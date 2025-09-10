@@ -175,7 +175,8 @@ final class JettyClientSlicesTest {
         );
         try {
             client.start();
-            final String nonroutable = "10.0.0.0";
+            // Use a different non-routable IP that's less likely to be blocked immediately
+            final String nonroutable = "192.0.2.1";
             final CompletionStage<Response> received = client.http(nonroutable).response(
                 new RequestLine(RqMethod.GET, "/conn-timeout"),
                 Headers.EMPTY,
@@ -199,7 +200,8 @@ final class JettyClientSlicesTest {
         );
         try {
             client.start();
-            final String nonroutable = "10.0.0.0";
+            // Use a different non-routable IP that's less likely to be blocked immediately
+            final String nonroutable = "192.0.2.1";
             final CompletionStage<Response> received = client.http(nonroutable).response(
                 new RequestLine(RqMethod.GET, "/conn-timeout"),
                 Headers.EMPTY,

@@ -1,0 +1,55 @@
+version: "3.3"
+services:
+  artipie:
+    depends_on:
+      - artipie-db
+    image: auto1-artipie:1.0-SNAPSHOT
+    container_name: artipie
+    restart: unless-stopped
+    environment:
+      - ARTIPIE_USER_NAME=artipie
+      - ARTIPIE_USER_PASS=artipie
+      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+    volumes:
+      - ./artipie/artipie.yml:/etc/artipie/artipie.yml
+      - ./artipie/repo:/var/artipie/repo
+      - ./artipie/security:/var/artipie/security
+      - ./artipie/data:/var/artipie/data
+    networks:
+      - artipie-net
+    ports:
+      - "8081:8080"
+      - "8086:8086"
+  front:
+    depends_on:
+      - artipie
+    image: artipie/front:latest
+    container_name: front
+    restart: unless-stopped
+    networks:
+      - artipie-net
+    environment:
+      - ARTIPIE_REST=http://artipie:8086
+    ports:
+      - "8080:8080"
+  artipie-db:
+    image: postgres:15-alpine
+    container_name: artipie-db
+    restart: unless-stopped
+    networks:
+      - artipie-net
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=artipie
+      - POSTGRES_PASSWORD=artipie
+      - POSTGRES_DB=artifacts
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "artifacts" ]
+      interval: 30s
+      timeout: 60s
+      retries: 5
+
+networks:
+  artipie-net:
+    driver: bridge
