@@ -1,0 +1,31 @@
+#
+# The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
+# https://github.com/artipie/artipie/blob/master/LICENSE.txt
+#
+
+meta:
+  storage:
+    type: fs
+    path: /var/artipie/repo
+  credentials:
+    - type: env
+    - type: artipie
+  policy:
+    type: artipie
+    eviction_millis: 180000 # optional, default 3 min
+    storage: # required
+      type: fs
+      path: /var/artipie/security
+  artifacts_database:
+    postgres_host: artipie-db
+    postgres_port: 5432
+    postgres_database: artifacts
+    postgres_user: artipie
+    postgres_password: artipie
+  metrics:
+    endpoint: "/metrics/vertx" # Path of the endpoint, starting with `/`, where the metrics will be served
+    port: 8087 # Port to serve the metrics
+    types:
+      - jvm # enables jvm-related metrics 
+      - storage # enables storage-related metrics
+      - http # enables http requests/responses related metrics

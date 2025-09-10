@@ -1,0 +1,8 @@
+permissions:
+  adapter_basic_permissions:
+    my-files:
+      - write
+      - read
+    helmcharts:
+      - read
+      - write

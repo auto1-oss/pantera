@@ -18,3 +18,4 @@ classes/
 .settings/
 .storage/data/**
 .storage/data/test/**
+artipie-main/artipie/data/**
