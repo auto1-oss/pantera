@@ -12,6 +12,8 @@ import com.artipie.http.Slice;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.auth.OperationControl;
 import com.artipie.http.headers.Accept;
 import com.artipie.http.headers.ContentType;
@@ -85,16 +87,34 @@ public final class FilesSlice extends Slice.Wrap {
         final Storage storage, final Policy<?> perms, final Authentication auth, final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, perms, auth, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage The storage. And default parameters for free access.
+     * @param perms Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Repository artifact events
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
                     MethodRule.HEAD,
-                    new BasicAuthzSlice(
+                    FilesSlice.createAuthSlice(
                         new SliceWithHeaders(
                             new FileMetaSlice(new HeadSlice(storage), storage),
                             Headers.from(ContentType.mime(FilesSlice.OCTET_STREAM))
                         ),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             perms, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -102,7 +122,7 @@ public final class FilesSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new BasicAuthzSlice(
+                    FilesSlice.createAuthSlice(
                         new SliceRoute(
                             new RtRulePath(
                                 new RtRule.ByHeader(
@@ -148,7 +168,8 @@ public final class FilesSlice extends Slice.Wrap {
                                 )
                             )
                         ),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             perms, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -156,7 +177,7 @@ public final class FilesSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.PUT,
-                    new BasicAuthzSlice(
+                    FilesSlice.createAuthSlice(
                         new SliceUpload(
                             storage,
                             KeyFromPath::new,
@@ -164,7 +185,8 @@ public final class FilesSlice extends Slice.Wrap {
                                 queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue)
                             )
                         ),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             perms, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -172,14 +194,15 @@ public final class FilesSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.DELETE,
-                    new BasicAuthzSlice(
+                    FilesSlice.createAuthSlice(
                         new SliceDelete(
                             storage,
                             events.map(
                                 queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue)
                             )
                         ),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             perms, new AdapterBasicPermission(name, Action.Standard.DELETE)
                         )
@@ -191,6 +214,24 @@ public final class FilesSlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BasicAuthzSlice(origin, basicAuth, control);
     }
 
     /**

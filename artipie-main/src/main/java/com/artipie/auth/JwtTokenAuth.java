@@ -38,7 +38,7 @@ public final class JwtTokenAuth implements TokenAuthentication {
                 user -> {
                     Optional<AuthUser> res = Optional.empty();
                     if (user.principal().containsKey(AuthTokenRest.SUB)
-                        && user.containsKey(AuthTokenRest.CONTEXT)) {
+                        && user.principal().containsKey(AuthTokenRest.CONTEXT)) {
                         res = Optional.of(
                             new AuthUser(
                                 user.principal().getString(AuthTokenRest.SUB),

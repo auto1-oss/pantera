@@ -10,7 +10,9 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.AuthzSlice;
+import com.artipie.http.auth.CombinedAuthScheme;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
@@ -39,7 +41,7 @@ public final class GemSlice extends Slice.Wrap {
      * @param name Repository name
      */
     public GemSlice(Storage storage, Policy<?> policy, Authentication auth, String name) {
-        this(storage, policy, auth, name, Optional.empty());
+        this(storage, policy, auth, null, name, Optional.empty());
     }
 
     /**
@@ -58,6 +60,27 @@ public final class GemSlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(storage, policy, auth, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     *
+     * @param storage The storage.
+     * @param policy The policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Artifact events queue
+     */
+    public GemSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -65,9 +88,10 @@ public final class GemSlice extends Slice.Wrap {
                         MethodRule.POST,
                         new RtRule.ByPath("/api/v1/gems")
                     ),
-                    new AuthzSlice(
+                    GemSlice.createAuthSlice(
                         new SubmitGemSlice(storage, events, name),
-                        new GemApiKeyAuth(auth),
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -85,7 +109,7 @@ public final class GemSlice extends Slice.Wrap {
                         MethodRule.GET,
                         new RtRule.ByPath("/api/v1/api_key")
                     ),
-                    new ApiKeySlice(auth)
+                    new ApiKeySlice(basicAuth)
                 ),
                 new RtRulePath(
                     new RtRule.All(
@@ -96,9 +120,10 @@ public final class GemSlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new AuthzSlice(
+                    GemSlice.createAuthSlice(
                         new SliceDownload(storage),
-                        new GemApiKeyAuth(auth),
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -110,5 +135,23 @@ public final class GemSlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new AuthzSlice(origin, new CombinedAuthScheme(basicAuth, tokenAuth), control);
+        }
+        return new AuthzSlice(origin, new GemApiKeyAuth(basicAuth), control);
     }
 }

@@ -94,7 +94,12 @@ final class CachedProxySlice implements Slice {
     @Override
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body) {
-        final Key key = new KeyFromPath(line.uri().getPath());
+        final String path = line.uri().getPath();
+        // Handle root path requests - don't try to cache them as they would use Key.ROOT
+        if ("/".equals(path) || path.isEmpty()) {
+            return this.handleRootPath(line);
+        }
+        final Key key = new KeyFromPath(path);
         final AtomicReference<Headers> rshdr = new AtomicReference<>(Headers.EMPTY);
         return new RepoHead(this.client)
             .head(line.uri().getPath()).thenCompose(
@@ -196,5 +201,24 @@ final class CachedProxySlice implements Slice {
             res = CacheControl.Standard.ALWAYS;
         }
         return res;
+    }
+
+    /**
+     * Handles root path requests without using cache to avoid Key.ROOT issues.
+     * @param line Request line
+     * @return Response future
+     */
+    private CompletableFuture<Response> handleRootPath(final RequestLine line) {
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (resp.status().success()) {
+                    this.addEventToQueue(new KeyFromPath("/index.html"));
+                    return ResponseBuilder.ok()
+                        .headers(resp.headers())
+                        .body(resp.body())
+                        .build();
+                }
+                return ResponseBuilder.notFound().build();
+            });
     }
 }

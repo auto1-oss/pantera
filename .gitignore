@@ -18,4 +18,4 @@ classes/
 .settings/
 .storage/data/**
 .storage/data/test/**
-artipie-main/artipie/data/**
+artipie-main/docker-compose/artipie/data/**

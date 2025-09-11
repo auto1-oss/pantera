@@ -35,6 +35,8 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
+import com.artipie.http.auth.CombinedAuthScheme;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.auth.Tokens;
 import com.artipie.http.client.jetty.JettyClientSlices;
 import com.artipie.http.filter.FilterSlice;
@@ -164,6 +166,7 @@ public class RepositorySlices {
                         cfg.storage(),
                         securityPolicy(),
                         authentication(),
+                        tokens.auth(),
                         cfg.name(),
                         artifactEvents()
                     )
@@ -178,7 +181,7 @@ public class RepositorySlices {
             case "npm":
                 slice = trimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), tokens.auth(), cfg.name(), artifactEvents()
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
                 break;
@@ -188,6 +191,7 @@ public class RepositorySlices {
                         cfg.storage(),
                         securityPolicy(),
                         authentication(),
+                        tokens.auth(),
                         cfg.name(),
                         artifactEvents()
                     )
@@ -196,21 +200,21 @@ public class RepositorySlices {
             case "helm":
                 slice = trimPathSlice(
                     new HelmSlice(
-                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), cfg.name(), artifactEvents()
+                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
                 break;
             case "rpm":
                 slice = trimPathSlice(
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()))
+                        tokens.auth(), new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty())
                 );
                 break;
             case "php":
                 slice = trimPathSlice(
                     new PhpComposer(
                         new AstoRepository(cfg.storage(), Optional.of(cfg.url().toString())),
-                        securityPolicy(), authentication(), cfg.name(), artifactEvents()
+                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
                 break;
@@ -222,14 +226,14 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new NuGet(
                         cfg.url(), new com.artipie.nuget.AstoRepository(cfg.storage()),
-                        securityPolicy(), authentication(), cfg.name(), artifactEvents()
+                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
                 break;
             case "maven":
                 slice = trimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
-                        authentication(), cfg.name(), artifactEvents())
+                        authentication(), tokens.auth(), cfg.name(), artifactEvents())
                 );
                 break;
             case "maven-proxy":
@@ -241,7 +245,7 @@ public class RepositorySlices {
                 break;
             case "go":
                 slice = trimPathSlice(
-                    new GoSlice(cfg.storage(), securityPolicy(), authentication(), cfg.name())
+                    new GoSlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name())
                 );
                 break;
             case "npm-proxy":
@@ -258,7 +262,7 @@ public class RepositorySlices {
                 break;
             case "pypi":
                 slice = trimPathSlice(
-                    new PySlice(cfg.storage(), securityPolicy(), authentication(), cfg.name(), artifactEvents())
+                    new PySlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents())
                 );
                 break;
             case "pypi-proxy":
@@ -278,11 +282,11 @@ public class RepositorySlices {
                 );
                 if (cfg.port().isPresent()) {
                     slice = new DockerSlice(docker, securityPolicy(),
-                        new BasicAuthScheme(authentication()), artifactEvents());
+                        new CombinedAuthScheme(authentication(), tokens.auth()), artifactEvents());
                 } else {
                     slice = new DockerRoutingSlice.Reverted(
                         new DockerSlice(new TrimmedDocker(docker, cfg.name()),
-                            securityPolicy(), new BasicAuthScheme(authentication()),
+                            securityPolicy(), new CombinedAuthScheme(authentication(), tokens.auth()),
                             artifactEvents())
                     );
                 }

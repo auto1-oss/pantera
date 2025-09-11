@@ -115,6 +115,11 @@ public final class VertxMain {
     public int start(final int apiPort) throws IOException {
         quartz = new QuartzService();
         final Settings settings = new SettingsFromPath(this.config).find(quartz);
+        // Apply logging configuration from YAML settings
+        if (settings.logging().configured()) {
+            settings.logging().apply();
+            LOGGER.info("Applied logging configuration from YAML settings");
+        }
         final Vertx vertx = VertxMain.vertx(settings.metrics());
         final JWTAuth jwt = JWTAuth.create(
             vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(

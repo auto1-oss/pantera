@@ -13,8 +13,10 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.BearerAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
 import com.artipie.http.auth.TokenAuthentication;
+import com.artipie.http.auth.Authentication;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
@@ -103,15 +105,39 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(base, storage, policy, null, auth, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     *
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Events queue
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
                     new RtRule.ByPath("/npm")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new SliceSimple(ResponseBuilder.ok().build()),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -122,9 +148,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.PUT,
                     new RtRule.ByPath(AddDistTagsSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new AddDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -135,9 +162,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.DELETE,
                     new RtRule.ByPath(AddDistTagsSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DeleteDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -151,9 +179,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, CliPublish.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UploadSlice(new CliPublish(storage), storage, events, name),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -167,9 +196,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, DeprecateSlice.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DeprecateSlice(storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -183,9 +213,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, UnpublishPutSlice.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UnpublishPutSlice(storage, events, name),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -196,9 +227,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.PUT,
                     new RtRule.ByPath(CurlPublish.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UploadSlice(new CurlPublish(storage), storage, events, name),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -209,9 +241,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*/dist-tags$")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new GetDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -222,9 +255,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*(?<!\\.tgz)$")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DownloadPackageSlice(base, storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -235,9 +269,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*\\.tgz$")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new SliceDownload(storage),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -248,9 +283,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.DELETE,
                     new RtRule.ByPath(UnpublishForceSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UnpublishForceSlice(storage, events, name),
-                    auth,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
@@ -265,5 +301,23 @@ public final class NpmSlice implements Slice {
         final Headers headers,
         final Content body) {
         return this.route.response(line, headers, body);
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (basicAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BearerAuthzSlice(origin, tokenAuth, control);
     }
 }

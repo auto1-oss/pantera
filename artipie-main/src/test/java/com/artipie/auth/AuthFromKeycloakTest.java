@@ -39,9 +39,11 @@ import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import java.time.Duration;
 
 /**
  * Test for {@link AuthFromKeycloak}.
@@ -91,8 +93,15 @@ public class AuthFromKeycloakTest {
     )
         .withEnv("KEYCLOAK_ADMIN", AuthFromKeycloakTest.ADMIN_LOGIN)
         .withEnv("KEYCLOAK_ADMIN_PASSWORD", AuthFromKeycloakTest.ADMIN_PASSWORD)
+        .withEnv("KC_HTTP_ENABLED", "true")
+        .withEnv("KC_HOSTNAME_STRICT", "false")
         .withExposedPorts(AuthFromKeycloakTest.KEYCLOAK_PORT)
-        .withCommand("start-dev");
+        .withCommand("start-dev")
+        .waitingFor(
+            Wait.forHttp("/")
+                .forPort(AuthFromKeycloakTest.KEYCLOAK_PORT)
+                .withStartupTimeout(Duration.ofMinutes(3))
+        );
 
     /**
      * Jars of classpath used for compilation java sources and loading of compiled classes.
@@ -277,6 +286,7 @@ public class AuthFromKeycloakTest {
      * Starts 'keycloak.KeycloakDockerInitializer' class by passing url of keycloak server
      * in first argument of 'main'-method.
      * CodeClassLoader is used as context class loader.
+     * Includes retry logic to handle Keycloak startup timing issues.
      *
      * @param loader CodeClassLoader.
      * @param main Main-method.
@@ -286,11 +296,40 @@ public class AuthFromKeycloakTest {
         final ClassLoader originalld = Thread.currentThread().getContextClassLoader();
         try {
             Thread.currentThread().setContextClassLoader(loader);
-            main.invoke(
-                new String[]{keycloakUrl()}
-            );
-        } catch (final Throwable exc) {
-            throw new ArtipieException(exc);
+            
+            // Add retry logic for Keycloak initialization
+            final int maxRetries = 3;
+            final long retryDelayMs = 5000;
+            
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    main.invoke(
+                        new String[]{keycloakUrl()}
+                    );
+                    // If successful, break out of retry loop
+                    break;
+                } catch (final Throwable exc) {
+                    if (attempt == maxRetries) {
+                        // If this was the last attempt, rethrow the exception
+                        throw new ArtipieException(
+                            String.format("Failed to initialize Keycloak after %d attempts", maxRetries),
+                            exc
+                        );
+                    } else {
+                        // Wait before retrying
+                        System.out.println(
+                            String.format("Keycloak initialization attempt %d failed, retrying in %dms...", 
+                                attempt, retryDelayMs)
+                        );
+                        try {
+                            Thread.sleep(retryDelayMs);
+                        } catch (final InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new ArtipieException("Interrupted while waiting to retry Keycloak initialization", ie);
+                        }
+                    }
+                }
+            }
         } finally {
             Thread.currentThread().setContextClassLoader(originalld);
         }
