@@ -108,6 +108,11 @@ public final class YamlSettings implements Settings {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Logging context.
+     */
+    private final LoggingContext lctx;
+
+    /**
      * Ctor.
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
@@ -128,6 +133,7 @@ public final class YamlSettings implements Settings {
             auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
         );
         this.mctx = new MetricsContext(this.meta());
+        this.lctx = new LoggingContext(this.meta());
         this.events = YamlSettings.initArtifactsEvents(this.meta(), quartz, path);
     }
 
@@ -181,6 +187,11 @@ public final class YamlSettings implements Settings {
     @Override
     public Optional<YamlSequence> crontab() {
         return Optional.ofNullable(this.meta().yamlSequence("crontab"));
+    }
+
+    @Override
+    public LoggingContext logging() {
+        return this.lctx;
     }
 
     @Override

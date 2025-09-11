@@ -4,6 +4,7 @@
  */
 package com.artipie.helm;
 
+import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.test.TestResource;
 import java.io.IOException;
 import java.util.Collections;
@@ -15,6 +16,7 @@ import org.hamcrest.core.AllOf;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assertions;
 
 /**
  * A test for {@link TgzArchive}.
@@ -53,6 +55,15 @@ public final class TgzArchiveTest {
                     )
                 )
             )
+        );
+    }
+
+    @Test
+    void throwsExceptionForInvalidGzipFormat() {
+        final byte[] invalidContent = "This is not a gzip file".getBytes();
+        Assertions.assertThrows(
+            ArtipieIOException.class,
+            () -> new TgzArchive(invalidContent).chartYaml()
         );
     }
 }

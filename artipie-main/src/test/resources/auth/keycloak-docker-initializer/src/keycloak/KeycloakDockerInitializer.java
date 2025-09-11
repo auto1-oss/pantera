@@ -99,19 +99,39 @@ public class KeycloakDockerInitializer {
 
     /**
      * Using admin connection to keycloak server initializes keycloak instance.
+     * Includes retry logic and better error handling for connection issues.
      */
     public void init() {
-        Keycloak keycloak = Keycloak.getInstance(
-            url,
-            "master",
-            KEYCLOAK_ADMIN_LOGIN,
-            KEYCLOAK_ADMIN_PASSWORD,
-            "admin-cli");
-        createRealm(keycloak);
-        createRealmRole(keycloak);
-        createClient(keycloak);
-        createClientRole(keycloak);
-        createUserNew(keycloak);
+        Keycloak keycloak = null;
+        try {
+            // Wait a bit to ensure Keycloak is fully ready
+            Thread.sleep(2000);
+            
+            keycloak = Keycloak.getInstance(
+                url,
+                "master",
+                KEYCLOAK_ADMIN_LOGIN,
+                KEYCLOAK_ADMIN_PASSWORD,
+                "admin-cli");
+                
+            // Test connection by calling serverInfo - this will throw if not ready
+            keycloak.serverInfo().getInfo();
+            
+            createRealm(keycloak);
+            createRealmRole(keycloak);
+            createClient(keycloak);
+            createClientRole(keycloak);
+            createUserNew(keycloak);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for Keycloak", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize Keycloak: " + e.getMessage(), e);
+        } finally {
+            if (keycloak != null) {
+                keycloak.close();
+            }
+        }
     }
 
     /**

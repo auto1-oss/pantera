@@ -77,6 +77,7 @@ SOFTWARE.
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>21</maven.compiler.release>
+    <!-- Tests enabled by default; set -Dmaven.test.skip=true to skip locally -->
     <header.license>LICENSE.header</header.license>
     <junit-platform.version>5.10.0</junit-platform.version>
     <vertx.version>4.5.6</vertx.version>
@@ -333,6 +334,7 @@ SOFTWARE.
                 <exclude>**/src/test/resources-binary/**</exclude>
                 <exclude>**/src/main/resources/**</exclude>
                 <exclude>**/examples/**</exclude>
+                <exclude>**/docker-compose/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>
@@ -361,6 +363,7 @@ SOFTWARE.
             <exclude>**/hex/proto/generated/**</exclude>
             <exclude>**/debian/benchmarks/**</exclude>
             <exclude>**/bench/**</exclude>
+            <exclude>**/docker-compose/**</exclude>
           </excludes>
         </configuration>
         <executions>

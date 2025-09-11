@@ -76,6 +76,12 @@ public interface Settings {
      */
     Optional<YamlSequence> crontab();
 
+    /**
+     * Logging configuration.
+     * @return Logging context
+     */
+    LoggingContext logging();
+
     default HttpClientSettings httpClientSettings() {
         return new HttpClientSettings();
     }
