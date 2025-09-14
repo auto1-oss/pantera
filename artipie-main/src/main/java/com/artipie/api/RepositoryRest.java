@@ -14,6 +14,7 @@ import com.artipie.security.policy.Policy;
 import com.artipie.settings.RepoData;
 import com.artipie.settings.cache.FiltersCache;
 import com.artipie.settings.repo.CrudRepoSettings;
+import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
@@ -66,6 +67,11 @@ public final class RepositoryRest extends BaseRest {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Vert.x event bus for publishing repository change events.
+     */
+    private final EventBus bus;
+
+    /**
      * Ctor.
      * @param cache Artipie filters cache
      * @param crs Repository settings create/read/update/delete
@@ -75,13 +81,15 @@ public final class RepositoryRest extends BaseRest {
      */
     public RepositoryRest(
         final FiltersCache cache, final CrudRepoSettings crs, final RepoData data,
-        final Policy<?> policy, final Optional<MetadataEventQueues> events
+        final Policy<?> policy, final Optional<MetadataEventQueues> events,
+        final EventBus bus
     ) {
         this.cache = cache;
         this.crs = crs;
         this.data = data;
         this.policy = policy;
         this.events = events;
+        this.bus = bus;
     }
 
     @Override
@@ -234,6 +242,8 @@ public final class RepositoryRest extends BaseRest {
             if (jsvalidator.validate(context)) {
                 this.crs.save(rname, json);
                 this.cache.invalidate(rname.toString());
+                // Notify runtime to refresh repositories and caches
+                this.bus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.upsert(rname.toString()));
                 context.response().setStatusCode(HttpStatus.OK_200).end();
             }
         } else {
@@ -265,6 +275,7 @@ public final class RepositoryRest extends BaseRest {
                     }
                 );
             this.cache.invalidate(rname.toString());
+            this.bus.publish(RepositoryEvents.ADDRESS, RepositoryEvents.remove(rname.toString()));
             this.events.ifPresent(item -> item.stopProxyMetadataProcessing(rname.toString()));
             context.response()
                 .setStatusCode(HttpStatus.OK_200)
@@ -300,6 +311,10 @@ public final class RepositoryRest extends BaseRest {
             if (validator.validate(context)) {
                 this.data.move(rname, newrname).thenRun(() -> this.crs.move(rname, newrname));
                 this.cache.invalidate(rname.toString());
+                this.bus.publish(
+                    RepositoryEvents.ADDRESS,
+                    RepositoryEvents.move(rname.toString(), newrname.toString())
+                );
                 context.response().setStatusCode(HttpStatus.OK_200).end();
             }
         }

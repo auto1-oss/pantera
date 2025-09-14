@@ -119,6 +119,32 @@ To avoid build errors use Maven 3.2+ and please read
 
 Thanks to [FreePik](https://www.freepik.com/free-photos-vectors/party) for the logo.
 
+## Dynamic Repositories (no restart)
+
+Artipie now supports creating, updating and deleting repositories dynamically via the REST API without restarting the process or container.
+
+- Create or update a repository: `PUT /api/v1/repository/{name}`
+- Get repository settings: `GET /api/v1/repository/{name}`
+- Check if repository exists: `HEAD /api/v1/repository/{name}`
+- Delete a repository: `DELETE /api/v1/repository/{name}`
+
+Example to create a new file repository named `my-bin` using the default storage alias:
+
+```
+curl -X PUT \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "repo": {
+          "type": "file",
+          "storage": "default"
+        }
+      }' \
+  http://localhost:8086/api/v1/repository/my-bin
+```
+
+After this call, the repository is immediately available at `http://localhost:8080/my-bin` with no restart required. This works for all supported repository types (maven, docker, npm, gem, helm, rpm, pypi, nuget, conda, conan, hexpm, file, and their proxy variants). If a repository configuration specifies its own `port`, Artipie will start a dedicated HTTP or HTTP/3 server for it on the fly as well.
+
 ## How to release
 
 Artipie service is released in several formats: 

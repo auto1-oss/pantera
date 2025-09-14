@@ -143,7 +143,8 @@ public final class RestApi extends AbstractVerticle {
             this.caches.filtersCache(),
             new ManageRepoSettings(asto),
             new RepoData(this.configsStorage, this.caches.storagesCache()),
-            this.security.policy(), this.events
+            this.security.policy(), this.events,
+            this.vertx.eventBus()
         ).init(repoRb);
         new StorageAliasesRest(
             this.caches.storagesCache(), asto, this.security.policy()
