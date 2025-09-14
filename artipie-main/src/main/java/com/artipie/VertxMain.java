@@ -5,6 +5,7 @@
 
 package com.artipie;
 
+import com.artipie.api.RepositoryEvents;
 import com.artipie.api.RestApi;
 import com.artipie.asto.Key;
 import com.artipie.auth.JwtTokens;
@@ -128,6 +129,56 @@ public final class VertxMain {
         );
         final Repositories repos = new MapRepositories(settings);
         final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt));
+        // Listen for repository change events to refresh runtime without restart
+        vertx.getDelegate().eventBus().consumer(
+            RepositoryEvents.ADDRESS,
+            msg -> {
+                try {
+                    final String body = String.valueOf(msg.body());
+                    final String[] parts = body.split("\\|");
+                    if (parts.length >= 2) {
+                        final String action = parts[0];
+                        final String name = parts[1];
+                        if (RepositoryEvents.UPSERT.equals(action)) {
+                            repos.refresh();
+                            slices.invalidateRepo(name);
+                            repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
+                                prt -> {
+                                    final Slice slice = slices.slice(new Key.From(name), prt);
+                                    if (cfg.startOnHttp3()) {
+                                        this.http3.computeIfAbsent(
+                                            prt, key -> {
+                                                final Http3Server server = new Http3Server(
+                                                    new LoggingSlice(slice), prt,
+                                                    new SslFactoryFromYaml(cfg.repoYaml()).build()
+                                                );
+                                                server.start();
+                                                return server;
+                                            }
+                                        );
+                                    } else {
+                                        // Start dedicated HTTP server if not already serving this port
+                                        final boolean exists = this.servers.stream().anyMatch(s -> s.port() == prt);
+                                        if (!exists) {
+                                            this.listenOn(slice, prt, vertx, settings.metrics());
+                                        }
+                                    }
+                                }
+                            ));
+                        } else if (RepositoryEvents.REMOVE.equals(action)) {
+                            slices.invalidateRepo(name);
+                            repos.refresh();
+                        } else if (RepositoryEvents.MOVE.equals(action) && parts.length >= 3) {
+                            slices.invalidateRepo(name);
+                            slices.invalidateRepo(parts[2]);
+                            repos.refresh();
+                        }
+                    }
+                } catch (final Throwable err) {
+                    LOGGER.error("Failed to process repository event", err);
+                }
+            }
+        );
         final int main = this.listenOn(
             new MainSlice(settings, slices),
             this.port,

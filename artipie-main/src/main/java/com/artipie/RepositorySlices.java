@@ -116,14 +116,44 @@ public class RepositorySlices {
                 new CacheLoader<>() {
                     @Override
                     public SliceValue load(final SliceKey key) {
-                        return resolve(key.name(), key.port());
+                        // Should not normally be used as we avoid caching NOT_FOUND entries
+                        return resolve(key.name(), key.port()).orElseGet(
+                            () -> new SliceValue(
+                                new SliceSimple(
+                                    () -> ResponseBuilder.notFound()
+                                        .textBody(
+                                            String.format(
+                                                "Repository '%s' not found",
+                                                key.name().string()
+                                            )
+                                        )
+                                        .build()
+                                ),
+                                Optional.empty()
+                            )
+                        );
                     }
                 }
             );
     }
 
     public Slice slice(final Key name, final int port) {
-        return this.slices.getUnchecked(new SliceKey(name, port)).slice();
+        final SliceKey skey = new SliceKey(name, port);
+        final SliceValue cached = this.slices.getIfPresent(skey);
+        if (cached != null) {
+            return cached.slice();
+        }
+        final Optional<SliceValue> resolved = resolve(name, port);
+        if (resolved.isPresent()) {
+            this.slices.put(skey, resolved.get());
+            return resolved.get().slice();
+        }
+        // Not found is NOT cached to allow dynamic repo addition without restart
+        return new SliceSimple(
+            () -> ResponseBuilder.notFound()
+                .textBody(String.format("Repository '%s' not found", name.string()))
+                .build()
+        );
     }
 
     /**
@@ -133,22 +163,30 @@ public class RepositorySlices {
      * @param port Repository port
      * @return Slice for repo
      */
-    private SliceValue resolve(final Key name, final int port) {
-        final Optional<RepoConfig> opt = repos.config(name.string());
+    private Optional<SliceValue> resolve(final Key name, final int port) {
+        Optional<RepoConfig> opt = repos.config(name.string());
+        if (opt.isEmpty()) {
+            // Attempt to refresh repositories on miss to support runtime additions
+            repos.refresh();
+            opt = repos.config(name.string());
+        }
         if (opt.isPresent()) {
             final RepoConfig cfg = opt.get();
             if (cfg.port().isEmpty() || cfg.port().getAsInt() == port) {
-                return sliceFromConfig(cfg);
+                return Optional.of(sliceFromConfig(cfg));
             }
         }
-        return new SliceValue(
-            new SliceSimple(
-                () -> ResponseBuilder.notFound()
-                    .textBody(String.format("Repository '%s' not found", name.string()))
-                    .build()
-            ),
-            Optional.empty()
-        );
+        return Optional.empty();
+    }
+
+    /**
+     * Invalidate all cached slices for repository name across all ports.
+     * @param name Repository name
+     */
+    public void invalidateRepo(final String name) {
+        this.slices.asMap().keySet().stream()
+            .filter(k -> k.name().string().equals(name))
+            .forEach(this.slices::invalidate);
     }
 
     private Optional<Queue<ArtifactEvent>> artifactEvents() {

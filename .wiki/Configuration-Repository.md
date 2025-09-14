@@ -47,11 +47,12 @@ Detailed configuration for each repository is provided in the corresponding subs
 ## Single repository on port
 
 Artipie repositories may run on separate ports if configured.
-This feature may be especially useful for Docker repository,
-as it's API is not well suited to serve multiple repositories on single port.
+This feature is especially useful for Docker repositories.
 
-To run repository on its own port
-`port` parameter should be specified in repository configuration YAML as follows:
+To run a repository on its own port specify the `port` parameter. You can do this
+in YAML or via the REST API (preferred for runtime changes):
+
+YAML example:
 
 ```yaml
 repo:
@@ -60,9 +61,13 @@ repo:
   ...
 ```
 
-> **Warning**  
-> Artipie scans repositories for port configuration only on start, 
-> so server requires restart in order to apply changes made in runtime.
+See REST JSON examples in [Rest API](./Rest-api#repository-json-payloads-by-type).
+
+Notes:
+- Repositories created or updated via REST are applied immediately with no restart, including
+  starting new listeners for `port`-bound repositories and enabling HTTP/3 when `http3: true`.
+- If you modify YAML files directly for a repository that binds to a dedicated `port`, a restart
+  may still be required to start the listener. Prefer using the REST API for runtime changes.
  
 ## Filters
 
