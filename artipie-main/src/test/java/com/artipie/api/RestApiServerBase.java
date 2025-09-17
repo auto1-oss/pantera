@@ -11,6 +11,7 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
+import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.nuget.RandomFreePort;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.ArtipieSecurity;
@@ -204,7 +205,8 @@ public class RestApiServerBase {
                         new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("some secret")
                     )
                 ),
-                Optional.empty()
+                Optional.empty(),
+                NoopCooldownService.INSTANCE
             ),
             context.succeedingThenComplete()
         );

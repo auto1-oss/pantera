@@ -24,6 +24,8 @@ import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.RegistryRoot;
 import com.artipie.docker.http.DockerSlice;
 import com.artipie.docker.http.TrimmedDocker;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.CooldownSupport;
 import com.artipie.files.FilesSlice;
 import com.artipie.gem.http.GemSlice;
 import com.artipie.helm.http.HelmSlice;
@@ -36,7 +38,9 @@ import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
 import com.artipie.http.auth.CombinedAuthScheme;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.TokenAuthentication;
+import com.artipie.http.auth.OperationControl;
 import com.artipie.http.auth.Tokens;
 import com.artipie.http.client.jetty.JettyClientSlices;
 import com.artipie.http.filter.FilterSlice;
@@ -55,6 +59,8 @@ import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.Settings;
 import com.artipie.settings.repo.RepoConfig;
+import com.artipie.security.perms.Action;
+import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.settings.repo.Repositories;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
@@ -93,6 +99,11 @@ public class RepositorySlices {
     private final LoadingCache<SliceKey, SliceValue> slices;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
      * @param settings Artipie settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -105,6 +116,7 @@ public class RepositorySlices {
         this.settings = settings;
         this.repos = repos;
         this.tokens = tokens;
+        this.cooldown = CooldownSupport.create(settings);
         this.slices = CacheBuilder.newBuilder()
             .expireAfterAccess(30, TimeUnit.MINUTES)
             .removalListener(
@@ -277,8 +289,20 @@ public class RepositorySlices {
             case "maven-proxy":
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
-                    new MavenProxy(clientSlices, cfg,
-                        settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)))
+                    new CombinedAuthzSliceWrap(
+                        new MavenProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
                 );
                 break;
             case "go":
@@ -288,13 +312,26 @@ public class RepositorySlices {
                 break;
             case "npm-proxy":
                 clientSlices = jettyClientSlices(cfg);
-                slice = new NpmProxySlice(
-                    cfg.path(),
-                    new NpmProxy(
-                        URI.create(
-                            cfg.settings().orElseThrow().yamlMapping("remote").string("url")
-                        ), cfg.storage(), clientSlices),
-                    settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)
+                final NpmProxy npmProxy = new NpmProxy(
+                    URI.create(
+                        cfg.settings().orElseThrow().yamlMapping("remote").string("url")
+                    ), cfg.storage(), clientSlices
+                );
+                slice = new CombinedAuthzSliceWrap(
+                    new NpmProxySlice(
+                        cfg.path(),
+                        npmProxy,
+                        settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)
+                        ),
+                        cfg.name(),
+                        cfg.type(),
+                        this.cooldown
+                    ),
+                    authentication(),
+                    tokens.auth(),
+                    new OperationControl(
+                        securityPolicy(),
+                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
                     )
                 );
                 break;
@@ -306,10 +343,20 @@ public class RepositorySlices {
             case "pypi-proxy":
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
-                    new PypiProxy(
-                        clientSlices, cfg,
-                        settings.artifactMetadata()
-                            .flatMap(queues -> queues.proxyEventQueues(cfg))
+                    new CombinedAuthzSliceWrap(
+                        new PypiProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata()
+                                .flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
                     )
                 );
                 break;
@@ -331,8 +378,15 @@ public class RepositorySlices {
                 break;
             case "docker-proxy":
                 clientSlices = jettyClientSlices(cfg);
-                slice = new DockerProxy(clientSlices, cfg, securityPolicy(),
-                    authentication(), artifactEvents());
+                slice = new DockerProxy(
+                    clientSlices,
+                    cfg,
+                    securityPolicy(),
+                    authentication(),
+                    tokens.auth(),
+                    artifactEvents(),
+                    this.cooldown
+                );
                 break;
             case "deb":
                 slice = trimPathSlice(

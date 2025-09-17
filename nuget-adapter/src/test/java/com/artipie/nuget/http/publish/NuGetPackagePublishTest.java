@@ -111,7 +111,8 @@ class NuGetPackagePublishTest {
                 new Content.From("data".getBytes())
             ).join(),
             new ResponseMatcher(
-                RsStatus.UNAUTHORIZED, Headers.EMPTY
+                RsStatus.PROXY_AUTHENTICATION_REQUIRED,
+                new Header("Proxy-Authenticate", "Basic realm=\"artipie\"")
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());

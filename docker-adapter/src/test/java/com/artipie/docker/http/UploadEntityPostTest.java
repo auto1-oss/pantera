@@ -42,7 +42,7 @@ class UploadEntityPostTest {
     @BeforeEach
     void setUp() {
         this.docker = new AstoDocker("test_registry", new InMemoryStorage());
-        this.slice = new DockerSlice(this.docker);
+        this.slice = TestDockerAuth.slice(this.docker);
     }
 
     @Test
@@ -50,7 +50,7 @@ class UploadEntityPostTest {
         uploadStartedAssert(
             this.slice.response(
                 new RequestLine(RqMethod.POST, "/v2/test/blobs/uploads/"),
-                Headers.EMPTY,
+                TestDockerAuth.headers(),
                 Content.EMPTY
             ).join()
         );
@@ -59,11 +59,11 @@ class UploadEntityPostTest {
     @Test
     void shouldStartUploadIfMountNotExists() {
         uploadStartedAssert(
-            new DockerSlice(this.docker).response(
+            TestDockerAuth.slice(this.docker).response(
                 new RequestLine(
                     RqMethod.POST,
                     "/v2/test/blobs/uploads/?mount=sha256:123&from=test"
-                ), Headers.EMPTY, Content.EMPTY
+                ), TestDockerAuth.headers(), Content.EMPTY
             ).join()
         );
     }
@@ -92,7 +92,9 @@ class UploadEntityPostTest {
                 new RequestLine(
                     RqMethod.POST,
                     String.format("/v2/%s/blobs/uploads/?mount=%s&from=%s", name, digest, from)
-                )
+                ),
+                TestDockerAuth.headers(),
+                Content.EMPTY
             )
         );
     }

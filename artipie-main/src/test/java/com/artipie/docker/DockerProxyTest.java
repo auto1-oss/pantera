@@ -88,7 +88,9 @@ class DockerProxyTest {
             ),
             Policy.FREE,
             (username, password) -> Optional.empty(),
-            Optional.empty()
+            token -> java.util.concurrent.CompletableFuture.completedFuture(Optional.empty()),
+            Optional.empty(),
+            com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
     }
 

@@ -9,6 +9,9 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
+import com.artipie.cooldown.CooldownDependency;
+import com.artipie.cooldown.CooldownInspector;
+import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.slice.SliceSimple;
@@ -29,9 +32,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.json.Json;
 import javax.json.JsonObject;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Test cases for {@link DownloadAssetSlice}.
@@ -87,7 +93,10 @@ final class DownloadAssetSliceTest {
                         new SliceSimple(ResponseBuilder.notFound().build())
                     ),
                     path, Optional.of(this.packages),
-                    DownloadAssetSliceTest.RNAME
+                    DownloadAssetSliceTest.RNAME,
+                    "npm-proxy",
+                    NoopCooldownService.INSTANCE,
+                    noopInspector()
                 ),
                 this.port
             )
@@ -117,7 +126,10 @@ final class DownloadAssetSliceTest {
                     ),
                     path,
                     Optional.of(this.packages),
-                    DownloadAssetSliceTest.RNAME
+                    DownloadAssetSliceTest.RNAME,
+                    "npm-proxy",
+                    NoopCooldownService.INSTANCE,
+                    noopInspector()
                 ),
                 this.port
             )
@@ -182,5 +194,19 @@ final class DownloadAssetSliceTest {
                     .getBytes()
             )
         ).join();
+    }
+
+    private static CooldownInspector noopInspector() {
+        return new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
     }
 }

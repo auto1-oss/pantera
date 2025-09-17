@@ -48,3 +48,12 @@ it via [`~/.m2/settings.xml`](https://maven.apache.org/settings.html)):
 ```
 where `{host}` and `{port}` are Artipie service host and port, `{repository-name}`
 is the name of maven repository.
+
+### Cooldown behaviour
+
+Proxy repositories participate in the global cooldown policy (see [configuration](../Configuration.md#cooldown-settings)).
+If a requested Maven artefact is newer than the cached version, or if it was released within the configured
+fresh-release window, Artipie temporarily blocks the download and responds with HTTP 403 providing the
+expected unblock time. Administrators can unblock specific artefacts (and their dependency set) through the
+REST API endpoints exposed under `/api/v1/repository/{rname}/cooldown/`. After the cooldown finishes or a
+manual unblock occurs, the version is permanently served without further delay.

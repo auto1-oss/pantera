@@ -10,6 +10,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
+import com.artipie.http.headers.Authorization;
 import com.artipie.http.headers.Header;
 import com.artipie.http.hm.ResponseAssert;
 import com.artipie.http.rq.RequestLine;
@@ -39,14 +40,23 @@ class PySliceTest {
      */
     private Storage storage;
 
+    /**
+     * Authorization headers for requests.
+     */
+    private Headers authorization;
+
+    private static final String USER = "pypi-user";
+    private static final String PASSWORD = "secret";
+
     @BeforeEach
     void init() {
         this.storage = new InMemoryStorage();
         this.slice = new PySlice(
             this.storage, Policy.FREE,
-            (username, password) -> Optional.empty(),
+            new com.artipie.http.auth.Authentication.Single(USER, PASSWORD),
             "*", Optional.empty()
         );
+        this.authorization = Headers.from(new Authorization.Basic(USER, PASSWORD));
     }
 
     @Test
@@ -56,7 +66,7 @@ class PySliceTest {
         this.storage.save(new Key.From(key), new Content.From(content)).join();
         Response resp = this.slice.response(
             new RequestLine("GET", "/simple"),
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         ResponseAssert.check(resp, RsStatus.OK,
@@ -76,7 +86,7 @@ class PySliceTest {
         this.storage.save(new Key.From(key), new Content.From(content)).join();
         Response resp = this.slice.response(
             new RequestLine("GET", "/"),
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         ResponseAssert.check(resp, RsStatus.OK,
@@ -94,7 +104,7 @@ class PySliceTest {
         ResponseAssert.check(
             this.slice.response(
                 new RequestLine("GET", "/one/Two_three"),
-                Headers.EMPTY,
+                this.authorization,
                 Content.EMPTY
             ).join(),
             RsStatus.MOVED_PERMANENTLY,
@@ -107,7 +117,10 @@ class PySliceTest {
         ResponseAssert.check(
             this.slice.response(
                 new RequestLine("POST", "/sample.tar"),
-                Headers.from("content-type", "multipart/form-data; boundary=\"abc123\""),
+                Headers.from(
+                    new Authorization.Basic(USER, PASSWORD),
+                    new Header("content-type", "multipart/form-data; boundary=\"abc123\"")
+                ),
                 Content.EMPTY
             ).join(),
             RsStatus.BAD_REQUEST
@@ -129,7 +142,7 @@ class PySliceTest {
         ResponseAssert.check(
             this.slice.response(
                 new RequestLine("GET", key),
-                Headers.EMPTY,
+                this.authorization,
                 Content.EMPTY
             ).join(),
             RsStatus.OK,

@@ -38,17 +38,25 @@ public final class CacheDocker implements Docker {
     private final Optional<Queue<ArtifactEvent>> events;
 
     /**
+     * Cooldown inspector to access per-request metadata.
+     */
+    private final Optional<DockerProxyCooldownInspector> inspector;
+
+    /**
      * @param origin Origin repository.
      * @param cache Cache repository.
      * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
      */
     public CacheDocker(Docker origin,
                        Docker cache,
-                       Optional<Queue<ArtifactEvent>> events
+                       Optional<Queue<ArtifactEvent>> events,
+                       Optional<DockerProxyCooldownInspector> inspector
     ) {
         this.origin = origin;
         this.cache = cache;
         this.events = events;
+        this.inspector = inspector;
     }
 
     @Override
@@ -58,7 +66,14 @@ public final class CacheDocker implements Docker {
 
     @Override
     public Repo repo(final String name) {
-        return new CacheRepo(name, this.origin.repo(name), this.cache.repo(name), this.events, registryName());
+        return new CacheRepo(
+            name,
+            this.origin.repo(name),
+            this.cache.repo(name),
+            this.events,
+            registryName(),
+            this.inspector
+        );
     }
 
     @Override

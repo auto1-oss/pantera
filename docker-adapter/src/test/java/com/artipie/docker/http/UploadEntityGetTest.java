@@ -9,7 +9,6 @@ import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.docker.Docker;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.Upload;
-import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.Header;
@@ -33,7 +32,7 @@ public final class UploadEntityGetTest {
     @BeforeEach
     void setUp() {
         this.docker = new AstoDocker("test_registry", new InMemoryStorage());
-        this.slice = new DockerSlice(this.docker);
+        this.slice = TestDockerAuth.slice(this.docker);
     }
 
     @Test
@@ -46,7 +45,7 @@ public final class UploadEntityGetTest {
         final String path = String.format("/v2/%s/blobs/uploads/%s", name, upload.uuid());
         final Response response = this.slice.response(
             new RequestLine(RqMethod.GET, path),
-            Headers.EMPTY, Content.EMPTY
+            TestDockerAuth.headers(), Content.EMPTY
         ).join();
         ResponseAssert.check(
             response,
@@ -67,7 +66,7 @@ public final class UploadEntityGetTest {
         upload.append(new Content.From(new byte[1])).toCompletableFuture().join();
         final String path = String.format("/v2/%s/blobs/uploads/%s", name, upload.uuid());
         final Response response = this.slice.response(
-            new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
+            new RequestLine(RqMethod.GET, path), TestDockerAuth.headers(), Content.EMPTY
         ).join();
         ResponseAssert.check(
             response,
@@ -88,7 +87,7 @@ public final class UploadEntityGetTest {
         upload.append(new Content.From(new byte[128])).toCompletableFuture().join();
         final String path = String.format("/v2/%s/blobs/uploads/%s", name, upload.uuid());
         final Response get = this.slice.response(
-            new RequestLine(RqMethod.GET, path), Headers.EMPTY, Content.EMPTY
+            new RequestLine(RqMethod.GET, path), TestDockerAuth.headers(), Content.EMPTY
         ).join();
         ResponseAssert.check(
             get,
@@ -103,7 +102,7 @@ public final class UploadEntityGetTest {
     void shouldReturnNotFoundWhenUploadNotExists() {
         final Response response = this.slice.response(
             new RequestLine(RqMethod.GET, "/v2/test/blobs/uploads/12345"),
-            Headers.EMPTY, Content.EMPTY
+            TestDockerAuth.headers(), Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
             response,

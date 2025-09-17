@@ -19,9 +19,17 @@ import com.artipie.scheduling.ProxyArtifactEvent;
 import com.google.common.base.Strings;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
+import com.artipie.cooldown.CooldownInspector;
+import com.artipie.cooldown.CooldownRequest;
+import com.artipie.cooldown.CooldownResponses;
+import com.artipie.cooldown.CooldownResult;
+import com.artipie.cooldown.CooldownService;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.time.Instant;
 
 /**
  * HTTP slice for download asset requests.
@@ -48,17 +56,39 @@ public final class DownloadAssetSlice implements Slice {
     private final String repoName;
 
     /**
+     * Repository type.
+     */
+    private final String repoType;
+
+    /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
+     * Cooldown inspector.
+     */
+    private final CooldownInspector inspector;
+
+    /**
      * @param npm NPM Proxy facade
      * @param path Asset path helper
      * @param packages Queue with proxy packages and owner
      * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
      */
     public DownloadAssetSlice(final NpmProxy npm, final AssetPath path,
-        final Optional<Queue<ProxyArtifactEvent>> packages, final String repoName) {
+        final Optional<Queue<ProxyArtifactEvent>> packages, final String repoName,
+        final String repoType, final CooldownService cooldown, final CooldownInspector inspector) {
         this.npm = npm;
         this.path = path;
         this.packages = packages;
         this.repoName = repoName;
+        this.repoType = repoType;
+        this.cooldown = cooldown;
+        this.inspector = inspector;
     }
 
     @Override
@@ -66,13 +96,29 @@ public final class DownloadAssetSlice implements Slice {
                                                 final Headers rqheaders,
                                                 final Content body) {
         final String tgz = this.path.value(line.uri().getPath());
+        final Optional<CooldownRequest> request = this.cooldownRequest(tgz, rqheaders);
+        if (request.isEmpty()) {
+            return this.serveAsset(tgz, rqheaders);
+        }
+        return this.cooldown.evaluate(request.get(), this.inspector)
+            .thenCompose(result -> {
+                if (result.blocked()) {
+                    return CompletableFuture.completedFuture(
+                        CooldownResponses.forbidden(result.block().orElseThrow())
+                    );
+                }
+                return this.serveAsset(tgz, rqheaders);
+            });
+    }
+
+    private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {
         return this.npm.getAsset(tgz).map(
                 asset -> {
                     this.packages.ifPresent(
                         queue -> queue.add(
                             new ProxyArtifactEvent(
                                 new Key.From(tgz), this.repoName,
-                                new Login(rqheaders).getValue()
+                                new Login(headers).getValue()
                             )
                         )
                     );
@@ -98,5 +144,38 @@ public final class DownloadAssetSlice implements Slice {
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture();
+    }
+
+    private Optional<CooldownRequest> cooldownRequest(final String original, final Headers headers) {
+        final String decoded = URLDecoder.decode(original, StandardCharsets.UTF_8);
+        final int sep = decoded.indexOf("/-/");
+        if (sep < 0) {
+            return Optional.empty();
+        }
+        final String pkg = decoded.substring(0, sep);
+        final String file = decoded.substring(decoded.lastIndexOf('/') + 1);
+        if (!file.endsWith(".tgz")) {
+            return Optional.empty();
+        }
+        final String base = file.substring(0, file.length() - 4);
+        final int dash = base.lastIndexOf('-');
+        if (dash < 0) {
+            return Optional.empty();
+        }
+        final String version = base.substring(dash + 1);
+        if (version.isEmpty()) {
+            return Optional.empty();
+        }
+        final String user = new Login(headers).getValue();
+        return Optional.of(
+            new CooldownRequest(
+                this.repoType,
+                this.repoName,
+                pkg,
+                version,
+                user,
+                Instant.now()
+            )
+        );
     }
 }

@@ -38,7 +38,8 @@ public final class MavenProxySlice extends Slice.Wrap {
      */
     public MavenProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Cache cache) {
-        this(clients, remote, auth, cache, Optional.empty(), "*");
+        this(clients, remote, auth, cache, Optional.empty(), "*",
+            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -51,7 +52,8 @@ public final class MavenProxySlice extends Slice.Wrap {
         final JettyClientSlices client, final URI uri,
         final Authenticator authenticator
     ) {
-        this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*");
+        this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
+            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -69,17 +71,42 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator auth,
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
-        final String rname
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown
+    ) {
+        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown);
+    }
+
+    private MavenProxySlice(
+        final Slice remote,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown
+    ) {
+        this(remote, cache, events, rname, rtype, cooldown, new MavenCooldownInspector(remote));
+    }
+
+    private MavenProxySlice(
+        final Slice remote,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown,
+        final MavenCooldownInspector inspector
     ) {
         super(
             new SliceRoute(
                 new RtRulePath(
                     MethodRule.HEAD,
-                    new HeadProxySlice(remote(clients, remote, auth))
+                    new HeadProxySlice(remote)
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new CachedProxySlice(remote(clients, remote, auth), cache, events, rname)
+                    new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,

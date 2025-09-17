@@ -233,7 +233,11 @@ public final class NpmProxyITCase {
         final URI uri = URI.create(String.format("http://%s:%d", address, port));
         final NpmProxy npm = new NpmProxy(uri, asto, this.client);
         final Queue<ProxyArtifactEvent> packages = new LinkedList<>();
-        final NpmProxySlice slice = new NpmProxySlice("npm-proxy", npm, Optional.of(packages));
+        final NpmProxySlice slice = new NpmProxySlice(
+            "npm-proxy", npm, Optional.of(packages),
+            "npm-proxy", "npm-proxy",
+            com.artipie.cooldown.NoopCooldownService.INSTANCE
+        );
         this.srv = new VertxSliceServer(NpmProxyITCase.VERTX, slice, NpmProxyITCase.listenPort);
         this.srv.start();
         this.scheduler = new StdSchedulerFactory().getScheduler();

@@ -11,11 +11,17 @@ import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.DigestVerification;
 import com.artipie.asto.cache.Remote;
 import com.artipie.asto.ext.Digests;
+import com.artipie.cooldown.CooldownRequest;
+import com.artipie.cooldown.CooldownResult;
+import com.artipie.cooldown.CooldownResponses;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.CooldownInspector;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.scheduling.ProxyArtifactEvent;
@@ -31,6 +37,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.time.Instant;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
@@ -77,18 +84,40 @@ final class CachedProxySlice implements Slice {
     private final String rname;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
+     * Cooldown inspector.
+     */
+    private final CooldownInspector inspector;
+
+    /**
+     * Repository type.
+     */
+    private final String rtype;
+
+    /**
      * Wraps origin slice with caching layer.
      * @param client Client slice
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
      */
     CachedProxySlice(final Slice client, final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events, final String rname) {
+        final Optional<Queue<ProxyArtifactEvent>> events, final String rname,
+        final String rtype, final CooldownService cooldown, final CooldownInspector inspector) {
         this.client = client;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
+        this.rtype = rtype;
+        this.cooldown = cooldown;
+        this.inspector = inspector;
     }
 
     @Override
@@ -100,7 +129,33 @@ final class CachedProxySlice implements Slice {
             return this.handleRootPath(line);
         }
         final Key key = new KeyFromPath(path);
+        final Optional<CooldownRequest> request = this.cooldownRequest(headers, key);
+        if (request.isEmpty()) {
+            return this.fetchThroughCache(line, key, headers);
+        }
+        return this.cooldown.evaluate(request.get(), this.inspector)
+            .thenCompose(result -> this.afterCooldown(result, line, key, headers));
+    }
+
+    private CompletableFuture<Response> afterCooldown(
+        final CooldownResult result, final RequestLine line, final Key key,
+        final Headers headers
+    ) {
+        if (result.blocked()) {
+            return CompletableFuture.completedFuture(
+                CooldownResponses.forbidden(result.block().orElseThrow())
+            );
+        }
+        return this.fetchThroughCache(line, key, headers);
+    }
+
+    private CompletableFuture<Response> fetchThroughCache(
+        final RequestLine line,
+        final Key key,
+        final Headers request
+    ) {
         final AtomicReference<Headers> rshdr = new AtomicReference<>(Headers.EMPTY);
+        final String owner = new Login(request).getValue();
         return new RepoHead(this.client)
             .head(line.uri().getPath()).thenCompose(
                 head -> this.cache.load(
@@ -111,14 +166,13 @@ final class CachedProxySlice implements Slice {
                                 new CompletableFuture<>();
                             this.client.response(line, Headers.EMPTY, Content.EMPTY)
                                 .thenApply(resp -> {
-                                    final CompletableFuture<Void> term =
-                                        new CompletableFuture<>();
+                                    final CompletableFuture<Void> term = new CompletableFuture<>();
                                     if (resp.status().success()) {
                                         final Flowable<ByteBuffer> res =
                                             Flowable.fromPublisher(resp.body())
                                                 .doOnError(term::completeExceptionally)
                                                 .doOnTerminate(() -> term.complete(null));
-                                        this.addEventToQueue(key);
+                                        this.addEventToQueue(key, owner);
                                         promise.complete(Optional.of(new Content.From(res)));
                                     } else {
                                         promise.complete(Optional.empty());
@@ -154,6 +208,31 @@ final class CachedProxySlice implements Slice {
             ).toCompletableFuture();
     }
 
+    private Optional<CooldownRequest> cooldownRequest(final Headers headers, final Key key) {
+        final Matcher matcher = MavenSlice.ARTIFACT.matcher(key.string());
+        if (!matcher.matches()) {
+            return Optional.empty();
+        }
+        final String pkg = matcher.group("pkg");
+        final int idx = pkg.lastIndexOf('/');
+        if (idx < 0 || idx == pkg.length() - 1) {
+            return Optional.empty();
+        }
+        final String version = pkg.substring(idx + 1);
+        final String artifact = MavenSlice.EVENT_INFO.formatArtifactName(pkg.substring(0, idx));
+        final String user = new Login(headers).getValue();
+        return Optional.of(
+            new CooldownRequest(
+                this.rtype,
+                this.rname,
+                artifact,
+                version,
+                user,
+                Instant.now()
+            )
+        );
+    }
+
     /**
      * Adds artifact data to events queue, if this queue is present.
      * Note, that
@@ -165,12 +244,16 @@ final class CachedProxySlice implements Slice {
      * equal.
      * @param key Artifact key
      */
-    private void addEventToQueue(final Key key) {
+    private void addEventToQueue(final Key key, final String owner) {
         if (this.events.isPresent()) {
             final Matcher matcher = MavenSlice.ARTIFACT.matcher(key.string());
             if (matcher.matches()) {
                 this.events.get().add(
-                    new ProxyArtifactEvent(new Key.From(matcher.group("pkg")), this.rname)
+                    new ProxyArtifactEvent(
+                        new Key.From(matcher.group("pkg")),
+                        this.rname,
+                        owner
+                    )
                 );
             }
         }
@@ -212,7 +295,8 @@ final class CachedProxySlice implements Slice {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenApply(resp -> {
                 if (resp.status().success()) {
-                    this.addEventToQueue(new KeyFromPath("/index.html"));
+                    this.addEventToQueue(new KeyFromPath("/index.html"),
+                        com.artipie.scheduling.ArtifactEvent.DEF_OWNER);
                     return ResponseBuilder.ok()
                         .headers(resp.headers())
                         .body(resp.body())

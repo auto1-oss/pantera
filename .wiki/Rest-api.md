@@ -136,6 +136,26 @@ request body, check Swagger docs to learn the format). Response is returned imme
 manipulation is performed in asynchronous mode, so to make sure data transfer is complete, 
 call `HEAD /api/v1/{repo_name}` and verify status `404 NOT FOUND` is returned.
 
+### Cooldown management
+
+When the global cooldown feature is active, administrators can unblock artefacts through the repository
+API:
+
+- `POST /api/v1/repository/{repo_name}/cooldown/unblock` – body:
+
+  ```json
+  {
+    "artifact": "com.example.library",
+    "version": "1.2.3"
+  }
+  ```
+
+- `POST /api/v1/repository/{repo_name}/cooldown/unblock-all`
+
+Both operations require update permissions on the repository. The first endpoint unblocks the specified
+artefact version and any dependencies that were blocked alongside it. The second endpoint clears all
+pending cooldown entries for the repository. Successful calls return `204 No Content`.
+
 ## Storage aliases
 [Storage aliases](./Configuration-Storage#Storage-Aliases) can also be managed with Rest API, 
 there are methods to read, create, update and remove aliases. Note, that concrete storage settings 

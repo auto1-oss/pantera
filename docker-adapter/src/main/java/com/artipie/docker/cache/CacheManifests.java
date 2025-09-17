@@ -63,6 +63,11 @@ public final class CacheManifests implements Manifests {
     private final String rname;
 
     /**
+     * Cooldown inspector carrying request context.
+     */
+    private final Optional<DockerProxyCooldownInspector> inspector;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -70,12 +75,14 @@ public final class CacheManifests implements Manifests {
      * @param registryName Artipie repository name
      */
     public CacheManifests(String name, Repo origin, Repo cache,
-        Optional<Queue<ArtifactEvent>> events, String registryName) {
+        Optional<Queue<ArtifactEvent>> events, String registryName,
+        Optional<DockerProxyCooldownInspector> inspector) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.rname = registryName;
+        this.inspector = inspector;
     }
 
     @Override
@@ -143,7 +150,9 @@ public final class CacheManifests implements Manifests {
                             new ArtifactEvent(
                                 CacheManifests.REPO_TYPE,
                                 this.rname,
-                                ArtifactEvent.DEF_OWNER,
+                                this.inspector
+                                    .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
+                                    .orElse(ArtifactEvent.DEF_OWNER),
                                 this.name,
                                 ref.digest(),
                                 manifest.layers().stream().mapToLong(ManifestLayer::size).sum()

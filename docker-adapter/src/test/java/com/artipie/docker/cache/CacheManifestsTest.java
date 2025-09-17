@@ -61,7 +61,7 @@ final class CacheManifestsTest {
             "test",
             new SimpleRepo(new FakeManifests(origin, "origin")),
             new SimpleRepo(new FakeManifests(cache, "cache")),
-            Optional.empty(), "*"
+            Optional.empty(), "*", Optional.empty()
         );
         MatcherAssert.assertThat(
             manifests.get(ManifestReference.from("ref"))
@@ -80,7 +80,10 @@ final class CacheManifestsTest {
             .repo("my-cache");
         new CacheManifests("cache-alpine",
             new AstoDocker("registry", new ExampleStorage()).repo("my-alpine"),
-            cache, Optional.of(events), "my-docker-proxy"
+            cache,
+            Optional.of(events),
+            "my-docker-proxy",
+            Optional.of(new DockerProxyCooldownInspector())
         ).get(ref).toCompletableFuture().join();
         final Stopwatch stopwatch = Stopwatch.createStarted();
         while (cache.manifests().get(ref).toCompletableFuture().join().isEmpty()) {
@@ -127,7 +130,7 @@ final class CacheManifestsTest {
                     new FullTagsManifests(
                         () -> new Content.From("{\"tags\":[\"one\",\"two\"]}".getBytes())
                     )
-                ), Optional.empty(), "*"
+                ), Optional.empty(), "*", Optional.empty()
             ).tags(Pagination.from("four", limit)).thenCompose(
                 tags -> tags.json().asStringFuture()
             ).toCompletableFuture().join(),

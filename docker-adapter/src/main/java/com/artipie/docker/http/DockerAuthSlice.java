@@ -44,6 +44,12 @@ final class DockerAuthSlice implements Slice {
                         .jsonBody(new UnauthorizedError().json())
                         .build();
                 }
+                if (response.status() == RsStatus.PROXY_AUTHENTICATION_REQUIRED) {
+                    return ResponseBuilder.proxyAuthenticationRequired()
+                        .headers(response.headers())
+                        .jsonBody(new UnauthorizedError().json())
+                        .build();
+                }
                 if (response.status() == RsStatus.FORBIDDEN) {
                     return ResponseBuilder.forbidden()
                         .headers(response.headers())

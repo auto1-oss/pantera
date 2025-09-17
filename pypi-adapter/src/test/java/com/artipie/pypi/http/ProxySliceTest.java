@@ -11,6 +11,9 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.memory.InMemoryStorage;
+import com.artipie.cooldown.NoopCooldownService;
+import com.artipie.http.Headers;
+import com.artipie.http.headers.Authorization;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.headers.Header;
 import com.artipie.http.hm.RsHasBody;
@@ -26,6 +29,7 @@ import com.artipie.scheduling.ProxyArtifactEvent;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -50,10 +54,16 @@ class ProxySliceTest {
      */
     private Queue<ProxyArtifactEvent> events;
 
+    private Headers authorization;
+
+    private static final String USER = "pypi-user";
+    private static final String PASSWORD = "secret";
+
     @BeforeEach
     void init() {
         this.storage = new InMemoryStorage();
         this.events = new LinkedList<>();
+        this.authorization = Headers.from(new Authorization.Basic(USER, PASSWORD));
     }
 
     @Test
@@ -68,7 +78,12 @@ class ProxySliceTest {
                         .body(body)
                         .build()
                 ),
-                new FromStorageCache(this.storage), Optional.of(this.events), "my-pypi-proxy"
+                new FromStorageCache(this.storage),
+                Optional.of(this.events),
+                "my-pypi-proxy",
+                "pypi-proxy",
+                NoopCooldownService.INSTANCE,
+                new PyProxyCooldownInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -78,7 +93,9 @@ class ProxySliceTest {
                         new Header("Content-Length", "9")
                     )
                 ),
-                new RequestLine(RqMethod.GET, String.format("/%s", key))
+                new RequestLine(RqMethod.GET, String.format("/%s", key)),
+                this.authorization,
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -86,7 +103,7 @@ class ProxySliceTest {
             new BlockingStorage(this.storage).value(new Key.From(key)),
             new IsEqual<>(body)
         );
-        MatcherAssert.assertThat("Queue has one event", this.events.size() == 1);
+        Assertions.assertTrue(this.events.isEmpty(), "Index requests should not enqueue events");
     }
 
     @ParameterizedTest
@@ -103,7 +120,12 @@ class ProxySliceTest {
             "Returns body from cache",
             new ProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
-                new FromStorageCache(this.storage), Optional.of(this.events), "my-pypi-proxy"
+                new FromStorageCache(this.storage),
+                Optional.of(this.events),
+                "my-pypi-proxy",
+                "pypi-proxy",
+                NoopCooldownService.INSTANCE,
+                new PyProxyCooldownInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -113,7 +135,9 @@ class ProxySliceTest {
                         new Header("Content-Length", String.valueOf(body.length))
                     )
                 ),
-                new RequestLine(RqMethod.GET, String.format("/%s", key))
+                new RequestLine(RqMethod.GET, String.format("/%s", key)),
+                this.authorization,
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -130,11 +154,18 @@ class ProxySliceTest {
             "Status 400 returned",
             new ProxySlice(
                 new SliceSimple(ResponseBuilder.badRequest().build()),
-                new FromStorageCache(this.storage), Optional.of(this.events), "my-pypi-proxy"
+                new FromStorageCache(this.storage),
+                Optional.of(this.events),
+                "my-pypi-proxy",
+                "pypi-proxy",
+                NoopCooldownService.INSTANCE,
+                new PyProxyCooldownInspector()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
-                new RequestLine(RqMethod.GET, "/any")
+                new RequestLine(RqMethod.GET, "/any"),
+                this.authorization,
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -161,7 +192,12 @@ class ProxySliceTest {
                     ResponseBuilder.ok().header(ContentType.mime("smth"))
                         .body(body).build()
                 ),
-                new FromStorageCache(this.storage), Optional.empty(), "my-pypi-proxy"
+                new FromStorageCache(this.storage),
+                Optional.empty(),
+                "my-pypi-proxy",
+                "pypi-proxy",
+                NoopCooldownService.INSTANCE,
+                new PyProxyCooldownInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -171,7 +207,9 @@ class ProxySliceTest {
                         new Header("Content-Length", String.valueOf(body.length))
                     )
                 ),
-                new RequestLine(RqMethod.GET, String.format("/%s", line))
+                new RequestLine(RqMethod.GET, String.format("/%s", line)),
+                this.authorization,
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -190,11 +228,18 @@ class ProxySliceTest {
                 (key, remote, cache) ->
                     new FailedCompletionStage<>(
                         new IllegalStateException("Failed to obtain item from cache")
-                    ), Optional.empty(), "my-pypi-proxy"
+                    ),
+                Optional.empty(),
+                "my-pypi-proxy",
+                "pypi-proxy",
+                NoopCooldownService.INSTANCE,
+                new PyProxyCooldownInspector()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
-                new RequestLine(RqMethod.GET, "/anything")
+                new RequestLine(RqMethod.GET, "/anything"),
+                this.authorization,
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(

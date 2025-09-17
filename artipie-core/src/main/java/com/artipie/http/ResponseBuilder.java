@@ -38,6 +38,10 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.TEMPORARY_REDIRECT);
     }
 
+    public static ResponseBuilder proxyAuthenticationRequired() {
+        return new ResponseBuilder(RsStatus.PROXY_AUTHENTICATION_REQUIRED);
+    }
+
     public static ResponseBuilder movedPermanently() {
         return new ResponseBuilder(RsStatus.MOVED_PERMANENTLY);
     }
@@ -208,6 +212,7 @@ public class ResponseBuilder {
                 case MOVED_TEMPORARILY -> RSP_MOVED_TEMPORARILY;
                 case NOT_MODIFIED -> RSP_NOT_MODIFIED;
                 case TEMPORARY_REDIRECT -> RSP_TEMPORARY_REDIRECT;
+                case PROXY_AUTHENTICATION_REQUIRED -> RSP_PROXY_AUTH_REQUIRED;
                 case BAD_REQUEST -> RSP_BAD_REQUEST;
                 case UNAUTHORIZED -> RSP_UNAUTHORIZED;
                 case FORBIDDEN -> RSP_FORBIDDEN;
@@ -234,6 +239,8 @@ public class ResponseBuilder {
 
     private final static Response RSP_OK = new Response(RsStatus.OK, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_NOT_FOUND = new Response(RsStatus.NOT_FOUND, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PROXY_AUTH_REQUIRED =
+        new Response(RsStatus.PROXY_AUTHENTICATION_REQUIRED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CONTINUE = new Response(RsStatus.CONTINUE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CREATED = new Response(RsStatus.CREATED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_ACCEPTED = new Response(RsStatus.ACCEPTED, Headers.EMPTY, Content.EMPTY);

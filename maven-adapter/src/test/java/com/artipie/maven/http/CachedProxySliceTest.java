@@ -6,6 +6,9 @@ package com.artipie.maven.http;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.FailedCompletionStage;
+import com.artipie.cooldown.CooldownDependency;
+import com.artipie.cooldown.CooldownInspector;
+import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.http.hm.RsHasBody;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.hm.SliceHasResponse;
@@ -23,6 +26,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.LinkedList;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -51,7 +56,9 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> CompletableFuture.supplyAsync(
                     () -> Optional.of(new Content.From(data))
                 ),
-                Optional.of(this.events), "*"
+                Optional.of(this.events), "*", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -69,7 +76,10 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -86,7 +96,9 @@ final class CachedProxySliceTest {
                 new SliceSimple(ResponseBuilder.internalError().build()),
                 (key, supplier, control)
                     -> new FailedCompletionStage<>(new RuntimeException("Any error")),
-                Optional.of(this.events), "*"
+                Optional.of(this.events), "*", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -108,7 +120,10 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -133,7 +148,10 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -144,5 +162,19 @@ final class CachedProxySliceTest {
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    private static CooldownInspector noopInspector() {
+        return new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
     }
 }

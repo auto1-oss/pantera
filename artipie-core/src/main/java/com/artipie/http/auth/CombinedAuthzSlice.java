@@ -9,6 +9,7 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Authorization;
+import com.artipie.http.headers.Header;
 import com.artipie.http.headers.WwwAuthenticate;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
@@ -87,14 +88,25 @@ public final class CombinedAuthzSlice implements Slice {
                         }
                         return CompletableFuture.completedFuture(ResponseBuilder.forbidden().build());
                     }
-                    // The case of anonymous user
-                    if (result.status() == AuthScheme.AuthStatus.NO_CREDENTIALS
-                        && this.control.allowed(result.user())) {
-                        return this.origin.response(
-                            line,
-                            headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, result.user().name()),
-                            body
-                        );
+                    if (result.status() == AuthScheme.AuthStatus.NO_CREDENTIALS) {
+                        try {
+                            final String challenge = result.challenge();
+                            if (challenge != null && !challenge.isBlank()) {
+                                return ResponseBuilder.proxyAuthenticationRequired()
+                                    .header(new Header("Proxy-Authenticate", challenge))
+                                    .completedFuture();
+                            }
+                        } catch (final UnsupportedOperationException ignored) {
+                            // fall through when scheme does not provide challenge
+                        }
+                        if (this.control.allowed(result.user())) {
+                            return this.origin.response(
+                                line,
+                                headers.copy().add(CombinedAuthzSlice.LOGIN_HDR, result.user().name()),
+                                body
+                            );
+                        }
+                        return CompletableFuture.completedFuture(ResponseBuilder.forbidden().build());
                     }
                     return ResponseBuilder.unauthorized()
                         .header(new WwwAuthenticate(result.challenge()))

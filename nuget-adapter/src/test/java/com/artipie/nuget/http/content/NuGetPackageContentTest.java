@@ -126,6 +126,13 @@ class NuGetPackageContentTest {
                 "/content/package/2.0.0/content.nupkg"
             ), Headers.EMPTY, Content.EMPTY
         ).join();
-        Assertions.assertEquals(RsStatus.UNAUTHORIZED, response.status());
+        Assertions.assertEquals(RsStatus.PROXY_AUTHENTICATION_REQUIRED, response.status());
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                        && header.getValue().contains("Basic realm=\"artipie\"")
+                )
+        );
     }
 }

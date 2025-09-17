@@ -45,3 +45,12 @@ npm set registry http://{host}:{port}/{repository-name}
 
 In the examples above `{host}` and `{port}` are Artipie service host and port, `{repository-name}`
 is the name of the repository (and repository name is the name of the repo config yaml file).
+
+### Cooldown behaviour
+
+When the [global cooldown configuration](../Configuration.md#cooldown-settings) is enabled, NPM proxy
+repositories delay serving new artefact versions. The first request for a version that is newer than
+the cached one – or a version published within the configured release window – returns an HTTP 403 response
+with the expected unblock time. The version (and its dependencies) is automatically allowed after the
+cooldown expires or when an administrator unblocks it through the REST API (`/api/v1/repository/{rname}/cooldown/...`).
+Once a version is unblocked it is never cooled down again.

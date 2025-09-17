@@ -4,6 +4,10 @@ meta:
     path: /var/artipie/cfg
   credentials:
     - type: env
+  cooldown:
+    enabled: true
+    newer_than_cache_hours: 72
+    fresh_release_hours: 72
   artifacts_database:
     postgres_host: localhost
     postgres_port: 5432

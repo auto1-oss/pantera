@@ -12,6 +12,7 @@ import com.artipie.api.ssl.KeyStoreFactory;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.auth.AuthFromEnv;
+import com.artipie.cooldown.CooldownSettings;
 import com.artipie.http.auth.Authentication;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.Policy;
@@ -21,6 +22,7 @@ import com.artipie.settings.MetricsContext;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * Test {@link Settings} implementation.
@@ -152,5 +154,15 @@ public final class TestSettings implements Settings {
     @Override
     public LoggingContext logging() {
         return new LoggingContext(Yaml.createYamlMappingBuilder().build());
+    }
+
+    @Override
+    public CooldownSettings cooldown() {
+        return CooldownSettings.defaults();
+    }
+
+    @Override
+    public Optional<DataSource> artifactsDatabase() {
+        return Optional.empty();
     }
 }

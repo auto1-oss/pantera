@@ -36,7 +36,7 @@ final class CacheRepoTest {
                 "test-origin"
             ),
             new AstoDocker("registry", new InMemoryStorage())
-                .repo("test-cache"), Optional.empty(), "*"
+                .repo("test-cache"), Optional.empty(), "*", Optional.empty()
         );
     }
 

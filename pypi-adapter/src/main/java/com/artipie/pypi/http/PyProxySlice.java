@@ -6,6 +6,8 @@ package com.artipie.pypi.http;
 
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.FromStorageCache;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
@@ -36,7 +38,16 @@ public final class PyProxySlice extends Slice.Wrap {
      * @param storage Cache storage
      */
     public PyProxySlice(final ClientSlices clients, final URI remote, final Storage storage) {
-        this(clients, remote, Authenticator.ANONYMOUS, storage, Optional.empty(), "*");
+        this(
+            clients,
+            remote,
+            Authenticator.ANONYMOUS,
+            storage,
+            Optional.empty(),
+            "*",
+            "pypi-proxy",
+            NoopCooldownService.INSTANCE
+        );
     }
 
     /**
@@ -57,13 +68,45 @@ public final class PyProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname
     ) {
+        this(clients, remote, auth, cache, events, rname, "pypi-proxy", NoopCooldownService.INSTANCE);
+    }
+
+    public PyProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Authenticator auth,
+        final Storage cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown
+    ) {
+        this(clients, remote, auth, cache, events, rname, rtype, cooldown, new PyProxyCooldownInspector());
+    }
+
+    private PyProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Authenticator auth,
+        final Storage cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final PyProxyCooldownInspector inspector
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
                     MethodRule.GET,
                     new ProxySlice(
                         new AuthClientSlice(new UriClientSlice(clients, remote), auth),
-                        new FromStorageCache(cache), events, rname
+                        new FromStorageCache(cache),
+                        events,
+                        rname,
+                        rtype,
+                        cooldown,
+                        inspector
                     )
                 ),
                 new RtRulePath(

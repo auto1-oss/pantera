@@ -11,6 +11,7 @@ Yaml configuration file contains server meta configuration, such as:
  - `configs` - repository config files location, not required, the storage key relative to the 
 main storage, or, in file system storage terms, subdirectory where repo configs are located relatively to the storage;
  - `metrics` - enable and set [metrics collection](./Configuration-Metrics), not required.
+ - `cooldown` - optional cooldown policy for proxy repositories (see below).
 
 Example: 
 ```yaml
@@ -39,6 +40,10 @@ meta:
   credentials:
     - type: artipie
     - type: env
+  cooldown:
+    enabled: true
+    newer_than_cache_hours: 72
+    fresh_release_hours: 72
   policy:
     type: artipie
     storage:
@@ -77,6 +82,20 @@ in `/tmp/artipie/configs` directly.
 Credentials and policy sections are responsible for [user credentials](./Configuration-Credentials) and [security policy](./Configuration-Policy).
 
 Note that Artipie understands both extensions: `yml` and `yaml`.
+
+### Cooldown settings
+
+When the optional `cooldown` block is present, Artipie enforces a delay before serving newly
+requested proxy artefacts. The fields control the behaviour:
+
+- `enabled`: toggle the feature on or off.
+- `newer_than_cache_hours`: block window (in hours) when a request targets a version newer than
+  the cached one.
+- `fresh_release_hours`: block window (in hours) for artefacts that have never been cached and were
+  recently released.
+
+Cooldown decisions are persisted to the configured artefacts database. Once a cooldown expires or an
+administrator manually unblocks the artefact via the REST API, that version becomes permanently allowed.
 
 ### Http client settings
 The http client settings can be overridden in `xxx-proxy` repository config.

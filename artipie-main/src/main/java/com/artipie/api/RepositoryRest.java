@@ -8,6 +8,7 @@ import com.artipie.api.perms.ApiRepositoryPermission;
 import com.artipie.api.verifier.ExistenceVerifier;
 import com.artipie.api.verifier.ReservedNamesVerifier;
 import com.artipie.api.verifier.SettingsDuplicatesVerifier;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.Policy;
@@ -22,6 +23,7 @@ import java.security.PermissionCollection;
 import java.util.Optional;
 import javax.json.JsonObject;
 import org.eclipse.jetty.http.HttpStatus;
+import com.jcabi.log.Logger;
 
 /**
  * Rest-api operations for repositories settings CRUD
@@ -72,6 +74,11 @@ public final class RepositoryRest extends BaseRest {
     private final EventBus bus;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
      * Ctor.
      * @param cache Artipie filters cache
      * @param crs Repository settings create/read/update/delete
@@ -82,6 +89,7 @@ public final class RepositoryRest extends BaseRest {
     public RepositoryRest(
         final FiltersCache cache, final CrudRepoSettings crs, final RepoData data,
         final Policy<?> policy, final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown,
         final EventBus bus
     ) {
         this.cache = cache;
@@ -89,6 +97,7 @@ public final class RepositoryRest extends BaseRest {
         this.data = data;
         this.policy = policy;
         this.events = events;
+        this.cooldown = cooldown;
         this.bus = bus;
     }
 
@@ -133,6 +142,14 @@ public final class RepositoryRest extends BaseRest {
                 )
             )
             .handler(this::removeRepo)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.operation("unblockCooldown")
+            .handler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
+            .handler(this::unblockCooldown)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.operation("unblockAllCooldown")
+            .handler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
+            .handler(this::unblockAllCooldown)
             .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
         rbr.operation("moveRepo")
             .handler(
@@ -281,6 +298,79 @@ public final class RepositoryRest extends BaseRest {
                 .setStatusCode(HttpStatus.OK_200)
                 .end();
         }
+    }
+
+    private void unblockCooldown(final RoutingContext context) {
+        final RepositoryName name = new RepositoryName.FromRequest(context);
+        final Optional<JsonObject> repo = this.repositoryConfig(name);
+        if (repo.isEmpty()) {
+            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            return;
+        }
+        final String type = repo.get().getString("type", "").trim();
+        if (type.isEmpty()) {
+            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
+                .end("Repository type is required");
+            return;
+        }
+        final JsonObject body = BaseRest.readJsonObject(context);
+        final String artifact = body.getString("artifact", "").trim();
+        final String version = body.getString("version", "").trim();
+        if (artifact.isEmpty() || version.isEmpty()) {
+            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
+                .end("artifact and version are required");
+            return;
+        }
+        final String actor = context.user().principal().getString(AuthTokenRest.SUB);
+        this.cooldown.unblock(type, name.toString(), artifact, version, actor)
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
+                } else {
+                    Logger.error(this, error.getMessage());
+                    context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
+                        .end(error.getMessage());
+                }
+            });
+    }
+
+    private void unblockAllCooldown(final RoutingContext context) {
+        final RepositoryName name = new RepositoryName.FromRequest(context);
+        final Optional<JsonObject> repo = this.repositoryConfig(name);
+        if (repo.isEmpty()) {
+            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            return;
+        }
+        final String type = repo.get().getString("type", "").trim();
+        if (type.isEmpty()) {
+            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
+                .end("Repository type is required");
+            return;
+        }
+        final String actor = context.user().principal().getString(AuthTokenRest.SUB);
+        this.cooldown.unblockAll(type, name.toString(), actor)
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
+                } else {
+                    Logger.error(this, error.getMessage());
+                    context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
+                        .end(error.getMessage());
+                }
+            });
+    }
+
+    private Optional<JsonObject> repositoryConfig(final RepositoryName name) {
+        final javax.json.JsonStructure config = this.crs.value(name);
+        if (config == null || !(config instanceof JsonObject)) {
+            return Optional.empty();
+        }
+        final JsonObject obj = (JsonObject) config;
+        if (obj.containsKey(BaseRest.REPO)
+            && obj.get(BaseRest.REPO).getValueType() == javax.json.JsonValue.ValueType.OBJECT) {
+            return Optional.of(obj.getJsonObject(BaseRest.REPO));
+        }
+        return Optional.of(obj);
     }
 
     /**

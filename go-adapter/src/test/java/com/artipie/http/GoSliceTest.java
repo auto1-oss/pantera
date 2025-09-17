@@ -48,8 +48,10 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage(path, body), anonymous),
             new SliceHasResponse(
-                matchers(body, ContentType.json()), GoSliceTest.line(path),
-                this.headers(anonymous), Content.EMPTY
+                anonymous
+                    ? unauthorized()
+                    : success(body, ContentType.json()),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
             )
         );
     }
@@ -62,8 +64,10 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage(path, body), anonymous),
             new SliceHasResponse(
-                matchers(body, ContentType.text()), GoSliceTest.line(path),
-                this.headers(anonymous), Content.EMPTY
+                anonymous
+                    ? unauthorized()
+                    : success(body, ContentType.text()),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
             )
         );
     }
@@ -76,8 +80,10 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage(path, body), anonymous),
             new SliceHasResponse(
-                matchers(body, ContentType.mime("application/zip")), GoSliceTest.line(path),
-                this.headers(anonymous), Content.EMPTY
+                anonymous
+                    ? unauthorized()
+                    : success(body, ContentType.mime("application/zip")),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
             )
         );
     }
@@ -90,8 +96,10 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage(path, body), anonymous),
             new SliceHasResponse(
-                matchers(body, ContentType.text()), GoSliceTest.line(path),
-                this.headers(anonymous), Content.EMPTY
+                anonymous
+                    ? unauthorized()
+                    : success(body, ContentType.text()),
+                GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
             )
         );
     }
@@ -104,7 +112,7 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage(path, body), anonymous),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.NOT_FOUND),
+                anonymous ? unauthorized() : new RsHasStatus(RsStatus.NOT_FOUND),
                 GoSliceTest.line(path), this.headers(anonymous), Content.EMPTY
             )
         );
@@ -117,7 +125,9 @@ class GoSliceTest {
         MatcherAssert.assertThat(
             this.slice(GoSliceTest.storage("example.com/latest/bar/@v/v1.1.info", body), anonymous),
             new SliceHasResponse(
-                matchers(body, ContentType.json()),
+                anonymous
+                    ? unauthorized()
+                    : success(body, ContentType.json()),
                 GoSliceTest.line("example.com/latest/bar/@latest"),
                 this.headers(anonymous), Content.EMPTY
             )
@@ -153,10 +163,18 @@ class GoSliceTest {
      * @param header Content-type
      * @return List of matchers
      */
-    private static AllOf<Response> matchers(String body, Header header) {
+    private static AllOf<Response> success(String body, Header header) {
         return new AllOf<>(
+            new RsHasStatus(RsStatus.OK),
             new RsHasBody(body.getBytes()),
             new RsHasHeaders(header)
+        );
+    }
+
+    private static AllOf<Response> unauthorized() {
+        return new AllOf<>(
+            new RsHasStatus(RsStatus.PROXY_AUTHENTICATION_REQUIRED),
+            new RsHasHeaders(new Header("Proxy-Authenticate", "Basic realm=\"artipie\""))
         );
     }
 

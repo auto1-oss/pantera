@@ -157,6 +157,49 @@ public final class ArtifactDbFactory {
                     ");"
                 )
             );
+            statement.executeUpdate(
+                String.join(
+                    "\n",
+                    "CREATE TABLE IF NOT EXISTS artifact_cooldowns(",
+                    "   id BIGSERIAL PRIMARY KEY,",
+                    "   repo_type VARCHAR NOT NULL,",
+                    "   repo_name VARCHAR NOT NULL,",
+                    "   artifact VARCHAR NOT NULL,",
+                    "   version VARCHAR NOT NULL,",
+                    "   reason VARCHAR NOT NULL,",
+                    "   status VARCHAR NOT NULL,",
+                    "   blocked_by VARCHAR NOT NULL,",
+                    "   blocked_at BIGINT NOT NULL,",
+                    "   blocked_until BIGINT NOT NULL,",
+                    "   unblocked_at BIGINT,",
+                    "   unblocked_by VARCHAR,",
+                    "   parent_block_id BIGINT,",
+                    "   CONSTRAINT cooldown_parent_fk FOREIGN KEY (parent_block_id)",
+                    "       REFERENCES artifact_cooldowns(id) ON DELETE CASCADE,",
+                    "   CONSTRAINT cooldown_artifact_unique UNIQUE (repo_name, artifact, version)",
+                    ");"
+                )
+            );
+            statement.executeUpdate(
+                String.join(
+                    "\n",
+                    "CREATE TABLE IF NOT EXISTS artifact_cooldown_attempts(",
+                    "   id BIGSERIAL PRIMARY KEY,",
+                    "   block_id BIGINT NOT NULL REFERENCES artifact_cooldowns(id) ON DELETE CASCADE,",
+                    "   requested_by VARCHAR NOT NULL,",
+                    "   attempted_at BIGINT NOT NULL",
+                    ");"
+                )
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_repo_artifact ON artifact_cooldowns(repo_name, artifact, version)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_status ON artifact_cooldowns(status)"
+            );
+            statement.executeUpdate(
+                "UPDATE artifact_cooldowns SET status = 'INACTIVE' WHERE status = 'MANUAL'"
+            );
         } catch (final SQLException error) {
             throw new ArtipieException(error);
         }
