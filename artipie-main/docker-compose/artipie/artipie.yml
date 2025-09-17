@@ -16,6 +16,10 @@ meta:
     storage: # required
       type: fs
       path: /var/artipie/security
+  cooldown:
+    enabled: true
+    newer_than_cache_hours: 1
+    fresh_release_hours: 1
   artifacts_database:
     postgres_host: artipie-db
     postgres_port: 5432

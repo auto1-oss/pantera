@@ -8,10 +8,12 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.artipie.api.ssl.KeyStore;
 import com.artipie.asto.Storage;
+import com.artipie.cooldown.CooldownSettings;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.settings.cache.ArtipieCaches;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * Application settings.
@@ -85,4 +87,16 @@ public interface Settings {
     default HttpClientSettings httpClientSettings() {
         return new HttpClientSettings();
     }
+
+    /**
+     * Cooldown configuration for proxy repositories.
+     * @return Cooldown settings
+     */
+    CooldownSettings cooldown();
+
+    /**
+     * Artifacts database data source, if configured.
+     * @return Optional data source
+     */
+    Optional<DataSource> artifactsDatabase();
 }

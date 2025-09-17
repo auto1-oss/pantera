@@ -325,6 +325,7 @@ SOFTWARE.
                 <exclude>**/**.yaml</exclude>
                 <exclude>**/**.rb</exclude>
                 <exclude>**/Docker*</exclude>
+                <exclude>**/.Docker*</exclude>
                 <exclude>pom.xml</exclude>
                 <exclude>LICENSE.header</exclude>
                 <exclude>.Dockerignore</exclude>

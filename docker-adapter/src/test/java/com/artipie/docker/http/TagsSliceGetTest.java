@@ -13,7 +13,6 @@ import com.artipie.docker.Repo;
 import com.artipie.docker.asto.Uploads;
 import com.artipie.docker.fake.FullTagsManifests;
 import com.artipie.docker.misc.Pagination;
-import com.artipie.http.Headers;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.headers.ContentType;
@@ -43,17 +42,17 @@ class TagsSliceGetTest {
         );
         MatcherAssert.assertThat(
             "Responds with tags",
-            new DockerSlice(docker),
+            TestDockerAuth.slice(docker),
             new SliceHasResponse(
                 new ResponseMatcher(
                     RsStatus.OK,
-                    Headers.from(
-                        new ContentLength(tags.length),
-                        ContentType.json()
-                    ),
-                    tags
+                    tags,
+                    new ContentLength(tags.length),
+                    ContentType.json()
                 ),
-                new RequestLine(RqMethod.GET, "/v2/my-alpine/tags/list")
+                new RequestLine(RqMethod.GET, "/v2/my-alpine/tags/list"),
+                TestDockerAuth.headers(),
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -69,12 +68,12 @@ class TagsSliceGetTest {
         final int limit = 123;
         final FullTagsManifests manifests = new FullTagsManifests(() -> Content.EMPTY);
         final Docker docker = new FakeDocker(manifests);
-        new DockerSlice(docker).response(
+        TestDockerAuth.slice(docker).response(
             new RequestLine(
                 RqMethod.GET,
                 String.format("/v2/my-alpine/tags/list?n=%d&last=%s", limit, from)
             ),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(

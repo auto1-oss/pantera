@@ -86,7 +86,14 @@ public final class GoSlice implements Slice {
             ),
             new RtRulePath(
                 RtRule.FALLBACK,
-                new SliceSimple(ResponseBuilder.notFound().build())
+                GoSlice.createAuthSlice(
+                    new SliceSimple(ResponseBuilder.notFound().build()),
+                    basicAuth,
+                    tokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
             )
         );
     }

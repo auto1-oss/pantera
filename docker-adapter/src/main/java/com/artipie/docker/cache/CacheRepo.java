@@ -44,6 +44,11 @@ public final class CacheRepo implements Repo {
     private final String repoName;
 
     /**
+     * Cooldown inspector.
+     */
+    private final Optional<DockerProxyCooldownInspector> inspector;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -51,12 +56,14 @@ public final class CacheRepo implements Repo {
      * @param registryName Registry name.
      */
     public CacheRepo(String name, Repo origin, Repo cache,
-                     Optional<Queue<ArtifactEvent>> events, String registryName) {
+                     Optional<Queue<ArtifactEvent>> events, String registryName,
+                     Optional<DockerProxyCooldownInspector> inspector) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.repoName = registryName;
+        this.inspector = inspector;
     }
 
     @Override
@@ -66,7 +73,14 @@ public final class CacheRepo implements Repo {
 
     @Override
     public Manifests manifests() {
-        return new CacheManifests(this.name, this.origin, this.cache, this.events, this.repoName);
+        return new CacheManifests(
+            this.name,
+            this.origin,
+            this.cache,
+            this.events,
+            this.repoName,
+            this.inspector
+        );
     }
 
     @Override

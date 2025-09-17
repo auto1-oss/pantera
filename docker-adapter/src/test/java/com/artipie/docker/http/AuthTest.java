@@ -66,13 +66,18 @@ public final class AuthTest {
     @ParameterizedTest
     @MethodSource("setups")
     void shouldUnauthorizedForAnonymousUser(final Method method, final RequestLine line) {
-        ResponseAssert.check(
-            method.slice(
-                new TestPolicy(
-                    new DockerRepositoryPermission("*", "whatever", DockerActions.PULL.mask())
+        final Response response = method.slice(
+            new TestPolicy(
+                new DockerRepositoryPermission("*", "whatever", DockerActions.PULL.mask())
+            )
+        ).response(line, Headers.EMPTY, Content.EMPTY).join();
+        ResponseAssert.check(response, RsStatus.PROXY_AUTHENTICATION_REQUIRED);
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                        && !header.getValue().isBlank()
                 )
-            ).response(line, Headers.EMPTY, Content.EMPTY).join(),
-            RsStatus.UNAUTHORIZED
         );
     }
 
@@ -165,12 +170,14 @@ public final class AuthTest {
             .response(line, Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
             response,
-            new AllOf<>(
-                Arrays.asList(
-                    new IsNot<>(new RsHasStatus(RsStatus.FORBIDDEN)),
-                    new IsNot<>(new RsHasStatus(RsStatus.UNAUTHORIZED))
+            new RsHasStatus(RsStatus.PROXY_AUTHENTICATION_REQUIRED)
+        );
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                        && !header.getValue().isBlank()
                 )
-            )
         );
     }
 

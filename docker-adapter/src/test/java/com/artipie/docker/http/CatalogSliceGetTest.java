@@ -9,7 +9,6 @@ import com.artipie.docker.Catalog;
 import com.artipie.docker.Docker;
 import com.artipie.docker.Repo;
 import com.artipie.docker.misc.Pagination;
-import com.artipie.http.Headers;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.headers.ContentType;
@@ -33,8 +32,8 @@ class CatalogSliceGetTest {
     void shouldReturnCatalog() {
         final byte[] catalog = "{...}".getBytes();
         ResponseAssert.check(
-            new DockerSlice(new FakeDocker(() -> new Content.From(catalog)))
-                .response(new RequestLine(RqMethod.GET, "/v2/_catalog"), Headers.EMPTY, Content.EMPTY)
+            TestDockerAuth.slice(new FakeDocker(() -> new Content.From(catalog)))
+                .response(new RequestLine(RqMethod.GET, "/v2/_catalog"), TestDockerAuth.headers(), Content.EMPTY)
                 .join(),
             RsStatus.OK,
             catalog,
@@ -48,12 +47,12 @@ class CatalogSliceGetTest {
         final String from = "foo";
         final int limit = 123;
         final FakeDocker docker = new FakeDocker(() -> Content.EMPTY);
-        new DockerSlice(docker).response(
+        TestDockerAuth.slice(docker).response(
             new RequestLine(
                 RqMethod.GET,
                 String.format("/v2/_catalog?n=%d&last=%s", limit, from)
             ),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(

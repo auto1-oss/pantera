@@ -130,11 +130,7 @@ paths:
         - bearerAuth: [ ]
       responses:
         '200':
-          description: Creates or update repository with name {rname}
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FullRepository'
+          description: Repository was created or updated
         '400':
           description: Wrong repository name
         '401':
@@ -198,7 +194,7 @@ paths:
         - bearerAuth: [ ]
       responses:
         '200':
-          description: Remove a repository with name {rname}
+          description: Repository moved successfully
         '400':
           description: Wrong repository name
         '404':
@@ -207,6 +203,73 @@ paths:
           description: Repository has settings duplicates
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/repository/{rname}/cooldown/unblock:
+    post:
+      summary: Unblock cooldown for repository artifact
+      operationId: unblockCooldown
+      tags:
+        - repository
+      parameters:
+        - name: rname
+          in: path
+          required: true
+          description: Name of the repository
+          schema:
+            type: string
+      requestBody:
+        description: Artifact to unblock
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CooldownUnblockRequest'
+        required: true
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '204':
+          description: Cooldown removed
+        '400':
+          description: Invalid request
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Repository not found
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/repository/{rname}/cooldown/unblock-all:
+    post:
+      summary: Unblock all cooldown entries for repository
+      operationId: unblockAllCooldown
+      tags:
+        - repository
+      parameters:
+        - name: rname
+          in: path
+          required: true
+          description: Name of the repository
+          schema:
+            type: string
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '204':
+          description: All cooldown entries removed
+        '400':
+          description: Invalid repository configuration
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Repository not found
         default:
           description: unexpected error
           content:
@@ -470,6 +533,16 @@ components:
         - new_name
       properties:
         new_name:
+          type: string
+    CooldownUnblockRequest:
+      type: object
+      required:
+        - artifact
+        - version
+      properties:
+        artifact:
+          type: string
+        version:
           type: string
   responses:
     UnauthorizedError:

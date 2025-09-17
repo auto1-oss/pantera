@@ -18,6 +18,7 @@ import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.npm.proxy.NpmProxy;
 import com.artipie.scheduling.ProxyArtifactEvent;
+import com.artipie.cooldown.CooldownService;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -37,12 +38,17 @@ public final class NpmProxySlice implements Slice {
      *  or, in other words, repository name
      * @param npm NPM Proxy facade
      * @param packages Queue with uploaded from remote packages
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
      */
     public NpmProxySlice(
-        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages
+        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
+        final String repoName, final String repoType, final CooldownService cooldown
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
+        final NpmCooldownInspector inspector = new NpmCooldownInspector(npm.remoteClient());
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
@@ -59,7 +65,7 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(apath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadAssetSlice(npm, apath, packages, path)
+                    new DownloadAssetSlice(npm, apath, packages, repoName, repoType, cooldown, inspector)
                 )
             ),
             new RtRulePath(

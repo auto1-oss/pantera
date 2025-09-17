@@ -51,6 +51,10 @@ public enum RsStatus {
      */
     TEMPORARY_REDIRECT(HttpStatus.SC_TEMPORARY_REDIRECT),
     /**
+     * Proxy Authentication Required.
+     */
+    PROXY_AUTHENTICATION_REQUIRED(HttpStatus.SC_PROXY_AUTHENTICATION_REQUIRED),
+    /**
      * Bad Request.
      */
     BAD_REQUEST(HttpStatus.SC_BAD_REQUEST),

@@ -63,11 +63,17 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             new ByteArrayInputStream(archive), filename
                         ).read();
                         if (new ValidFilename(info, filename).valid()) {
+                            final String owner = event.ownerLogin();
                             this.events.add(
                                 new ArtifactEvent(
-                                    PyProxyPackageProcessor.REPO_TYPE, event.repoName(),
-                                    "ANONYMOUS", String.join("/", info.name(), filename),
-                                    info.version(), archive.length
+                                    PyProxyPackageProcessor.REPO_TYPE,
+                                    event.repoName(),
+                                    owner == null || owner.isBlank()
+                                        ? ArtifactEvent.DEF_OWNER
+                                        : owner,
+                                    String.join("/", info.name(), filename),
+                                    info.version(),
+                                    archive.length
                                 )
                             );
                         } else {

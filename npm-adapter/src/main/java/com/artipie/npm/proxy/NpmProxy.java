@@ -102,6 +102,14 @@ public class NpmProxy {
     }
 
     /**
+     * Access underlying remote client.
+     * @return Remote client
+     */
+    public NpmRemote remoteClient() {
+        return this.remote;
+    }
+
+    /**
      * Get package from remote repository and save it to storage.
      * @param name Package name
      * @return Npm Package

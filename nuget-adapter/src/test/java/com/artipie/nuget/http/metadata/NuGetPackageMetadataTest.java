@@ -132,14 +132,19 @@ class NuGetPackageMetadataTest {
 
     @Test
     void shouldUnauthorizedGetRegistrationForAnonymousUser() {
-        Assertions.assertEquals(
-            RsStatus.UNAUTHORIZED,
-            this.nuget.response(
-                new RequestLine(
-                    RqMethod.GET,
-                    "/registrations/my-utils/index.json"
-                ), Headers.EMPTY, Content.EMPTY
-            ).join().status()
+        final Response response = this.nuget.response(
+            new RequestLine(
+                RqMethod.GET,
+                "/registrations/my-utils/index.json"
+            ), Headers.EMPTY, Content.EMPTY
+        ).join();
+        Assertions.assertEquals(RsStatus.PROXY_AUTHENTICATION_REQUIRED, response.status());
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                        && header.getValue().contains("Basic realm=\"artipie\"")
+                )
         );
     }
 

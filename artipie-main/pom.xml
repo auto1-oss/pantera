@@ -108,6 +108,11 @@ SOFTWARE.
             <scope>compile</scope>
         </dependency>
         <dependency>
+            <groupId>com.vdurmont</groupId>
+            <artifactId>semver4j</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+        <dependency>
             <groupId>org.apache.httpcomponents.core5</groupId>
             <artifactId>httpcore5</artifactId>
             <version>${httpcore5.version}</version>

@@ -10,17 +10,20 @@ import com.artipie.docker.Docker;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.RegistryRoot;
 import com.artipie.docker.cache.CacheDocker;
+import com.artipie.docker.cache.DockerProxyCooldownInspector;
 import com.artipie.docker.composite.MultiReadDocker;
 import com.artipie.docker.composite.ReadWriteDocker;
 import com.artipie.docker.http.DockerSlice;
 import com.artipie.docker.http.TrimmedDocker;
 import com.artipie.docker.proxy.ProxyDocker;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.http.auth.CombinedAuthScheme;
 import com.artipie.http.DockerRoutingSlice;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BasicAuthScheme;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.RemoteConfig;
 import com.artipie.http.client.auth.AuthClientSlice;
@@ -50,15 +53,18 @@ public final class DockerProxy implements Slice {
      * @param policy Access policy.
      * @param auth Authentication mechanism.
      * @param events Artifact events queue
+     * @param cooldown Cooldown service
      */
     public DockerProxy(
         final ClientSlices client,
         final RepoConfig cfg,
         final Policy<?> policy,
         final Authentication auth,
-        final Optional<Queue<ArtifactEvent>> events
+        final TokenAuthentication tokens,
+        final Optional<Queue<ArtifactEvent>> events,
+        final CooldownService cooldown
     ) {
-        this.delegate = createProxy(client, cfg, policy, auth, events);
+        this.delegate = createProxy(client, cfg, policy, auth, tokens, events, cooldown);
     }
 
     @Override
@@ -80,10 +86,13 @@ public final class DockerProxy implements Slice {
             final RepoConfig cfg,
             final Policy<?> policy,
             final Authentication auth,
-            final Optional<Queue<ArtifactEvent>> events
+            final TokenAuthentication tokens,
+            final Optional<Queue<ArtifactEvent>> events,
+            final CooldownService cooldown
     ) {
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
         final Docker proxies = new MultiReadDocker(
-            cfg.remotes().stream().map(r -> proxy(client, cfg, events, r))
+            cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
                 .toList()
         );
         Docker docker = cfg.storageOpt()
@@ -99,7 +108,14 @@ public final class DockerProxy implements Slice {
             .orElse(proxies);
         docker = new TrimmedDocker(docker, cfg.name());
         Slice slice = new DockerSlice(
-            docker, policy, new BasicAuthScheme(auth), events
+            docker, policy, new CombinedAuthScheme(auth, tokens), events
+        );
+        slice = new DockerProxyCooldownSlice(
+            slice,
+            cfg.name(),
+            cfg.type(),
+            cooldown,
+            inspector
         );
         if (cfg.port().isEmpty()) {
             slice = new DockerRoutingSlice.Reverted(slice);
@@ -117,7 +133,8 @@ public final class DockerProxy implements Slice {
             final ClientSlices client,
             final RepoConfig cfg,
             final Optional<Queue<ArtifactEvent>> events,
-            final RemoteConfig remote
+            final RemoteConfig remote,
+            final DockerProxyCooldownInspector inspector
     ) {
         final Docker proxy = new ProxyDocker(
             cfg.name(),
@@ -127,7 +144,8 @@ public final class DockerProxy implements Slice {
             cache -> new CacheDocker(
                 proxy,
                 new AstoDocker(cfg.name(), new SubStorage(RegistryRoot.V2, cache)),
-                events
+                events,
+                Optional.of(inspector)
             )
         ).orElse(proxy);
     }

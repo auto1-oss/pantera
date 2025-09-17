@@ -14,6 +14,7 @@ import com.artipie.composer.AllPackages;
 import com.artipie.composer.AstoRepository;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
+import com.artipie.http.headers.Authorization;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -46,14 +47,24 @@ class PhpComposerTest {
      */
     private PhpComposer php;
 
+    /**
+     * Authorization headers for requests.
+     */
+    private Headers authorization;
+
     @BeforeEach
     void init() {
         this.storage = new InMemoryStorage();
+        final String user = "composer-user";
+        final String password = "secret";
         this.php = new PhpComposer(
             new AstoRepository(this.storage),
-            Policy.FREE, (username, password) -> Optional.empty(),
-            "*", Optional.empty()
+            Policy.FREE,
+            new com.artipie.http.auth.Authentication.Single(user, password),
+            "*",
+            Optional.empty()
         );
+        this.authorization = Headers.from(new Authorization.Basic(user, password));
     }
 
     @Test
@@ -65,7 +76,7 @@ class PhpComposerTest {
         );
         final Response response = this.php.response(
             new RequestLine(RqMethod.GET, "/p/vendor/package.json"),
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
@@ -76,7 +87,7 @@ class PhpComposerTest {
     void shouldFailGetPackageMetadataWhenNotExists() {
         final Response response = this.php.response(
             new RequestLine(RqMethod.GET, "/p/vendor/unknown-package.json"),
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.NOT_FOUND, response.status());
@@ -88,7 +99,7 @@ class PhpComposerTest {
         new BlockingStorage(this.storage).save(new AllPackages(), data);
         final Response response = this.php.response(
             PhpComposerTest.GET_PACKAGES,
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
@@ -99,7 +110,7 @@ class PhpComposerTest {
     void shouldFailGetAllPackagesWhenNotExists() {
         final Response response = this.php.response(
             PhpComposerTest.GET_PACKAGES,
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.NOT_FOUND, response.status());
@@ -109,7 +120,7 @@ class PhpComposerTest {
     void shouldPutRoot() {
         final Response response = this.php.response(
             new RequestLine(RqMethod.PUT, "/"),
-            Headers.EMPTY,
+            this.authorization,
             new Content.From(
                 new TestResource("minimal-package.json").asBytes()
             )

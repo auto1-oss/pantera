@@ -8,6 +8,8 @@ import com.artipie.api.ssl.KeyStore;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.auth.JwtTokens;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.CooldownSupport;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.settings.ArtipieSecurity;
@@ -72,6 +74,11 @@ public final class RestApi extends AbstractVerticle {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -88,7 +95,8 @@ public final class RestApi extends AbstractVerticle {
         final ArtipieSecurity security,
         final Optional<KeyStore> keystore,
         final JWTAuth jwt,
-        final Optional<MetadataEventQueues> events
+        final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -97,6 +105,7 @@ public final class RestApi extends AbstractVerticle {
         this.keystore = keystore;
         this.jwt = jwt;
         this.events = events;
+        this.cooldown = cooldown;
     }
 
     /**
@@ -108,7 +117,8 @@ public final class RestApi extends AbstractVerticle {
     public RestApi(final Settings settings, final int port, final JWTAuth jwt) {
         this(
             settings.caches(), settings.configStorage(),
-            port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata()
+            port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata(),
+            CooldownSupport.create(settings)
         );
     }
 
@@ -144,6 +154,7 @@ public final class RestApi extends AbstractVerticle {
             new ManageRepoSettings(asto),
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
+            this.cooldown,
             this.vertx.eventBus()
         ).init(repoRb);
         new StorageAliasesRest(

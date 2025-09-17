@@ -5,6 +5,7 @@
 package com.artipie.adapters.pypi;
 
 import com.artipie.asto.Content;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
@@ -35,7 +36,8 @@ public final class PypiProxy implements Slice {
     public PypiProxy(
         ClientSlices client,
         RepoConfig cfg,
-        Optional<Queue<ProxyArtifactEvent>> queue
+        Optional<Queue<ProxyArtifactEvent>> queue,
+        CooldownService cooldown
     ) {
         final RemoteConfig remote = cfg.remoteConfig();
         slice = new PyProxySlice(
@@ -43,7 +45,7 @@ public final class PypiProxy implements Slice {
             GenericAuthenticator.create(client, remote.username(), remote.pwd()),
             cfg.storageOpt().orElseThrow(
                 () -> new IllegalStateException("Python proxy requires proxy storage to be set")
-            ), queue, cfg.name()
+            ), queue, cfg.name(), cfg.type(), cooldown
         );
     }
 

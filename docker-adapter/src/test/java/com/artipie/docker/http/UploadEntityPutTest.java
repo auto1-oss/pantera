@@ -11,7 +11,6 @@ import com.artipie.docker.Digest;
 import com.artipie.docker.Docker;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.Upload;
-import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.Header;
@@ -40,7 +39,7 @@ class UploadEntityPutTest {
     void setUp() {
         final Storage storage = new InMemoryStorage();
         this.docker = new AstoDocker("test_registry", storage);
-        this.slice = new DockerSlice(this.docker);
+        this.slice = TestDockerAuth.slice(this.docker);
     }
 
     @Test
@@ -58,7 +57,7 @@ class UploadEntityPutTest {
         );
         final Response response = this.slice.response(
             UploadEntityPutTest.requestLine(name, upload.uuid(), digest),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(
@@ -92,7 +91,9 @@ class UploadEntityPutTest {
             this.slice,
             new SliceHasResponse(
                 new IsErrorsResponse(RsStatus.BAD_REQUEST, "DIGEST_INVALID"),
-                UploadEntityPutTest.requestLine(name, upload.uuid(), "sha256:0000")
+                UploadEntityPutTest.requestLine(name, upload.uuid(), "sha256:0000"),
+                TestDockerAuth.headers(),
+                Content.EMPTY
             )
         );
         MatcherAssert.assertThat(
@@ -108,7 +109,7 @@ class UploadEntityPutTest {
     void shouldReturnNotFoundWhenUploadNotExists() {
         final Response response = this.slice
             .response(new RequestLine(RqMethod.PUT, "/v2/test/blobs/uploads/12345"),
-                Headers.EMPTY, Content.EMPTY)
+                TestDockerAuth.headers(), Content.EMPTY)
             .join();
         MatcherAssert.assertThat(
             response,

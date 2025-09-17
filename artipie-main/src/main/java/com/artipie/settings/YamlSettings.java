@@ -17,6 +17,8 @@ import com.artipie.asto.factory.Config;
 import com.artipie.asto.factory.StoragesLoader;
 import com.artipie.auth.AuthFromEnv;
 import com.artipie.cache.StoragesCache;
+import com.artipie.cooldown.CooldownSettings;
+import com.artipie.cooldown.YamlCooldownSettings;
 import com.artipie.db.ArtifactDbFactory;
 import com.artipie.db.DbConsumer;
 import com.artipie.http.auth.AuthLoader;
@@ -113,6 +115,16 @@ public final class YamlSettings implements Settings {
     private final LoggingContext lctx;
 
     /**
+     * Cooldown settings.
+     */
+    private final CooldownSettings cooldown;
+
+    /**
+     * Artifacts database data source if configured.
+     */
+    private final Optional<DataSource> artifactsDb;
+
+    /**
      * Ctor.
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
@@ -134,7 +146,11 @@ public final class YamlSettings implements Settings {
         );
         this.mctx = new MetricsContext(this.meta());
         this.lctx = new LoggingContext(this.meta());
-        this.events = YamlSettings.initArtifactsEvents(this.meta(), quartz, path);
+        this.cooldown = YamlCooldownSettings.fromMeta(this.meta());
+        this.artifactsDb = YamlSettings.initArtifactsDb(this.meta());
+        this.events = this.artifactsDb.flatMap(
+            db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
+        );
     }
 
     @Override
@@ -200,6 +216,16 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public CooldownSettings cooldown() {
+        return this.cooldown;
+    }
+
+    @Override
+    public Optional<DataSource> artifactsDatabase() {
+        return this.artifactsDb;
+    }
+
+    @Override
     public String toString() {
         return String.format("YamlSettings{\n%s\n}", this.meta.toString());
     }
@@ -237,30 +263,47 @@ public final class YamlSettings implements Settings {
      * (adding and removing artifacts) and create {@link MetadataEventQueues} instance.
      * @param settings Artipie settings
      * @param quartz Quartz service
-     * @param path Default location for db file
+     * @param database Artifact database
      * @return Event queue to gather artifacts events
      */
-    @SuppressWarnings("PMD.OnlyOneReturn")
     private static Optional<MetadataEventQueues> initArtifactsEvents(
-        final YamlMapping settings, final QuartzService quartz, final Path path
+        final YamlMapping settings, final QuartzService quartz, final DataSource database
     ) {
         final YamlMapping prop = settings.yamlMapping("artifacts_database");
         if (prop == null) {
             return Optional.empty();
         }
+        final int threads = readPositive(prop.integer("threads_count"), 1);
+        final int interval = readPositive(prop.integer("interval_seconds"), 1);
+        final List<Consumer<ArtifactEvent>> consumers = new ArrayList<>(threads);
+        for (int idx = 0; idx < threads; idx = idx + 1) {
+            consumers.add(new DbConsumer(database));
+        }
         try {
-            final DataSource database = new ArtifactDbFactory(settings, "artifacts").initialize();
-            final int threads = Math.max(1, prop.integer("threads_count"));
-            final int interval = Math.max(1, prop.integer("interval_seconds"));
-            final List<Consumer<ArtifactEvent>> list = new ArrayList<>(threads);
-            for (int cnt = 0; cnt < threads; cnt = cnt + 1) {
-                list.add(new DbConsumer(database));
-            }
-            final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, list);
+            final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, consumers);
             return Optional.of(new MetadataEventQueues(res, quartz));
         } catch (final SchedulerException error) {
             throw new ArtipieException(error);
         }
+    }
+
+    /**
+     * Initialize artifacts database.
+     * @param settings Artipie settings
+     * @return Data source if configuration is present
+     */
+    private static Optional<DataSource> initArtifactsDb(final YamlMapping settings) {
+        if (settings.yamlMapping("artifacts_database") == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new ArtifactDbFactory(settings, "artifacts").initialize());
+    }
+
+    private static int readPositive(final Integer value, final int fallback) {
+        if (value == null || value <= 0) {
+            return fallback;
+        }
+        return value;
     }
 
     /**

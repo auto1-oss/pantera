@@ -55,9 +55,14 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     final Collection<Key> keys = this.asto.list(event.artifactKey()).join();
                     try {
                         final Key archive = MavenSlice.EVENT_INFO.artifactPackage(keys);
+                        final String owner = event.ownerLogin();
                         this.events.add(
                             new ArtifactEvent(
-                                MavenProxyPackageProcessor.REPO_TYPE, event.repoName(), "ANONYMOUS",
+                                MavenProxyPackageProcessor.REPO_TYPE,
+                                event.repoName(),
+                                owner == null || owner.isBlank()
+                                    ? ArtifactEvent.DEF_OWNER
+                                    : owner,
                                 MavenSlice.EVENT_INFO.formatArtifactName(
                                     event.artifactKey().parent().get()
                                 ),
