@@ -90,6 +90,7 @@ SOFTWARE.
     <httpcore5.version>5.2.4</httpcore5.version>
     <httpcore5-h2.version>5.2.4</httpcore5-h2.version>
     <fasterxml.jackson.version>2.16.2</fasterxml.jackson.version>
+    <micrometer.version>1.12.1</micrometer.version>
   </properties>
   <developers>
     <!-- Required for publishing to central -->
