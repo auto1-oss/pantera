@@ -152,10 +152,15 @@ public final class ArtifactDbFactory {
                     "   version VARCHAR NOT NULL,",
                     "   size BIGINT NOT NULL,",
                     "   created_date BIGINT NOT NULL,",
+                    "   release_date BIGINT,",
                     "   owner VARCHAR NOT NULL,",
                     "   UNIQUE (repo_name, name, version) ",
                     ");"
                 )
+            );
+            // Backward compatibility: add release_date if table already existed
+            statement.executeUpdate(
+                "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS release_date BIGINT"
             );
             statement.executeUpdate(
                 String.join(

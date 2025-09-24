@@ -38,6 +38,8 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
@@ -120,6 +122,27 @@ final class CachedProxySlice implements Slice {
         this.inspector = inspector;
     }
 
+    /**
+     * Enqueue proxy artifact event using response headers.
+     * @param headers Response headers
+     * @param key Artifact key
+     * @param owner Owner login
+     */
+    private void enqueueFromHeaders(final Headers headers, final Key key, final String owner) {
+        Long lm = null;
+        try {
+            lm = StreamSupport.stream(headers.spliterator(), false)
+                .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
+                .findFirst()
+                .map(Header::getValue)
+                .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)).toEpochMilli())
+                .orElse(null);
+        } catch (final DateTimeParseException ignored) {
+            // ignore invalid date header
+        }
+        this.addEventToQueue(key, owner, Optional.ofNullable(lm));
+    }
+
     @Override
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body) {
@@ -172,7 +195,7 @@ final class CachedProxySlice implements Slice {
                                             Flowable.fromPublisher(resp.body())
                                                 .doOnError(term::completeExceptionally)
                                                 .doOnTerminate(() -> term.complete(null));
-                                        this.addEventToQueue(key, owner);
+                                        this.enqueueFromHeaders(resp.headers(), key, owner);
                                         promise.complete(Optional.of(new Content.From(res)));
                                     } else {
                                         promise.complete(Optional.empty());
@@ -245,6 +268,10 @@ final class CachedProxySlice implements Slice {
      * @param key Artifact key
      */
     private void addEventToQueue(final Key key, final String owner) {
+        this.addEventToQueue(key, owner, Optional.empty());
+    }
+
+    private void addEventToQueue(final Key key, final String owner, final Optional<Long> release) {
         if (this.events.isPresent()) {
             final Matcher matcher = MavenSlice.ARTIFACT.matcher(key.string());
             if (matcher.matches()) {
@@ -252,7 +279,8 @@ final class CachedProxySlice implements Slice {
                     new ProxyArtifactEvent(
                         new Key.From(matcher.group("pkg")),
                         this.rname,
-                        owner
+                        owner,
+                        release
                     )
                 );
             }

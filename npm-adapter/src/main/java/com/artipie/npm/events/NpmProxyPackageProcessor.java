@@ -66,11 +66,13 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 if (item != null) {
                     final Optional<Publish.PackageInfo> info = this.info(item.artifactKey());
                     if (info.isPresent() && this.checkMetadata(info.get(), item)) {
+                        final long created = System.currentTimeMillis();
+                        final Long release = item.releaseMillis().orElse(null);
                         this.events.add(
                             new ArtifactEvent(
                                 UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
                                 info.get().packageName(), info.get().packageVersion(),
-                                info.get().tarSize()
+                                info.get().tarSize(), created, release
                             )
                         );
                     } else {

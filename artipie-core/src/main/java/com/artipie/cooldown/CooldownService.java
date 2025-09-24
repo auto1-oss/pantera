@@ -16,7 +16,7 @@ public interface CooldownService {
      * Evaluate request and either allow it or produce cooldown information.
      *
      * @param request Request details
-     * @param inspector Repository specific inspector
+     * @param inspector Repository-specific inspector to fetch data such as release date
      * @return Evaluation result
      */
     CompletableFuture<CooldownResult> evaluate(CooldownRequest request, CooldownInspector inspector);

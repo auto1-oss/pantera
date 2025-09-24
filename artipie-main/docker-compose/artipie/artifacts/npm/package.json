@@ -10,7 +10,8 @@
   "dependencies": {
     "lodash": "^4.17.21",
     "axios": "^1.7.2",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "format-for": "^0.0.3"
   },
   "devDependencies": {
     "jest": "^29.7.0"

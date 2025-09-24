@@ -12,7 +12,6 @@ import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import java.sql.Connection;
-import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -77,10 +76,10 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             try (
                 Connection conn = DbConsumer.this.source.getConnection();
                 PreparedStatement insert = conn.prepareStatement(
-                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, owner) VALUES (?,?,?,?,?,?,?)"
+                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner) VALUES (?,?,?,?,?,?,?,?)"
                 );
                 PreparedStatement update = conn.prepareStatement(
-                    "UPDATE artifacts SET repo_type = ?, size = ?, created_date = ?, owner = ? WHERE TRIM(repo_name) = ? AND name = ? AND version = ?"
+                    "UPDATE artifacts SET repo_type = ?, size = ?, created_date = ?, release_date = ?, owner = ? WHERE TRIM(repo_name) = ? AND name = ? AND version = ?"
                 );
                 PreparedStatement deletev = conn.prepareStatement(
                     "DELETE FROM artifacts WHERE TRIM(repo_name) = ? AND name = ? AND version = ?;"
@@ -94,13 +93,15 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     try {
                         if (record.eventType() == ArtifactEvent.Type.INSERT) {
                             // Try to update first
+                            final long release = record.releaseDate().orElse(record.createdDate());
                             update.setString(1, record.repoType());
                             update.setDouble(2, record.size());
                             update.setLong(3, record.createdDate());
-                            update.setString(4, record.owner());
-                            update.setString(5, record.repoName());
-                            update.setString(6, record.artifactName());
-                            update.setString(7, record.artifactVersion());
+                            update.setLong(4, release);
+                            update.setString(5, record.owner());
+                            update.setString(6, record.repoName());
+                            update.setString(7, record.artifactName());
+                            update.setString(8, record.artifactVersion());
                             final int updated = update.executeUpdate();
                             
                             // If no rows were updated, insert new record
@@ -111,7 +112,8 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                                 insert.setString(4, record.artifactVersion());
                                 insert.setDouble(5, record.size());
                                 insert.setLong(6, record.createdDate());
-                                insert.setString(7, record.owner());
+                                insert.setLong(7, release);
+                                insert.setString(8, record.owner());
                                 insert.execute();
                             }
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {

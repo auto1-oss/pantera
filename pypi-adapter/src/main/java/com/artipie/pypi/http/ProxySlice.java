@@ -12,7 +12,6 @@ import com.artipie.asto.cache.Remote;
 import com.artipie.asto.ext.KeyLastPart;
 import com.artipie.cooldown.CooldownRequest;
 import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownResult;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
@@ -183,7 +182,8 @@ final class ProxySlice implements Slice {
             if (result.blocked()) {
                 return CooldownResponses.forbidden(result.block().orElseThrow());
             }
-            this.events.ifPresent(queue -> queue.add(new ProxyArtifactEvent(key, this.rname, user)));
+            final java.util.Optional<Long> millis = this.releaseInstant(remote).map(java.time.Instant::toEpochMilli);
+            this.events.ifPresent(queue -> queue.add(new ProxyArtifactEvent(key, this.rname, user, millis)));
             return ResponseBuilder.ok()
                 .headers(Headers.from(ProxySlice.contentType(remote, line)))
                 .body(content)

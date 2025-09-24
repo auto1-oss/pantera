@@ -145,8 +145,13 @@ public final class CacheManifests implements Manifests {
                 nothing -> {
                     final CompletionStage<Manifest> res =
                         this.cache.manifests().put(ref, manifest.content());
-                    this.events.ifPresent(
-                        queue -> queue.add(
+                    this.events.ifPresent(queue -> {
+                        final long created = System.currentTimeMillis();
+                        final Long release = this.inspector
+                            .flatMap(ins -> ins.releaseDate(this.name, ref.digest()).join())
+                            .map(java.time.Instant::toEpochMilli)
+                            .orElse(null);
+                        queue.add(
                             new ArtifactEvent(
                                 CacheManifests.REPO_TYPE,
                                 this.rname,
@@ -155,10 +160,12 @@ public final class CacheManifests implements Manifests {
                                     .orElse(ArtifactEvent.DEF_OWNER),
                                 this.name,
                                 ref.digest(),
-                                manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
+                                manifest.layers().stream().mapToLong(ManifestLayer::size).sum(),
+                                created,
+                                release
                             )
-                        )
-                    );
+                        );
+                    });
                     return res;
                 }
             )
