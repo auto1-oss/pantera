@@ -5,6 +5,7 @@
 package com.artipie.scheduling;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Artifact data record.
@@ -57,13 +58,18 @@ public final class ArtifactEvent {
     private final long created;
 
     /**
+     * Remote artifact release time, when known (primarily for proxies).
+     */
+    private final Optional<Long> release;
+
+    /**
      * Ctor for the event to remove all artifact versions.
      * @param repoType Repository type
      * @param repoName Repository name
      * @param artifactName Artifact name
      */
     public ArtifactEvent(String repoType, String repoName, String artifactName) {
-        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, "", 0L, 0L, Type.DELETE_ALL);
+        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, "", 0L, 0L, Optional.empty(), Type.DELETE_ALL);
     }
 
     /**
@@ -75,7 +81,7 @@ public final class ArtifactEvent {
      */
     public ArtifactEvent(String repoType, String repoName,
                          String artifactName, String version) {
-        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, version, 0L, 0L, Type.DELETE_VERSION);
+        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, version, 0L, 0L, Optional.empty(), Type.DELETE_VERSION);
     }
 
     /**
@@ -88,9 +94,9 @@ public final class ArtifactEvent {
      * @param created Artifact created date
      * @param etype Event type
      */
-    public ArtifactEvent(String repoType, String repoName, String owner,
-                         String artifactName, String version, long size,
-                         long created, Type etype) {
+    private ArtifactEvent(String repoType, String repoName, String owner,
+                          String artifactName, String version, long size,
+                          long created, Optional<Long> release, Type etype) {
         this.repoType = repoType;
         this.repoName = repoName;
         this.owner = owner;
@@ -98,6 +104,7 @@ public final class ArtifactEvent {
         this.version = version;
         this.size = size;
         this.created = created;
+        this.release = release == null ? Optional.empty() : release;
         this.eventType = etype;
     }
 
@@ -109,11 +116,38 @@ public final class ArtifactEvent {
      * @param version Artifact version
      * @param size Artifact size
      * @param created Artifact created date
+     * @param etype Event type
      */
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size,
                          final long created) {
-        this(repoType, repoName, owner, artifactName, version, size, created, Type.INSERT);
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), Type.INSERT);
+    }
+
+    /**
+     * Backward compatible constructor with explicit event type.
+     */
+    public ArtifactEvent(final String repoType, final String repoName, final String owner,
+                         final String artifactName, final String version, final long size,
+                         final long created, final Type etype) {
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), etype);
+    }
+
+    /**
+     * Ctor to insert artifact data with explicit created and release timestamps.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param owner Owner username
+     * @param artifactName Artifact name
+     * @param version Artifact version
+     * @param size Artifact size
+     * @param created Artifact created (uploaded) date
+     * @param release Remote release date (nullable)
+     */
+    public ArtifactEvent(final String repoType, final String repoName, final String owner,
+                         final String artifactName, final String version, final long size,
+                         final long created, final Long release) {
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.ofNullable(release), Type.INSERT);
     }
 
     /**
@@ -127,7 +161,8 @@ public final class ArtifactEvent {
      */
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size) {
-        this(repoType, repoName, owner, artifactName, version, size, System.currentTimeMillis(), Type.INSERT);
+        this(repoType, repoName, owner, artifactName, version, size,
+            System.currentTimeMillis(), Optional.empty(), Type.INSERT);
     }
 
     /**
@@ -179,6 +214,14 @@ public final class ArtifactEvent {
     }
 
     /**
+     * Remote artifact release time, when known.
+     * @return Optional release datetime
+     */
+    public Optional<Long> releaseDate() {
+        return this.release;
+    }
+
+    /**
      * Owner username.
      * @return Username
      */
@@ -225,6 +268,7 @@ public final class ArtifactEvent {
             ", version='" + version + '\'' +
             ", size=" + size +
             ", created=" + created +
+            ", release=" + release.orElse(null) +
             '}';
     }
 

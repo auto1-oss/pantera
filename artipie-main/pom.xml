@@ -195,6 +195,12 @@ SOFTWARE.
             <artifactId>vertx-web-openapi</artifactId>
             <version>${vertx.version}</version>
         </dependency>
+        <!-- Required for Router, JWTAuthHandler, StaticHandler used in tests -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-authz-client</artifactId>
@@ -334,6 +340,13 @@ SOFTWARE.
             <artifactId>httpclient5-fluent</artifactId>
             <version>${httpclient.version}</version>
             <scope>test</scope>
+        </dependency>
+        <!-- Provide URIBuilder and HttpClient expected by main and tests -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <version>4.5.14</version>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.skyscreamer</groupId>

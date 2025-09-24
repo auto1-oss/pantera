@@ -56,6 +56,8 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     try {
                         final Key archive = MavenSlice.EVENT_INFO.artifactPackage(keys);
                         final String owner = event.ownerLogin();
+                        final long created = System.currentTimeMillis();
+                        final Long release = event.releaseMillis().orElse(null);
                         this.events.add(
                             new ArtifactEvent(
                                 MavenProxyPackageProcessor.REPO_TYPE,
@@ -68,7 +70,9 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 ),
                                 new KeyLastPart(event.artifactKey()).get(),
                                 this.asto.metadata(archive)
-                                    .thenApply(meta -> meta.read(Meta.OP_SIZE)).join().get()
+                                    .thenApply(meta -> meta.read(Meta.OP_SIZE)).join().get(),
+                                created,
+                                release
                             )
                         );
                         while (this.packages.remove(event)) { }

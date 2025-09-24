@@ -15,8 +15,11 @@ public final class YamlCooldownSettings {
 
     private static final String NODE = "cooldown";
     private static final String KEY_ENABLED = "enabled";
-    private static final String KEY_NEWER = "newer_than_cache_hours";
-    private static final String KEY_FRESH = "fresh_release_hours";
+    private static final String KEY_NEWER_MIN = "newer_than_cache_minutes";
+    private static final String KEY_FRESH_MIN = "fresh_release_minutes";
+    // Backward compatibility
+    private static final String KEY_NEWER_HOURS = "newer_than_cache_hours";
+    private static final String KEY_FRESH_HOURS = "fresh_release_hours";
 
     private YamlCooldownSettings() {
         // Utility class
@@ -38,20 +41,24 @@ public final class YamlCooldownSettings {
             return defaults;
         }
         final boolean enabled = parseBool(node.string(KEY_ENABLED), defaults.enabled());
-        final Duration newer = Duration.ofHours(
-            positiveOrDefault(node.integer(KEY_NEWER), defaults.newerThanCache().toHours())
-        );
-        final Duration fresh = Duration.ofHours(
-            positiveOrDefault(node.integer(KEY_FRESH), defaults.freshRelease().toHours())
-        );
+        // Prefer minutes keys; if not present, fallback to hours
+        final Integer newerMinRaw = node.integer(KEY_NEWER_MIN);
+        final Integer freshMinRaw = node.integer(KEY_FRESH_MIN);
+        final Integer newerHoursRaw = node.integer(KEY_NEWER_HOURS);
+        final Integer freshHoursRaw = node.integer(KEY_FRESH_HOURS);
+        final long newerMin = newerMinRaw != null && newerMinRaw > 0
+            ? newerMinRaw.longValue()
+            : (newerHoursRaw != null && newerHoursRaw > 0
+                ? Duration.ofHours(newerHoursRaw.longValue()).toMinutes()
+                : defaults.newerThanCache().toMinutes());
+        final long freshMin = freshMinRaw != null && freshMinRaw > 0
+            ? freshMinRaw.longValue()
+            : (freshHoursRaw != null && freshHoursRaw > 0
+                ? Duration.ofHours(freshHoursRaw.longValue()).toMinutes()
+                : defaults.freshRelease().toMinutes());
+        final Duration newer = Duration.ofMinutes(newerMin);
+        final Duration fresh = Duration.ofMinutes(freshMin);
         return new CooldownSettings(enabled, newer, fresh);
-    }
-
-    private static long positiveOrDefault(final Integer value, final long fallback) {
-        if (value == null || value <= 0) {
-            return fallback;
-        }
-        return value.longValue();
     }
 
     private static boolean parseBool(final String value, final boolean fallback) {

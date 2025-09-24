@@ -114,14 +114,24 @@ public final class DownloadAssetSlice implements Slice {
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {
         return this.npm.getAsset(tgz).map(
                 asset -> {
-                    this.packages.ifPresent(
-                        queue -> queue.add(
+                    this.packages.ifPresent(queue -> {
+                        Long millis = null;
+                        try {
+                            final String lm = asset.meta().lastModified();
+                            if (!Strings.isNullOrEmpty(lm)) {
+                                millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                            }
+                        } catch (final Exception ignored) {
+                            // ignore parse failures
+                        }
+                        queue.add(
                             new ProxyArtifactEvent(
                                 new Key.From(tgz), this.repoName,
-                                new Login(headers).getValue()
+                                new Login(headers).getValue(),
+                                java.util.Optional.ofNullable(millis)
                             )
-                        )
-                    );
+                        );
+                    });
                     return asset;
                 })
             .map(
