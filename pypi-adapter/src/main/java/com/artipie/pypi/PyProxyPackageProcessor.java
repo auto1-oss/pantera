@@ -8,6 +8,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.ext.KeyLastPart;
+import com.artipie.pypi.NormalizedProjectName;
 import com.artipie.pypi.meta.Metadata;
 import com.artipie.pypi.meta.PackageInfo;
 import com.artipie.pypi.meta.ValidFilename;
@@ -16,6 +17,7 @@ import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
 import com.jcabi.log.Logger;
 import java.io.ByteArrayInputStream;
+import java.time.Instant;
 import java.util.Queue;
 import org.quartz.JobExecutionContext;
 
@@ -57,6 +59,15 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 if (event != null) {
                     final Key key = event.artifactKey();
                     final String filename = new KeyLastPart(key).get();
+                    if (!this.asto.exists(key)) {
+                        Logger.debug(
+                            this,
+                            "Artifact %s is not yet cached, re-queueing to retry later",
+                            key.string()
+                        );
+                        this.packages.add(event);
+                        break;
+                    }
                     final byte[] archive = this.asto.value(key);
                     try {
                         final PackageInfo info = new Metadata.FromArchive(
@@ -66,6 +77,9 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             final String owner = event.ownerLogin();
                             final long created = System.currentTimeMillis();
                             final Long release = event.releaseMillis().orElse(null);
+                            final String project =
+                                new NormalizedProjectName.Simple(info.name()).value();
+                            final String artifact = String.join("/", project, filename);
                             this.events.add(
                                 new ArtifactEvent(
                                     PyProxyPackageProcessor.REPO_TYPE,
@@ -73,11 +87,23 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     owner == null || owner.isBlank()
                                         ? ArtifactEvent.DEF_OWNER
                                         : owner,
-                                    String.join("/", info.name(), filename),
+                                    artifact,
                                     info.version(),
                                     archive.length,
                                     created,
                                     release
+                                )
+                            );
+                            Logger.info(
+                                this,
+                                String.format(
+                                    "Recorded PyPI proxy artifact %s:%s (repo=%s, size=%dB, release=%s)",
+                                    project,
+                                    info.version(),
+                                    event.repoName(),
+                                    archive.length,
+                                    release == null ? "unknown"
+                                        : Instant.ofEpochMilli(release).toString()
                                 )
                             );
                         } else {

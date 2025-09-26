@@ -10,7 +10,6 @@ import com.jcabi.log.Logger;
 import java.util.Optional;
 import org.keycloak.authorization.client.AuthzClient;
 import org.keycloak.authorization.client.Configuration;
-import org.keycloak.representations.idm.authorization.AuthorizationRequest;
 
 /**
  * Authentication based on keycloak.
@@ -36,8 +35,7 @@ public final class AuthFromKeycloak implements Authentication {
         final AuthzClient client = AuthzClient.create(this.config);
         Optional<AuthUser> res;
         try {
-            client.authorization(username, password, "openid")
-                .authorize(new AuthorizationRequest());
+            client.obtainAccessToken(username, password);
             res = Optional.of(new AuthUser(username, "keycloak"));
         } catch (final Throwable err) {
             Logger.error(this, err.getMessage());
