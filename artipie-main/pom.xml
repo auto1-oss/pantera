@@ -184,6 +184,12 @@ SOFTWARE.
             <version>1.19.3</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.github.dasniko</groupId>
+            <artifactId>testcontainers-keycloak</artifactId>
+            <version>3.8.0</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Hamcrest is required in the main code for github auth -->
         <dependency>
             <groupId>org.hamcrest</groupId>
@@ -204,7 +210,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-authz-client</artifactId>
-            <version>24.0.1</version>
+            <version>26.0.2</version>
         </dependency>
         <dependency>
             <groupId>org.quartz-scheduler</groupId>

@@ -100,7 +100,10 @@ public final class PyProxySlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     new ProxySlice(
+                        clients,
+                        auth,
                         new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+                        cache,
                         new FromStorageCache(cache),
                         events,
                         rname,
