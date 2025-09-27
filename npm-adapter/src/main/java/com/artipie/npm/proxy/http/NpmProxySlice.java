@@ -44,7 +44,8 @@ public final class NpmProxySlice implements Slice {
      */
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
-        final String repoName, final String repoType, final CooldownService cooldown
+        final String repoName, final String repoType, final CooldownService cooldown,
+        final com.artipie.http.Slice remote
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
@@ -68,6 +69,25 @@ public final class NpmProxySlice implements Slice {
                     new DownloadAssetSlice(npm, apath, packages, repoName, repoType, cooldown, inspector)
                 )
             ),
+            // Pass-through for npm security audit endpoints to upstream registry
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(auditPattern(path))
+                ),
+                new LoggingSlice(
+                    new SecurityAuditProxySlice(remote, path)
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(auditPatternNoDash(path))
+                ),
+                new LoggingSlice(
+                    new SecurityAuditProxySlice(remote, path)
+                )
+            ),
             new RtRulePath(
                 RtRule.FALLBACK,
                 new LoggingSlice(
@@ -84,5 +104,29 @@ public final class NpmProxySlice implements Slice {
                                                     final Headers headers,
                                                     final Content body) {
         return this.route.response(line, headers, body);
+    }
+
+    private static String auditPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        // Matches: audits (legacy) and audits/quick, and advisories/bulk
+        final String prefixPath = base.isEmpty() ? "" : base;
+        return String.format(
+            "^(?:%1$s/-/npm/v1/security/audits(?:/quick)?|%1$s/-/npm/v1/security/advisories/bulk)$",
+            prefixPath
+        );
+    }
+
+    private static String auditPatternNoDash(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        // Some clients may call without leading -/, handle audits and advisories/bulk as well
+        final String prefixPath = base.isEmpty() ? "" : base;
+        return String.format(
+            "^(?:%1$s/npm/v1/security/audits(?:/quick)?|%1$s/npm/v1/security/advisories/bulk)$",
+            prefixPath
+        );
     }
 }

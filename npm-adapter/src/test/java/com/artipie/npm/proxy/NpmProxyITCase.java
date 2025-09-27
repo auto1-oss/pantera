@@ -236,7 +236,8 @@ public final class NpmProxyITCase {
         final NpmProxySlice slice = new NpmProxySlice(
             "npm-proxy", npm, Optional.of(packages),
             "npm-proxy", "npm-proxy",
-            com.artipie.cooldown.NoopCooldownService.INSTANCE
+            com.artipie.cooldown.NoopCooldownService.INSTANCE,
+            new com.artipie.http.client.UriClientSlice(this.client, uri)
         );
         this.srv = new VertxSliceServer(NpmProxyITCase.VERTX, slice, NpmProxyITCase.listenPort);
         this.srv.start();
