@@ -92,8 +92,8 @@ public final class CombinedAuthzSlice implements Slice {
                         try {
                             final String challenge = result.challenge();
                             if (challenge != null && !challenge.isBlank()) {
-                                return ResponseBuilder.proxyAuthenticationRequired()
-                                    .header(new Header("Proxy-Authenticate", challenge))
+                                return ResponseBuilder.unauthorized()
+                                    .header(new WwwAuthenticate(challenge))
                                     .completedFuture();
                             }
                         } catch (final UnsupportedOperationException ignored) {

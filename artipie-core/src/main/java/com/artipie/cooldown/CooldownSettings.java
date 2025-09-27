@@ -18,9 +18,15 @@ public final class CooldownSettings {
     public static final long DEFAULT_HOURS = 72L;
 
     /**
-     * Whether cooldown logic is enabled.
+     * Whether cooldown logic is enabled globally.
      */
     private final boolean enabled;
+
+    /** Enable rule: newer-than-cache. */
+    private final boolean enableNewerThanCache;
+
+    /** Enable rule: fresh-release. */
+    private final boolean enableFreshRelease;
 
     /**
      * Cooldown window applied when a newer version than cached is requested.
@@ -44,7 +50,28 @@ public final class CooldownSettings {
         final Duration newerThanCache,
         final Duration freshRelease
     ) {
+        this(enabled, true, true, newerThanCache, freshRelease);
+    }
+
+    /**
+     * Full constructor allowing to toggle each rule.
+     *
+     * @param enabled Global enable flag
+     * @param enableNewerThanCache Enable newer-than-cache rule
+     * @param enableFreshRelease Enable fresh-release rule
+     * @param newerThanCache Duration for newer-than-cache rule
+     * @param freshRelease Duration for fresh-release rule
+     */
+    public CooldownSettings(
+        final boolean enabled,
+        final boolean enableNewerThanCache,
+        final boolean enableFreshRelease,
+        final Duration newerThanCache,
+        final Duration freshRelease
+    ) {
         this.enabled = enabled;
+        this.enableNewerThanCache = enableNewerThanCache;
+        this.enableFreshRelease = enableFreshRelease;
         this.newerThanCache = Objects.requireNonNull(newerThanCache);
         this.freshRelease = Objects.requireNonNull(freshRelease);
     }
@@ -56,6 +83,22 @@ public final class CooldownSettings {
      */
     public boolean enabled() {
         return this.enabled;
+    }
+
+    /**
+     * Whether newer-than-cache cooldown rule is enabled.
+     * @return True when enabled
+     */
+    public boolean newerThanCacheEnabled() {
+        return this.enableNewerThanCache;
+    }
+
+    /**
+     * Whether fresh-release cooldown rule is enabled.
+     * @return True when enabled
+     */
+    public boolean freshReleaseEnabled() {
+        return this.enableFreshRelease;
     }
 
     /**
@@ -83,6 +126,6 @@ public final class CooldownSettings {
      */
     public static CooldownSettings defaults() {
         final Duration duration = Duration.ofHours(DEFAULT_HOURS);
-        return new CooldownSettings(true, duration, duration);
+        return new CooldownSettings(true, true, true, duration, duration);
     }
 }

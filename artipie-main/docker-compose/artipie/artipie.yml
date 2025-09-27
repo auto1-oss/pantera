@@ -18,8 +18,12 @@ meta:
       path: /var/artipie/security
   cooldown:
     enabled: true
-    newer_than_cache_hours: 72
-    fresh_release_hours: 72
+    # Enable or disable each cooldown rule independently
+    enable_newer_than_cache: true
+    enable_fresh_release: true
+    # Use unified duration strings: m = minutes, h = hours, d = days
+    newer_than_cache_by: 72h
+    fresh_release_age: 72h
   artifacts_database:
     postgres_host: artipie-db
     postgres_port: 5432

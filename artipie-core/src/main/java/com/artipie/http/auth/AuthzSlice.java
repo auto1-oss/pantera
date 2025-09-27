@@ -73,12 +73,12 @@ public final class AuthzSlice implements Slice {
                         try {
                             final String challenge = result.challenge();
                             if (challenge != null && !challenge.isBlank()) {
-                                return ResponseBuilder.proxyAuthenticationRequired()
-                                    .header(new Header("Proxy-Authenticate", challenge))
+                                return ResponseBuilder.unauthorized()
+                                    .header(new WwwAuthenticate(challenge))
                                     .completedFuture();
                             }
                         } catch (final UnsupportedOperationException ignored) {
-                            // fall through to legacy behaviour when scheme does not support challenge
+                            // fall through when scheme does not provide challenge
                         }
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(

@@ -91,7 +91,7 @@ class BasicAuthzSliceTest {
     }
 
     @Test
-    void returnsProxyAuthRequiredForAnonymousUser() {
+    void returnsUnauthorizedForAnonymousUser() {
         ResponseAssert.check(
             new BasicAuthzSlice(
                 new SliceSimple(ResponseBuilder.ok().build()),
@@ -111,8 +111,8 @@ class BasicAuthzSliceTest {
                 Headers.from(new Header("WWW-Authenticate", "Basic realm=\"artipie\"")),
                 Content.EMPTY
             ).join(),
-            RsStatus.PROXY_AUTHENTICATION_REQUIRED,
-            new Header("Proxy-Authenticate", "Basic realm=\"artipie\"")
+            RsStatus.UNAUTHORIZED,
+            new Header("WWW-Authenticate", "Basic realm=\"artipie\"")
         );
     }
 
