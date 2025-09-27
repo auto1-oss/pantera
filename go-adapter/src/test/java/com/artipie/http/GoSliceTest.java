@@ -173,8 +173,8 @@ class GoSliceTest {
 
     private static AllOf<Response> unauthorized() {
         return new AllOf<>(
-            new RsHasStatus(RsStatus.PROXY_AUTHENTICATION_REQUIRED),
-            new RsHasHeaders(new Header("Proxy-Authenticate", "Basic realm=\"artipie\""))
+            new RsHasStatus(RsStatus.UNAUTHORIZED),
+            new RsHasHeaders(new Header("WWW-Authenticate", "Basic realm=\"artipie\""))
         );
     }
 

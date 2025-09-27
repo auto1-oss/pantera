@@ -5,7 +5,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>sample-fatjar</artifactId>
-    <version>1.0.0</version>
+    <version>1.2.0</version>
     <name>sample-fatjar</name>
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -13,10 +13,44 @@
     </properties>
     <repositories>
         <repository>
-            <id>artipie</id>
+            <id>artipie-proxy</id>
             <url>http://localhost:8081/proxy</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
         </repository>
     </repositories>
+
+    <!-- Use the same proxy for plugin resolution -->
+    <pluginRepositories>
+        <pluginRepository>
+            <id>artipie-proxy</id>
+            <url>http://localhost:8081/proxy</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <!-- Publish artifacts to the local Artipie hosted repo -->
+    <distributionManagement>
+        <repository>
+            <id>mvn-local</id>
+            <url>http://localhost:8081/mvn-local</url>
+            <uniqueVersion>false</uniqueVersion>
+        </repository>
+        <snapshotRepository>
+            <id>mvn-local</id>
+            <url>http://localhost:8081/mvn-local</url>
+            <uniqueVersion>true</uniqueVersion>
+        </snapshotRepository>
+    </distributionManagement>
     <dependencies>
         <!-- 1. Google Guava -->
         <dependency>
@@ -25,11 +59,6 @@
             <version>33.3.1-jre</version>
         </dependency>
 
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>url-connection-client</artifactId>
-            <version>2.34.1</version>
-        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
@@ -93,10 +122,24 @@
                         <goals><goal>shade</goal></goals>
                         <configuration>
                             <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <!-- Remove signatures from dependencies to avoid 'Invalid signature file digest' -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>META-INF/*.EC</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.example.App</mainClass>
                                 </transformer>
+                                <!-- Merge service descriptors if present -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
                         </configuration>
                     </execution>

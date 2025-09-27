@@ -648,6 +648,11 @@ final class ProxySlice implements Slice {
      */
     private static Header contentType(final Headers headers, final RequestLine line) {
         final String name = "content-type";
+        // For metadata files, default to plain text for better compatibility
+        final String path = line.uri().getPath();
+        if (path != null && path.endsWith(".metadata")) {
+            return new Header(name, "text/plain; charset=utf-8");
+        }
         return Optional.ofNullable(headers).flatMap(
             hdrs -> StreamSupport.stream(hdrs.spliterator(), false)
                 .filter(header -> header.getKey().equalsIgnoreCase(name)).findFirst()

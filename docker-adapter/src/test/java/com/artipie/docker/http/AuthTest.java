@@ -71,11 +71,11 @@ public final class AuthTest {
                 new DockerRepositoryPermission("*", "whatever", DockerActions.PULL.mask())
             )
         ).response(line, Headers.EMPTY, Content.EMPTY).join();
-        ResponseAssert.check(response, RsStatus.PROXY_AUTHENTICATION_REQUIRED);
+        ResponseAssert.check(response, RsStatus.UNAUTHORIZED);
         Assertions.assertTrue(
             response.headers().stream()
                 .anyMatch(header ->
-                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                    header.getKey().equalsIgnoreCase("WWW-Authenticate")
                         && !header.getValue().isBlank()
                 )
         );
@@ -170,12 +170,12 @@ public final class AuthTest {
             .response(line, Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
             response,
-            new RsHasStatus(RsStatus.PROXY_AUTHENTICATION_REQUIRED)
+            new RsHasStatus(RsStatus.UNAUTHORIZED)
         );
         Assertions.assertTrue(
             response.headers().stream()
                 .anyMatch(header ->
-                    header.getKey().equalsIgnoreCase("Proxy-Authenticate")
+                    header.getKey().equalsIgnoreCase("WWW-Authenticate")
                         && !header.getValue().isBlank()
                 )
         );

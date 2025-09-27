@@ -139,12 +139,17 @@ final class JdbcCooldownService implements CooldownService {
             if (latest.isPresent()
                 && compareVersions(request.version(), latest.get()) > 0
             ) {
-                return this.createBlock(
-                    request,
-                    inspector,
-                    CooldownReason.NEWER_THAN_CACHE,
-                    now.plus(this.settings.newerThanCache())
-                );
+                if (this.settings.newerThanCacheEnabled()
+                    && !this.settings.newerThanCache().isZero()
+                    && !this.settings.newerThanCache().isNegative()) {
+                    return this.createBlock(
+                        request,
+                        inspector,
+                        CooldownReason.NEWER_THAN_CACHE,
+                        now.plus(this.settings.newerThanCache())
+                    );
+                }
+                return CooldownResult.allowed();
             }
             return CooldownResult.allowed();
         }
@@ -155,7 +160,9 @@ final class JdbcCooldownService implements CooldownService {
         }
         final Duration fresh = this.settings.freshRelease();
         final Instant date = release.get();
-        if (date.plus(fresh).isAfter(now)) {
+        if (date.plus(fresh).isAfter(now)
+            && this.settings.freshReleaseEnabled()
+            && !fresh.isZero() && !fresh.isNegative()) {
             final Instant until = maxInstant(now.plus(fresh), date.plus(fresh));
             return this.createBlock(request, inspector, CooldownReason.FRESH_RELEASE, until);
         }

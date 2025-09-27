@@ -15,11 +15,13 @@ public final class YamlCooldownSettings {
 
     private static final String NODE = "cooldown";
     private static final String KEY_ENABLED = "enabled";
-    private static final String KEY_NEWER_MIN = "newer_than_cache_minutes";
-    private static final String KEY_FRESH_MIN = "fresh_release_minutes";
-    // Backward compatibility
-    private static final String KEY_NEWER_HOURS = "newer_than_cache_hours";
-    private static final String KEY_FRESH_HOURS = "fresh_release_hours";
+    // New merged keys accepting duration strings like 1m, 3h, 4d
+    private static final String KEY_NEWER_BY = "newer_than_cache_by";
+    private static final String KEY_FRESH_AGE = "fresh_release_age";
+
+    private static final String KEY_ENABLE_NEWER = "enable_newer_than_cache";
+    private static final String KEY_ENABLE_FRESH = "enable_fresh_release";
+
 
     private YamlCooldownSettings() {
         // Utility class
@@ -42,23 +44,17 @@ public final class YamlCooldownSettings {
         }
         final boolean enabled = parseBool(node.string(KEY_ENABLED), defaults.enabled());
         // Prefer minutes keys; if not present, fallback to hours
-        final Integer newerMinRaw = node.integer(KEY_NEWER_MIN);
-        final Integer freshMinRaw = node.integer(KEY_FRESH_MIN);
-        final Integer newerHoursRaw = node.integer(KEY_NEWER_HOURS);
-        final Integer freshHoursRaw = node.integer(KEY_FRESH_HOURS);
-        final long newerMin = newerMinRaw != null && newerMinRaw > 0
-            ? newerMinRaw.longValue()
-            : (newerHoursRaw != null && newerHoursRaw > 0
-                ? Duration.ofHours(newerHoursRaw.longValue()).toMinutes()
-                : defaults.newerThanCache().toMinutes());
-        final long freshMin = freshMinRaw != null && freshMinRaw > 0
-            ? freshMinRaw.longValue()
-            : (freshHoursRaw != null && freshHoursRaw > 0
-                ? Duration.ofHours(freshHoursRaw.longValue()).toMinutes()
-                : defaults.freshRelease().toMinutes());
-        final Duration newer = Duration.ofMinutes(newerMin);
-        final Duration fresh = Duration.ofMinutes(freshMin);
-        return new CooldownSettings(enabled, newer, fresh);
+        final boolean enableNewer = parseBool(node.string(KEY_ENABLE_NEWER), true);
+        final boolean enableFresh = parseBool(node.string(KEY_ENABLE_FRESH), true);
+
+        // Prefer new duration string keys; if absent, fallback to legacy minute/hour keys
+        final String newerStr = node.string(KEY_NEWER_BY);
+        final String freshStr = node.string(KEY_FRESH_AGE);
+
+        Duration newer = parseDurationOrDefault(newerStr, defaults.newerThanCache());
+        Duration fresh = parseDurationOrDefault(freshStr, defaults.freshRelease());
+
+        return new CooldownSettings(enabled, enableNewer, enableFresh, newer, fresh);
     }
 
     private static boolean parseBool(final String value, final boolean fallback) {
@@ -73,5 +69,40 @@ public final class YamlCooldownSettings {
             return false;
         }
         return fallback;
+    }
+
+    /**
+     * Parses duration strings like "1m", "3h", "4d". Returns fallback when null/invalid.
+     * Supported units: m (minutes), h (hours), d (days).
+     *
+     * @param value String value
+     * @param fallback Fallback duration
+     * @return Parsed duration or fallback
+     */
+    private static Duration parseDurationOrDefault(final String value, final Duration fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        final String val = value.trim().toLowerCase(Locale.US);
+        if (val.isEmpty()) {
+            return fallback;
+        }
+        // Accept formats like 15m, 3h, 4d (optionally with spaces, e.g. "15 m")
+        final String digits = val.replaceAll("[^0-9]", "");
+        final String unit = val.replaceAll("[0-9\\s]", "");
+        if (digits.isEmpty() || unit.isEmpty()) {
+            return fallback;
+        }
+        try {
+            final long amount = Long.parseLong(digits);
+            return switch (unit) {
+                case "m" -> Duration.ofMinutes(amount);
+                case "h" -> Duration.ofHours(amount);
+                case "d" -> Duration.ofDays(amount);
+                default -> fallback;
+            };
+        } catch (final NumberFormatException err) {
+            return fallback;
+        }
     }
 }

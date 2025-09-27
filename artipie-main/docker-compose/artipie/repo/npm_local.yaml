@@ -1,0 +1,6 @@
+repo:
+  type: npm
+  url: "http://localhost:8081/npm_local"
+  storage:
+    type: fs
+    path: /var/artipie/data/
