@@ -312,10 +312,11 @@ public class RepositorySlices {
                 break;
             case "npm-proxy":
                 clientSlices = jettyClientSlices(cfg);
+                final URI npmRemoteUri = URI.create(
+                    cfg.settings().orElseThrow().yamlMapping("remote").string("url")
+                );
                 final NpmProxy npmProxy = new NpmProxy(
-                    URI.create(
-                        cfg.settings().orElseThrow().yamlMapping("remote").string("url")
-                    ), cfg.storage(), clientSlices
+                    npmRemoteUri, cfg.storage(), clientSlices
                 );
                 slice = new CombinedAuthzSliceWrap(
                     new NpmProxySlice(
@@ -325,7 +326,8 @@ public class RepositorySlices {
                         ),
                         cfg.name(),
                         cfg.type(),
-                        this.cooldown
+                        this.cooldown,
+                        new com.artipie.http.client.UriClientSlice(clientSlices, npmRemoteUri)
                     ),
                     authentication(),
                     tokens.auth(),

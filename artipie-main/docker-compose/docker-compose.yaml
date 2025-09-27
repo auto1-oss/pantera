@@ -2,7 +2,9 @@ version: "3.3"
 services:
   artipie:
     depends_on:
-      - artipie-db
+      artipie-db:
+        condition: service_healthy
+        
     image: auto1-artipie:1.0-SNAPSHOT
     container_name: artipie
     restart: unless-stopped
@@ -46,9 +48,9 @@ services:
       - POSTGRES_DB=artifacts
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready", "-d", "artifacts" ]
-      interval: 30s
+      interval: 10s
       timeout: 60s
-      retries: 5
+      retries: 6
 
 networks:
   artipie-net:
