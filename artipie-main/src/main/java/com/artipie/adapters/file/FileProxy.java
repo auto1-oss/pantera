@@ -8,6 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.FromStorageCache;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.files.FileProxySlice;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
@@ -28,21 +29,30 @@ import java.util.concurrent.CompletableFuture;
 public final class FileProxy implements Slice {
 
     private final Slice slice;
+    
+    /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
 
     /**
      * @param client HTTP client.
      * @param cfg Repository configuration.
      * @param events Artifact events queue
+     * @param cooldown Cooldown service
      */
     public FileProxy(
-        ClientSlices client, RepoConfig cfg, Optional<Queue<ArtifactEvent>> events
+        ClientSlices client, RepoConfig cfg, Optional<Queue<ArtifactEvent>> events,
+        CooldownService cooldown
     ) {
+        this.cooldown = cooldown;
         final Optional<Storage> asto = cfg.storageOpt();
         this.slice = new FileProxySlice(
             AuthClientSlice.withUriClientSlice(client, cfg.remoteConfig()),
             asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
             asto.flatMap(ignored -> events),
-            cfg.name()
+            cfg.name(),
+            this.cooldown
         );
     }
 

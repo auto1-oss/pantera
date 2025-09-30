@@ -9,6 +9,7 @@ import com.artipie.cooldown.CooldownInspector;
 import com.artipie.asto.Content;
 import com.artipie.asto.Remaining;
 import com.artipie.http.Headers;
+import com.artipie.http.headers.Header;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
@@ -48,10 +49,28 @@ final class MavenCooldownInspector implements CooldownInspector {
 
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
-        final String path = pomPath(artifact, version);
-        return this.head.head(path)
-            .thenApply(headers -> headers.flatMap(MavenCooldownInspector::parseLastModified))
-            .toCompletableFuture();
+        final String pom = pomPath(artifact, version);
+        final String jar = artifactPath(artifact, version, "jar");
+        return this.head.head(pom)
+            .thenCompose(headers -> {
+                final Optional<Instant> lm = headers.flatMap(MavenCooldownInspector::parseLastModified);
+                if (lm.isPresent()) {
+                    return CompletableFuture.completedFuture(lm);
+                }
+                // Fallback 1: some upstreams don't send Last-Modified on HEAD; try GET headers
+                return this.remote.response(new RequestLine(RqMethod.GET, pom), Headers.EMPTY, Content.EMPTY)
+                    .thenCompose(resp -> {
+                        final Optional<Instant> fromGet = resp.status().success()
+                            ? parseLastModified(resp.headers())
+                            : Optional.empty();
+                        if (fromGet.isPresent()) {
+                            return CompletableFuture.completedFuture(fromGet);
+                        }
+                        // Fallback 2: try artifact JAR HEAD
+                        return this.head.head(jar)
+                            .thenApply(h -> h.flatMap(MavenCooldownInspector::parseLastModified));
+                    });
+            }).toCompletableFuture();
     }
 
     @Override
@@ -101,19 +120,38 @@ final class MavenCooldownInspector implements CooldownInspector {
     private static Optional<Instant> parseLastModified(final Headers headers) {
         return headers.stream()
             .filter(header -> "Last-Modified".equalsIgnoreCase(header.getKey()))
+            .map(Header::getValue)
             .findFirst()
-            .flatMap(header -> {
-                try {
-                    return Optional.of(Instant.from(LAST_MODIFIED.parse(header.getValue())));
-                } catch (final DateTimeParseException ex) {
-                    Logger.warn(
-                        MavenCooldownInspector.class,
-                        "Invalid Last-Modified header: %s",
-                        header.getValue()
+            .flatMap(MavenCooldownInspector::parseRfc1123Relaxed);
+    }
+
+    private static Optional<Instant> parseRfc1123Relaxed(final String raw) {
+        String val = raw == null ? "" : raw.trim();
+        // strip surrounding quotes if present
+        if (val.length() >= 2 && val.startsWith("\"") && val.endsWith("\"")) {
+            val = val.substring(1, val.length() - 1);
+        }
+        // collapse multiple spaces to a single space
+        val = val.replaceAll("\\s+", " ");
+        try {
+            return Optional.of(Instant.from(LAST_MODIFIED.parse(val)));
+        } catch (final DateTimeParseException ex1) {
+            try {
+                // some upstreams send single-digit hour; accept with 'H'
+                final DateTimeFormatter relaxed =
+                    DateTimeFormatter.ofPattern(
+                        "EEE, dd MMM yyyy H:mm:ss z", Locale.US
                     );
-                    return Optional.empty();
-                }
-            });
+                return Optional.of(Instant.from(relaxed.parse(val)));
+            } catch (final DateTimeParseException ex2) {
+                Logger.warn(
+                    MavenCooldownInspector.class,
+                    "Invalid Last-Modified header: %s",
+                    raw
+                );
+                return Optional.empty();
+            }
+        }
     }
 
     private static CompletableFuture<byte[]> bodyBytes(final org.reactivestreams.Publisher<ByteBuffer> body) {
@@ -219,6 +257,10 @@ final class MavenCooldownInspector implements CooldownInspector {
     }
 
     private static String pomPath(final String artifact, final String version) {
+        return artifactPath(artifact, version, "pom");
+    }
+
+    private static String artifactPath(final String artifact, final String version, final String ext) {
         final int idx = artifact.lastIndexOf('.');
         final String group;
         final String name;
@@ -235,7 +277,7 @@ final class MavenCooldownInspector implements CooldownInspector {
             path.append(group).append('/');
         }
         path.append(name).append('/').append(version).append('/').append(name)
-            .append('-').append(version).append(".pom");
+            .append('-').append(version).append('.').append(ext);
         return path.toString();
     }
 

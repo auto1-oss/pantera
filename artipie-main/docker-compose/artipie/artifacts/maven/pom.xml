@@ -5,7 +5,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>sample-fatjar</artifactId>
-    <version>1.2.0</version>
+    <version>1.4.0</version>
     <name>sample-fatjar</name>
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -14,7 +14,7 @@
     <repositories>
         <repository>
             <id>artipie-proxy</id>
-            <url>http://localhost:8081/proxy</url>
+            <url>http://localhost:8081/maven_group</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -28,7 +28,7 @@
     <pluginRepositories>
         <pluginRepository>
             <id>artipie-proxy</id>
-            <url>http://localhost:8081/proxy</url>
+            <url>http://localhost:8081/maven_group</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -56,7 +56,12 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>33.3.1-jre</version>
+            <version>33.5.0-jre</version>
+        </dependency>
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations-jakarta</artifactId>
+            <version>2.2.38</version>
         </dependency>
 
         <dependency>
@@ -108,6 +113,19 @@
             <version>2.0.13</version>
             <scope>runtime</scope>
         </dependency>
+
+        <dependency>
+            <groupId>io.streamnative</groupId>
+            <artifactId>pulsar-io-common</artifactId>
+            <version>4.0.6.7</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>sample-fatjar</artifactId>
+            <version>1.3.0</version>
+        </dependency>
+
     </dependencies>
     <build>
         <plugins>

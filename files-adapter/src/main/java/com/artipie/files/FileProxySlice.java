@@ -10,6 +10,9 @@ import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.FromRemoteCache;
 import com.artipie.asto.cache.Remote;
+import com.artipie.cooldown.CooldownRequest;
+import com.artipie.cooldown.CooldownResponses;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
@@ -18,6 +21,7 @@ import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
+import com.artipie.http.headers.Login;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
@@ -63,12 +67,23 @@ public final class FileProxySlice implements Slice {
     private final String rname;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
+     * Cooldown inspector.
+     */
+    private final FilesCooldownInspector inspector;
+
+    /**
      * New files proxy slice.
      * @param clients HTTP clients
      * @param remote Remote URI
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
-        this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO);
+        this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -82,7 +97,8 @@ public final class FileProxySlice implements Slice {
         final Authenticator auth, final Storage asto) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
-            new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO
+            new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
     }
 
@@ -98,7 +114,8 @@ public final class FileProxySlice implements Slice {
         final Queue<ArtifactEvent> events, final String rname) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
-            new FromRemoteCache(asto), Optional.of(events), rname
+            new FromRemoteCache(asto), Optional.of(events), rname,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
     }
 
@@ -107,7 +124,8 @@ public final class FileProxySlice implements Slice {
      * @param cache Cache
      */
     FileProxySlice(final Slice remote, final Cache cache) {
-        this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO);
+        this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -118,22 +136,42 @@ public final class FileProxySlice implements Slice {
      */
     public FileProxySlice(
         final Slice remote, final Cache cache,
-        final Optional<Queue<ArtifactEvent>> events, final String rname
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown
     ) {
         this.remote = remote;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
+        this.cooldown = cooldown;
+        this.inspector = new FilesCooldownInspector(remote);
     }
 
     @Override
     public CompletableFuture<Response> response(
-        RequestLine line, Headers ignored, Content pub
+        RequestLine line, Headers rqheaders, Content pub
     ) {
-        final AtomicReference<Headers> headers = new AtomicReference<>();
+        final AtomicReference<Headers> rshdr = new AtomicReference<>();
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
+        final String artifact = line.uri().getPath();
+        final String user = new Login(rqheaders).getValue();
+        final CooldownRequest request = new CooldownRequest(
+            FileProxySlice.REPO_TYPE,
+            this.rname,
+            artifact,
+            "latest",
+            user,
+            java.time.Instant.now()
+        );
 
-        return this.cache.load(key,
+        return this.cooldown.evaluate(request, this.inspector)
+            .thenCompose(result -> {
+                if (result.blocked()) {
+                    return java.util.concurrent.CompletableFuture.completedFuture(
+                        CooldownResponses.forbidden(result.block().orElseThrow())
+                    );
+                }
+                return this.cache.load(key,
                 new Remote.WithErrorHandling(
                     () -> {
                         final CompletableFuture<Optional<? extends Content>> promise = new CompletableFuture<>();
@@ -141,7 +179,7 @@ public final class FileProxySlice implements Slice {
                             .thenApply(
                                 response -> {
                                     final CompletableFuture<Void> term = new CompletableFuture<>();
-                                    headers.set(response.headers());
+                                    rshdr.set(response.headers());
 
                                     if (response.status().success()) {
                                         final Flowable<ByteBuffer> body = Flowable.fromPublisher(response.body())
@@ -152,7 +190,7 @@ public final class FileProxySlice implements Slice {
 
                                         if (this.events.isPresent()) {
                                             final long size =
-                                                new RqHeaders(headers.get(), ContentLength.NAME)
+                                                new RqHeaders(rshdr.get(), ContentLength.NAME)
                                                     .stream().findFirst().map(Long::parseLong)
                                                     .orElse(0L);
                                             this.events.get().add(
@@ -175,12 +213,13 @@ public final class FileProxySlice implements Slice {
             .handle((content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
                         return ResponseBuilder.ok()
-                            .headers(headers.get())
+                            .headers(rshdr.get())
                             .body(content.get())
                             .build();
                     }
                     return ResponseBuilder.notFound().build();
                 }
             );
+            });
     }
 }
