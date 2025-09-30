@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hello"
+version = "0.1.0"
+description = "Tiny example package with a CLI that says hello."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT License"}
+authors = [{name = "Ayd", email = "you@example.com"}]
+keywords = ["example", "hello", "cli"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent"
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://example.com/hello"
+Source = "https://example.com/hello"
+Issues = "https://example.com/hello/issues"
+
+[project.scripts]
+hello = "hello.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["hello*"]

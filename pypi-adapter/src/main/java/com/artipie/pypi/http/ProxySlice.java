@@ -180,6 +180,7 @@ final class ProxySlice implements Slice {
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
+        final String user = new Login(rqheaders).getValue();
         return this.cache.load(
             key,
             new Remote.WithErrorHandling(
@@ -213,6 +214,22 @@ final class ProxySlice implements Slice {
                         remote.set(response.headers());
                         if (response.status().success()) {
                             remoteSuccess.set(true);
+                            // Enqueue artifact event immediately on successful remote fetch
+                            // ONLY for actual artifact downloads (archives/wheels). This ensures
+                            // metadata is recorded even if cooldown blocks this request, while
+                            // avoiding index requests polluting the queue.
+                            if (ProxySlice.this.extract(line).isPresent()) {
+                                this.events.ifPresent(queue ->
+                                    queue.add(
+                                        new ProxyArtifactEvent(
+                                            key,
+                                            this.rname,
+                                            user,
+                                            this.releaseInstant(response.headers()).map(Instant::toEpochMilli)
+                                        )
+                                    )
+                                );
+                            }
                             return Optional.of(response.body());
                         }
                         return Optional.empty();
@@ -242,6 +259,25 @@ final class ProxySlice implements Slice {
     ) {
         final Optional<ArtifactCoordinates> coords = this.extract(line);
         if (coords.isEmpty()) {
+            final String path = line.uri().getPath();
+            // Serve .metadata files exactly as received (no rewriting, no charset conversions)
+            if (path != null && path.endsWith(".metadata")) {
+                return new com.artipie.asto.streams.ContentAsStream<Response>(content)
+                    .process(stream -> {
+                        try {
+                            final byte[] bytes = stream.readAllBytes();
+                            return ResponseBuilder.ok()
+                                // Keep minimal headers; integrity depends on body bytes, not headers
+                                .headers(Headers.EMPTY)
+                                .body(new Content.From(bytes))
+                                .header(new com.artipie.http.headers.ContentLength((long) bytes.length), true)
+                                .build();
+                        } catch (final java.io.IOException ex) {
+                            throw new com.artipie.asto.ArtipieIOException(ex);
+                        }
+                    })
+                    .toCompletableFuture();
+            }
             final Header ctype = ProxySlice.contentType(remote, line);
             return this.rewriteIndex(content, ctype)
                 .thenApply(
@@ -279,7 +315,9 @@ final class ProxySlice implements Slice {
                         return CooldownResponses.forbidden(result.block().orElseThrow());
                     }
 
-                    if (remoteSuccess || !ctx.knownBefore()) {
+                    // Avoid duplicate events: if content came from cache but we had no prior
+                    // release knowledge, enqueue now. Remote fetch case is enqueued earlier.
+                    if (!remoteSuccess && !ctx.knownBefore()) {
                         this.events.ifPresent(queue ->
                             queue.add(new ProxyArtifactEvent(
                                 key,
@@ -309,6 +347,9 @@ final class ProxySlice implements Slice {
                     }
                     final String original = new String(bytes, StandardCharsets.UTF_8);
                     final String rewritten = this.rewriteIndexBody(original, header);
+                    if (rewritten.equals(original)) {
+                        return new Content.From(bytes);
+                    }
                     return new Content.From(rewritten.getBytes(StandardCharsets.UTF_8));
                 } catch (final IOException ex) {
                     throw new ArtipieIOException(ex);

@@ -6,7 +6,7 @@
   "loginWithEmailAllowed": true,
   "registrationAllowed": false,
   "bruteForceProtected": false,
-  "sslRequired": "external",
+  "sslRequired": "none",
   "clients": [
     {
       "clientId": "test_client",

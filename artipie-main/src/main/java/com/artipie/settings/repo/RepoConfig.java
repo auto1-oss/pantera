@@ -160,6 +160,28 @@ public final class RepoConfig {
     }
 
     /**
+     * Group members list (for *-group repositories).
+     * The order of members defines resolution priority.
+     *
+     * @return List of member repository names or empty list if not specified.
+     */
+    public List<String> members() {
+        final YamlSequence seq = this.repoYaml.yamlSequence("members");
+        if (seq == null) {
+            return Collections.emptyList();
+        }
+        final List<String> res = new ArrayList<>(seq.size());
+        seq.forEach(node -> {
+            if (node instanceof Scalar scalar) {
+                res.add(scalar.value());
+            } else {
+                throw new IllegalStateException("`members` element is not scalar in group config");
+            }
+        });
+        return res;
+    }
+
+    /**
      * A single remote configuration.
      * <p>Fails if there are more than one remote configs or no remotes specified.
      *

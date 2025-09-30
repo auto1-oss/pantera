@@ -6,10 +6,7 @@ meta:
     - type: env
   cooldown:
     enabled: true
-    enable_newer_than_cache: true
-    enable_fresh_release: true
-    newer_than_cache_by: 72h
-    fresh_release_age: 72h
+    minimum_allowed_age: 72h
   artifacts_database:
     postgres_host: localhost
     postgres_port: 5432

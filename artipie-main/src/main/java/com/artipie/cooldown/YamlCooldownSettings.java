@@ -15,12 +15,11 @@ public final class YamlCooldownSettings {
 
     private static final String NODE = "cooldown";
     private static final String KEY_ENABLED = "enabled";
-    // New merged keys accepting duration strings like 1m, 3h, 4d
+    // New simplified key: accepts duration strings like 1m, 3h, 4d
+    private static final String KEY_MIN_AGE = "minimum_allowed_age";
+    // Legacy keys kept for backward compatibility
     private static final String KEY_NEWER_BY = "newer_than_cache_by";
     private static final String KEY_FRESH_AGE = "fresh_release_age";
-
-    private static final String KEY_ENABLE_NEWER = "enable_newer_than_cache";
-    private static final String KEY_ENABLE_FRESH = "enable_fresh_release";
 
 
     private YamlCooldownSettings() {
@@ -43,18 +42,19 @@ public final class YamlCooldownSettings {
             return defaults;
         }
         final boolean enabled = parseBool(node.string(KEY_ENABLED), defaults.enabled());
-        // Prefer minutes keys; if not present, fallback to hours
-        final boolean enableNewer = parseBool(node.string(KEY_ENABLE_NEWER), true);
-        final boolean enableFresh = parseBool(node.string(KEY_ENABLE_FRESH), true);
-
-        // Prefer new duration string keys; if absent, fallback to legacy minute/hour keys
-        final String newerStr = node.string(KEY_NEWER_BY);
+        // New key takes precedence
+        final String minAgeStr = node.string(KEY_MIN_AGE);
+        // Backward compatibility: prefer fresh_release_age, then newer_than_cache_by
         final String freshStr = node.string(KEY_FRESH_AGE);
+        final String newerStr = node.string(KEY_NEWER_BY);
 
-        Duration newer = parseDurationOrDefault(newerStr, defaults.newerThanCache());
-        Duration fresh = parseDurationOrDefault(freshStr, defaults.freshRelease());
+        Duration minAge = parseDurationOrDefault(minAgeStr,
+            parseDurationOrDefault(freshStr,
+                parseDurationOrDefault(newerStr, defaults.minimumAllowedAge())
+            )
+        );
 
-        return new CooldownSettings(enabled, enableNewer, enableFresh, newer, fresh);
+        return new CooldownSettings(enabled, minAge);
     }
 
     private static boolean parseBool(final String value, final boolean fallback) {

@@ -3,21 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 package com.artipie.cooldown;
-
-import com.artipie.cooldown.CooldownBlock;
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownReason;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSettings;
-import com.vdurmont.semver4j.Semver;
-import com.vdurmont.semver4j.SemverException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -129,41 +117,16 @@ final class JdbcCooldownService implements CooldownService {
             }
             return CooldownResult.allowed();
         }
-        final List<String> cached = this.repository.cachedVersions(
-            request.repoType(),
-            request.repoName(),
-            request.artifact()
-        );
-        if (!cached.isEmpty()) {
-            final Optional<String> latest = latestVersion(cached);
-            if (latest.isPresent()
-                && compareVersions(request.version(), latest.get()) > 0
-            ) {
-                if (this.settings.newerThanCacheEnabled()
-                    && !this.settings.newerThanCache().isZero()
-                    && !this.settings.newerThanCache().isNegative()) {
-                    return this.createBlock(
-                        request,
-                        inspector,
-                        CooldownReason.NEWER_THAN_CACHE,
-                        now.plus(this.settings.newerThanCache())
-                    );
-                }
-                return CooldownResult.allowed();
-            }
-            return CooldownResult.allowed();
-        }
         final Optional<Instant> release =
             inspector.releaseDate(request.artifact(), request.version()).join();
         if (release.isEmpty()) {
             return CooldownResult.allowed();
         }
-        final Duration fresh = this.settings.freshRelease();
+        final Duration fresh = this.settings.minimumAllowedAge();
         final Instant date = release.get();
         if (date.plus(fresh).isAfter(now)
-            && this.settings.freshReleaseEnabled()
             && !fresh.isZero() && !fresh.isNegative()) {
-            final Instant until = maxInstant(now.plus(fresh), date.plus(fresh));
+            final Instant until = date.plus(fresh);
             return this.createBlock(request, inspector, CooldownReason.FRESH_RELEASE, until);
         }
         return CooldownResult.allowed();
@@ -287,21 +250,7 @@ final class JdbcCooldownService implements CooldownService {
         );
     }
 
-    private static Optional<String> latestVersion(final List<String> versions) {
-        return versions.stream()
-            .filter(version -> !version.isBlank())
-            .max((left, right) -> compareVersions(left, right));
-    }
-
-    private static int compareVersions(final String first, final String second) {
-        try {
-            final Semver left = new Semver(first, Semver.SemverType.LOOSE);
-            final Semver right = new Semver(second, Semver.SemverType.LOOSE);
-            return left.compareTo(right);
-        } catch (final SemverException ignored) {
-            return first.compareToIgnoreCase(second);
-        }
-    }
+    // Version comparison helpers removed as newer-than-cache logic is no longer supported.
 
     private static List<CooldownDependency> deduplicateDependencies(
         final List<CooldownDependency> deps,
@@ -328,9 +277,5 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownDependency dep
     ) {
         return artifact.equalsIgnoreCase(dep.artifact()) && version.equals(dep.version());
-    }
-
-    private static Instant maxInstant(final Instant first, final Instant second) {
-        return first.isAfter(second) ? first : second;
     }
 }

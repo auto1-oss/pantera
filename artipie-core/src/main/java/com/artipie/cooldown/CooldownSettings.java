@@ -22,58 +22,22 @@ public final class CooldownSettings {
      */
     private final boolean enabled;
 
-    /** Enable rule: newer-than-cache. */
-    private final boolean enableNewerThanCache;
-
-    /** Enable rule: fresh-release. */
-    private final boolean enableFreshRelease;
-
     /**
-     * Cooldown window applied when a newer version than cached is requested.
+     * Minimum allowed age for an artifact release. If an artifact's release time
+     * is within this window (i.e. too fresh), it will be blocked until it reaches
+     * the minimum allowed age.
      */
-    private final Duration newerThanCache;
-
-    /**
-     * Cooldown window applied for freshly released artifacts when nothing is cached yet.
-     */
-    private final Duration freshRelease;
+    private final Duration minimumAllowedAge;
 
     /**
      * Ctor.
      *
      * @param enabled Whether cooldown logic is enabled
-     * @param newerThanCache Cooldown duration for newer-than-cache requests
-     * @param freshRelease Cooldown duration for first-time releases
+     * @param minimumAllowedAge Minimum allowed age duration for fresh releases
      */
-    public CooldownSettings(
-        final boolean enabled,
-        final Duration newerThanCache,
-        final Duration freshRelease
-    ) {
-        this(enabled, true, true, newerThanCache, freshRelease);
-    }
-
-    /**
-     * Full constructor allowing to toggle each rule.
-     *
-     * @param enabled Global enable flag
-     * @param enableNewerThanCache Enable newer-than-cache rule
-     * @param enableFreshRelease Enable fresh-release rule
-     * @param newerThanCache Duration for newer-than-cache rule
-     * @param freshRelease Duration for fresh-release rule
-     */
-    public CooldownSettings(
-        final boolean enabled,
-        final boolean enableNewerThanCache,
-        final boolean enableFreshRelease,
-        final Duration newerThanCache,
-        final Duration freshRelease
-    ) {
+    public CooldownSettings(final boolean enabled, final Duration minimumAllowedAge) {
         this.enabled = enabled;
-        this.enableNewerThanCache = enableNewerThanCache;
-        this.enableFreshRelease = enableFreshRelease;
-        this.newerThanCache = Objects.requireNonNull(newerThanCache);
-        this.freshRelease = Objects.requireNonNull(freshRelease);
+        this.minimumAllowedAge = Objects.requireNonNull(minimumAllowedAge);
     }
 
     /**
@@ -86,46 +50,21 @@ public final class CooldownSettings {
     }
 
     /**
-     * Whether newer-than-cache cooldown rule is enabled.
-     * @return True when enabled
-     */
-    public boolean newerThanCacheEnabled() {
-        return this.enableNewerThanCache;
-    }
-
-    /**
-     * Whether fresh-release cooldown rule is enabled.
-     * @return True when enabled
-     */
-    public boolean freshReleaseEnabled() {
-        return this.enableFreshRelease;
-    }
-
-    /**
-     * Cooldown duration used when cached artifact exists but a newer version is requested.
+     * Minimum allowed age duration for releases.
      *
-     * @return Cooldown duration
+     * @return Duration of minimum allowed age
      */
-    public Duration newerThanCache() {
-        return this.newerThanCache;
+    public Duration minimumAllowedAge() {
+        return this.minimumAllowedAge;
     }
 
     /**
-     * Cooldown duration used for freshly released artifacts with no cached version.
-     *
-     * @return Cooldown duration
-     */
-    public Duration freshRelease() {
-        return this.freshRelease;
-    }
-
-    /**
-     * Creates default configuration (enabled, 72 hours for both windows).
+     * Creates default configuration (enabled, 72 hours minimum allowed age).
      *
      * @return Default cooldown settings
      */
     public static CooldownSettings defaults() {
         final Duration duration = Duration.ofHours(DEFAULT_HOURS);
-        return new CooldownSettings(true, true, true, duration, duration);
+        return new CooldownSettings(true, duration);
     }
 }

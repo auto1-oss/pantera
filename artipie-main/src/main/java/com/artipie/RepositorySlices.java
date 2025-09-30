@@ -35,6 +35,7 @@ import com.artipie.http.DockerRoutingSlice;
 import com.artipie.http.GoSlice;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
+import com.artipie.group.GroupSlice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
 import com.artipie.http.auth.CombinedAuthScheme;
@@ -185,7 +186,7 @@ public class RepositorySlices {
         if (opt.isPresent()) {
             final RepoConfig cfg = opt.get();
             if (cfg.port().isEmpty() || cfg.port().getAsInt() == port) {
-                return Optional.of(sliceFromConfig(cfg));
+                return Optional.of(sliceFromConfig(cfg, port));
             }
         }
         return Optional.empty();
@@ -206,7 +207,7 @@ public class RepositorySlices {
             .map(MetadataEventQueues::eventQueue);
     }
 
-    private SliceValue sliceFromConfig(final RepoConfig cfg) {
+    private SliceValue sliceFromConfig(final RepoConfig cfg, final int port) {
         final Slice slice;
         JettyClientSlices clientSlices = null;
         switch (cfg.type()) {
@@ -225,7 +226,7 @@ public class RepositorySlices {
             case "file-proxy":
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
-                    new FileProxy(clientSlices, cfg, artifactEvents())
+                    new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown)
                 );
                 break;
             case "npm":
@@ -340,6 +341,23 @@ public class RepositorySlices {
             case "pypi":
                 slice = trimPathSlice(
                     new PySlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents())
+                );
+                break;
+            case "file-group":
+            case "maven-group":
+            case "npm-group":
+            case "pypi-group":
+            case "docker-group":
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new GroupSlice(this::slice, cfg.name(), cfg.members(), port),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
                 );
                 break;
             case "pypi-proxy":

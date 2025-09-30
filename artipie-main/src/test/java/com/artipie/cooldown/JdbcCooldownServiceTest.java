@@ -68,7 +68,7 @@ final class JdbcCooldownServiceTest {
     }
 
     @Test
-    void blocksWhenNewerVersionThanCache() {
+    void allowsWhenNewerVersionThanCache() {
         this.insertArtifact("maven-proxy", "central", "com.test.pkg", "1.0.0");
         final CooldownRequest request =
             new CooldownRequest("maven-proxy", "central", "com.test.pkg", "2.0.0", "alice", Instant.now());
@@ -84,8 +84,8 @@ final class JdbcCooldownServiceTest {
             }
         };
         final CooldownResult result = this.service.evaluate(request, inspector).join();
-        MatcherAssert.assertThat(result.blocked(), Matchers.is(true));
-        MatcherAssert.assertThat(result.block().get().reason(), Matchers.is(CooldownReason.NEWER_THAN_CACHE));
+        MatcherAssert.assertThat(result.blocked(), Matchers.is(false));
+        MatcherAssert.assertThat(result.block().isEmpty(), Matchers.is(true));
     }
 
     @Test
