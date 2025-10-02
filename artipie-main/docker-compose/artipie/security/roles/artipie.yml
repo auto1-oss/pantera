@@ -6,4 +6,4 @@
 permissions:
   adapter_basic_permissions:
     "*":
-      - "*"
+      - read

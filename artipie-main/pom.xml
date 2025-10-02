@@ -425,32 +425,36 @@ SOFTWARE.
                         </configuration>
                     </plugin>
                     <plugin>
-                        <groupId>io.fabric8</groupId>
-                        <artifactId>docker-maven-plugin</artifactId>
-                        <version>0.43.0</version>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
-                                <id>default</id>
+                                <id>docker-buildx-multiplatform</id>
+                                <phase>install</phase>
                                 <goals>
-                                    <goal>build</goal>
-                                    <goal>push</goal>
+                                    <goal>exec</goal>
                                 </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <workingDirectory>${project.basedir}</workingDirectory>
+                                    <arguments>
+                                        <argument>buildx</argument>
+                                        <argument>build</argument>
+                                        <argument>--platform</argument>
+                                        <argument>linux/amd64,linux/arm64</argument>
+                                        <argument>--build-arg</argument>
+                                        <argument>JAR_FILE=${project.build.finalName}.jar</argument>
+                                        <argument>-t</argument>
+                                        <argument>${docker.image.name}:${project.version}</argument>
+                                        <argument>--load</argument>
+                                        <argument>-f</argument>
+                                        <argument>Dockerfile</argument>
+                                        <argument>.</argument>
+                                    </arguments>
+                                </configuration>
                             </execution>
                         </executions>
-                        <configuration>
-                            <images>
-                                <image>
-                                    <name>${docker.image.name}:${project.version}</name>
-                                    <build>
-                                        <contextDir>${project.basedir}</contextDir>
-                                        <dockerFile>Dockerfile</dockerFile>
-                                        <args>
-                                            <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
-                                        </args>
-                                    </build>
-                                </image>
-                            </images>
-                        </configuration>
                     </plugin>
                     <plugin>
                         <artifactId>maven-deploy-plugin</artifactId>
@@ -503,32 +507,36 @@ SOFTWARE.
                         </configuration>
                     </plugin>
                     <plugin>
-                        <groupId>io.fabric8</groupId>
-                        <artifactId>docker-maven-plugin</artifactId>
-                        <version>0.43.0</version>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
-                                <id>default</id>
+                                <id>docker-buildx-multiplatform-ubuntu</id>
+                                <phase>install</phase>
                                 <goals>
-                                    <goal>build</goal>
-                                    <goal>push</goal>
+                                    <goal>exec</goal>
                                 </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <workingDirectory>${project.basedir}</workingDirectory>
+                                    <arguments>
+                                        <argument>buildx</argument>
+                                        <argument>build</argument>
+                                        <argument>--platform</argument>
+                                        <argument>linux/amd64,linux/arm64</argument>
+                                        <argument>--build-arg</argument>
+                                        <argument>JAR_FILE=${project.build.finalName}.jar</argument>
+                                        <argument>-t</argument>
+                                        <argument>${docker.ubuntu.image.name}:${project.version}</argument>
+                                        <argument>--load</argument>
+                                        <argument>-f</argument>
+                                        <argument>Dockerfile-ubuntu</argument>
+                                        <argument>.</argument>
+                                    </arguments>
+                                </configuration>
                             </execution>
                         </executions>
-                        <configuration>
-                            <images>
-                                <image>
-                                    <name>${docker.ubuntu.image.name}:${project.version}</name>
-                                    <build>
-                                        <contextDir>${project.basedir}</contextDir>
-                                        <dockerFile>Dockerfile-ubuntu</dockerFile>
-                                        <args>
-                                            <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
-                                        </args>
-                                    </build>
-                                </image>
-                            </images>
-                        </configuration>
                     </plugin>
                     <plugin>
                         <artifactId>maven-deploy-plugin</artifactId>

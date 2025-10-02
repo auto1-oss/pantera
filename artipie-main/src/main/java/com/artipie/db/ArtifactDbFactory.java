@@ -104,25 +104,33 @@ public final class ArtifactDbFactory {
     public DataSource initialize() {
         final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
         
-        final String host = config != null && config.string(ArtifactDbFactory.YAML_HOST) != null 
-            ? config.string(ArtifactDbFactory.YAML_HOST) 
-            : ArtifactDbFactory.DEFAULT_HOST;
+        final String host = resolveEnvVar(
+            config != null && config.string(ArtifactDbFactory.YAML_HOST) != null 
+                ? config.string(ArtifactDbFactory.YAML_HOST) 
+                : ArtifactDbFactory.DEFAULT_HOST
+        );
             
         final int port = config != null && config.string(ArtifactDbFactory.YAML_PORT) != null 
-            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_PORT)) 
+            ? Integer.parseInt(resolveEnvVar(config.string(ArtifactDbFactory.YAML_PORT)))
             : ArtifactDbFactory.DEFAULT_PORT;
             
-        final String database = config != null && config.string(ArtifactDbFactory.YAML_DATABASE) != null 
-            ? config.string(ArtifactDbFactory.YAML_DATABASE) 
-            : this.defaultDb;
+        final String database = resolveEnvVar(
+            config != null && config.string(ArtifactDbFactory.YAML_DATABASE) != null 
+                ? config.string(ArtifactDbFactory.YAML_DATABASE) 
+                : this.defaultDb
+        );
             
-        final String user = config != null && config.string(ArtifactDbFactory.YAML_USER) != null 
-            ? config.string(ArtifactDbFactory.YAML_USER) 
-            : "artipie";
+        final String user = resolveEnvVar(
+            config != null && config.string(ArtifactDbFactory.YAML_USER) != null 
+                ? config.string(ArtifactDbFactory.YAML_USER) 
+                : "artipie"
+        );
             
-        final String password = config != null && config.string(ArtifactDbFactory.YAML_PASSWORD) != null 
-            ? config.string(ArtifactDbFactory.YAML_PASSWORD) 
-            : "artipie";
+        final String password = resolveEnvVar(
+            config != null && config.string(ArtifactDbFactory.YAML_PASSWORD) != null 
+                ? config.string(ArtifactDbFactory.YAML_PASSWORD) 
+                : "artipie"
+        );
         
         final PGSimpleDataSource source = new PGSimpleDataSource();
         source.setUrl(String.format("jdbc:postgresql://%s:%d/%s", host, port, database));
@@ -131,6 +139,29 @@ public final class ArtifactDbFactory {
         
         ArtifactDbFactory.createStructure(source);
         return source;
+    }
+
+    /**
+     * Resolve environment variable placeholders in the format ${VAR_NAME}.
+     * @param value Value that may contain environment variable placeholders
+     * @return Resolved value with environment variables substituted
+     */
+    private static String resolveEnvVar(final String value) {
+        if (value == null) {
+            return null;
+        }
+        String result = value;
+        // Match ${VAR_NAME} pattern
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\$\\{([^}]+)\\}");
+        java.util.regex.Matcher matcher = pattern.matcher(value);
+        while (matcher.find()) {
+            String envVar = matcher.group(1);
+            String envValue = System.getenv(envVar);
+            if (envValue != null) {
+                result = result.replace("${" + envVar + "}", envValue);
+            }
+        }
+        return result;
     }
 
     /**

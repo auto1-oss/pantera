@@ -10,6 +10,11 @@ meta:
   credentials:
     - type: env
     - type: artipie
+    - type: keycloak
+      url: http://keycloak:8080
+      realm: artipie
+      client-id: artipie
+      client-password: T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ
   policy:
     type: artipie
     eviction_millis: 180000 # optional, default 3 min
