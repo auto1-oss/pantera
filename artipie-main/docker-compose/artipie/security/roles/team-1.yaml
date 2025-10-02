@@ -1,7 +1,0 @@
-enabled: true # optional default true
-permissions:
-  adapter_basic_permissions:
-    my-files:
-      - read
-    test-files:
-      - write

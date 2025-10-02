@@ -1,9 +1,11 @@
-version: "3.3"
+version: "3.9"
 services:
   artipie:
     depends_on:
       artipie-db:
         condition: service_healthy
+      keycloak:
+        condition: service_started
         
     image: auto1-artipie:1.0-SNAPSHOT
     container_name: artipie
@@ -22,6 +24,32 @@ services:
     ports:
       - "8081:8080"
       - "8086:8086"
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.0
+    container_name: keycloak
+    depends_on:
+      artipie-db:
+        condition: service_healthy
+    command:
+    - start-dev
+    - --import-realm
+    restart: unless-stopped
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://artipie-db:5432/keycloak
+      - KC_DB_USERNAME=artipie
+      - KC_DB_PASSWORD=artipie
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+    ports:
+      - "8080:8080"
+    volumes:
+    - ./keycloak-export:/opt/keycloak/data/import
+    networks:
+      - artipie-net
   front:
     depends_on:
       - artipie
@@ -33,7 +61,7 @@ services:
     environment:
       - ARTIPIE_REST=http://artipie:8086
     ports:
-      - "8080:8080"
+      - "8082:8080"
   artipie-db:
     image: postgres:15-alpine
     container_name: artipie-db
@@ -45,7 +73,8 @@ services:
     environment:
       - POSTGRES_USER=artipie
       - POSTGRES_PASSWORD=artipie
-      - POSTGRES_DB=artifacts
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready", "-d", "artifacts" ]
       interval: 10s

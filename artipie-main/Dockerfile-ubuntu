@@ -12,14 +12,17 @@ RUN apt-get install -y wget
 
 # set shell variables for java installation
 ENV java_version 21
-ENV filename jdk-21_linux-x64_bin.tar.gz
-ENV downloadlink https://download.oracle.com/java/21/latest/$filename
-
-# download java, accepting the license agreement
-RUN wget --no-cookies --header "Cookie: oraclelicense=accept-securebackup-cookie" -O /tmp/$filename $downloadlink
-
-# unpack java
-RUN mkdir /opt/java-oracle/ && mkdir /opt/java-oracle/jdk21/ && tar -zxf /tmp/$filename -C /opt/java-oracle/jdk21/ --strip-components 1
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        filename="jdk-21_linux-x64_bin.tar.gz"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        filename="jdk-21_linux-aarch64_bin.tar.gz"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    downloadlink="https://download.oracle.com/java/21/latest/$filename" && \
+    wget --no-cookies --header "Cookie: oraclelicense=accept-securebackup-cookie" -O /tmp/$filename $downloadlink && \
+    mkdir /opt/java-oracle/ && mkdir /opt/java-oracle/jdk21/ && tar -zxf /tmp/$filename -C /opt/java-oracle/jdk21/ --strip-components 1
 ENV JAVA_HOME /opt/java-oracle/jdk21
 ENV PATH $JAVA_HOME/bin:$PATH
 
