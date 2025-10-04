@@ -39,7 +39,7 @@ public class PutUploadSlice extends UploadSlice {
             .get(request.uuid())
             .thenCompose(
                 found -> found.map(upload -> upload
-                    .putTo(repo.layers(), request.digest())
+                    .putTo(repo.layers(), request.digest(), body, headers)
                     .thenCompose(any -> createdResponse(request.name(), request.digest()))
                 ).orElseGet(
                     () -> ResponseBuilder.notFound()

@@ -115,7 +115,8 @@ public final class DockerProxy implements Slice {
             cfg.name(),
             cfg.type(),
             cooldown,
-            inspector
+            inspector,
+            docker
         );
         if (cfg.port().isEmpty()) {
             slice = new DockerRoutingSlice.Reverted(slice);
@@ -138,7 +139,8 @@ public final class DockerProxy implements Slice {
     ) {
         final Docker proxy = new ProxyDocker(
             cfg.name(),
-            AuthClientSlice.withClientSlice(client, remote)
+            AuthClientSlice.withClientSlice(client, remote),
+            remote.uri()
         );
         return cfg.storageOpt().<Docker>map(
             cache -> new CacheDocker(

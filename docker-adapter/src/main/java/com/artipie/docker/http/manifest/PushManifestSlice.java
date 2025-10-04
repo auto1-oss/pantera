@@ -51,7 +51,9 @@ public class PushManifestSlice extends DockerActionSlice {
                                 docker.registryName(),
                                 new Login(headers).getValue(),
                                 request.name(), ref.digest(),
-                                manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
+                                manifest.isManifestList()
+                                    ? 0L
+                                    : manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
                             )
                         );
                     }

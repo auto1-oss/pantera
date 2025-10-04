@@ -24,10 +24,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Asto implementation of {@link Manifests}.
  */
 public final class AstoManifests implements Manifests {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AstoManifests.class);
 
     /**
      * Asto storage.
@@ -71,21 +76,33 @@ public final class AstoManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        LOGGER.debug("AstoManifests.get() called for ref: {}", ref.digest());
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
-                digest -> this.blobs.blob(digest)
-                    .thenCompose(
-                        blobOpt -> blobOpt
-                            .map(
-                                blob -> blob.content()
-                                    .thenCompose(Content::asBytesFuture)
-                                    .thenApply(bytes -> Optional.of(
-                                        new Manifest(blob.digest(), bytes))
-                                    )
-                            )
-                            .orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
-                    )
-            ).orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
+                digest -> {
+                    LOGGER.debug("Found link for ref {}, digest: {}", ref.digest(), digest);
+                    return this.blobs.blob(digest)
+                        .thenCompose(
+                            blobOpt -> blobOpt
+                                .map(
+                                    blob -> blob.content()
+                                        .thenCompose(Content::asBytesFuture)
+                                        .thenApply(bytes -> {
+                                            LOGGER.info("Creating Manifest from {} bytes for digest {}", 
+                                                bytes.length, digest);
+                                            return Optional.of(new Manifest(blob.digest(), bytes));
+                                        })
+                                )
+                                .orElseGet(() -> {
+                                    LOGGER.warn("Blob not found for digest: {}", digest);
+                                    return CompletableFuture.completedFuture(Optional.empty());
+                                })
+                        );
+                }
+            ).orElseGet(() -> {
+                LOGGER.warn("No link found for ref: {}", ref.digest());
+                return CompletableFuture.completedFuture(Optional.empty());
+            })
         );
     }
 
@@ -104,19 +121,28 @@ public final class AstoManifests implements Manifests {
      * @return Validation completion.
      */
     private CompletionStage<Void> validate(final Manifest manifest) {
+        // Check if this is a manifest list (multi-platform)
+        boolean isManifestList = manifest.isManifestList();
+
         final Stream<Digest> digests;
-        try {
-            digests = Stream.concat(
-                Stream.of(manifest.config()),
-                manifest.layers().stream()
-                    .filter(layer -> layer.urls().isEmpty())
-                    .map(ManifestLayer::digest)
-            );
-        } catch (final JsonException ex) {
-            throw new InvalidManifestException(
-                String.format("Failed to parse manifest: %s", ex.getMessage()),
-                ex
-            );
+        if (isManifestList) {
+            // Manifest lists don't have config or layers, skip validation
+            digests = Stream.empty();
+        } else {
+            // Regular manifests have config and layers
+            try {
+                digests = Stream.concat(
+                    Stream.of(manifest.config()),
+                    manifest.layers().stream()
+                        .filter(layer -> layer.urls().isEmpty())
+                        .map(ManifestLayer::digest)
+                );
+            } catch (final JsonException ex) {
+                throw new InvalidManifestException(
+                    String.format("Failed to parse manifest: %s", ex.getMessage()),
+                    ex
+                );
+            }
         }
         return CompletableFuture.allOf(
             Stream.concat(

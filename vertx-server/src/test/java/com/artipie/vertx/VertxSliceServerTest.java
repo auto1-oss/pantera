@@ -71,6 +71,27 @@ public final class VertxSliceServerTest {
         this.client = WebClient.create(this.vertx);
     }
 
+    @Test
+    public void headRequestPreservesContentLength() {
+        final String path = "/head";
+        final String header = "Content-Length";
+        final long length = 123L;
+        this.start(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .header(header, Long.toString(length))
+                    .build()
+            )
+        );
+        final HttpResponse<Buffer> response = this.client
+            .head(this.port, VertxSliceServerTest.HOST, path)
+            .rxSend()
+            .blockingGet();
+        MatcherAssert.assertThat(response.statusCode(), Matchers.equalTo(200));
+        MatcherAssert.assertThat(response.getHeader(header), Matchers.equalTo(Long.toString(length)));
+        MatcherAssert.assertThat(response.body(), Matchers.nullValue());
+    }
+
     @AfterEach
     public void tearDown() {
         if (this.server != null) {

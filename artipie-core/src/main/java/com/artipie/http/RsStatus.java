@@ -88,6 +88,10 @@ public enum RsStatus {
      */
     LENGTH_REQUIRED(HttpStatus.SC_LENGTH_REQUIRED),
     /**
+     * Precondition Failed.
+     */
+    PRECONDITION_FAILED(HttpStatus.SC_PRECONDITION_FAILED),
+    /**
      * Payload Too Large.
      */
     REQUEST_TOO_LONG(HttpStatus.SC_REQUEST_TOO_LONG),

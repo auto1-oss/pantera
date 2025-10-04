@@ -8,6 +8,8 @@ import com.artipie.asto.Content;
 import com.artipie.docker.Digest;
 import com.artipie.docker.error.InvalidManifestException;
 import com.google.common.base.Strings;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.json.Json;
 import javax.json.JsonArray;
@@ -18,12 +20,15 @@ import javax.json.JsonValue;
 import java.io.ByteArrayInputStream;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.stream.Collectors;
 
 /**
  * Image manifest in JSON format.
  */
 public final class Manifest {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(Manifest.class);
 
     /**
      * New image manifest format (schemaVersion = 2).
@@ -34,6 +39,16 @@ public final class Manifest {
      * Image Manifest OCI Specification.
      */
     public static final String MANIFEST_OCI_V1 = "application/vnd.oci.image.manifest.v1+json";
+
+    /**
+     * Docker manifest list media type (schemaVersion = 2).
+     */
+    public static final String MANIFEST_LIST_SCHEMA2 = "application/vnd.docker.distribution.manifest.list.v2+json";
+
+    /**
+     * OCI image index media type.
+     */
+    public static final String MANIFEST_OCI_INDEX = "application/vnd.oci.image.index.v1+json";
 
     /**
      * Manifest digest.
@@ -99,12 +114,27 @@ public final class Manifest {
     public Collection<ManifestLayer> layers() {
         JsonArray array = this.json.getJsonArray("layers");
         if (array == null) {
+            if (this.isManifestList()) {
+                return Collections.emptyList();
+            }
             throw new InvalidManifestException("Required field `layers` is absent");
         }
         return array.getValuesAs(JsonValue::asJsonObject)
                 .stream()
                 .map(ManifestLayer::new)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Indicates whether manifest is a manifest list or OCI index (multi-platform).
+     *
+     * @return {@code true} when manifest represents a list/index document.
+     */
+    public boolean isManifestList() {
+        final String media = this.json.getString("mediaType", "");
+        return MANIFEST_LIST_SCHEMA2.equals(media)
+            || MANIFEST_OCI_INDEX.equals(media)
+            || (media.isEmpty() && this.json.containsKey("manifests"));
     }
 
     /**
@@ -131,6 +161,8 @@ public final class Manifest {
      * @return Size of the manifest.
      */
     public long size() {
-        return this.source.length;
+        long size = this.source.length;
+        LOGGER.debug("Manifest size for digest {}: {} bytes", this.manifestDigest, size);
+        return size;
     }
 }

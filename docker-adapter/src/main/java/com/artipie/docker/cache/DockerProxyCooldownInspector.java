@@ -21,9 +21,12 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
 
     private final ConcurrentMap<String, String> digestOwners;
 
+    private final ConcurrentMap<String, Boolean> seen;
+
     public DockerProxyCooldownInspector() {
         this.releases = new ConcurrentHashMap<>();
         this.digestOwners = new ConcurrentHashMap<>();
+        this.seen = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -44,14 +47,16 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
         final String repoName,
         final Optional<String> digest
     ) {
-        this.releases.compute(key(artifact, version), (ignored, existing) ->
-            release.orElse(existing)
-        );
-        if (release.isEmpty()) {
-            this.releases.putIfAbsent(key(artifact, version), Instant.EPOCH);
-        }
+        final String key = key(artifact, version);
+        this.seen.putIfAbsent(key, Boolean.TRUE);
+        release.ifPresent(value -> this.releases.put(key, value));
         this.digestOwners.put(digestKey(repoName, version), owner);
         digest.ifPresent(value -> this.digestOwners.put(digestKey(repoName, value), owner));
+    }
+
+    public void recordRelease(final String artifact, final String version, final Instant release) {
+        this.seen.putIfAbsent(key(artifact, version), Boolean.TRUE);
+        this.releases.put(key(artifact, version), release);
     }
 
     public Optional<String> ownerFor(final String repoName, final String digest) {
@@ -59,7 +64,11 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
     }
 
     public boolean known(final String artifact, final String version) {
-        return this.releases.containsKey(key(artifact, version));
+        return this.seen.containsKey(key(artifact, version));
+    }
+
+    public boolean isBlocked(final String artifact, final String digest) {
+        return false;
     }
 
     private static String key(final String artifact, final String version) {
