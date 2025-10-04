@@ -14,14 +14,19 @@ import com.artipie.docker.perms.DockerRepositoryPermission;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
-import com.artipie.http.headers.ContentLength;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
-
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;
+import java.nio.ByteBuffer;
+
+import io.reactivex.Flowable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class HeadManifestSlice extends DockerActionSlice {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(HeadManifestSlice.class);
 
     public HeadManifestSlice(Docker docker) {
         super(docker);
@@ -30,16 +35,48 @@ public class HeadManifestSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
+        try {
+            java.nio.file.Files.writeString(
+                java.nio.file.Paths.get("/var/artipie/head-manifest-debug.log"),
+                "HEAD request for: " + request.reference() + "\n",
+                java.nio.file.StandardOpenOption.CREATE, 
+                java.nio.file.StandardOpenOption.APPEND
+            );
+        } catch (Exception e) {}
+        
         return this.docker.repo(request.name()).manifests()
             .get(request.reference())
             .thenApply(
                 manifest -> manifest.map(
-                    found ->
-                        ResponseBuilder.ok()
+                    found -> {
+                        long size = found.size();
+                        Content head = new Content.From(size, Flowable.<ByteBuffer>empty());
+                        try {
+                            java.nio.file.Files.writeString(
+                                java.nio.file.Paths.get("/var/artipie/head-manifest-debug.log"),
+                                "Manifest size: " + size + " bytes, mediaType: " + found.mediaType() + "\n",
+                                java.nio.file.StandardOpenOption.CREATE, 
+                                java.nio.file.StandardOpenOption.APPEND
+                            );
+                        } catch (Exception e) {}
+                        
+                        Response response = ResponseBuilder.ok()
                             .header(ContentType.mime(found.mediaType()))
                             .header(new DigestHeader(found.digest()))
-                            .header(new ContentLength(found.size()))
-                            .build()
+                            .body(head)
+                            .build();
+                            
+                        try {
+                            java.nio.file.Files.writeString(
+                                java.nio.file.Paths.get("/var/artipie/head-manifest-debug.log"),
+                                "Response headers: " + response.headers() + "\n",
+                                java.nio.file.StandardOpenOption.CREATE, 
+                                java.nio.file.StandardOpenOption.APPEND
+                            );
+                        } catch (Exception e) {}
+                        
+                        return response;
+                    }
                 ).orElseGet(
                     () -> ResponseBuilder.notFound()
                         .jsonBody(new ManifestError(request.reference()).json())

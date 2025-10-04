@@ -14,12 +14,14 @@ import com.artipie.docker.perms.DockerRepositoryPermission;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
-import com.artipie.http.headers.ContentLength;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;
+import java.nio.ByteBuffer;
+
+import io.reactivex.Flowable;
 
 public class HeadBlobsSlice extends DockerActionSlice {
     public HeadBlobsSlice(Docker docker) {
@@ -34,11 +36,14 @@ public class HeadBlobsSlice extends DockerActionSlice {
             .thenCompose(
                 found -> found.map(
                     blob -> blob.size().thenApply(
-                        size -> ResponseBuilder.ok()
-                            .header(new DigestHeader(blob.digest()))
-                            .header(ContentType.mime("application/octet-stream"))
-                            .header(new ContentLength(size))
-                            .build()
+                        size -> {
+                            Content head = new Content.From(size, Flowable.<ByteBuffer>empty());
+                            return ResponseBuilder.ok()
+                                .header(new DigestHeader(blob.digest()))
+                                .header(ContentType.mime("application/octet-stream"))
+                                .body(head)
+                                .build();
+                        }
                     )
                 ).orElseGet(
                     () -> ResponseBuilder.notFound()

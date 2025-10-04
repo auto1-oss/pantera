@@ -221,6 +221,7 @@ public class ResponseBuilder {
                 case REQUEST_TIMEOUT -> RSP_REQUEST_TIMEOUT;
                 case CONFLICT -> RSP_CONFLICT;
                 case LENGTH_REQUIRED -> RSP_LENGTH_REQUIRED;
+                case PRECONDITION_FAILED -> RSP_PRECONDITION_FAILED;
                 case REQUEST_TOO_LONG -> RSP_REQUEST_TOO_LONG;
                 case REQUESTED_RANGE_NOT_SATISFIABLE -> RSP_REQUESTED_RANGE_NOT_SATISFIABLE;
                 case EXPECTATION_FAILED -> RSP_EXPECTATION_FAILED;
@@ -256,6 +257,8 @@ public class ResponseBuilder {
     private final static Response RSP_REQUEST_TIMEOUT = new Response(RsStatus.REQUEST_TIMEOUT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CONFLICT = new Response(RsStatus.CONFLICT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_LENGTH_REQUIRED = new Response(RsStatus.LENGTH_REQUIRED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PRECONDITION_FAILED =
+        new Response(RsStatus.PRECONDITION_FAILED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_REQUEST_TOO_LONG = new Response(RsStatus.REQUEST_TOO_LONG, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_REQUESTED_RANGE_NOT_SATISFIABLE = new Response(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_EXPECTATION_FAILED = new Response(RsStatus.EXPECTATION_FAILED, Headers.EMPTY, Content.EMPTY);

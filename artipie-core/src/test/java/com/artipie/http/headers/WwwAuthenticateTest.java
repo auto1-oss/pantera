@@ -139,4 +139,40 @@ public final class WwwAuthenticateTest {
             new IsEqual<>("repository:busybox:pull")
         );
     }
+
+    @Test
+    void shouldHandleCommaInsideParamValue() {
+        final WwwAuthenticate header = new WwwAuthenticate(
+            "Bearer realm=\"https://auth.docker.io/token\",scope=\"repository:library/ubuntu:pull,push\""
+        );
+        MatcherAssert.assertThat(
+            "Wrong realm",
+            header.realm(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final Iterator<WwwAuthenticate.Param> params = header.params().iterator();
+        final WwwAuthenticate.Param realm = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of realm param",
+            realm.name(),
+            new IsEqual<>("realm")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of realm param",
+            realm.value(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final WwwAuthenticate.Param scope = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of scope param",
+            scope.name(),
+            new IsEqual<>("scope")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of scope param",
+            scope.value(),
+            new IsEqual<>("repository:library/ubuntu:pull,push")
+        );
+        MatcherAssert.assertThat("Unexpected extra params", params.hasNext(), new IsEqual<>(false));
+    }
 }

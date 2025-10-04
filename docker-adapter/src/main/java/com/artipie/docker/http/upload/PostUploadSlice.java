@@ -49,19 +49,31 @@ public class PostUploadSlice extends UploadSlice {
     private CompletableFuture<Response> mount(
         Digest digest, String source, String target
     ) {
-        return this.docker.repo(source)
-            .layers()
-            .get(digest)
-            .thenCompose(
-                opt -> opt.map(
-                    src -> this.docker.repo(target)
-                        .layers()
-                        .mount(src)
-                        .thenCompose(v -> createdResponse(target, digest))
-                ).orElseGet(
-                    () -> this.startUpload(target)
-                )
-            );
+        final int slash = target.indexOf('/');
+        if (slash > 0) {
+            final String expected = target.substring(0, slash + 1);
+            if (!source.startsWith(expected)) {
+                return this.startUpload(target);
+            }
+        }
+        try {
+            return this.docker.repo(source)
+                .layers()
+                .get(digest)
+                .thenCompose(
+                    opt -> opt.map(
+                        src -> this.docker.repo(target)
+                            .layers()
+                            .mount(src)
+                            .thenCompose(v -> createdResponse(target, digest))
+                    ).orElseGet(
+                        () -> this.startUpload(target)
+                    )
+                );
+        } catch (final IllegalArgumentException ex) {
+            // Source repository belongs to a different prefix; fall back to regular upload.
+            return this.startUpload(target);
+        }
     }
 
     /**

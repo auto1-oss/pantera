@@ -159,6 +159,7 @@ public final class VertxSliceServer implements Closeable {
     private CompletionStage<Void> serve(final HttpServerRequest req) {
         Headers requestHeaders = Headers.from(req.headers());
         AtomicReference<Response> artipieResponse = new AtomicReference<>();
+        final boolean isHead = "HEAD".equals(req.method().name());
         return CompletableFuture.allOf(
             this.served.response(
                 new RequestLine(req.method().name(), req.uri(), req.version().toString()),
@@ -170,13 +171,20 @@ public final class VertxSliceServer implements Closeable {
             continueResponseFut(requestHeaders, req.response())
         ).thenCompose(v -> {
             Response resp = artipieResponse.get();
-            return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body());
+            // For HEAD requests, pass full body - Vert.x will handle stripping it
+            return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
         });
     }
 
 
     private static CompletionStage<Void> accept(
         HttpServerResponse response, RsStatus status, Headers headers, Content body
+    ) {
+        return accept(response, status, headers, body, false);
+    }
+
+    private static CompletionStage<Void> accept(
+        HttpServerResponse response, RsStatus status, Headers headers, Content body, boolean isHead
     ) {
         final CompletableFuture<Void> promise = new CompletableFuture<>();
         if (status == RsStatus.CONTINUE) {
@@ -185,21 +193,43 @@ public final class VertxSliceServer implements Closeable {
         }
         response.setStatusCode(status.code());
         headers.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
+        
+        if (isHead) {
+            System.err.println("HEAD: Content-Length in headers? " + response.headers().contains("Content-Length"));
+            System.err.println("HEAD: Content-Length value: " + response.headers().get("Content-Length"));
+        }
+        
         final Flowable<Buffer> vpb = Flowable.fromPublisher(body)
             .map(VertxSliceServer::mapBuffer)
             .doOnError(promise::completeExceptionally);
         if (response.headers().contains("Content-Length")) {
             response.setChunked(false);
-            vpb.doOnComplete(
-                () -> {
-                    response.end();
-                    promise.complete(null);
-                }
-            ).forEach(response::write);
+            if (isHead) {
+                // For HEAD, consume body without writing to preserve Content-Length
+                vpb.doOnComplete(
+                    () -> {
+                        response.end();
+                        promise.complete(null);
+                    }
+                ).subscribe();
+            } else {
+                vpb.doOnComplete(
+                    () -> {
+                        response.end();
+                        promise.complete(null);
+                    }
+                ).forEach(response::write);
+            }
         } else {
             response.setChunked(true);
-            vpb.doOnComplete(() -> promise.complete(null))
-                .subscribe(response.toSubscriber());
+            if (isHead) {
+                // For HEAD without Content-Length, just end immediately
+                response.end();
+                promise.complete(null);
+            } else {
+                vpb.doOnComplete(() -> promise.complete(null))
+                    .subscribe(response.toSubscriber());
+            }
         }
         return promise;
     }

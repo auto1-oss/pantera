@@ -29,16 +29,39 @@ public class GetManifestSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
+        try {
+            java.nio.file.Files.writeString(
+                java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
+                "GET request for: " + request.reference() + ", method=" + line.method() + "\n",
+                java.nio.file.StandardOpenOption.CREATE, 
+                java.nio.file.StandardOpenOption.APPEND
+            );
+        } catch (Exception e) {}
+        
         return this.docker.repo(request.name())
             .manifests()
             .get(request.reference())
             .thenApply(
                 manifest -> manifest.map(
-                    found -> ResponseBuilder.ok()
-                        .header(ContentType.mime(found.mediaType()))
-                        .header(new DigestHeader(found.digest()))
-                        .body(found.content())
-                        .build()
+                    found -> {
+                        try {
+                            java.nio.file.Files.writeString(
+                                java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
+                                "Manifest found, size=" + found.size() + ", mediaType=" + found.mediaType() + "\n",
+                                java.nio.file.StandardOpenOption.CREATE, 
+                                java.nio.file.StandardOpenOption.APPEND
+                            );
+                        } catch (Exception e) {}
+                        
+                        Response response = ResponseBuilder.ok()
+                            .header(ContentType.mime(found.mediaType()))
+                            .header(new DigestHeader(found.digest()))
+                            .body(found.content())
+                            .build();
+                        System.err.println("GET/HEAD manifest response headers:");
+                        response.headers().forEach(h -> System.err.println("  " + h.getKey() + ": " + h.getValue()));
+                        return response;
+                    }
                 ).orElseGet(
                     () -> ResponseBuilder.notFound()
                         .jsonBody(new ManifestError(request.reference()).json())

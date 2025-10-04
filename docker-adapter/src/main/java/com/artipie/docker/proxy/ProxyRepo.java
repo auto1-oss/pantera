@@ -23,17 +23,32 @@ public final class ProxyRepo implements Repo {
     private final Slice remote;
 
     /**
-     * Repository name.
+     * Repository name (normalized for remote).
      */
     private final String name;
+    
+    /**
+     * Original repository name (as requested by client).
+     */
+    private final String originalName;
 
+    /**
+     * @param remote Remote repository.
+     * @param name Repository name (normalized).
+     * @param originalName Original repository name.
+     */
+    public ProxyRepo(Slice remote, String name, String originalName) {
+        this.remote = remote;
+        this.name = name;
+        this.originalName = originalName;
+    }
+    
     /**
      * @param remote Remote repository.
      * @param name Repository name.
      */
     public ProxyRepo(Slice remote, String name) {
-        this.remote = remote;
-        this.name = name;
+        this(remote, name, name);
     }
 
     @Override

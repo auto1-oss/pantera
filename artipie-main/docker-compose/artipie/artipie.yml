@@ -32,10 +32,10 @@ meta:
     postgres_user: artipie
     postgres_password: artipie
   logging:
-    level: INFO
+    level: Debug
     loggers:
-      com.artipie: INFO
-      com.artipie.maven.http.CachedProxySlice: INFO
+      com.artipie.scheduling: INFO
+      org.quartz: INFO
   metrics:
     endpoint: "/metrics/vertx" # Path of the endpoint, starting with `/`, where the metrics will be served
     port: 8087 # Port to serve the metrics

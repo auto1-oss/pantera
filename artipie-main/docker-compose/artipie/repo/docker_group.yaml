@@ -2,5 +2,5 @@ repo:
   type: "docker-group"
   # Example members; ensure corresponding docker and docker-proxy repos exist
   members:
-    - docker
-    - docker-proxy
+    - docker_proxy
+    - docker_local

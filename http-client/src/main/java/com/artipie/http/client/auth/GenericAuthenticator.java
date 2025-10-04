@@ -7,7 +7,9 @@ package com.artipie.http.client.auth;
 import com.artipie.http.Headers;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.headers.WwwAuthenticate;
+import java.util.List;
 import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 /**
@@ -88,12 +90,26 @@ public final class GenericAuthenticator implements Authenticator {
 
     @Override
     public CompletionStage<Headers> authenticate(final Headers headers) {
-        return StreamSupport.stream(headers.spliterator(), false)
-            .filter(header -> WwwAuthenticate.NAME.equals(header.getKey()))
-            .findAny()
-            .map(header -> this.authenticate(new WwwAuthenticate(header.getValue())))
-            .orElse(Authenticator.ANONYMOUS)
-            .authenticate(headers);
+        final List<WwwAuthenticate> challenges = StreamSupport.stream(headers.spliterator(), false)
+            .filter(header -> WwwAuthenticate.NAME.equalsIgnoreCase(header.getKey()))
+            .map(header -> new WwwAuthenticate(header.getValue()))
+            .collect(Collectors.toList());
+        for (final WwwAuthenticate challenge : challenges) {
+            if (isBearer(challenge)) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        for (final WwwAuthenticate challenge : challenges) {
+            if (isBasic(challenge) && this.supportsBasic()) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        for (final WwwAuthenticate challenge : challenges) {
+            if (!isBasic(challenge) && !isBearer(challenge)) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        return Authenticator.ANONYMOUS.authenticate(headers);
     }
 
     /**
@@ -113,5 +129,17 @@ public final class GenericAuthenticator implements Authenticator {
             throw new IllegalArgumentException(String.format("Unsupported scheme: %s", scheme));
         }
         return result;
+    }
+
+    private static boolean isBearer(final WwwAuthenticate challenge) {
+        return "Bearer".equalsIgnoreCase(challenge.scheme());
+    }
+
+    private static boolean isBasic(final WwwAuthenticate challenge) {
+        return "Basic".equalsIgnoreCase(challenge.scheme());
+    }
+
+    private boolean supportsBasic() {
+        return this.basic != Authenticator.ANONYMOUS;
     }
 }
