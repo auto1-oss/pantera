@@ -195,7 +195,7 @@ public final class FileProxySlice implements Slice {
                                                     .orElse(0L);
                                             this.events.get().add(
                                                 new ArtifactEvent(
-                                                    FileProxySlice.REPO_TYPE, this.rname, "ANONYMOUS",
+                                                    FileProxySlice.REPO_TYPE, this.rname, user,
                                                     key.string(), "UNKNOWN", size
                                                 )
                                             );

@@ -120,15 +120,35 @@ final class JdbcCooldownService implements CooldownService {
         final Optional<Instant> release =
             inspector.releaseDate(request.artifact(), request.version()).join();
         if (release.isEmpty()) {
+            com.jcabi.log.Logger.warn(
+                this,
+                "No release date found for %s:%s:%s:%s - allowing",
+                request.repoType(), request.repoName(), request.artifact(), request.version()
+            );
             return CooldownResult.allowed();
         }
         final Duration fresh = this.settings.minimumAllowedAge();
         final Instant date = release.get();
+        com.jcabi.log.Logger.debug(
+            this,
+            "Evaluating cooldown for %s:%s (released=%s, now=%s, minAge=%s)",
+            request.artifact(), request.version(), date, now, fresh
+        );
         if (date.plus(fresh).isAfter(now)
             && !fresh.isZero() && !fresh.isNegative()) {
             final Instant until = date.plus(fresh);
+            com.jcabi.log.Logger.info(
+                this,
+                "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
+                request.artifact(), request.version(), date, until
+            );
             return this.createBlock(request, inspector, CooldownReason.FRESH_RELEASE, until);
         }
+        com.jcabi.log.Logger.debug(
+            this,
+            "ALLOWING %s:%s - old enough (released=%s, age=%s)",
+            request.artifact(), request.version(), date, Duration.between(date, now)
+        );
         return CooldownResult.allowed();
     }
 

@@ -6,6 +6,8 @@ package com.artipie;
 
 import com.artipie.adapters.docker.DockerProxy;
 import com.artipie.adapters.file.FileProxy;
+import com.artipie.adapters.go.GoProxy;
+import com.artipie.adapters.gradle.GradleProxy;
 import com.artipie.adapters.maven.MavenProxy;
 import com.artipie.adapters.php.ComposerProxy;
 import com.artipie.adapters.pypi.PypiProxy;
@@ -28,6 +30,7 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownSupport;
 import com.artipie.files.FilesSlice;
 import com.artipie.gem.http.GemSlice;
+import com.artipie.gradle.http.GradleSlice;
 import com.artipie.helm.http.HelmSlice;
 import com.artipie.hex.http.HexSlice;
 import com.artipie.http.ContentLengthRestriction;
@@ -281,6 +284,31 @@ public class RepositorySlices {
                     )
                 );
                 break;
+            case "gradle":
+                slice = trimPathSlice(
+                    new GradleSlice(cfg.storage(), securityPolicy(),
+                        authentication(), cfg.name(), artifactEvents())
+                );
+                break;
+            case "gradle-proxy":
+                clientSlices = jettyClientSlices(cfg);
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new GradleProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ).slice(),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
             case "maven":
                 slice = trimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
@@ -308,7 +336,33 @@ public class RepositorySlices {
                 break;
             case "go":
                 slice = trimPathSlice(
-                    new GoSlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name())
+                    new GoSlice(
+                        cfg.storage(),
+                        securityPolicy(),
+                        authentication(),
+                        tokens.auth(),
+                        cfg.name(),
+                        artifactEvents()
+                    )
+                );
+                break;
+            case "go-proxy":
+                clientSlices = jettyClientSlices(cfg);
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new GoProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ).slice(),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
                 );
                 break;
             case "npm-proxy":
@@ -344,6 +398,8 @@ public class RepositorySlices {
                 );
                 break;
             case "file-group":
+            case "go-group":
+            case "gradle-group":
             case "maven-group":
             case "npm-group":
             case "pypi-group":

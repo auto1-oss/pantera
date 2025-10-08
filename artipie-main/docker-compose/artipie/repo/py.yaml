@@ -1,8 +1,0 @@
-repo:
-  type: "pypi-proxy"
-  url: "http://localhost:8081/py"
-  storage:
-    type: fs
-    path: /var/artipie/data
-  remotes:
-    - url: "https://pypi.org/simple"

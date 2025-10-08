@@ -22,10 +22,13 @@ import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceDownload;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceWithHeaders;
+import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.security.policy.Policy;
 
+import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
@@ -44,7 +47,24 @@ public final class GoSlice implements Slice {
      */
     public GoSlice(final Storage storage, final Policy<?> policy, final Authentication users,
         final String name) {
-        this(storage, policy, users, null, name);
+        this(storage, policy, users, null, name, Optional.empty());
+    }
+
+    /**
+     * @param storage Storage
+     * @param policy Security policy
+     * @param users Users
+     * @param name Repository name
+     * @param events Artifact events
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication users,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(storage, policy, users, null, name, events);
     }
 
     /**
@@ -57,6 +77,26 @@ public final class GoSlice implements Slice {
      */
     public GoSlice(final Storage storage, final Policy<?> policy, final Authentication basicAuth,
         final TokenAuthentication tokenAuth, final String name) {
+        this(storage, policy, basicAuth, tokenAuth, name, Optional.empty());
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact events queue
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathGet(
                 ".+/@v/v.*\\.info",
@@ -81,6 +121,17 @@ public final class GoSlice implements Slice {
                     tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                MethodRule.PUT,
+                GoSlice.createAuthSlice(
+                    new GoUploadSlice(storage, name, events),
+                    basicAuth,
+                    tokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
                 )
             ),

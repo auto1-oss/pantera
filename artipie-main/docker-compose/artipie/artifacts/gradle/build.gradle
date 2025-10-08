@@ -1,0 +1,86 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'com.example'
+version = '1.0.1'
+
+repositories {
+    // Use Artipie gradle_group repository for downloading dependencies
+    maven {
+        url = 'http://localhost:8081/gradle_group'
+        allowInsecureProtocol = true
+        credentials {
+            username = 'ayd'
+            password = 'ayd'
+        }
+    }
+}
+
+dependencies {
+    // Example dependencies that will be downloaded from gradle_group
+    implementation 'com.google.guava:guava:32.1.3-jre'
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    
+    testImplementation 'junit:junit:4.13.2'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    withSourcesJar()
+    withJavadocJar()
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            
+            pom {
+                name = 'Gradle Sample Project'
+                description = 'A sample Gradle project for Artipie demonstration'
+                url = 'http://example.com/gradle-sample'
+                
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'developer'
+                        name = 'Developer Name'
+                        email = 'dev@example.com'
+                    }
+                }
+            }
+        }
+    }
+    
+    repositories {
+        // Publish to Artipie gradle repository
+        maven {
+            name = 'artipie'
+            url = 'http://localhost:8081/gradle'
+            allowInsecureProtocol = true
+            credentials {
+                username = 'ayd'
+                password = 'ayd'
+            }
+        }
+    }
+}
+
+// Task to display repository information
+task showRepos {
+    doLast {
+        println "Configured repositories:"
+        repositories.each { repo ->
+            println "  - ${repo.name}: ${repo.url}"
+        }
+    }
+}

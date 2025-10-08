@@ -1,0 +1,7 @@
+repo:
+  type: gradle-proxy
+  storage:
+    type: fs
+    path: /var/artipie/data
+  remotes:
+    - url: https://repo1.maven.org/maven2

@@ -65,11 +65,11 @@
     <repository>
       <uniqueVersion>false</uniqueVersion>
       <id>mvn-local</id>
-      <url>http://localhost:8081/mvn-local</url>
+      <url>http://localhost:8081/maven</url>
     </repository>
     <snapshotRepository>
       <id>mvn-local</id>
-      <url>http://localhost:8081/mvn-local</url>
+      <url>http://localhost:8081/maven</url>
     </snapshotRepository>
   </distributionManagement>
   <properties>
