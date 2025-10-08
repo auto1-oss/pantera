@@ -275,9 +275,18 @@ public final class YamlSettings implements Settings {
         }
         final int threads = readPositive(prop.integer("threads_count"), 1);
         final int interval = readPositive(prop.integer("interval_seconds"), 1);
+        
+        // Read configurable buffer settings
+        final int bufferTimeSeconds = prop.string("buffer_time_seconds") != null
+            ? Integer.parseInt(prop.string("buffer_time_seconds"))
+            : 2;
+        final int bufferSize = prop.string("buffer_size") != null
+            ? Integer.parseInt(prop.string("buffer_size"))
+            : 50;
+        
         final List<Consumer<ArtifactEvent>> consumers = new ArrayList<>(threads);
         for (int idx = 0; idx < threads; idx = idx + 1) {
-            consumers.add(new DbConsumer(database));
+            consumers.add(new DbConsumer(database, bufferTimeSeconds, bufferSize));
         }
         try {
             final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, consumers);

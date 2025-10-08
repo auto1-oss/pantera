@@ -35,6 +35,7 @@ SOFTWARE.
     <module>artipie-main</module>
     <module>pypi-adapter</module>
     <module>maven-adapter</module>
+    <module>gradle-adapter</module>
     <module>docker-adapter</module>
     <module>hexpm-adapter</module>
     <module>conan-adapter</module>

@@ -6,11 +6,12 @@ package com.artipie.db;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.ArtipieException;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import javax.sql.DataSource;
-import org.postgresql.ds.PGSimpleDataSource;
 
 /**
  * Factory to create and initialize artifacts PostgreSQL database.
@@ -26,6 +27,10 @@ import org.postgresql.ds.PGSimpleDataSource;
  *   postgres_database: artipie # required, PostgreSQL database name
  *   postgres_user: artipie # required, PostgreSQL username
  *   postgres_password: artipie # required, PostgreSQL password
+ *   pool_max_size: 20 # optional, connection pool max size, default 20
+ *   pool_min_idle: 5 # optional, connection pool min idle, default 5
+ *   buffer_time_seconds: 2 # optional, buffer time in seconds, default 2
+ *   buffer_size: 50 # optional, max events per batch, default 50
  *   threads_count: 3 # default 1, not required, in how many parallel threads to
  *       process artifacts data queue
  *   interval_seconds: 5 # default 1, not required, interval to check events queue and write into db
@@ -60,6 +65,26 @@ public final class ArtifactDbFactory {
     public static final String YAML_PASSWORD = "postgres_password";
 
     /**
+     * Connection pool maximum size configuration key.
+     */
+    public static final String YAML_POOL_MAX_SIZE = "pool_max_size";
+
+    /**
+     * Connection pool minimum idle configuration key.
+     */
+    public static final String YAML_POOL_MIN_IDLE = "pool_min_idle";
+
+    /**
+     * Buffer time in seconds configuration key.
+     */
+    public static final String YAML_BUFFER_TIME_SECONDS = "buffer_time_seconds";
+
+    /**
+     * Buffer size (max events per batch) configuration key.
+     */
+    public static final String YAML_BUFFER_SIZE = "buffer_size";
+
+    /**
      * Default PostgreSQL host.
      */
     static final String DEFAULT_HOST = "localhost";
@@ -73,6 +98,26 @@ public final class ArtifactDbFactory {
      * Default PostgreSQL database name.
      */
     static final String DEFAULT_DATABASE = "artifacts";
+
+    /**
+     * Default connection pool maximum size.
+     */
+    static final int DEFAULT_POOL_MAX_SIZE = 20;
+
+    /**
+     * Default connection pool minimum idle.
+     */
+    static final int DEFAULT_POOL_MIN_IDLE = 5;
+
+    /**
+     * Default buffer time in seconds.
+     */
+    static final int DEFAULT_BUFFER_TIME_SECONDS = 2;
+
+    /**
+     * Default buffer size.
+     */
+    static final int DEFAULT_BUFFER_SIZE = 50;
 
     /**
      * Settings yaml.
@@ -98,7 +143,7 @@ public final class ArtifactDbFactory {
      * Initialize artifacts database and mechanism to gather artifacts metadata and
      * write to db.
      * If yaml settings are absent, default PostgreSQL connection parameters are used.
-     * @return Queue to add artifacts metadata into
+     * @return DataSource with connection pooling
      * @throws ArtipieException On error
      */
     public DataSource initialize() {
@@ -131,14 +176,53 @@ public final class ArtifactDbFactory {
                 ? config.string(ArtifactDbFactory.YAML_PASSWORD) 
                 : "artipie"
         );
+
+        final int poolMaxSize = config != null && config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE))
+            : ArtifactDbFactory.DEFAULT_POOL_MAX_SIZE;
+
+        final int poolMinIdle = config != null && config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE))
+            : ArtifactDbFactory.DEFAULT_POOL_MIN_IDLE;
         
-        final PGSimpleDataSource source = new PGSimpleDataSource();
-        source.setUrl(String.format("jdbc:postgresql://%s:%d/%s", host, port, database));
-        source.setUser(user);
-        source.setPassword(password);
+        // Configure HikariCP connection pool for better performance
+        final HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl(String.format("jdbc:postgresql://%s:%d/%s", host, port, database));
+        hikariConfig.setUsername(user);
+        hikariConfig.setPassword(password);
+        hikariConfig.setMaximumPoolSize(poolMaxSize);
+        hikariConfig.setMinimumIdle(poolMinIdle);
+        hikariConfig.setConnectionTimeout(30000); // 30 seconds
+        hikariConfig.setIdleTimeout(600000); // 10 minutes
+        hikariConfig.setMaxLifetime(1800000); // 30 minutes
+        hikariConfig.setPoolName("ArtipieDB-Pool");
+        
+        final HikariDataSource source = new HikariDataSource(hikariConfig);
         
         ArtifactDbFactory.createStructure(source);
         return source;
+    }
+
+    /**
+     * Get buffer time in seconds from configuration.
+     * @return Buffer time in seconds
+     */
+    public int getBufferTimeSeconds() {
+        final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
+        return config != null && config.string(ArtifactDbFactory.YAML_BUFFER_TIME_SECONDS) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_BUFFER_TIME_SECONDS))
+            : ArtifactDbFactory.DEFAULT_BUFFER_TIME_SECONDS;
+    }
+
+    /**
+     * Get buffer size from configuration.
+     * @return Buffer size (max events per batch)
+     */
+    public int getBufferSize() {
+        final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
+        return config != null && config.string(ArtifactDbFactory.YAML_BUFFER_SIZE) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_BUFFER_SIZE))
+            : ArtifactDbFactory.DEFAULT_BUFFER_SIZE;
     }
 
     /**
@@ -192,6 +276,23 @@ public final class ArtifactDbFactory {
             // Backward compatibility: add release_date if table already existed
             statement.executeUpdate(
                 "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS release_date BIGINT"
+            );
+            
+            // Performance indexes for artifacts table
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_repo_lookup ON artifacts(repo_name, name, version)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_repo_type_name ON artifacts(repo_type, repo_name, name)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_created_date ON artifacts(created_date)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_owner ON artifacts(owner)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_release_date ON artifacts(release_date) WHERE release_date IS NOT NULL"
             );
             statement.executeUpdate(
                 String.join(

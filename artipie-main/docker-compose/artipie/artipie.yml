@@ -24,7 +24,7 @@ meta:
   cooldown:
     enabled: true
     # Use duration strings: m = minutes, h = hours, d = days
-    minimum_allowed_age: 72h
+    minimum_allowed_age: 7d
   artifacts_database:
     postgres_host: artipie-db
     postgres_port: 5432
@@ -33,9 +33,9 @@ meta:
     postgres_password: artipie
   logging:
     level: Debug
-    loggers:
-      com.artipie.scheduling: INFO
-      org.quartz: INFO
+#    loggers:
+#      com.artipie.scheduling: INFO
+#      org.quartz: INFO
   metrics:
     endpoint: "/metrics/vertx" # Path of the endpoint, starting with `/`, where the metrics will be served
     port: 8087 # Port to serve the metrics

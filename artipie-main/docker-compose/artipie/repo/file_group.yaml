@@ -3,4 +3,4 @@ repo:
   # Example members; ensure matching file and file-proxy repos exist
   members:
     - file
-    - file-proxy
+    - file_proxy

@@ -5,6 +5,8 @@
 package com.artipie.scheduling;
 
 import com.artipie.ArtipieException;
+import com.artipie.goproxy.GoProxyPackageProcessor;
+import com.artipie.gradle.GradleProxyPackageProcessor;
 import com.artipie.maven.MavenProxyPackageProcessor;
 import com.artipie.npm.events.NpmProxyPackageProcessor;
 import com.artipie.pypi.PyProxyPackageProcessor;
@@ -194,6 +196,20 @@ public final class MetadataEventQueues {
             @Override
             Class<? extends QuartzJob> job() {
                 return NpmProxyPackageProcessor.class;
+            }
+        },
+
+        GRADLE_PROXY {
+            @Override
+            Class<? extends QuartzJob> job() {
+                return GradleProxyPackageProcessor.class;
+            }
+        },
+
+        GO_PROXY {
+            @Override
+            Class<? extends QuartzJob> job() {
+                return GoProxyPackageProcessor.class;
             }
         };
 

@@ -27,6 +27,16 @@ import javax.sql.DataSource;
 public final class DbConsumer implements Consumer<ArtifactEvent> {
 
     /**
+     * Default buffer time in seconds.
+     */
+    private static final int DEFAULT_BUFFER_TIME_SECONDS = 2;
+
+    /**
+     * Default buffer size (max events per batch).
+     */
+    private static final int DEFAULT_BUFFER_SIZE = 50;
+
+    /**
      * Publish subject
      * <a href="https://reactivex.io/documentation/subject.html">Docs</a>.
      */
@@ -38,21 +48,41 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     private final DataSource source;
 
     /**
-     * Ctor.
+     * Ctor with default buffer settings.
      * @param source Database source
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public DbConsumer(final DataSource source) {
+        this(source, DEFAULT_BUFFER_TIME_SECONDS, DEFAULT_BUFFER_SIZE);
+    }
+
+    /**
+     * Ctor with configurable buffer settings.
+     * @param source Database source
+     * @param bufferTimeSeconds Buffer time in seconds
+     * @param bufferSize Maximum events per batch
+     */
+    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
+    public DbConsumer(final DataSource source, final int bufferTimeSeconds, final int bufferSize) {
         this.source = source;
         this.subject = PublishSubject.create();
         this.subject.subscribeOn(Schedulers.io())
-            .buffer(2, TimeUnit.SECONDS, 50)
+            .buffer(bufferTimeSeconds, TimeUnit.SECONDS, bufferSize)
             .subscribe(new DbObserver());
     }
 
     @Override
     public void accept(final ArtifactEvent record) {
         this.subject.onNext(record);
+    }
+
+    /**
+     * Normalize repository name by trimming whitespace.
+     * This ensures data consistency and allows index usage in queries.
+     * @param name Repository name
+     * @return Normalized name
+     */
+    private static String normalizeRepoName(final String name) {
+        return name == null ? null : name.trim();
     }
 
     /**
@@ -79,13 +109,13 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner) VALUES (?,?,?,?,?,?,?,?)"
                 );
                 PreparedStatement update = conn.prepareStatement(
-                    "UPDATE artifacts SET repo_type = ?, size = ?, created_date = ?, release_date = ?, owner = ? WHERE TRIM(repo_name) = ? AND name = ? AND version = ?"
+                    "UPDATE artifacts SET repo_type = ?, size = ?, created_date = ?, release_date = ?, owner = ? WHERE repo_name = ? AND name = ? AND version = ?"
                 );
                 PreparedStatement deletev = conn.prepareStatement(
-                    "DELETE FROM artifacts WHERE TRIM(repo_name) = ? AND name = ? AND version = ?;"
+                    "DELETE FROM artifacts WHERE repo_name = ? AND name = ? AND version = ?;"
                 );
                 PreparedStatement delete = conn.prepareStatement(
-                    "DELETE FROM artifacts WHERE TRIM(repo_name) = ? AND name = ?;"
+                    "DELETE FROM artifacts WHERE repo_name = ? AND name = ?;"
                 )
             ) {
                 conn.setAutoCommit(false);
@@ -99,7 +129,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             update.setLong(3, record.createdDate());
                             update.setLong(4, release);
                             update.setString(5, record.owner());
-                            update.setString(6, record.repoName());
+                            update.setString(6, normalizeRepoName(record.repoName()));
                             update.setString(7, record.artifactName());
                             update.setString(8, record.artifactVersion());
                             final int updated = update.executeUpdate();
@@ -107,7 +137,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             // If no rows were updated, insert new record
                             if (updated == 0) {
                                 insert.setString(1, record.repoType());
-                                insert.setString(2, record.repoName());
+                                insert.setString(2, normalizeRepoName(record.repoName()));
                                 insert.setString(3, record.artifactName());
                                 insert.setString(4, record.artifactVersion());
                                 insert.setDouble(5, record.size());
@@ -117,12 +147,12 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                                 insert.execute();
                             }
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
-                            deletev.setString(1, record.repoName());
+                            deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());
                             deletev.setString(3, record.artifactVersion());
                             deletev.execute();
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_ALL) {
-                            delete.setString(1, record.repoName());
+                            delete.setString(1, normalizeRepoName(record.repoName()));
                             delete.setString(2, record.artifactName());
                             delete.execute();
                         }

@@ -1,0 +1,7 @@
+repo:
+  type: go-proxy
+  storage:
+    type: fs
+    path: /var/artipie/data
+  remotes:
+    - url: https://proxy.golang.org

@@ -3,4 +3,4 @@ repo:
   # Example members; ensure corresponding docker and docker-proxy repos exist
   members:
     - docker_proxy
-    - docker_local
+    - docker

@@ -24,11 +24,25 @@ public final class CooldownSupport {
 
     public static CooldownService create(final Settings settings, final Executor executor) {
         return settings.artifactsDatabase()
-            .map(ds -> (CooldownService) new JdbcCooldownService(
-                settings.cooldown(),
-                new CooldownRepository(ds),
-                executor
-            ))
-            .orElse(NoopCooldownService.INSTANCE);
+            .map(ds -> {
+                com.jcabi.log.Logger.info(
+                    CooldownSupport.class,
+                    "Creating JdbcCooldownService with settings: enabled=%s, minAge=%s",
+                    settings.cooldown().enabled(),
+                    settings.cooldown().minimumAllowedAge()
+                );
+                return (CooldownService) new JdbcCooldownService(
+                    settings.cooldown(),
+                    new CooldownRepository(ds),
+                    executor
+                );
+            })
+            .orElseGet(() -> {
+                com.jcabi.log.Logger.warn(
+                    CooldownSupport.class,
+                    "No artifacts database configured - using NoopCooldownService (cooldown disabled)"
+                );
+                return NoopCooldownService.INSTANCE;
+            });
     }
 }
