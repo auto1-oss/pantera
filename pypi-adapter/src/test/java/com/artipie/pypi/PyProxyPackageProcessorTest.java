@@ -15,7 +15,9 @@ import java.time.Instant;
 import java.util.LinkedList;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.awaitility.Awaitility;
@@ -96,6 +98,12 @@ class PyProxyPackageProcessorTest {
         );
         this.scheduler.start();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 3);
+        MatcherAssert.assertThat(
+            this.events.stream()
+                .map(ArtifactEvent::artifactName)
+                .collect(Collectors.toSet()),
+            Matchers.equalTo(Set.of("artipie-sample"))
+        );
     }
 
     @Test
@@ -178,7 +186,7 @@ class PyProxyPackageProcessorTest {
         MatcherAssert.assertThat(
             "Artifact name stored in normalized form",
             artifact.artifactName(),
-            Matchers.equalTo("alarmtime/AlarmTime-0.1.5.tar.gz")
+            Matchers.equalTo("alarmtime")
         );
     }
 

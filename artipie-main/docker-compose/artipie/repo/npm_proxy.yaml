@@ -6,4 +6,4 @@ repo:
       url: "https://registry.npmjs.org"
   storage:
     type: fs
-    path: /var/artipie/data/npm
+    path: /var/artipie/data/

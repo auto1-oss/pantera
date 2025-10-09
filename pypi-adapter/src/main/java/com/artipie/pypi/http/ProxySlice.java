@@ -40,6 +40,7 @@ import java.util.Arrays;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.StreamSupport;
+import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -279,12 +281,16 @@ final class ProxySlice implements Slice {
                     .toCompletableFuture();
             }
             final Header ctype = ProxySlice.contentType(remote, line);
-            return this.rewriteIndex(content, ctype)
+            return this.rewriteIndex(content, ctype, line)
                 .thenApply(
-                    updated -> ResponseBuilder.ok()
-                        .headers(Headers.from(ctype))
-                        .body(updated)
-                        .build()
+                    updated -> updated
+                        .map(
+                            body -> ResponseBuilder.ok()
+                                .headers(Headers.from(ctype))
+                                .body(body)
+                                .build()
+                        )
+                        .orElseGet(ResponseBuilder.notFound()::build)
                 );
         }
 
@@ -337,38 +343,76 @@ final class ProxySlice implements Slice {
             });
     }
 
-    private CompletableFuture<Content> rewriteIndex(final Content content, final Header header) {
-        return new com.artipie.asto.streams.ContentAsStream<Content>(content)
+    private CompletableFuture<Optional<Content>> rewriteIndex(
+        final Content content,
+        final Header header,
+        final RequestLine line
+    ) {
+        return new com.artipie.asto.streams.ContentAsStream<Optional<Content>>(content)
             .process(stream -> {
                 try {
                     final byte[] bytes = stream.readAllBytes();
                     if (bytes.length == 0) {
-                        return new Content.From(bytes);
+                        if (this.packageIndexWithoutLinks(line, "")) {
+                            return Optional.empty();
+                        }
+                        return Optional.of(new Content.From(bytes));
                     }
                     final String original = new String(bytes, StandardCharsets.UTF_8);
                     final String rewritten = this.rewriteIndexBody(original, header);
-                    if (rewritten.equals(original)) {
-                        return new Content.From(bytes);
+                    if (this.packageIndexWithoutLinks(line, rewritten)) {
+                        return Optional.empty();
                     }
-                    return new Content.From(rewritten.getBytes(StandardCharsets.UTF_8));
+                    if (rewritten.equals(original)) {
+                        return Optional.of(new Content.From(bytes));
+                    }
+                    return Optional.of(new Content.From(rewritten.getBytes(StandardCharsets.UTF_8)));
                 } catch (final IOException ex) {
                     throw new ArtipieIOException(ex);
                 }
             })
             .toCompletableFuture()
             .handle(
-                (Content body, Throwable error) -> {
+                (Optional<Content> body, Throwable error) -> {
                     if (error != null) {
                         Logger.warn(
                             this,
                             "Failed to rewrite PyPI index content: %s",
                             error.getMessage()
                         );
-                        return body == null ? new Content.From(new byte[0]) : body;
+                        return Optional.of(new Content.From(new byte[0]));
                     }
                     return body;
                 }
             );
+    }
+
+    private boolean packageIndexWithoutLinks(final RequestLine line, final String body) {
+        if (!this.looksLikeHtml(body)) {
+            return false;
+        }
+        final String lower = body.toLowerCase();
+        if (lower.contains("<a ") && lower.contains("href=")) {
+            return false;
+        }
+        final List<String> segments = ProxySlice.pathSegments(line.uri().getPath());
+        if (segments.isEmpty()) {
+            return false;
+        }
+        String candidate = segments.get(segments.size() - 1);
+        if ("index.html".equalsIgnoreCase(candidate) && segments.size() >= 2) {
+            candidate = segments.get(segments.size() - 2);
+        }
+        return !"simple".equalsIgnoreCase(candidate);
+    }
+
+    private static List<String> pathSegments(final String path) {
+        if (path == null || path.isEmpty()) {
+            return List.of();
+        }
+        return Arrays.stream(path.split("/"))
+            .filter(part -> !part.isEmpty())
+            .collect(Collectors.toList());
     }
 
     private String rewriteIndexBody(final String body, final Header header) {

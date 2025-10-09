@@ -25,5 +25,5 @@ python -m build
 twine check dist/*
 
 #Publish to Artipie
-twine upload --repository-url http://localhost:8081/py_local -u artipie -p artipie dist/*
+twine upload --repository-url http://localhost:8081/pypi -u artipie -p artipie dist/*
 ```

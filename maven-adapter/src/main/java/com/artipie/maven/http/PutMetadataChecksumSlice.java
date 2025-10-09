@@ -21,6 +21,7 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.maven.Maven;
 import com.artipie.maven.ValidUpload;
 import com.artipie.scheduling.ArtifactEvent;
+import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import io.reactivex.Single;
@@ -147,29 +148,52 @@ public final class PutMetadataChecksumSlice implements Slice {
      */
     private CompletableFuture<Response> validateAndUpdate(
         String pkg, Key location, Headers headers) {
+        Logger.info(this, "Validating and updating Maven artifact: pkg=%s, location=%s", pkg, location);
         return this.valid.validate(location, new Key.From(pkg))
             .thenCompose(
                 correct -> {
                     final CompletableFuture<Response> upd;
                     if (correct) {
+                        Logger.info(this, "Validation successful, starting update for: %s", pkg);
                         CompletionStage<Void> res = this.mvn.update(location, new Key.From(pkg));
                         if (this.events.isPresent()) {
                             final String version = new KeyLastPart(location).get();
                             res = res.thenCompose(
                                 ignored -> this.artifactSize(new Key.From(pkg, version))
                             ).thenAccept(
-                                size -> this.events.get().add(
-                                    new ArtifactEvent(
-                                        PutMetadataChecksumSlice.REPO_TYPE, this.rname,
-                                        new Login(headers).getValue(),
-                                        MavenSlice.EVENT_INFO.formatArtifactName(pkg), version, size
-                                    )
-                                )
+                                size -> {
+                                    Logger.info(
+                                        this,
+                                        "Adding artifact event: pkg=%s, version=%s, size=%d",
+                                        pkg, version, size
+                                    );
+                                    this.events.get().add(
+                                        new ArtifactEvent(
+                                            PutMetadataChecksumSlice.REPO_TYPE, this.rname,
+                                            new Login(headers).getValue(),
+                                            MavenSlice.EVENT_INFO.formatArtifactName(pkg), version, size
+                                        )
+                                    );
+                                }
                             );
                         }
                         upd = res.toCompletableFuture()
-                            .thenApply(ignored -> ResponseBuilder.created().build());
+                            .thenApply(ignored -> {
+                                Logger.info(this, "Successfully updated Maven artifact: %s", pkg);
+                                return ResponseBuilder.created().build();
+                            })
+                            .exceptionally(error -> {
+                                Logger.error(
+                                    this,
+                                    "Failed to update Maven artifact: pkg=%s, location=%s, error=%[exception]s",
+                                    pkg, location, error
+                                );
+                                return ResponseBuilder.internalError()
+                                    .textBody(String.format("Failed to update artifact: %s", error.getMessage()))
+                                    .build();
+                            });
                     } else {
+                        Logger.warn(this, "Validation failed for Maven artifact: pkg=%s, location=%s", pkg, location);
                         upd = CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest().build()
                         );

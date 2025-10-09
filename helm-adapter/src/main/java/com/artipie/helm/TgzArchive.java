@@ -66,6 +66,8 @@ public final class TgzArchive {
      */
     public Map<String, Object> metadata(final Optional<String> baseurl) {
         final Map<String, Object> meta = new HashMap<>();
+        // Include chart name in path: <chart_name>/<chart_name>-<version>.tgz
+        final String urlPath = String.format("%s/%s", this.chart.name(), this.name());
         meta.put(
             "urls",
             new ArrayList<>(
@@ -73,7 +75,7 @@ public final class TgzArchive {
                     String.format(
                         "%s%s",
                         baseurl.orElse(""),
-                        this.name()
+                        urlPath
                     )
                 )
             )

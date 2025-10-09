@@ -141,7 +141,7 @@ final class IndexYamlTest {
                     this.matcher("description", chart),
                     this.matcher("home", chart),
                     this.matcher("maintainers", chart),
-                    Matchers.hasEntry("urls", Collections.singletonList(IndexYamlTest.ARK)),
+                    Matchers.hasEntry("urls", Collections.singletonList("ark/" + IndexYamlTest.ARK)),
                     Matchers.hasEntry(
                         "sources", Collections.singletonList("https://github.com/heptio/ark")
                     ),

@@ -376,6 +376,42 @@ class ProxySliceTest {
     }
 
     @Test
+    void returnsNotFoundWhenIndexHasNoLinks() {
+        final String html = "<!DOCTYPE html><html><body><h1>Links for hello</h1></body></html>";
+        final TestClientSlices clients = new TestClientSlices(line -> ResponseBuilder.ok().build());
+        final ProxySlice slice = this.newProxySlice(
+            new SliceSimple(ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()),
+            clients,
+            Optional.of(this.events)
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/my-pypi-proxy/hello/"),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(response.status(), Matchers.is(RsStatus.NOT_FOUND));
+        Assertions.assertFalse(clients.invoked(), "Remote fetch must not be triggered");
+    }
+
+    @Test
+    void returnsNotFoundForTrimmedPathIndexWithoutLinks() {
+        final String html = "<!DOCTYPE html><html><body><h1>Links for hello</h1></body></html>";
+        final TestClientSlices clients = new TestClientSlices(line -> ResponseBuilder.ok().build());
+        final ProxySlice slice = this.newProxySlice(
+            new SliceSimple(ResponseBuilder.ok().htmlBody(html, StandardCharsets.UTF_8).build()),
+            clients,
+            Optional.of(this.events)
+        );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, "/hello/"),
+            this.authorization,
+            Content.EMPTY
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(response.status(), Matchers.is(RsStatus.NOT_FOUND));
+        Assertions.assertFalse(clients.invoked(), "Remote fetch must not be triggered");
+    }
+
+    @Test
     void fetchesMetadataViaMirrorMapping() {
         final String upstream =
             "https://files.pythonhosted.org/packages/aa/bb/pkg-1.0.0-py3-none-any.whl#sha256=abc";
