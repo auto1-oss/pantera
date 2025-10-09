@@ -79,7 +79,6 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             final Long release = event.releaseMillis().orElse(null);
                             final String project =
                                 new NormalizedProjectName.Simple(info.name()).value();
-                            final String artifact = String.join("/", project, filename);
                             this.events.add(
                                 new ArtifactEvent(
                                     PyProxyPackageProcessor.REPO_TYPE,
@@ -87,7 +86,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     owner == null || owner.isBlank()
                                         ? ArtifactEvent.DEF_OWNER
                                         : owner,
-                                    artifact,
+                                    project,
                                     info.version(),
                                     archive.length,
                                     created,
@@ -97,7 +96,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                             Logger.info(
                                 this,
                                 String.format(
-                                    "Recorded PyPI proxy artifact %s:%s (repo=%s, size=%dB, release=%s)",
+                                    "Recorded PyPI proxy release %s:%s (repo=%s, size=%dB, release=%s)",
                                     project,
                                     info.version(),
                                     event.repoName(),

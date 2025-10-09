@@ -47,7 +47,7 @@ public final class TgzArchiveTest {
                 new ListOf<>(
                     new IsMapContaining<>(
                         new IsEqual<>("urls"),
-                        new IsEqual<>(Collections.singletonList("tomcat-0.4.1.tgz"))
+                        new IsEqual<>(Collections.singletonList("tomcat/tomcat-0.4.1.tgz"))
                     ),
                     new IsMapContaining<>(
                         new IsEqual<>("digest"),

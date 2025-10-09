@@ -3,4 +3,4 @@ repo:
   storage:
     type: fs
     path: /var/artipie/data
-  url: http://localhost:8080/npm
+  url: http://localhost:8081/npm

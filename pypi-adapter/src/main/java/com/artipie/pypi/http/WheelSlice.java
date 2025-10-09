@@ -84,9 +84,12 @@ final class WheelSlice implements Slice {
                 info -> {
                     final CompletionStage<RsStatus> res;
                     if (new ValidFilename(info, filename).valid()) {
+                        // Organize by version: <repo>/<package_name>/<version>/<filename>
+                        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
                         final Key name = new Key.From(
                             new KeyFromPath(line.uri().toString()),
-                            new NormalizedProjectName.Simple(info.name()).value(),
+                            packageName,
+                            info.version(),
                             filename
                         );
                         CompletionStage<Void> move = this.storage.move(key, name);
@@ -96,6 +99,27 @@ final class WheelSlice implements Slice {
                                     this.putArtifactToQueue(name, info, filename, iterable)
                             );
                         }
+                        // Regenerate package-level index.html after upload
+                        final Key packageKey = new Key.From(
+                            new KeyFromPath(line.uri().toString()),
+                            packageName
+                        );
+                        move = move.thenCompose(
+                            ignored -> new IndexGenerator(
+                                this.storage,
+                                packageKey,
+                                line.uri().getPath()
+                            ).generate()
+                        );
+                        // Regenerate repository-level index.html
+                        final Key repoKey = new KeyFromPath(line.uri().toString());
+                        move = move.thenCompose(
+                            ignored -> new IndexGenerator(
+                                this.storage,
+                                repoKey,
+                                line.uri().getPath()
+                            ).generateRepoIndex()
+                        );
                         res = move.thenApply(ignored -> RsStatus.CREATED);
                     } else {
                         res = this.storage.delete(key)
@@ -173,10 +197,12 @@ final class WheelSlice implements Slice {
             .thenAccept(
                 size -> this.events.get().add(
                     new ArtifactEvent(
-                        WheelSlice.TYPE, this.rname,
+                        WheelSlice.TYPE,
+                        this.rname,
                         new Login(headers).getValue(),
-                        String.join("/", info.name(), filename),
-                        info.version(), size
+                        new NormalizedProjectName.Simple(info.name()).value(),
+                        info.version(),
+                        size
                     )
                 )
             );
