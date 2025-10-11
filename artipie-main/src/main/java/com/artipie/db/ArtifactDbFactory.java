@@ -337,6 +337,41 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "UPDATE artifact_cooldowns SET status = 'INACTIVE' WHERE status = 'MANUAL'"
             );
+            statement.executeUpdate(
+                String.join(
+                    "\n",
+                    "CREATE TABLE IF NOT EXISTS import_sessions(",
+                    "   id BIGSERIAL PRIMARY KEY,",
+                    "   idempotency_key VARCHAR(200) NOT NULL UNIQUE,",
+                    "   repo_name VARCHAR NOT NULL,",
+                    "   repo_type VARCHAR NOT NULL,",
+                    "   artifact_path TEXT NOT NULL,",
+                    "   artifact_name VARCHAR,",
+                    "   artifact_version VARCHAR,",
+                    "   size_bytes BIGINT,",
+                    "   checksum_sha1 VARCHAR(128),",
+                    "   checksum_sha256 VARCHAR(128),",
+                    "   checksum_md5 VARCHAR(128),",
+                    "   checksum_policy VARCHAR(16) NOT NULL,",
+                    "   status VARCHAR(32) NOT NULL,",
+                    "   attempt_count INTEGER NOT NULL DEFAULT 1,",
+                    "   created_at TIMESTAMP NOT NULL,",
+                    "   updated_at TIMESTAMP NOT NULL,",
+                    "   completed_at TIMESTAMP,",
+                    "   last_error TEXT,",
+                    "   quarantine_path TEXT",
+                    ");"
+                )
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_import_sessions_repo ON import_sessions(repo_name)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_import_sessions_status ON import_sessions(status)"
+            );
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_import_sessions_repo_path ON import_sessions(repo_name, artifact_path)"
+            );
         } catch (final SQLException error) {
             throw new ArtipieException(error);
         }

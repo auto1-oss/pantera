@@ -56,6 +56,7 @@ SOFTWARE.
     <module>vertx-server</module>
     <module>http-client</module>
     <module>asto</module>
+    <module>artipie-import-cli</module>
   </modules>
   <description>Binary Artifact Management Tool</description>
   <url>https://github.com/artipie/artipie</url>

@@ -193,10 +193,18 @@ public final class FileProxySlice implements Slice {
                                                 new RqHeaders(rshdr.get(), ContentLength.NAME)
                                                     .stream().findFirst().map(Long::parseLong)
                                                     .orElse(0L);
+                                            String aname = key.string();
+                                            // Exclude repo name prefix if present
+                                            if (this.rname != null && !this.rname.isEmpty()
+                                                && aname.startsWith(this.rname + "/")) {
+                                                aname = aname.substring(this.rname.length() + 1);
+                                            }
+                                            // Replace folder separators with dots
+                                            aname = aname.replace('/', '.');
                                             this.events.get().add(
                                                 new ArtifactEvent(
                                                     FileProxySlice.REPO_TYPE, this.rname, user,
-                                                    key.string(), "UNKNOWN", size
+                                                    aname, "UNKNOWN", size
                                                 )
                                             );
                                         }
