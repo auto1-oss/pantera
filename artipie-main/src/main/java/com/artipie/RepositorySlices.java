@@ -205,6 +205,15 @@ public class RepositorySlices {
             .forEach(this.slices::invalidate);
     }
 
+    /**
+     * Access underlying repositories registry.
+     *
+     * @return Repositories instance
+     */
+    public Repositories repositories() {
+        return this.repos;
+    }
+
     private Optional<Queue<ArtifactEvent>> artifactEvents() {
         return this.settings.artifactMetadata()
             .map(MetadataEventQueues::eventQueue);
