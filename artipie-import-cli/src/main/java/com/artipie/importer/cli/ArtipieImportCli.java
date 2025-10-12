@@ -8,7 +8,6 @@ import com.artipie.importer.api.ChecksumPolicy;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -39,6 +38,7 @@ public final class ArtipieImportCli {
             Path.of(values.getOrDefault("progress-log", "import-progress.log")),
             Path.of(values.getOrDefault("failures-dir", "import-failures")),
             values.containsKey("resume"),
+            values.containsKey("retry"),
             values.containsKey("dry-run"),
             values.getOrDefault("owner", "UNKNOWN"),
             Integer.parseInt(values.getOrDefault("max-retries", "5")),
@@ -53,7 +53,7 @@ public final class ArtipieImportCli {
 
     private static Map<String, String> parse(final String[] args) {
         final Map<String, String> values = new HashMap<>();
-        final Set<String> flags = Set.of("resume", "dry-run", "help");
+        final Set<String> flags = Set.of("resume", "retry", "dry-run", "help");
         for (int idx = 0; idx < args.length; idx += 1) {
             final String arg = args[idx];
             if (!arg.startsWith("--")) {
@@ -97,6 +97,7 @@ public final class ArtipieImportCli {
             "  --progress-log <file>       Progress log path\n" +
             "  --failures-dir <dir>        Directory for per-repo failure lists\n" +
             "  --resume                    Resume from progress log\n" +
+            "  --retry                     Retry only items from failures-dir\n" +
             "  --dry-run                   Enumerate artifacts only\n" +
             "  --owner <name>              Override artifact owner\n" +
             "  --max-retries <n>           Max retries per upload (default 5)\n" +

@@ -46,6 +46,23 @@ SOFTWARE.
       <artifactId>s3</artifactId>
       <version>2.23.21</version>
     </dependency>
+    <!-- AWS SDK v2 SSO modules for profile-based SSO credentials -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sso</artifactId>
+      <version>2.23.21</version>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>ssooidc</artifactId>
+      <version>2.23.21</version>
+    </dependency>
+    <!-- Netty async HTTP client for AWS SDK v2 -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>netty-nio-client</artifactId>
+      <version>2.23.21</version>
+    </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sts</artifactId>

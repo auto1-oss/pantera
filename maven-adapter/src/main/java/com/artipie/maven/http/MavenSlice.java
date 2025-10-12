@@ -17,8 +17,6 @@ import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceSimple;
-import com.artipie.maven.asto.AstoMaven;
-import com.artipie.maven.asto.AstoValidUpload;
 import com.artipie.maven.metadata.ArtifactEventInfo;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
@@ -138,40 +136,7 @@ public final class MavenSlice extends Slice.Wrap {
                     new RtRule.ByPath(".*SNAPSHOT.*")
                 ),
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage),
-                    basicAuth,
-                    tokenAuth,
-                    new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
-                    )
-                )
-            ),
-            new RtRulePath(
-                new RtRule.All(
-                    MethodRule.PUT,
-                    new RtRule.ByPath(PutMetadataSlice.PTN_META)
-                ),
-                MavenSlice.createAuthSlice(
-                    new PutMetadataSlice(storage),
-                    basicAuth,
-                    tokenAuth,
-                    new OperationControl(
-                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
-                    )
-                )
-            ),
-            new RtRulePath(
-                new RtRule.All(
-                    MethodRule.PUT,
-                    new RtRule.ByPath(PutMetadataChecksumSlice.PTN)
-                ),
-                MavenSlice.createAuthSlice(
-                    new PutMetadataChecksumSlice(
-                        storage,
-                        new AstoValidUpload(storage),
-                        new AstoMaven(storage),
-                        name, events
-                    ),
+                    new UploadSlice(storage, events, name),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
@@ -182,7 +147,7 @@ public final class MavenSlice extends Slice.Wrap {
             new RtRulePath(
                 MethodRule.PUT,
                 MavenSlice.createAuthSlice(
-                    new UploadSlice(storage),
+                    new UploadSlice(storage, events, name),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(
