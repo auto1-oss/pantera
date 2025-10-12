@@ -87,7 +87,7 @@ SOFTWARE.
     <javax.json.version>1.1.4</javax.json.version>
     <jetty.version>12.0.6</jetty.version>
     <s3mock.version>3.5.2</s3mock.version>
-    <bouncycastle-lts.version>2.73.5</bouncycastle-lts.version>
+    <bouncycastle-lts.version>2.73.9</bouncycastle-lts.version>
     <httpclient.version>5.3.1</httpclient.version>
     <httpcore5.version>5.2.4</httpcore5.version>
     <httpcore5-h2.version>5.2.4</httpcore5-h2.version>

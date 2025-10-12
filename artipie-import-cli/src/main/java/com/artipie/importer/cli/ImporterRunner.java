@@ -7,7 +7,6 @@ package com.artipie.importer.cli;
 import com.artipie.importer.api.ChecksumPolicy;
 import com.artipie.importer.api.DigestType;
 import com.artipie.importer.api.ImportHeaders;
-import com.artipie.importer.api.ImportManifest;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,28 +14,22 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionService;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 final class ImporterRunner {
 
@@ -71,7 +64,9 @@ final class ImporterRunner {
                         .connectTimeout(Duration.ofSeconds(15))
                         .build();
                     final CompletionService<UploadResult> completion = new ExecutorCompletionService<>(executor);
-                    final List<UploadTask> tasks = collectTasks(progress.completedKeys());
+                    final List<UploadTask> tasks = this.config.retryFailures()
+                        ? collectRetryTasks(progress.completedKeys())
+                        : collectTasks(progress.completedKeys());
                     final long totalBytes = tasks.stream().mapToLong(UploadTask::size).sum();
                     try (ConsoleProgress console = new ConsoleProgress(totalBytes, tasks.size())) {
                         console.start();
@@ -114,7 +109,9 @@ final class ImporterRunner {
     }
 
     private void enumerateOnly(final ProgressTracker progress, final SummaryTracker summary) throws IOException {
-        final List<UploadTask> tasks = collectTasks(progress.completedKeys());
+        final List<UploadTask> tasks = this.config.retryFailures()
+            ? collectRetryTasks(progress.completedKeys())
+            : collectTasks(progress.completedKeys());
         for (final UploadTask task : tasks) {
             summary.markEnumerated(task.repoName());
         }
@@ -132,6 +129,49 @@ final class ImporterRunner {
                     tasks.add(task);
                 }
             }));
+        return tasks;
+    }
+
+    private List<UploadTask> collectRetryTasks(final Set<String> completed) throws IOException {
+        final List<UploadTask> tasks = new ArrayList<>();
+        final TaskScanner scanner = new TaskScanner(this.config.exportDir(), this.config.owner(), this.config.checksumPolicy());
+        final Set<String> seen = new HashSet<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(this.config.failuresDir(), "*-failures.log")) {
+            for (final Path flog : stream) {
+                final String fname = flog.getFileName().toString();
+                final String repo = fname.substring(0, fname.length() - "-failures.log".length());
+                for (final String line : Files.readAllLines(flog, StandardCharsets.UTF_8)) {
+                    final int sep = line.indexOf('|');
+                    final String rel = sep >= 0 ? line.substring(0, sep) : line;
+                    final String key = repo + "|" + rel;
+                    if (!seen.add(key)) {
+                        continue;
+                    }
+                    // Attempt to resolve the file under any top-level directory inside exportDir
+                    boolean resolved = false;
+                    try (DirectoryStream<Path> tops = Files.newDirectoryStream(this.config.exportDir())) {
+                        for (final Path top : tops) {
+                            if (!Files.isDirectory(top)) {
+                                continue;
+                            }
+                            final Path candidate = top.resolve(repo).resolve(rel);
+                            if (Files.isRegularFile(candidate)) {
+                                scanner.analyze(candidate).ifPresent(task -> {
+                                    if (!completed.contains(task.idempotencyKey())) {
+                                        tasks.add(task);
+                                    }
+                                });
+                                resolved = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!resolved) {
+                        System.err.printf("Could not resolve failed entry %s/%s under export-dir%n", repo, rel);
+                    }
+                }
+            }
+        }
         return tasks;
     }
 

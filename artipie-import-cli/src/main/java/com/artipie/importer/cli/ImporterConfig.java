@@ -21,6 +21,7 @@ final class ImporterConfig {
     private final Path progressLog;
     private final Path failuresDir;
     private final boolean resume;
+    private final boolean retryFailures;
     private final boolean dryRun;
     private final String owner;
     private final int maxRetries;
@@ -38,6 +39,7 @@ final class ImporterConfig {
         final Path progressLog,
         final Path failuresDir,
         final boolean resume,
+        final boolean retryFailures,
         final boolean dryRun,
         final String owner,
         final int maxRetries,
@@ -54,6 +56,7 @@ final class ImporterConfig {
         this.progressLog = Objects.requireNonNull(progressLog);
         this.failuresDir = Objects.requireNonNull(failuresDir);
         this.resume = resume;
+        this.retryFailures = retryFailures;
         this.dryRun = dryRun;
         this.owner = owner == null || owner.isBlank() ? "UNKNOWN" : owner;
         this.maxRetries = Math.max(1, maxRetries);
@@ -99,6 +102,10 @@ final class ImporterConfig {
 
     boolean resume() {
         return this.resume;
+    }
+
+    boolean retryFailures() {
+        return this.retryFailures;
     }
 
     boolean dryRun() {

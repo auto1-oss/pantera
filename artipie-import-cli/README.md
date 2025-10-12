@@ -28,13 +28,15 @@ Key options:
 | `--checksum-mode` | `compute` (default), `metadata`, `skip`. |
 | `--concurrency` | Bounded worker pool size (default 4). |
 | `--resume` | Continue from an existing progress log. |
+| `--retry` | Retry only the artifacts listed under `--failures-dir`. |
 | `--progress-log` | Location of the resumable progress log. |
 | `--failures-dir` | Directory containing per-repository failure lists. |
 | `--report` | JSON summary report path. |
 
 The importer is idempotent. Each artifact upload uses a deterministic idempotency key
 based on the repository and relative path. Use `--resume` to skip previously completed
-uploads after an interruption.
+uploads after an interruption. Use `--retry` to retry only previously failed items recorded
+under `--failures-dir`.
 
 ## Repository Layout Mapping
 

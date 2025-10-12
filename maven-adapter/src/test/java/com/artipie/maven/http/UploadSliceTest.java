@@ -43,7 +43,7 @@ class UploadSliceTest {
     }
 
     @Test
-    void savesDataToTempUpload() {
+    void savesDataDirectly() {
         final byte[] data = "jar content".getBytes();
         MatcherAssert.assertThat(
             "Wrong response status, CREATED is expected",
@@ -57,7 +57,7 @@ class UploadSliceTest {
         );
         MatcherAssert.assertThat(
             "Uploaded data were not saved to storage",
-            this.asto.value(new Key.From(".upload/com/artipie/asto/0.1/asto-0.1.jar")).join(),
+            this.asto.value(new Key.From("com/artipie/asto/0.1/asto-0.1.jar")).join(),
             new ContentIs(data)
         );
     }
