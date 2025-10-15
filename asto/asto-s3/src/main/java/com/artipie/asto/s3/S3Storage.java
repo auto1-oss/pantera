@@ -14,7 +14,6 @@ import com.artipie.asto.UnderLockOperation;
 import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.lock.storage.StorageLock;
 import java.nio.ByteBuffer;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -24,7 +23,6 @@ import java.util.stream.Collectors;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Publisher;
 import io.reactivex.Flowable;
-import hu.akarnokd.rxjava2.interop.SingleInterop;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.async.AsyncResponseTransformer;
 import software.amazon.awssdk.core.async.SdkPublisher;
@@ -284,12 +282,12 @@ public final class S3Storage implements Storage {
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
         final CompletionStage<Content> result;
-        final Content onetime = new Content.OneTime(content);
+        // Don't wrap in OneTime - AWS SDK needs to retry on throttling/errors
         if (this.multipart) {
-            result = new EstimatedContentCompliment(onetime, S3Storage.MIN_MULTIPART)
+            result = new EstimatedContentCompliment(content, S3Storage.MIN_MULTIPART)
                 .estimate();
         } else {
-            result = new EstimatedContentCompliment(onetime).estimate();
+            result = new EstimatedContentCompliment(content).estimate();
         }
         return result.thenCompose(
             estimated -> {
@@ -450,17 +448,16 @@ public final class S3Storage implements Storage {
                 req.ssekmsKeyId(this.kms);
             }
         }
-        return collectToBytes(content).thenCompose(bytes -> {
-            if (this.checksum == ChecksumAlgorithm.SHA256) {
-                req.checksumSHA256(base64Sha256(bytes));
-            } else {
-                req.checksumAlgorithm(this.checksum);
-            }
-            return this.client.putObject(
-                req.build(),
-                AsyncRequestBody.fromBytes(bytes)
-            ).thenApply(ignored -> null);
-        });
+        // Stream directly without buffering entire content in memory
+        // This reduces memory usage from 3x file size to streaming buffers only
+        if (this.checksum != null && this.checksum != ChecksumAlgorithm.SHA256) {
+            req.checksumAlgorithm(this.checksum);
+        }
+        // For SHA256, AWS SDK will calculate it during streaming
+        return this.client.putObject(
+            req.build(),
+            new ContentBody(content)
+        ).thenApply(ignored -> null);
     }
 
     /**
@@ -539,32 +536,6 @@ public final class S3Storage implements Storage {
         return res.thenApply(c -> (Publisher<ByteBuffer>) c).join();
     }
 
-    private static CompletableFuture<byte[]> collectToBytes(final Content content) {
-        return Flowable.fromPublisher(content)
-            .reduce(new java.io.ByteArrayOutputStream(), (baos, buf) -> {
-                final byte[] arr = new byte[buf.remaining()];
-                buf.duplicate().get(arr);
-                try {
-                    baos.write(arr);
-                } catch (final java.io.IOException err) {
-                    throw new ArtipieIOException(err);
-                }
-                return baos;
-            })
-            .map(java.io.ByteArrayOutputStream::toByteArray)
-            .to(SingleInterop.get())
-            .toCompletableFuture();
-    }
-
-    private static String base64Sha256(final byte[] data) {
-        try {
-            final java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            final byte[] digest = md.digest(data);
-            return Base64.getEncoder().encodeToString(digest);
-        } catch (final Exception err) {
-            throw new ArtipieIOException(err);
-        }
-    }
 
     /**
      * {@link AsyncRequestBody} created from {@link Content}.

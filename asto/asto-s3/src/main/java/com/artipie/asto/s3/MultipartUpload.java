@@ -11,10 +11,11 @@ import com.artipie.asto.Splitting;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.reactivestreams.Publisher;
@@ -91,7 +92,9 @@ final class MultipartUpload {
         this.bucket = bucket;
         this.key = key;
         this.id = id;
-        this.parts = new CopyOnWriteArrayList<>();
+        // Use synchronized ArrayList instead of CopyOnWriteArrayList to avoid
+        // full array copy on every part upload (better memory efficiency)
+        this.parts = Collections.synchronizedList(new ArrayList<>());
         this.partsize = Math.max(partsize, MultipartUpload.MIN_PART_SIZE);
         this.concurrency = Math.max(1, concurrency);
         this.checksum = checksum;

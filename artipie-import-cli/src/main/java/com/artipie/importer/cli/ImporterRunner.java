@@ -24,12 +24,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 final class ImporterRunner {
 
@@ -58,11 +60,12 @@ final class ImporterRunner {
                     System.out.println(summary.renderTable());
                     return 0;
                 }
-                final ExecutorService executor = Executors.newFixedThreadPool(this.config.concurrency());
+                // Use virtual threads for better I/O performance
+                // Virtual threads are lightweight and don't block OS threads during I/O
+                final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
                 try {
-                    final HttpClient client = HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofSeconds(15))
-                        .build();
+                    // Don't create shared HttpClient - each task will create its own
+                    // This avoids connection pool exhaustion issues
                     final CompletionService<UploadResult> completion = new ExecutorCompletionService<>(executor);
                     final List<UploadTask> tasks = this.config.retryFailures()
                         ? collectRetryTasks(progress.completedKeys())
@@ -70,28 +73,73 @@ final class ImporterRunner {
                     final long totalBytes = tasks.stream().mapToLong(UploadTask::size).sum();
                     try (ConsoleProgress console = new ConsoleProgress(totalBytes, tasks.size())) {
                         console.start();
-                        int submitted = 0;
-                        for (final UploadTask task : tasks) {
-                            completion.submit(uploadCallable(client, task, console));
-                            submitted += 1;
-                        }
-                        for (int idx = 0; idx < submitted; idx += 1) {
-                            final Future<UploadResult> future = completion.take();
-                            final UploadResult result = future.get();
-                            if (result.status == UploadStatus.SUCCESS || result.status == UploadStatus.ALREADY) {
-                                progress.markCompleted(result.task);
-                                summary.markSuccess(result.task.repoName(), result.status == UploadStatus.ALREADY);
-                                System.out.printf("%n[OK] %s/%s (%s)%n", result.task.repoName(), result.task.relativePath(), result.status == UploadStatus.ALREADY ? "already" : "created");
-                            } else if (result.status == UploadStatus.QUARANTINED) {
-                                failures.record(result.task.repoName(), result.task.relativePath(), result.message);
-                                summary.markQuarantine(result.task.repoName());
-                                System.out.printf("%n[QUARANTINED] %s/%s :: %s%n", result.task.repoName(), result.task.relativePath(), result.message);
-                            } else {
-                                failures.record(result.task.repoName(), result.task.relativePath(), result.message);
-                                summary.markFailure(result.task.repoName());
-                                System.out.printf("%n[FAIL] %s/%s :: %s%n", result.task.repoName(), result.task.relativePath(), result.message);
+                        System.out.printf("Total tasks: %d, Batch size: %d, Using: Virtual Threads, Timeout: %d minutes%n",
+                            tasks.size(), this.config.batchSize(), this.config.timeoutMinutes());
+                        
+                        // Start watchdog thread to detect stuck uploads
+                        final Thread watchdog = startWatchdog(executor);
+                        
+                        int taskIndex = 0;
+                        final int batchSize = this.config.batchSize();
+                        
+                        while (taskIndex < tasks.size()) {
+                            // Submit next batch
+                            final int batchEnd = Math.min(taskIndex + batchSize, tasks.size());
+                            final int batchCount = batchEnd - taskIndex;
+                            System.out.printf("%n[BATCH] Submitting tasks %d-%d (batch %d/%d)%n",
+                                taskIndex + 1, batchEnd, (taskIndex / batchSize) + 1, (tasks.size() + batchSize - 1) / batchSize);
+                            
+                            // Track submitted futures for this batch
+                            final List<Future<UploadResult>> batchFutures = new ArrayList<>(batchCount);
+                            for (int i = taskIndex; i < batchEnd; i++) {
+                                final UploadTask task = tasks.get(i);
+                                batchFutures.add(completion.submit(uploadCallable(task, console)));
                             }
+                            System.err.printf("[DEBUG] Submitted %d tasks, waiting for completion...%n", batchCount);
+                            
+                            // Wait for batch to complete
+                            for (int i = 0; i < batchCount; i++) {
+                                System.err.printf("[DEBUG] Waiting for result %d/%d...%n", i + 1, batchCount);
+                                final Future<UploadResult> future = completion.take();
+                                System.err.printf("[DEBUG] Got result %d/%d%n", i + 1, batchCount);
+                                final UploadResult result;
+                                try {
+                                    // Add timeout to prevent indefinite blocking
+                                    result = future.get(this.config.timeoutMinutes() + 5, TimeUnit.MINUTES);
+                                } catch (final TimeoutException timeout) {
+                                    System.err.printf("%n[ERROR] Task timed out after %d minutes. This may indicate a stuck upload or server issue.%n",
+                                        this.config.timeoutMinutes() + 5);
+                                    System.err.println("Cancelling remaining tasks in batch...");
+                                    throw new RuntimeException("Upload task timed out", timeout);
+                                } catch (final ExecutionException ex) {
+                                    System.err.printf("%n[ERROR] Task failed with exception: %s%n", ex.getCause().getMessage());
+                                    ex.getCause().printStackTrace(System.err);
+                                    throw new RuntimeException("Upload task failed", ex.getCause());
+                                }
+                                final int currentTask = taskIndex + i + 1;
+                                System.out.printf("[%d/%d] Processing: %s/%s (%.2f MB)%n",
+                                    currentTask, tasks.size(),
+                                    result.task.repoName(), result.task.relativePath(),
+                                    result.task.size() / 1024.0 / 1024.0);
+                                if (result.status == UploadStatus.SUCCESS || result.status == UploadStatus.ALREADY) {
+                                    progress.markCompleted(result.task);
+                                    summary.markSuccess(result.task.repoName(), result.status == UploadStatus.ALREADY);
+                                    System.out.printf("[OK] %s/%s (%s)%n", result.task.repoName(), result.task.relativePath(), result.status == UploadStatus.ALREADY ? "already" : "created");
+                                } else if (result.status == UploadStatus.QUARANTINED) {
+                                    failures.record(result.task.repoName(), result.task.relativePath(), result.message);
+                                    summary.markQuarantine(result.task.repoName());
+                                    System.out.printf("[QUARANTINED] %s/%s :: %s%n", result.task.repoName(), result.task.relativePath(), result.message);
+                                } else {
+                                    failures.record(result.task.repoName(), result.task.relativePath(), result.message);
+                                    summary.markFailure(result.task.repoName());
+                                    System.out.printf("[FAIL] %s/%s :: %s%n", result.task.repoName(), result.task.relativePath(), result.message);
+                                }
+                            }
+                            System.err.printf("[DEBUG] Batch complete, processed %d tasks%n", batchCount);
+                            taskIndex = batchEnd;
                         }
+                        System.err.println("[DEBUG] All batches complete!");
+                        watchdog.interrupt();
                     }
                     summary.writeReport(this.config.report());
                     System.out.println();
@@ -175,8 +223,14 @@ final class ImporterRunner {
         return tasks;
     }
 
-    private Callable<UploadResult> uploadCallable(final HttpClient client, final UploadTask task, final ConsoleProgress console) {
+    private Callable<UploadResult> uploadCallable(final UploadTask task, final ConsoleProgress console) {
         return () -> {
+            // Create a dedicated HttpClient for this task to avoid connection pool contention
+            final HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(15))
+                .build();
+            System.err.printf("[DEBUG] Starting upload: %s/%s (%.2f MB)%n",
+                task.repoName(), task.relativePath(), task.size() / 1024.0 / 1024.0);
             if (this.config.checksumPolicy() == ChecksumPolicy.COMPUTE) {
                 task.computeDigests();
             } else if (this.config.checksumPolicy() == ChecksumPolicy.METADATA) {
@@ -189,7 +243,11 @@ final class ImporterRunner {
             while (true) {
                 attempt += 1;
                 try {
+                    System.err.printf("[DEBUG] Attempt %d: Sending request for %s%n", attempt, task.relativePath());
+                    final long sendStart = System.currentTimeMillis();
                     final HttpResponse<String> response = client.send(buildRequest(task, console), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    final long sendDuration = System.currentTimeMillis() - sendStart;
+                    System.err.printf("[DEBUG] Request completed in %d ms, status: %d%n", sendDuration, response.statusCode());
                     final int status = response.statusCode();
                     if (status == 201) {
                         console.markTaskDone();
@@ -213,17 +271,28 @@ final class ImporterRunner {
                     return new UploadResult(task, UploadStatus.FAILED,
                         String.format("HTTP %d: %s", status, response.body()));
                 } catch (final HttpTimeoutException timeout) {
+                    System.err.printf("[DEBUG] HTTP timeout on attempt %d for %s: %s%n",
+                        attempt, task.relativePath(), timeout.getMessage());
                     if (attempt >= this.config.maxRetries()) {
                         console.markTaskDone();
                         return new UploadResult(task, UploadStatus.FAILED, "Timeout: " + timeout.getMessage());
                     }
                     Thread.sleep(backoff(attempt));
-                } catch (final IOException | InterruptedException ex) {
+                } catch (final IOException ex) {
+                    System.err.printf("[DEBUG] IOException on attempt %d for %s: %s%n",
+                        attempt, task.relativePath(), ex.getMessage());
                     if (attempt >= this.config.maxRetries()) {
                         console.markTaskDone();
-                        return new UploadResult(task, UploadStatus.FAILED, ex.getMessage());
+                        return new UploadResult(task, UploadStatus.FAILED, "IOException: " + ex.getMessage());
                     }
                     Thread.sleep(backoff(attempt));
+                } catch (final InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    console.markTaskDone();
+                    return new UploadResult(task, UploadStatus.FAILED, "Interrupted: " + ex.getMessage());
+                } catch (final Exception ex) {
+                    console.markTaskDone();
+                    return new UploadResult(task, UploadStatus.FAILED, "Unexpected error: " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
                 }
             }
         };
@@ -231,6 +300,8 @@ final class ImporterRunner {
 
     private HttpRequest buildRequest(final UploadTask task, final ConsoleProgress console) throws IOException {
         final URI uri = task.buildUri(this.config.server());
+        // Use 5 minutes per request timeout (not the full batch timeout)
+        // Large files should complete in < 5 min, if not, likely stuck
         final HttpRequest.Builder builder = HttpRequest.newBuilder()
             .uri(uri)
             .timeout(Duration.ofMinutes(5))
@@ -238,11 +309,13 @@ final class ImporterRunner {
             .header(ImportHeaders.IDEMPOTENCY_KEY, task.idempotencyKey())
             .header(
                 ImportHeaders.ARTIFACT_NAME,
-                "file".equals(task.repoType())
-                    ? task.dotSeparatedName()
-                    : task.metadata().artifact().orElse(task.derivedName())
+                sanitizeHeaderValue(
+                    "file".equals(task.repoType())
+                        ? task.dotSeparatedName()
+                        : task.metadata().artifact().orElse(task.derivedName())
+                )
             )
-            .header(ImportHeaders.ARTIFACT_VERSION, task.metadata().version().orElse(""))
+            .header(ImportHeaders.ARTIFACT_VERSION, sanitizeHeaderValue(task.metadata().version().orElse("")))
             .header(ImportHeaders.ARTIFACT_OWNER, this.config.owner())
             .header(ImportHeaders.ARTIFACT_SIZE, Long.toString(task.size()))
             .header(ImportHeaders.ARTIFACT_CREATED, Long.toString(task.created()))
@@ -269,9 +342,64 @@ final class ImporterRunner {
         };
     }
 
+    /**
+     * Sanitize header value by removing invalid characters.
+     * HTTP headers must only contain visible ASCII characters (0x20-0x7E)
+     * and horizontal tabs (0x09). This method removes any other characters
+     * including invisible Unicode characters like zero-width spaces.
+     *
+     * @param value The header value to sanitize
+     * @return Sanitized header value
+     */
+    private static String sanitizeHeaderValue(final String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        // Remove all characters that are not visible ASCII or tab
+        return value.replaceAll("[^\\x09\\x20-\\x7E]", "");
+    }
+
     private long backoff(final int attempt) {
         final long jitter = ThreadLocalRandom.current().nextLong(50, 200);
         return (long) (this.config.backoffMs() * Math.pow(2, attempt - 1)) + jitter;
+    }
+
+    /**
+     * Start a watchdog thread that monitors the executor for stuck tasks.
+     * Prints thread dumps periodically to help diagnose hangs.
+     */
+    private Thread startWatchdog(final ExecutorService executor) {
+        final Thread watchdog = new Thread(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    Thread.sleep(60_000); // Check every minute
+                    System.err.println("\\n[WATCHDOG] Still running... Active threads:");
+                    Thread.getAllStackTraces().forEach((thread, stack) -> {
+                        if (thread.getName().contains("pool") || thread.getName().contains("ForkJoin")) {
+                            System.err.printf("  %s [%s]%n", thread.getName(), thread.getState());
+                            if (stack.length > 0) {
+                                // Show top 3 stack frames to understand what's blocking
+                                for (int i = 0; i < Math.min(3, stack.length); i++) {
+                                    System.err.printf("    at %s.%s(%s:%d)%n",
+                                        stack[i].getClassName(),
+                                        stack[i].getMethodName(),
+                                        stack[i].getFileName(),
+                                        stack[i].getLineNumber());
+                                }
+                            }
+                        }
+                    });
+                    System.err.println("[WATCHDOG] If all threads are WAITING at Unsafe.park, the HTTP client connection pool may be exhausted.");
+                    System.err.println("[WATCHDOG] Consider reducing --concurrency or checking if the server is responding.");
+                }
+            } catch (final InterruptedException ex) {
+                // Normal shutdown
+                Thread.currentThread().interrupt();
+            }
+        }, "import-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+        return watchdog;
     }
 
     private static final class UploadResult {

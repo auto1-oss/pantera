@@ -339,6 +339,7 @@ SOFTWARE.
                 <exclude>**/src/main/resources/**</exclude>
                 <exclude>**/examples/**</exclude>
                 <exclude>**/docker-compose/**</exclude>
+                <exclude>**/docs/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>

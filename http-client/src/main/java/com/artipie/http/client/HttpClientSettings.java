@@ -44,6 +44,10 @@ public class HttpClientSettings {
             if (!Strings.isNullOrEmpty(followRedirects)) {
                 res.setFollowRedirects(Boolean.parseBoolean(followRedirects));
             }
+            final String proxyTimeout = mapping.string("proxy_timeout");
+            if (!Strings.isNullOrEmpty(proxyTimeout)) {
+                res.setProxyTimeout(Long.parseLong(proxyTimeout));
+            }
             final YamlMapping jks = mapping.yamlMapping("jks");
             if (jks != null) {
                 res.setJksPath(
@@ -128,12 +132,19 @@ public class HttpClientSettings {
      */
     private long idleTimeout;
 
+    /**
+     * Proxy request timeout in seconds.
+     * Default is 120 seconds (2 minutes).
+     */
+    private long proxyTimeout;
+
     public HttpClientSettings() {
         this.trustAll = false;
         this.followRedirects = true;
         this.connectTimeout = 15_000L;
         this.idleTimeout = 0L;
         this.http3 = false;
+        this.proxyTimeout = 120L;  // Default 2 minutes
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
@@ -210,6 +221,15 @@ public class HttpClientSettings {
 
     public HttpClientSettings setIdleTimeout(final long idleTimeout) {
         this.idleTimeout = idleTimeout;
+        return this;
+    }
+
+    public long proxyTimeout() {
+        return proxyTimeout;
+    }
+
+    public HttpClientSettings setProxyTimeout(final long proxyTimeout) {
+        this.proxyTimeout = proxyTimeout;
         return this;
     }
 }

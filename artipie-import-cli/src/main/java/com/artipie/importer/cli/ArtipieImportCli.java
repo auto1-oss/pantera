@@ -40,10 +40,12 @@ public final class ArtipieImportCli {
             values.containsKey("resume"),
             values.containsKey("retry"),
             values.containsKey("dry-run"),
-            values.getOrDefault("owner", "UNKNOWN"),
+            values.getOrDefault("owner", "system"),
             Integer.parseInt(values.getOrDefault("max-retries", "5")),
             Long.parseLong(values.getOrDefault("backoff-ms", "500")),
-            Path.of(values.getOrDefault("report", "import-report.json"))
+            Path.of(values.getOrDefault("report", "import-report.json")),
+            Integer.parseInt(values.getOrDefault("timeout-minutes", "30")),
+            Integer.parseInt(values.getOrDefault("batch-size", "100"))
         );
         final int code = new ImporterRunner(config).run();
         if (code != 0) {
@@ -102,6 +104,8 @@ public final class ArtipieImportCli {
             "  --owner <name>              Override artifact owner\n" +
             "  --max-retries <n>           Max retries per upload (default 5)\n" +
             "  --backoff-ms <ms>           Initial retry backoff (default 500)\n" +
+            "  --timeout-minutes <min>     Upload timeout in minutes (default 30)\n" +
+            "  --batch-size <n>            Submit tasks in batches (default 100)\n" +
             "  --report <file>             JSON summary output (default import-report.json)\n" +
             "  --help                      Show this message");
     }

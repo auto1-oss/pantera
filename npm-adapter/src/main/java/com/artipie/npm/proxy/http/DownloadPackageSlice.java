@@ -17,6 +17,8 @@ import com.artipie.npm.proxy.json.ClientContent;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import org.apache.commons.lang3.StringUtils;
 
+import java.net.URL;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.StreamSupport;
 
@@ -35,12 +37,27 @@ public final class DownloadPackageSlice implements Slice {
     private final PackagePath path;
 
     /**
+     * Base URL for the repository (optional).
+     */
+    private final Optional<URL> baseUrl;
+
+    /**
      * @param npm NPM Proxy facade
      * @param path Package path helper
      */
     public DownloadPackageSlice(final NpmProxy npm, final PackagePath path) {
+        this(npm, path, Optional.empty());
+    }
+
+    /**
+     * @param npm NPM Proxy facade
+     * @param path Package path helper
+     * @param baseUrl Base URL for the repository
+     */
+    public DownloadPackageSlice(final NpmProxy npm, final PackagePath path, final Optional<URL> baseUrl) {
         this.npm = npm;
         this.path = path;
+        this.baseUrl = baseUrl;
     }
 
     @Override
@@ -65,12 +82,20 @@ public final class DownloadPackageSlice implements Slice {
      */
     private String clientFormat(final String data,
         final Iterable<Header> headers) {
-        final String host = StreamSupport.stream(headers.spliterator(), false)
-            .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
-            .findAny().orElseThrow(
-                () -> new RuntimeException("Could not find Host header in request")
-            ).getValue();
-        return new ClientContent(data, this.assetPrefix(host)).value().toString();
+        final String prefix;
+        if (this.baseUrl.isPresent()) {
+            // Use configured repository URL
+            prefix = this.baseUrl.get().toString();
+        } else {
+            // Fall back to Host header
+            final String host = StreamSupport.stream(headers.spliterator(), false)
+                .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
+                .findAny().orElseThrow(
+                    () -> new RuntimeException("Could not find Host header in request")
+                ).getValue();
+            prefix = this.assetPrefix(host);
+        }
+        return new ClientContent(data, prefix).value().toString();
     }
 
     /**

@@ -38,6 +38,7 @@ import com.artipie.http.DockerRoutingSlice;
 import com.artipie.http.GoSlice;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
+import com.artipie.http.TimeoutSlice;
 import com.artipie.group.GroupSlice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
@@ -238,7 +239,10 @@ public class RepositorySlices {
             case "file-proxy":
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
-                    new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown)
+                    new TimeoutSlice(
+                        new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
+                        settings.httpClientSettings().proxyTimeout()
+                    )
                 );
                 break;
             case "npm":
@@ -283,7 +287,12 @@ public class RepositorySlices {
                 break;
             case "php-proxy":
                 clientSlices = jettyClientSlices(cfg);
-                slice = trimPathSlice(new ComposerProxy(clientSlices, cfg));
+                slice = trimPathSlice(
+                    new TimeoutSlice(
+                        new ComposerProxy(clientSlices, cfg),
+                        settings.httpClientSettings().proxyTimeout()
+                    )
+                );
                 break;
             case "nuget":
                 slice = trimPathSlice(
@@ -303,12 +312,15 @@ public class RepositorySlices {
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GradleProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
-                        ).slice(),
+                        new TimeoutSlice(
+                            new GradleProxy(
+                                clientSlices,
+                                cfg,
+                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                this.cooldown
+                            ).slice(),
+                            settings.httpClientSettings().proxyTimeout()
+                        ),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -328,11 +340,14 @@ public class RepositorySlices {
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new MavenProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
+                        new TimeoutSlice(
+                            new MavenProxy(
+                                clientSlices,
+                                cfg,
+                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                this.cooldown
+                            ),
+                            settings.httpClientSettings().proxyTimeout()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -359,12 +374,15 @@ public class RepositorySlices {
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new GoProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
-                        ).slice(),
+                        new TimeoutSlice(
+                            new GoProxy(
+                                clientSlices,
+                                cfg,
+                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                this.cooldown
+                            ).slice(),
+                            settings.httpClientSettings().proxyTimeout()
+                        ),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -383,15 +401,19 @@ public class RepositorySlices {
                     npmRemoteUri, cfg.storage(), clientSlices
                 );
                 slice = new CombinedAuthzSliceWrap(
-                    new NpmProxySlice(
-                        cfg.path(),
-                        npmProxy,
-                        settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)
+                    new TimeoutSlice(
+                        new NpmProxySlice(
+                            cfg.path(),
+                            npmProxy,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)
+                            ),
+                            cfg.name(),
+                            cfg.type(),
+                            this.cooldown,
+                            new com.artipie.http.client.UriClientSlice(clientSlices, npmRemoteUri),
+                            Optional.of(cfg.url())
                         ),
-                        cfg.name(),
-                        cfg.type(),
-                        this.cooldown,
-                        new com.artipie.http.client.UriClientSlice(clientSlices, npmRemoteUri)
+                        settings.httpClientSettings().proxyTimeout()
                     ),
                     authentication(),
                     tokens.auth(),
@@ -407,6 +429,7 @@ public class RepositorySlices {
                 );
                 break;
             case "file-group":
+            case "gem-group":
             case "go-group":
             case "gradle-group":
             case "maven-group":
@@ -429,12 +452,15 @@ public class RepositorySlices {
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new PypiProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata()
-                                .flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
+                        new TimeoutSlice(
+                            new PypiProxy(
+                                clientSlices,
+                                cfg,
+                                settings.artifactMetadata()
+                                    .flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                this.cooldown
+                            ),
+                            settings.httpClientSettings().proxyTimeout()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -463,14 +489,17 @@ public class RepositorySlices {
                 break;
             case "docker-proxy":
                 clientSlices = jettyClientSlices(cfg);
-                slice = new DockerProxy(
-                    clientSlices,
-                    cfg,
-                    securityPolicy(),
-                    authentication(),
-                    tokens.auth(),
-                    artifactEvents(),
-                    this.cooldown
+                slice = new TimeoutSlice(
+                    new DockerProxy(
+                        clientSlices,
+                        cfg,
+                        securityPolicy(),
+                        authentication(),
+                        tokens.auth(),
+                        artifactEvents(),
+                        this.cooldown
+                    ),
+                    settings.httpClientSettings().proxyTimeout()
                 );
                 break;
             case "deb":

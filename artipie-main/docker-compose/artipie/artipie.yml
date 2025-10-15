@@ -31,11 +31,66 @@ meta:
     postgres_database: artifacts
     postgres_user: artipie
     postgres_password: artipie
+  http_client:
+    proxy_timeout: 900  # 15 minutes (in seconds)
+    connection_timeout: 120000  # Connection timeout (milliseconds)
+    idle_timeout: 3600000  # Idle timeout (milliseconds, 0 = infinite)
+    follow_redirects: true
   logging:
-    level: Debug
-#    loggers:
-#      com.artipie.scheduling: INFO
-#      org.quartz: INFO
+    level: INFO
+    loggers:
+      # Artipie core packages
+      com.artipie: INFO
+      com.artipie.asto: INFO
+      com.artipie.composer: INFO
+
+      # Common third-party libraries
+      io.netty: INFO
+      io.vertx: INFO
+      org.apache.http: INFO
+      org.eclipse.jetty: INFO
+      org.asynchttpclient: INFO
+      reactor: INFO
+      org.jooq: INFO
+      org.hibernate: INFO
+      org.quartz: INFO
+      org.springframework: INFO
+      org.h2: INFO
+      ch.qos.logback: INFO
+      org.slf4j: INFO
+
+      # Security-related
+      org.bouncycastle: INFO
+      org.jose4j: INFO
+      io.jsonwebtoken: INFO
+      org.keycloak: INFO
+
+      # Database and persistence
+      org.postgresql: INFO
+      org.mongodb: INFO
+      com.mongodb: INFO
+      org.elasticsearch: INFO
+
+      # Caching
+      com.github.benmanes.caffeine: INFO
+      net.sf.ehcache: INFO
+      org.infinispan: INFO
+
+      # Metrics and monitoring
+      io.micrometer: INFO
+      io.prometheus: INFO
+      com.codahale.metrics: INFO
+
+      # HTTP clients
+      okhttp3: INFO
+      retrofit2: INFO
+      feign: INFO
+
+      # XML/JSON processing
+      com.fasterxml.jackson: INFO
+      com.google.gson: INFO
+      com.thoughtworks.xstream: INFO
+      org.codehaus.jackson: INFO
   metrics:
     endpoint: "/metrics/vertx" # Path of the endpoint, starting with `/`, where the metrics will be served
     port: 8087 # Port to serve the metrics

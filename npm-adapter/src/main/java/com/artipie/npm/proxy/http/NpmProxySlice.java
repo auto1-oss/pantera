@@ -20,6 +20,7 @@ import com.artipie.npm.proxy.NpmProxy;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.cooldown.CooldownService;
 
+import java.net.URL;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -41,11 +42,31 @@ public final class NpmProxySlice implements Slice {
      * @param repoName Repository name
      * @param repoType Repository type
      * @param cooldown Cooldown service
+     * @param remote Remote slice for security audit endpoints
      */
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
         final String repoName, final String repoType, final CooldownService cooldown,
         final com.artipie.http.Slice remote
+    ) {
+        this(path, npm, packages, repoName, repoType, cooldown, remote, Optional.empty());
+    }
+
+    /**
+     * @param path NPM proxy repo path ("" if NPM proxy should handle ROOT context path),
+     *  or, in other words, repository name
+     * @param npm NPM Proxy facade
+     * @param packages Queue with uploaded from remote packages
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
+     * @param remote Remote slice for security audit endpoints
+     * @param baseUrl Base URL for the repository (from configuration)
+     */
+    public NpmProxySlice(
+        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
+        final String repoName, final String repoType, final CooldownService cooldown,
+        final com.artipie.http.Slice remote, final Optional<URL> baseUrl
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
@@ -57,7 +78,7 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadPackageSlice(npm, ppath)
+                    new DownloadPackageSlice(npm, ppath, baseUrl)
                 )
             ),
             new RtRulePath(

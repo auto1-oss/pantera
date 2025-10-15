@@ -13,11 +13,19 @@ services:
       - ARTIPIE_USER_NAME=artipie
       - ARTIPIE_USER_PASS=artipie
       - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+      - HOME=/home/
+      - AWS_CONFIG_FILE=/home/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/.aws/credentials
+      - AWS_SDK_LOAD_CONFIG=1
+      - AWS_PROFILE=shared-services-qa-devops
+      - AWS_REGION=eu-west-1
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./artipie/repo:/var/artipie/repo
       - ./artipie/security:/var/artipie/security
       - ./artipie/data:/var/artipie/data
+      - ./artipie/cache:/var/artipie/cache
+      - ~/.aws:/home/.aws
     networks:
       - artipie-net
     ports:

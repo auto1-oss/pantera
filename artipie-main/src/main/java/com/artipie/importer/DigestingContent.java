@@ -71,9 +71,26 @@ final class DigestingContent implements Content {
                 this.total.addAndGet(chunk.length);
                 return buffer;
             })
-            .doOnError(this.result::completeExceptionally)
-            .doOnComplete(() -> this.result.complete(new DigestResult(this.total.get(), this.digestHex())))
+            .doOnError(err -> {
+                this.result.completeExceptionally(err);
+                // Ensure cleanup on error
+                this.cleanup();
+            })
+            .doOnComplete(() -> {
+                this.result.complete(new DigestResult(this.total.get(), this.digestHex()));
+                // Ensure cleanup on completion
+                this.cleanup();
+            })
+            .doOnCancel(this::cleanup)  // Cleanup on cancellation
             .subscribe(subscriber);
+    }
+
+    /**
+     * Cleanup resources.
+     */
+    private void cleanup() {
+        // Clear digest instances to free memory
+        this.digests.clear();
     }
 
     @Override

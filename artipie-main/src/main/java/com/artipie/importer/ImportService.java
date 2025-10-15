@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -160,13 +161,11 @@ public final class ImportService {
                 .thenCompose(
                     result -> finalizeImport(request, session, st, staging, target, quarantine, result)
                 )
-        ).toCompletableFuture().handle((result, err) -> {
-            if (err != null) {
-                LOG.error("Import failed for {} :: {}", request.repo(), request.path(), err);
-                this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));
-                throw new CompletionException(err);
-            }
-            return result;
+                .orTimeout(5, TimeUnit.MINUTES)  // Add timeout to prevent hanging futures
+        ).toCompletableFuture().exceptionally(err -> {
+            LOG.error("Import failed for {} :: {}: {}", request.repo(), request.path(), err.getMessage());
+            this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));
+            throw new CompletionException(err);
         });
     }
 

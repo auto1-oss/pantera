@@ -29,12 +29,27 @@ final class ProgressTracker implements AutoCloseable {
         this.completed = Collections.synchronizedSet(new HashSet<>());
         this.lock = new Object();
         if (resume && Files.exists(log)) {
-            Files.readAllLines(log, StandardCharsets.UTF_8).forEach(line -> {
-                final int idx = line.indexOf('|');
-                if (idx > 0) {
-                    this.completed.add(line.substring(0, idx));
-                }
-            });
+            System.out.println("Loading progress log...");
+            final long start = System.currentTimeMillis();
+            int count = 0;
+            // Stream lines instead of loading entire file into memory
+            try (var lines = Files.lines(log, StandardCharsets.UTF_8)) {
+                count = (int) lines
+                    .peek(line -> {
+                        if (this.completed.size() % 10000 == 0 && this.completed.size() > 0) {
+                            System.out.printf("  Loaded %d completed tasks...%n", this.completed.size());
+                        }
+                    })
+                    .map(line -> {
+                        final int idx = line.indexOf('|');
+                        return idx > 0 ? line.substring(0, idx) : null;
+                    })
+                    .filter(key -> key != null)
+                    .peek(this.completed::add)
+                    .count();
+            }
+            final long elapsed = System.currentTimeMillis() - start;
+            System.out.printf("Loaded %d completed tasks in %.2f seconds%n", count, elapsed / 1000.0);
         }
         this.writer = Files.newBufferedWriter(log, StandardCharsets.UTF_8,
             StandardOpenOption.CREATE, StandardOpenOption.APPEND);
