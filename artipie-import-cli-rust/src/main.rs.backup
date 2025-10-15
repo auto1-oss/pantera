@@ -1,0 +1,441 @@
+use anyhow::Result;
+use clap::Parser;
+use futures::stream::{self, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
+use reqwest::Client;
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
+use tokio::sync::Semaphore;
+use walkdir::WalkDir;
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "artipie-import-cli")]
+#[command(about = "High-performance Artipie artifact importer")]
+struct Args {
+    /// Artipie server URL
+    #[arg(long)]
+    url: String,
+
+    /// Export directory containing artifacts
+    #[arg(long)]
+    export_dir: PathBuf,
+
+    /// Authentication token
+    #[arg(long)]
+    token: String,
+
+    /// Maximum concurrent uploads
+    #[arg(long, default_value = "100")]
+    concurrency: usize,
+
+    /// Batch size for processing
+    #[arg(long, default_value = "500")]
+    batch_size: usize,
+
+    /// Progress log file
+    #[arg(long, default_value = "progress.log")]
+    progress_log: PathBuf,
+
+    /// Failures directory
+    #[arg(long, default_value = "failed")]
+    failures_dir: PathBuf,
+
+    /// Resume from progress log
+    #[arg(long)]
+    resume: bool,
+
+    /// Request timeout in seconds
+    #[arg(long, default_value = "300")]
+    timeout: u64,
+
+    /// Max retries per file
+    #[arg(long, default_value = "5")]
+    max_retries: u32,
+}
+
+#[derive(Debug, Clone)]
+struct UploadTask {
+    repo_name: String,
+    repo_type: String,
+    relative_path: String,
+    file_path: PathBuf,
+    size: u64,
+    created: u64,
+}
+
+#[derive(Debug)]
+enum UploadStatus {
+    Success,
+    Already,
+    Failed(String),
+}
+
+impl UploadTask {
+    fn idempotency_key(&self) -> String {
+        format!("{}|{}", self.repo_name, self.relative_path)
+    }
+
+    fn compute_checksums(&self) -> Result<(String, String, String)> {
+        let mut file = File::open(&self.file_path)?;
+        let mut md5 = md5::Context::new();
+        let mut sha1 = Sha1::new();
+        let mut sha256 = Sha256::new();
+
+        let mut buffer = [0u8; 8192];
+        loop {
+            let n = std::io::Read::read(&mut file, &mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            md5.consume(&buffer[..n]);
+            sha1.update(&buffer[..n]);
+            sha256.update(&buffer[..n]);
+        }
+
+        Ok((
+            format!("{:x}", md5.compute()),
+            hex::encode(sha1.finalize()),
+            hex::encode(sha256.finalize()),
+        ))
+    }
+}
+
+struct ProgressTracker {
+    completed: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    file: Arc<tokio::sync::Mutex<File>>,
+}
+
+impl ProgressTracker {
+    fn new(log_path: PathBuf, resume: bool) -> Result<Self> {
+        let mut completed = HashSet::new();
+
+        if resume && log_path.exists() {
+            println!("Loading progress log...");
+            let file = File::open(&log_path)?;
+            let reader = BufReader::new(file);
+            for (i, line) in reader.lines().enumerate() {
+                if let Ok(line) = line {
+                    if let Some(key) = line.split('|').next() {
+                        completed.insert(key.to_string());
+                    }
+                }
+                if i % 10000 == 0 && i > 0 {
+                    println!("  Loaded {} completed tasks...", i);
+                }
+            }
+            println!("Loaded {} completed tasks", completed.len());
+        }
+
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+
+        Ok(Self {
+            completed: Arc::new(tokio::sync::Mutex::new(completed)),
+            file: Arc::new(tokio::sync::Mutex::new(file)),
+        })
+    }
+
+    async fn is_completed(&self, key: &str) -> bool {
+        self.completed.lock().await.contains(key)
+    }
+
+    async fn mark_completed(&self, task: &UploadTask) -> Result<()> {
+        let key = task.idempotency_key();
+        let mut completed = self.completed.lock().await;
+        if completed.insert(key.clone()) {
+            let mut file = self.file.lock().await;
+            writeln!(file, "{}|{}|{}", key, task.repo_name, task.relative_path)?;
+            file.flush()?;
+        }
+        Ok(())
+    }
+}
+
+async fn upload_file(
+    client: &Client,
+    task: &UploadTask,
+    args: &Args,
+    progress: &ProgressTracker,
+) -> Result<UploadStatus> {
+    let url = format!("{}/{}/{}", args.url, task.repo_name, task.relative_path);
+
+    // Compute checksums
+    let (md5, sha1, sha256) = task.compute_checksums()?;
+
+    // Read file
+    let file_bytes = tokio::fs::read(&task.file_path).await?;
+
+    for attempt in 1..=args.max_retries {
+        let request = client
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", args.token))
+            .header("X-Repo-Type", &task.repo_type)
+            .header("X-Idempotency-Key", task.idempotency_key())
+            .header("X-Artifact-Size", task.size.to_string())
+            .header("X-Artifact-Created", task.created.to_string())
+            .header("Content-MD5", &md5)
+            .header("X-Checksum-SHA1", &sha1)
+            .header("X-Checksum-SHA256", &sha256)
+            .timeout(Duration::from_secs(args.timeout))
+            .body(file_bytes.clone());
+
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    progress.mark_completed(task).await?;
+                    return Ok(if status.as_u16() == 201 {
+                        UploadStatus::Success
+                    } else {
+                        UploadStatus::Already
+                    });
+                } else if status.as_u16() >= 500 && attempt < args.max_retries {
+                    eprintln!(
+                        "[RETRY] Attempt {}/{} for {} (HTTP {})",
+                        attempt, args.max_retries, task.relative_path, status
+                    );
+                    tokio::time::sleep(Duration::from_millis(1000 * attempt as u64)).await;
+                    continue;
+                } else {
+                    let body = response.text().await.unwrap_or_default();
+                    return Ok(UploadStatus::Failed(format!("HTTP {}: {}", status, body)));
+                }
+            }
+            Err(e) if attempt < args.max_retries => {
+                eprintln!(
+                    "[RETRY] Attempt {}/{} for {}: {}",
+                    attempt, args.max_retries, task.relative_path, e
+                );
+                tokio::time::sleep(Duration::from_millis(1000 * attempt as u64)).await;
+            }
+            Err(e) => {
+                return Ok(UploadStatus::Failed(format!("Request failed: {}", e)));
+            }
+        }
+    }
+
+    Ok(UploadStatus::Failed("Max retries exceeded".to_string()))
+}
+
+fn detect_repo_type(path: &Path) -> String {
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/maven/") {
+        "maven".to_string()
+    } else if path_str.contains("/npm/") {
+        "npm".to_string()
+    } else if path_str.contains("/pypi/") {
+        "pypi".to_string()
+    } else if path_str.contains("/go/") {
+        "go".to_string()
+    } else if path_str.contains("/docker/") {
+        "docker".to_string()
+    } else {
+        "file".to_string()
+    }
+}
+
+fn collect_tasks(export_dir: &Path) -> Result<Vec<UploadTask>> {
+    println!("Scanning for artifacts...");
+    let mut tasks = Vec::new();
+
+    for entry in WalkDir::new(export_dir).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let metadata = entry.metadata()?;
+        let size = metadata.len();
+
+        // Skip checksum files
+        let path_str = path.to_string_lossy();
+        if path_str.ends_with(".md5")
+            || path_str.ends_with(".sha1")
+            || path_str.ends_with(".sha256")
+            || path_str.ends_with(".sha512")
+        {
+            continue;
+        }
+
+        let relative = path.strip_prefix(export_dir)?;
+        let components: Vec<_> = relative.components().collect();
+        if components.is_empty() {
+            continue;
+        }
+
+        let repo_name = components[0].as_os_str().to_string_lossy().to_string();
+        let relative_path = components[1..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        let repo_type = detect_repo_type(path);
+
+        let created = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        tasks.push(UploadTask {
+            repo_name,
+            repo_type,
+            relative_path,
+            file_path: path.to_path_buf(),
+            size,
+            created,
+        });
+
+        if tasks.len() % 10000 == 0 {
+            println!("  Found {} artifacts...", tasks.len());
+        }
+    }
+
+    println!("Found {} total artifacts", tasks.len());
+    Ok(tasks)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    // Create failures directory
+    fs::create_dir_all(&args.failures_dir)?;
+
+    // Initialize progress tracker
+    let progress = Arc::new(ProgressTracker::new(args.progress_log.clone(), args.resume)?);
+
+    // Collect tasks
+    let mut tasks = collect_tasks(&args.export_dir)?;
+
+    // Filter out completed tasks
+    if args.resume {
+        println!("Filtering completed tasks...");
+        let initial_count = tasks.len();
+        let mut filtered = Vec::new();
+        for task in tasks {
+            if !progress.is_completed(&task.idempotency_key()).await {
+                filtered.push(task);
+            }
+        }
+        tasks = filtered;
+        println!(
+            "Skipped {} completed tasks, {} remaining",
+            initial_count - tasks.len(),
+            tasks.len()
+        );
+    }
+
+    if tasks.is_empty() {
+        println!("No tasks to process!");
+        return Ok(());
+    }
+
+    // Create HTTP client
+    let client = Client::builder()
+        .pool_max_idle_per_host(args.concurrency)
+        .timeout(Duration::from_secs(args.timeout))
+        .build()?;
+
+    // Setup progress bar
+    let pb = ProgressBar::new(tasks.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")?
+            .progress_chars("=>-"),
+    );
+
+    println!(
+        "\nStarting upload: {} tasks, {} concurrent, batch size {}",
+        tasks.len(),
+        args.concurrency,
+        args.batch_size
+    );
+
+    // Process in batches with concurrency limit
+    let semaphore = Arc::new(Semaphore::new(args.concurrency));
+    let mut success = 0usize;
+    let mut already = 0usize;
+    let mut failed = 0usize;
+
+    for batch in tasks.chunks(args.batch_size) {
+        let futures = batch.iter().map(|task| {
+            let client = client.clone();
+            let task = task.clone();
+            let args_clone = args.clone();
+            let progress_clone = progress.clone();
+            let semaphore = semaphore.clone();
+            let pb = pb.clone();
+
+            async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                let result = upload_file(&client, &task, &args_clone, &progress_clone).await;
+                pb.inc(1);
+                (task, result)
+            }
+        });
+
+        let results = stream::iter(futures)
+            .buffer_unordered(args.concurrency)
+            .collect::<Vec<_>>()
+            .await;
+
+        for (task, result) in results {
+            match result {
+                Ok(UploadStatus::Success) => {
+                    success += 1;
+                    pb.set_message(format!("✓ {} (created)", task.relative_path));
+                }
+                Ok(UploadStatus::Already) => {
+                    already += 1;
+                    pb.set_message(format!("✓ {} (already)", task.relative_path));
+                }
+                Ok(UploadStatus::Failed(msg)) => {
+                    failed += 1;
+                    pb.set_message(format!("✗ {} ({})", task.relative_path, msg));
+
+                    // Log failure
+                    let failure_file = args.failures_dir.join(format!("{}.txt", task.repo_name));
+                    let mut file = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(failure_file)?;
+                    writeln!(file, "{}|{}", task.relative_path, msg)?;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    failed += 1;
+                    pb.set_message(format!("✗ {} ({})", task.relative_path, msg));
+
+                    // Log failure
+                    let failure_file = args.failures_dir.join(format!("{}.txt", task.repo_name));
+                    let mut file = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(failure_file)?;
+                    writeln!(file, "{}|{}", task.relative_path, msg)?;
+                }
+            }
+        }
+    }
+
+    pb.finish_with_message("Complete!");
+
+    println!("\n=== Summary ===");
+    println!("Success:  {}", success);
+    println!("Already:  {}", already);
+    println!("Failed:   {}", failed);
+    println!("Total:    {}", tasks.len());
+
+    Ok(())
+}

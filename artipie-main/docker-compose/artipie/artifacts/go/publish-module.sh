@@ -88,11 +88,11 @@ export GOPROXY="https://ayd:ayd@localhost:8443/go_group"
 export GOINSECURE="*"
 export GONOSUMDB="$MODULE_PATH"
 
-echo "Attempting to get $MODULE_PATH@$VERSION from proxy..."
+echo "Attempting to get $MODULE_PATH@$VERSION from group..."
 if go get -v "$MODULE_PATH@$VERSION"; then
-    echo "✅ Successfully downloaded $MODULE_PATH@$VERSION from Artipie proxy"
+    echo "✅ Successfully downloaded $MODULE_PATH@$VERSION from Artipie group"
 else
-    echo "❌ Failed to download $MODULE_PATH@$VERSION from Artipie proxy"
+    echo "❌ Failed to download $MODULE_PATH@$VERSION from Artipie group"
     echo "This may be expected if testing upload functionality only"
 fi
 

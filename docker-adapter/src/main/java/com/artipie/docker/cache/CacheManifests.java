@@ -106,7 +106,9 @@ public final class CacheManifests implements Manifests {
                     if (original.isPresent()) {
                         Manifest manifest = original.get();
                         if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
-                            Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType())) {
+                            Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
+                            Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
+                            Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
                             this.copy(ref);
                             result = CompletableFuture.completedFuture(original);
                         } else {

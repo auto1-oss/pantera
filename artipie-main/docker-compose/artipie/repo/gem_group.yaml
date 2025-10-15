@@ -1,0 +1,7 @@
+repo:
+  type: "gem-group"
+  url: http://localhost:8081/gem_group
+  path: gem_group
+  # Resolution order: first match wins
+  members:
+    - gem

@@ -27,6 +27,8 @@ final class ImporterConfig {
     private final int maxRetries;
     private final long backoffMs;
     private final Path report;
+    private final int timeoutMinutes;
+    private final int batchSize;
 
     ImporterConfig(
         final URI server,
@@ -44,7 +46,9 @@ final class ImporterConfig {
         final String owner,
         final int maxRetries,
         final long backoffMs,
-        final Path report
+        final Path report,
+        final int timeoutMinutes,
+        final int batchSize
     ) {
         this.server = Objects.requireNonNull(server);
         this.username = username;
@@ -62,6 +66,8 @@ final class ImporterConfig {
         this.maxRetries = Math.max(1, maxRetries);
         this.backoffMs = Math.max(100L, backoffMs);
         this.report = Objects.requireNonNull(report);
+        this.timeoutMinutes = Math.max(1, timeoutMinutes);
+        this.batchSize = Math.max(1, batchSize);
     }
 
     URI server() {
@@ -126,5 +132,13 @@ final class ImporterConfig {
 
     Path report() {
         return this.report;
+    }
+
+    int timeoutMinutes() {
+        return this.timeoutMinutes;
+    }
+
+    int batchSize() {
+        return this.batchSize;
     }
 }

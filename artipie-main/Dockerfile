@@ -1,14 +1,20 @@
-FROM openjdk:21-oracle
+FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE
 
-LABEL description="Artipie binary repository management tool"
-LABEL maintainer="g4s8.public@gmail.com"
-LABEL maintainer="oleg.mozzhechkov@gmail.com"
 
-RUN groupadd -r -g 2020 artipie && \
-    adduser -M -r -g artipie -u 2021 -s /sbin/nologin artipie && \
-    mkdir -p /etc/artipie /usr/lib/artipie /var/artipie && \
-    chown artipie:artipie -R /etc/artipie /usr/lib/artipie /var/artipie
+ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
+  -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled \
+  -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 \
+  -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError \
+  -XX:HeapDumpPath=/var/artipie/logs/dumps/heapdump.hprof \
+  -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=100m \
+  -Dio.netty.leakDetection.level=simple"
+
+RUN addgroup -g 2020 -S artipie && \
+    adduser -u 2021 -S -G artipie -s /sbin/nologin artipie && \
+    mkdir -p /etc/artipie /usr/lib/artipie /var/artipie/logs/dumps && \
+    chown -R artipie:artipie /etc/artipie /usr/lib/artipie /var/artipie
+
 USER 2021:2020
 
 COPY target/dependency  /usr/lib/artipie/lib

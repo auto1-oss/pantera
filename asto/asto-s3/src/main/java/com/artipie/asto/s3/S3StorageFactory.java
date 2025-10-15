@@ -43,9 +43,10 @@ public final class S3StorageFactory implements StorageFactory {
         final String bucket = new Config.StrictStorageConfig(cfg).string("bucket");
         final boolean multipart = !"false".equals(cfg.string("multipart"));
 
-        final long minmp = optLong(cfg, "multipart-min-bytes").orElse(16L * 1024 * 1024);
-        final int partsize = (int) (long) optLong(cfg, "part-size-bytes").orElse(16L * 1024 * 1024);
-        final int mpconc = optInt(cfg, "multipart-concurrency").orElse(32);
+        // Support both human-readable (e.g., "32MB") and byte values
+        final long minmp = parseSize(cfg, "multipart-min-size", "multipart-min-bytes").orElse(32L * 1024 * 1024);
+        final int partsize = (int) (long) parseSize(cfg, "part-size", "part-size-bytes").orElse(8L * 1024 * 1024);
+        final int mpconc = optInt(cfg, "multipart-concurrency").orElse(16);
 
         final ChecksumAlgorithm algo = Optional
             .ofNullable(cfg.string("checksum"))
@@ -72,9 +73,9 @@ public final class S3StorageFactory implements StorageFactory {
         final String kmsId = sse.isEmpty() ? null : sse.string("kms-key-id");
 
         final boolean enablePdl = "true".equalsIgnoreCase(cfg.string("parallel-download"));
-        final long pdlThreshold = optLong(cfg, "parallel-download-min-bytes").orElse(64L * 1024 * 1024);
-        final int pdlChunk = (int) (long) optLong(cfg, "parallel-download-chunk-bytes").orElse(8L * 1024 * 1024);
-        final int pdlConc = optInt(cfg, "parallel-download-concurrency").orElse(16);
+        final long pdlThreshold = parseSize(cfg, "parallel-download-min-size", "parallel-download-min-bytes").orElse(64L * 1024 * 1024);
+        final int pdlChunk = (int) (long) parseSize(cfg, "parallel-download-chunk-size", "parallel-download-chunk-bytes").orElse(8L * 1024 * 1024);
+        final int pdlConc = optInt(cfg, "parallel-download-concurrency").orElse(8);
 
         final Storage base = new S3Storage(
             S3StorageFactory.s3Client(cfg),
@@ -132,12 +133,13 @@ public final class S3StorageFactory implements StorageFactory {
         final S3AsyncClientBuilder builder = S3AsyncClient.builder();
 
         // HTTP client: Netty async
+        // Increased defaults to handle concurrent S3 operations without connection pool exhaustion
         final Config http = cfg.config("http");
-        final int maxConc = optInt(http, "max-concurrency").orElse(1024);
-        final int maxPend = optInt(http, "max-pending-acquires").orElse(2048);
-        final Duration acqTmo = Duration.ofMillis(optLong(http, "acquisition-timeout-millis").orElse(10_000L));
-        final Duration readTmo = Duration.ofMillis(optLong(http, "read-timeout-millis").orElse(20_000L));
-        final Duration writeTmo = Duration.ofMillis(optLong(http, "write-timeout-millis").orElse(20_000L));
+        final int maxConc = optInt(http, "max-concurrency").orElse(2048);
+        final int maxPend = optInt(http, "max-pending-acquires").orElse(4096);
+        final Duration acqTmo = Duration.ofMillis(optLong(http, "acquisition-timeout-millis").orElse(30_000L));
+        final Duration readTmo = Duration.ofMillis(optLong(http, "read-timeout-millis").orElse(60_000L));
+        final Duration writeTmo = Duration.ofMillis(optLong(http, "write-timeout-millis").orElse(60_000L));
         final Duration idleMax = Duration.ofMillis(optLong(http, "connection-max-idle-millis").orElse(60_000L));
 
         final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder()
@@ -271,6 +273,47 @@ public final class S3StorageFactory implements StorageFactory {
             return val == null ? Optional.empty() : Optional.of(Long.parseLong(val));
         } catch (final Exception err) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Parse size from config supporting human-readable format (e.g., "32MB", "1GB").
+     * Falls back to legacy byte-based key for backward compatibility.
+     *
+     * @param cfg Configuration
+     * @param newKey New human-readable key (e.g., "part-size")
+     * @param legacyKey Legacy byte key (e.g., "part-size-bytes")
+     * @return Size in bytes
+     */
+    private static Optional<Long> parseSize(final Config cfg, final String newKey, final String legacyKey) {
+        // Try new human-readable format first
+        final String newVal = cfg.string(newKey);
+        if (newVal != null) {
+            return Optional.of(parseSizeString(newVal));
+        }
+        // Fall back to legacy byte format
+        return optLong(cfg, legacyKey);
+    }
+
+    /**
+     * Parse human-readable size string to bytes.
+     * Supports: KB, MB, GB (case-insensitive)
+     * Examples: "32MB", "1GB", "512KB", "1024" (bytes)
+     *
+     * @param size Size string
+     * @return Size in bytes
+     */
+    private static long parseSizeString(final String size) {
+        final String upper = size.trim().toUpperCase();
+        if (upper.endsWith("GB")) {
+            return Long.parseLong(upper.substring(0, upper.length() - 2).trim()) * 1024 * 1024 * 1024;
+        } else if (upper.endsWith("MB")) {
+            return Long.parseLong(upper.substring(0, upper.length() - 2).trim()) * 1024 * 1024;
+        } else if (upper.endsWith("KB")) {
+            return Long.parseLong(upper.substring(0, upper.length() - 2).trim()) * 1024;
+        } else {
+            // Assume bytes if no unit
+            return Long.parseLong(upper);
         }
     }
 }

@@ -10,7 +10,8 @@
     "lodash": "^4.17.21",
     "nailgun": "^1.0.32",
     "express": "^4.18.2",
-    "moment": "^2.29.4"
+    "moment": "^2.29.4",
+    "awaitter-lite": "^1.0.8"
   },
   "publishConfig": {
     "registry": "http://localhost:8081/npm"

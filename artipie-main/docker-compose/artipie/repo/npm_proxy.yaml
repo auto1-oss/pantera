@@ -1,5 +1,6 @@
 repo:
   type: "npm-proxy"
+  url: http://localhost:8081/npm_proxy
   path: npm_proxy
   settings:
     remote:

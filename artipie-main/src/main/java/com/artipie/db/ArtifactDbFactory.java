@@ -342,7 +342,7 @@ public final class ArtifactDbFactory {
                     "\n",
                     "CREATE TABLE IF NOT EXISTS import_sessions(",
                     "   id BIGSERIAL PRIMARY KEY,",
-                    "   idempotency_key VARCHAR(200) NOT NULL UNIQUE,",
+                    "   idempotency_key VARCHAR(1000) NOT NULL UNIQUE,",
                     "   repo_name VARCHAR NOT NULL,",
                     "   repo_type VARCHAR NOT NULL,",
                     "   artifact_path TEXT NOT NULL,",
