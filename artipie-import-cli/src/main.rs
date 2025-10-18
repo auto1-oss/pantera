@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use clap::Parser;
 use futures::stream::{self, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::{Mutex, Semaphore};
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
@@ -88,6 +89,10 @@ struct Args {
     /// Report file path
     #[arg(long, default_value = "import_report.json")]
     report: PathBuf,
+
+    /// Checksum policy: COMPUTE, METADATA, or SKIP
+    #[arg(long, default_value = "SKIP")]
+    checksum_policy: String,
 }
 
 #[derive(Debug, Clone)]
@@ -113,17 +118,19 @@ impl UploadTask {
         format!("{}|{}", self.repo_name, self.relative_path)
     }
 
-    fn compute_checksums(&self) -> Result<(String, String, String)> {
-        let mut file = File::open(&self.file_path)
+    async fn compute_checksums(&self) -> Result<(String, String, String)> {
+        use tokio::io::AsyncReadExt;
+        
+        let mut file = tokio::fs::File::open(&self.file_path).await
             .with_context(|| format!("Failed to open file: {:?}", self.file_path))?;
         
         let mut md5 = md5::Context::new();
         let mut sha1 = Sha1::new();
         let mut sha256 = Sha256::new();
 
-        let mut buffer = [0u8; 65536]; // 64KB buffer for better performance
+        let mut buffer = vec![0u8; 65536]; // 64KB buffer for better performance
         loop {
-            let n = std::io::Read::read(&mut file, &mut buffer)?;
+            let n = file.read(&mut buffer).await?;
             if n == 0 {
                 break;
             }
@@ -142,7 +149,7 @@ impl UploadTask {
 
 struct ProgressTracker {
     completed: Arc<Mutex<HashSet<String>>>,
-    file: Arc<Mutex<File>>,
+    file: Arc<Mutex<std::io::BufWriter<File>>>,
     success_count: Arc<AtomicUsize>,
     already_count: Arc<AtomicUsize>,
     failed_count: Arc<AtomicUsize>,
@@ -181,7 +188,7 @@ impl ProgressTracker {
 
         Ok(Self {
             completed: Arc::new(Mutex::new(completed)),
-            file: Arc::new(Mutex::new(file)),
+            file: Arc::new(Mutex::new(std::io::BufWriter::with_capacity(1024 * 1024, file))),
             success_count: Arc::new(AtomicUsize::new(0)),
             already_count: Arc::new(AtomicUsize::new(0)),
             failed_count: Arc::new(AtomicUsize::new(0)),
@@ -203,9 +210,9 @@ impl ProgressTracker {
         let mut completed = self.completed.lock().await;
         
         if completed.insert(key.clone()) {
-            let mut file = self.file.lock().await;
+            let mut bufw = self.file.lock().await;
             writeln!(
-                file,
+                bufw,
                 "{}|{}|{}|{}",
                 key,
                 task.repo_name,
@@ -217,7 +224,14 @@ impl ProgressTracker {
                     UploadStatus::Quarantined(_) => "quarantined",
                 }
             )?;
-            file.flush()?;
+            // Periodic flush to reduce syscall overhead
+            let done = self.success_count.load(Ordering::Relaxed)
+                + self.already_count.load(Ordering::Relaxed)
+                + self.failed_count.load(Ordering::Relaxed)
+                + self.quarantine_count.load(Ordering::Relaxed);
+            if done % 1000 == 0 {
+                bufw.flush()?;
+            }
         }
 
         // Update counters
@@ -469,6 +483,38 @@ impl SummaryTracker {
     }
 }
 
+// Attempt to load checksum values from sidecar files ("file.ext.sha1" etc.)
+async fn read_sidecar_checksums(path: &Path) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let mut md5: Option<String> = None;
+    let mut sha1: Option<String> = None;
+    let mut sha256: Option<String> = None;
+
+    let read_first_token = |p: &Path| -> Result<Option<String>> {
+        if !p.exists() {
+            return Ok(None);
+        }
+        let f = File::open(p)?;
+        let mut reader = BufReader::new(f);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        if line.trim().is_empty() {
+            return Ok(None);
+        }
+        let token = line.split_whitespace().next().unwrap_or("").trim().to_lowercase();
+        Ok(if token.is_empty() { None } else { Some(token) })
+    };
+
+    if let Some(stem) = path.file_name().and_then(|n| n.to_str()) {
+        let md5p = path.with_file_name(format!("{}.md5", stem));
+        let sha1p = path.with_file_name(format!("{}.sha1", stem));
+        let sha256p = path.with_file_name(format!("{}.sha256", stem));
+        md5 = read_first_token(&md5p)?;
+        sha1 = read_first_token(&sha1p)?;
+        sha256 = read_first_token(&sha256p)?;
+    }
+    Ok((md5, sha1, sha256))
+}
+
 async fn upload_file(
     client: &Client,
     task: &UploadTask,
@@ -478,36 +524,56 @@ async fn upload_file(
     // Use /.import/ endpoint like Java CLI - this is critical!
     let url = format!("{}/.import/{}/{}", args.url, task.repo_name, task.relative_path);
 
-    debug!("Computing checksums for {:?}", task.file_path);
-    let (md5, sha1, sha256) = task.compute_checksums()
-        .with_context(|| format!("Failed to compute checksums for {:?}", task.file_path))?;
+    // Resolve checksum policy and values
+    let policy = args.checksum_policy.trim().to_uppercase();
+    let (md5, sha1, sha256): (Option<String>, Option<String>, Option<String>) = match policy.as_str() {
+        // Only compute when explicitly requested
+        "COMPUTE" => {
+            debug!("Computing checksums for {:?}", task.file_path);
+            let (m, s1, s256) = task.compute_checksums().await
+                .with_context(|| format!("Failed to compute checksums for {:?}", task.file_path))?;
+            (Some(m), Some(s1), Some(s256))
+        }
+        // Prefer sidecar files if present
+        "METADATA" => {
+            match read_sidecar_checksums(&task.file_path).await {
+                Ok((m, s1, s256)) => (m, s1, s256),
+                Err(_) => (None, None, None),
+            }
+        }
+        // SKIP or unknown: do not send checksum headers
+        _ => (None, None, None),
+    };
 
-    debug!("Reading file {:?}", task.file_path);
-    let file_bytes = tokio::fs::read(&task.file_path).await
-        .with_context(|| format!("Failed to read file: {:?}", task.file_path))?;
+    // Determine authorization header once (outside retry loop)
+    let auth_header = if let (Some(user), Some(pass)) = (&args.username, &args.password) {
+        // Basic authentication
+        let credentials = format!("{}:{}", user, pass);
+        let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
+        format!("Basic {}", encoded)
+    } else if let Some(token) = &args.token {
+        // Bearer token authentication
+        format!("Bearer {}", token)
+    } else {
+        return Err(anyhow::anyhow!(
+            "Either --token or both --username and --password must be provided"
+        ));
+    };
 
     for attempt in 1..=args.max_retries {
         debug!("Attempt {}/{} for {}", attempt, args.max_retries, task.relative_path);
         
-        // Determine authorization header
-        let auth_header = if let (Some(user), Some(pass)) = (&args.username, &args.password) {
-            // Basic authentication
-            let credentials = format!("{}:{}", user, pass);
-            let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-            format!("Basic {}", encoded)
-        } else if let Some(token) = &args.token {
-            // Bearer token authentication
-            format!("Bearer {}", token)
-        } else {
-            return Err(anyhow::anyhow!(
-                "Either --token or both --username and --password must be provided"
-            ));
-        };
+        // Open file and stream body without loading into memory
+        debug!("Opening file {:?}", task.file_path);
+        let file = tokio::fs::File::open(&task.file_path).await
+            .with_context(|| format!("Failed to open file: {:?}", task.file_path))?;
+        let stream = ReaderStream::new(file);
+        let body = reqwest::Body::wrap_stream(stream);
 
         // Build request with headers matching Java CLI exactly
-        let request = client
+        let mut request = client
             .put(&url)
-            .header("Authorization", auth_header)
+            .header("Authorization", &auth_header)
             // Core Artipie import headers (must match Java CLI)
             .header("X-Artipie-Repo-Type", &task.repo_type)
             .header("X-Artipie-Idempotency-Key", task.idempotency_key())
@@ -516,13 +582,22 @@ async fn upload_file(
             .header("X-Artipie-Artifact-Owner", "admin")  // TODO: Make configurable
             .header("X-Artipie-Artifact-Size", task.size.to_string())
             .header("X-Artipie-Artifact-Created", task.created.to_string())
-            .header("X-Artipie-Checksum-Mode", "COMPUTE")
-            // Checksums
-            .header("X-Artipie-Checksum-Md5", &md5)
-            .header("X-Artipie-Checksum-Sha1", &sha1)
-            .header("X-Artipie-Checksum-Sha256", &sha256)
+            .header("X-Artipie-Checksum-Mode", policy.as_str())
             .timeout(Duration::from_secs(args.timeout))
-            .body(file_bytes.clone());
+            // Provide Content-Length to avoid server-side temp spooling
+            .header(reqwest::header::CONTENT_LENGTH, task.size.to_string())
+            .body(body);
+
+        // Optionally attach checksum headers when present
+        if let Some(v) = md5.as_ref() {
+            request = request.header("X-Artipie-Checksum-Md5", v);
+        }
+        if let Some(v) = sha1.as_ref() {
+            request = request.header("X-Artipie-Checksum-Sha1", v);
+        }
+        if let Some(v) = sha256.as_ref() {
+            request = request.header("X-Artipie-Checksum-Sha256", v);
+        }
 
         match request.send().await {
             Ok(response) => {
@@ -672,7 +747,7 @@ fn collect_tasks(export_dir: &Path) -> Result<Vec<UploadTask>> {
             .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
+            .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
         tasks.push(UploadTask {
@@ -848,7 +923,7 @@ async fn main() -> Result<()> {
     // Determine concurrency
     let concurrency = args.concurrency.unwrap_or_else(|| {
         let cpus = num_cpus::get();
-        let default = cpus * 50;
+        let default = std::cmp::max(32, cpus * 16);
         info!("Auto-detected {} CPU cores, using {} concurrent tasks", cpus, default);
         default
     });
@@ -923,8 +998,6 @@ async fn main() -> Result<()> {
         .pool_idle_timeout(Duration::from_secs(90))
         .timeout(Duration::from_secs(args.timeout))
         .tcp_keepalive(Duration::from_secs(60))
-        .http2_keep_alive_interval(Duration::from_secs(30))
-        .http2_keep_alive_timeout(Duration::from_secs(20))
         .build()
         .context("Failed to create HTTP client")?;
 

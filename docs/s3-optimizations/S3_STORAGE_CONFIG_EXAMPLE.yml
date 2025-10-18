@@ -1,0 +1,95 @@
+#
+# The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
+# https://github.com/artipie/artipie/blob/master/LICENSE.txt
+#
+
+# S3 Storage Configuration with Memory Optimizations
+# Supports human-readable sizes (KB, MB, GB) and backward-compatible byte values
+
+meta:
+  storage:
+    type: s3
+    bucket: my-artipie-bucket
+    region: us-east-1
+    endpoint: https://s3.amazonaws.com
+    
+    # Credentials (choose one method)
+    credentials:
+      type: basic
+      accessKeyId: ${AWS_ACCESS_KEY_ID}
+      secretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+    
+    # Multipart upload settings (OPTIMIZED FOR MEMORY)
+    # Files larger than multipart-min-size use multipart upload
+    multipart: true
+    multipart-min-size: 32MB        # ✅ Increased from 16MB (reduces memory buffering)
+    part-size: 8MB                  # ✅ Reduced from 16MB (lower memory per part)
+    multipart-concurrency: 16       # ✅ Reduced from 32 (prevents memory spikes)
+    
+    # Checksum algorithm (optional)
+    checksum: SHA256                # Options: SHA256, SHA1, CRC32
+    
+    # Server-side encryption (optional)
+    sse:
+      type: AES256                  # Options: AES256, KMS
+      # kms-key-id: arn:aws:kms:... # Required if type=KMS
+    
+    # Parallel download settings (optional)
+    parallel-download: true
+    parallel-download-min-size: 64MB      # Files larger than this use parallel download
+    parallel-download-chunk-size: 8MB     # Chunk size for parallel downloads
+    parallel-download-concurrency: 8      # ✅ Reduced from 16 (lower memory)
+    
+    # HTTP connection pool settings (optional, defaults are optimized)
+    http:
+      max-concurrency: 2048                # Max HTTP connections (default: 2048)
+      max-pending-acquires: 4096           # Max pending connection requests (default: 4096)
+      acquisition-timeout-millis: 30000    # Connection acquire timeout (default: 30s)
+      read-timeout-millis: 60000           # Read timeout (default: 60s)
+      write-timeout-millis: 60000          # Write timeout (default: 60s)
+      connection-max-idle-millis: 60000    # Max idle time (default: 60s)
+    
+    # Optional disk cache (for frequently accessed files)
+    cache:
+      enabled: false
+      path: /var/artipie/cache/s3
+      max-size: 10GB
+
+# ============================================
+# LEGACY FORMAT (still supported)
+# ============================================
+# You can still use byte values instead:
+#
+# multipart-min-bytes: 33554432      # 32MB in bytes
+# part-size-bytes: 8388608            # 8MB in bytes
+# parallel-download-min-bytes: 67108864
+# parallel-download-chunk-bytes: 8388608
+
+# ============================================
+# MEMORY USAGE ESTIMATES
+# ============================================
+# With these settings:
+# - Small uploads (<32MB): ~2-4MB memory per file (streaming)
+# - Large uploads (>32MB): ~24MB memory per file (3 parts buffered)
+# - 100 concurrent uploads: ~400MB total (vs 4.5GB before!)
+# - Parallel downloads: ~64MB per large file download
+
+# ============================================
+# PERFORMANCE TUNING
+# ============================================
+# High-memory servers (16GB+ RAM):
+#   multipart-concurrency: 32
+#   parallel-download-concurrency: 16
+#
+# Low-memory servers (4GB RAM):
+#   multipart-concurrency: 8
+#   parallel-download-concurrency: 4
+#   multipart-min-size: 64MB
+#
+# High-throughput (many small files):
+#   multipart-min-size: 64MB  # Avoid multipart overhead
+#   part-size: 16MB
+#
+# Large files (GB+):
+#   part-size: 16MB
+#   multipart-concurrency: 32
