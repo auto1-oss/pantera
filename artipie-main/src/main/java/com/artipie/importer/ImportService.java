@@ -161,7 +161,8 @@ public final class ImportService {
                 .thenCompose(
                     result -> finalizeImport(request, session, st, staging, target, quarantine, result)
                 )
-                .orTimeout(5, TimeUnit.MINUTES)  // Add timeout to prevent hanging futures
+                // Configurable import timeout (default: 30 minutes)
+                .orTimeout(Long.getLong("artipie.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
             LOG.error("Import failed for {} :: {}: {}", request.repo(), request.path(), err.getMessage());
             this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));

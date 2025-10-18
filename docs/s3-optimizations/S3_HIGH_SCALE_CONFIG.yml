@@ -1,0 +1,160 @@
+#
+# The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
+# https://github.com/artipie/artipie/blob/master/LICENSE.txt
+#
+
+# S3 Storage Configuration for HIGH SCALE
+# Optimized for: 5M artifacts, 200M requests/month (30% uploads, 70% reads)
+# Expected load: ~1,400 req/sec peak, ~460 req/sec average
+
+meta:
+  storage:
+    type: s3
+    bucket: artipie-artifacts
+    region: eu-west-1
+    # Use VPC endpoint for cost savings and lower latency
+    # endpoint: https://s3.eu-west-1.amazonaws.com  # Optional, auto-detected
+    
+    credentials:
+      type: profile
+      profile: shared-services-qa-devops
+    
+    # ============================================
+    # MULTIPART UPLOAD SETTINGS (HIGH SCALE)
+    # ============================================
+    multipart: true
+    multipart-min-size: 64MB        # Higher threshold = less multipart overhead
+    part-size: 16MB                 # Larger parts = fewer S3 requests
+    multipart-concurrency: 64       # High concurrency for 417 uploads/sec peak
+    
+    # Checksum for data integrity
+    checksum: SHA256
+    
+    # Server-side encryption
+    sse:
+      type: AES256
+    
+    # ============================================
+    # PARALLEL DOWNLOAD SETTINGS (HIGH SCALE)
+    # ============================================
+    parallel-download: true
+    parallel-download-min-size: 128MB     # Only large files use parallel
+    parallel-download-chunk-size: 16MB    # Larger chunks = fewer requests
+    parallel-download-concurrency: 32     # Handle 972 downloads/sec peak
+    
+    # ============================================
+    # HTTP CONNECTION POOL (HIGH SCALE)
+    # ============================================
+    http:
+      max-concurrency: 4096                # 2x connections for peak load
+      max-pending-acquires: 8192           # 2x pending requests
+      acquisition-timeout-millis: 45000    # 45s timeout for high load
+      read-timeout-millis: 120000          # 2min for large files
+      write-timeout-millis: 120000         # 2min for large uploads
+      connection-max-idle-millis: 120000   # Keep connections alive longer
+    
+    # ============================================
+    # DISK CACHE (CRITICAL FOR 70% READS!)
+    # ============================================
+    cache:
+      enabled: true
+      path: /var/artipie/cache
+      max-size: 500GB                      # Cache hot artifacts (adjust based on disk)
+      eviction-policy: LFU                 # Least Frequently Used (better for reads)
+      cleanup-interval-millis: 600000      # 10min cleanup interval
+      high-watermark-percent: 90           # Start eviction at 90%
+      low-watermark-percent: 80            # Evict down to 80%
+      validate-on-read: false              # Skip validation for performance
+
+# ============================================
+# INFRASTRUCTURE REQUIREMENTS
+# ============================================
+# 
+# Container Resources:
+#   CPU: 8-16 cores
+#   Memory: 16-32GB RAM
+#   Disk: 500GB-1TB SSD (for cache)
+#   Network: 10Gbps (or VPC endpoint)
+#
+# JVM Settings:
+#   -Xms16g -Xmx24g
+#   -XX:+UseG1GC
+#   -XX:MaxGCPauseMillis=200
+#   -XX:ParallelGCThreads=8
+#   -XX:ConcGCThreads=2
+#   -XX:+UseStringDeduplication
+#
+# Kubernetes (if applicable):
+#   replicas: 3-5 (for HA)
+#   resources:
+#     requests:
+#       cpu: 4
+#       memory: 16Gi
+#     limits:
+#       cpu: 16
+#       memory: 32Gi
+#   hpa:
+#     minReplicas: 3
+#     maxReplicas: 10
+#     targetCPU: 70%
+#
+# S3 Bucket Settings:
+#   - Enable S3 Transfer Acceleration (if global traffic)
+#   - Use S3 Intelligent-Tiering for cost optimization
+#   - Enable S3 bucket versioning for safety
+#   - Set lifecycle policy: Delete incomplete multipart uploads after 7 days
+#
+# Monitoring:
+#   - Track cache hit rate (target: >80% for reads)
+#   - Monitor S3 request rate (stay under 5,500 req/sec per prefix)
+#   - Alert on connection pool exhaustion
+#   - Track P99 latency (target: <500ms for cached, <2s for S3)
+
+# ============================================
+# COST OPTIMIZATION
+# ============================================
+#
+# With 200M requests/month:
+#   - Without cache: ~$1,000/month in S3 requests
+#   - With 80% cache hit: ~$200/month in S3 requests
+#   - Cache saves: ~$800/month!
+#
+# S3 Storage (5M artifacts, avg 10MB):
+#   - 50TB storage: ~$1,150/month (Standard)
+#   - 50TB storage: ~$625/month (Intelligent-Tiering)
+#
+# Data Transfer (70% reads, 140M/month):
+#   - Without VPC endpoint: ~$12,600/month
+#   - With VPC endpoint: $0/month
+#   - VPC endpoint saves: ~$12,600/month!
+#
+# Total Monthly Cost Estimate:
+#   - Optimized: ~$825/month (Intelligent-Tiering + VPC + Cache)
+#   - Unoptimized: ~$14,750/month
+#   - Savings: ~$13,925/month (94% reduction!)
+
+# ============================================
+# PERFORMANCE EXPECTATIONS
+# ============================================
+#
+# With this configuration:
+#   - Cache hit rate: 80-90% (for 70% read workload)
+#   - Cached read latency: 10-50ms (P99)
+#   - S3 read latency: 100-500ms (P99)
+#   - Upload latency: 200-2000ms (depends on size)
+#   - Throughput: 2,000+ req/sec sustained
+#   - Peak capacity: 5,000+ req/sec burst
+
+# ============================================
+# SCALING STRATEGY
+# ============================================
+#
+# Current scale (200M/month):
+#   - Single instance: OK with cache
+#   - 3 instances: Recommended for HA
+#
+# Future scale (1B/month):
+#   - 5-10 instances with load balancer
+#   - Distributed cache (Redis/Memcached)
+#   - S3 prefix sharding (avoid hot partitions)
+#   - Consider CDN (CloudFront) for global reads
