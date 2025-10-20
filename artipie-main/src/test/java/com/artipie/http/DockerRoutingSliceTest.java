@@ -202,5 +202,15 @@ final class DockerRoutingSliceTest {
         public Optional<DataSource> artifactsDatabase() {
             return Optional.empty();
         }
+
+        @Override
+        public com.artipie.settings.PrefixesConfig prefixes() {
+            return new com.artipie.settings.PrefixesConfig();
+        }
+
+        @Override
+        public java.nio.file.Path configPath() {
+            return java.nio.file.Paths.get("/tmp/test-artipie.yaml");
+        }
     }
 }

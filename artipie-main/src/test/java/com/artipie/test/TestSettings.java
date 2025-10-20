@@ -19,6 +19,7 @@ import com.artipie.security.policy.Policy;
 import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.LoggingContext;
 import com.artipie.settings.MetricsContext;
+import com.artipie.settings.PrefixesConfig;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
 import java.util.Optional;
@@ -164,5 +165,15 @@ public final class TestSettings implements Settings {
     @Override
     public Optional<DataSource> artifactsDatabase() {
         return Optional.empty();
+    }
+
+    @Override
+    public PrefixesConfig prefixes() {
+        return new PrefixesConfig();
+    }
+
+    @Override
+    public java.nio.file.Path configPath() {
+        return java.nio.file.Paths.get("/tmp/test-artipie.yaml");
     }
 }

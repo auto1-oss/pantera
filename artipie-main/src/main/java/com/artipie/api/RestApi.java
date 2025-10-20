@@ -79,6 +79,11 @@ public final class RestApi extends AbstractVerticle {
     private final CooldownService cooldown;
 
     /**
+     * Artipie settings.
+     */
+    private final Settings settings;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -96,7 +101,8 @@ public final class RestApi extends AbstractVerticle {
         final Optional<KeyStore> keystore,
         final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
-        final CooldownService cooldown
+        final CooldownService cooldown,
+        final Settings settings
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -106,6 +112,7 @@ public final class RestApi extends AbstractVerticle {
         this.jwt = jwt;
         this.events = events;
         this.cooldown = cooldown;
+        this.settings = settings;
     }
 
     /**
@@ -118,7 +125,8 @@ public final class RestApi extends AbstractVerticle {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata(),
-            CooldownSupport.create(settings)
+            CooldownSupport.create(settings),
+            settings
         );
     }
 
@@ -173,7 +181,7 @@ public final class RestApi extends AbstractVerticle {
                 ).init(rolesRb);
             }
         }
-        new SettingsRest(this.port).init(settingsRb);
+        new SettingsRest(this.port, this.settings).init(settingsRb);
         final Router router = repoRb.createRouter();
         router.route("/*").subRouter(rolesRb.createRouter());
         router.route("/*").subRouter(userRb.createRouter());

@@ -94,6 +94,11 @@ public final class VertxMain {
     private final Map<Integer, Http3Server> http3;
 
     /**
+     * Config watch service for hot reload.
+     */
+    private com.artipie.settings.ConfigWatchService configWatch;
+
+    /**
      * Ctor.
      *
      * @param config Config file path.
@@ -190,6 +195,18 @@ public final class VertxMain {
         vertx.deployVerticle(new RestApi(settings, apiPort, jwt));
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
+        
+        // Start config watch service for hot reload
+        try {
+            this.configWatch = new com.artipie.settings.ConfigWatchService(
+                this.config, settings.prefixes()
+            );
+            this.configWatch.start();
+            LOGGER.info("Config watch service started for hot reload");
+        } catch (final IOException ex) {
+            LOGGER.error("Failed to start config watch service", ex);
+        }
+        
         return main;
     }
 
@@ -200,6 +217,9 @@ public final class VertxMain {
         });
         if (quartz != null) {
             quartz.stop();
+        }
+        if (this.configWatch != null) {
+            this.configWatch.close();
         }
     }
 

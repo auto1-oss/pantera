@@ -14,7 +14,7 @@
     <repositories>
         <repository>
             <id>artipie-proxy</id>
-            <url>http://localhost:8081/maven_group</url>
+            <url>http://localhost:8081/artifactory/maven_group</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -28,7 +28,7 @@
     <pluginRepositories>
         <pluginRepository>
             <id>artipie-proxy</id>
-            <url>http://localhost:8081/maven_group</url>
+            <url>http://localhost:8081/artifactory/maven_group</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -42,12 +42,12 @@
     <distributionManagement>
         <repository>
             <id>mvn-local</id>
-            <url>http://localhost:8081/maven</url>
+            <url>http://localhost:8081/artifactory/maven</url>
             <uniqueVersion>false</uniqueVersion>
         </repository>
         <snapshotRepository>
             <id>mvn-local</id>
-            <url>http://localhost:8081/maven</url>
+            <url>http://localhost:8081/artifactory/maven</url>
             <uniqueVersion>true</uniqueVersion>
         </snapshotRepository>
     </distributionManagement>
@@ -106,14 +106,11 @@
             <version>2.0.13</version>
             <scope>runtime</scope>
         </dependency>
-
         <dependency>
-            <groupId>aws.smithy.kotlin</groupId>
-            <artifactId>telemetry-api</artifactId>
-            <version>1.5.14</version>
-            <scope>runtime</scope>
+            <groupId>io.github.xiaomisum</groupId>
+            <artifactId>ryze</artifactId>
+            <version>6.0.6</version>
         </dependency>
-
     </dependencies>
     <build>
         <plugins>

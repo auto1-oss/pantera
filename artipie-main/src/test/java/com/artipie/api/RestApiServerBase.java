@@ -15,8 +15,10 @@ import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.nuget.RandomFreePort;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.ArtipieSecurity;
+import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.test.TestArtipieCaches;
+import com.artipie.test.TestSettings;
 import com.artipie.test.TestStoragesCache;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -132,6 +134,14 @@ public class RestApiServerBase {
     }
 
     /**
+     * Artipie settings for tests.
+     * @return Settings instance.
+     */
+    Settings settings() {
+        return new TestSettings();
+    }
+
+    /**
      * Save bytes into test storage with provided key.
      * @param key The key
      * @param data Data to save
@@ -206,7 +216,8 @@ public class RestApiServerBase {
                     )
                 ),
                 Optional.empty(),
-                NoopCooldownService.INSTANCE
+                NoopCooldownService.INSTANCE,
+                this.settings()
             ),
             context.succeedingThenComplete()
         );

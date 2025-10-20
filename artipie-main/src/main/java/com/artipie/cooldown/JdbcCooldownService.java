@@ -175,17 +175,31 @@ final class JdbcCooldownService implements CooldownService {
             request.artifact(),
             request.version()
         );
+        // Only block dependencies that are themselves fresh relative to minimumAllowedAge
         if (!deps.isEmpty()) {
-            this.repository.insertDependencies(
-                request.repoType(),
-                request.repoName(),
-                deps,
-                reason,
-                now,
-                blockedUntil,
-                SYSTEM_ACTOR,
-                main.id()
-            );
+            final java.time.Duration minAge = this.settings.minimumAllowedAge();
+            if (!minAge.isZero() && !minAge.isNegative()) {
+                final java.util.Map<CooldownDependency, Optional<Instant>> releases =
+                    inspector.releaseDatesBatch(deps).join();
+                final List<CooldownDependency> freshDeps = deps.stream()
+                    .filter(dep -> {
+                        final Optional<Instant> ts = releases.getOrDefault(dep, Optional.empty());
+                        return ts.isPresent() && ts.get().plus(minAge).isAfter(now);
+                    })
+                    .collect(java.util.stream.Collectors.toList());
+                if (!freshDeps.isEmpty()) {
+                    this.repository.insertDependencies(
+                        request.repoType(),
+                        request.repoName(),
+                        freshDeps,
+                        reason,
+                        now,
+                        blockedUntil,
+                        SYSTEM_ACTOR,
+                        main.id()
+                    );
+                }
+            }
         }
         this.repository.recordAttempt(main.id(), request.requestedBy(), now);
         final List<DbBlockRecord> storedDeps = this.repository.dependenciesOf(main.id());

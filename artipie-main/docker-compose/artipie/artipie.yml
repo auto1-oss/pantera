@@ -1,40 +1,38 @@
-#
-# The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
-# https://github.com/artipie/artipie/blob/master/LICENSE.txt
-#
-
 meta:
   storage:
     type: fs
     path: /var/artipie/repo
   credentials:
-    - type: env
-    - type: artipie
-    - type: keycloak
-      url: http://keycloak:8080
+    -
+      type: env
+    -
+      type: artipie
+    -
+      type: keycloak
+      url: "http://keycloak:8080"
       realm: artipie
-      client-id: artipie
-      client-password: T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ
+      "client-id": artipie
+      "client-password": T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ
   policy:
     type: artipie
     eviction_millis: 180000 # optional, default 3 min
-    storage: # required
+    storage:
       type: fs
       path: /var/artipie/security
   cooldown:
     enabled: true
     # Use duration strings: m = minutes, h = hours, d = days
-    minimum_allowed_age: 7d
+    minimum_allowed_age: 45m
   artifacts_database:
-    postgres_host: artipie-db
+    postgres_host: "artipie-db"
     postgres_port: 5432
     postgres_database: artifacts
     postgres_user: artipie
     postgres_password: artipie
   http_client:
-    proxy_timeout: 900  # 15 minutes (in seconds)
-    connection_timeout: 120000  # Connection timeout (milliseconds)
-    idle_timeout: 3600000  # Idle timeout (milliseconds, 0 = infinite)
+    proxy_timeout: 900 # 15 minutes (in seconds)
+    connection_timeout: 120000 # Connection timeout (milliseconds)
+    idle_timeout: 3600000 # Idle timeout (milliseconds, 0 = infinite)
     follow_redirects: true
   logging:
     level: INFO
@@ -43,7 +41,6 @@ meta:
       com.artipie: INFO
       com.artipie.asto: INFO
       com.artipie.composer: INFO
-
       # Common third-party libraries
       io.netty: INFO
       io.vertx: INFO
@@ -58,43 +55,39 @@ meta:
       org.h2: INFO
       ch.qos.logback: INFO
       org.slf4j: INFO
-
       # Security-related
       org.bouncycastle: INFO
       org.jose4j: INFO
       io.jsonwebtoken: INFO
       org.keycloak: INFO
-
       # Database and persistence
       org.postgresql: INFO
       org.mongodb: INFO
       com.mongodb: INFO
       org.elasticsearch: INFO
-
       # Caching
       com.github.benmanes.caffeine: INFO
       net.sf.ehcache: INFO
       org.infinispan: INFO
-
       # Metrics and monitoring
       io.micrometer: INFO
       io.prometheus: INFO
       com.codahale.metrics: INFO
-
       # HTTP clients
       okhttp3: INFO
       retrofit2: INFO
       feign: INFO
-
       # XML/JSON processing
       com.fasterxml.jackson: INFO
       com.google.gson: INFO
       com.thoughtworks.xstream: INFO
       org.codehaus.jackson: INFO
   metrics:
-    endpoint: "/metrics/vertx" # Path of the endpoint, starting with `/`, where the metrics will be served
+    endpoint: /metrics/vertx # Path of the endpoint, starting with `/`, where the metrics will be served
     port: 8087 # Port to serve the metrics
     types:
-      - jvm # enables jvm-related metrics 
+      - jvm # enables jvm-related metrics
       - storage # enables storage-related metrics
       - http # enables http requests/responses related metrics
+  global_prefixes:
+    - artifactory
