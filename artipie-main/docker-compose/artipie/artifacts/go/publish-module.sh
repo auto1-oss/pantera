@@ -12,7 +12,7 @@ VERSION="v1.0.1"
 ARTIPIE_URL="${ARTIPIE_URL:-https://localhost:8443}"
 ARTIPIE_USER="${ARTIPIE_USER:-ayd}"
 ARTIPIE_PASS="${ARTIPIE_PASS:-ayd}"
-REPO_NAME="${REPO_NAME:-go}"
+REPO_NAME="${REPO_NAME:-artifactory/go}"
 
 echo "Publishing Go module: $MODULE_PATH @ $VERSION"
 echo "Target repository: $ARTIPIE_URL/$REPO_NAME"
@@ -84,7 +84,7 @@ cd test-go-get
 go mod init test-module
 
 # Configure Go to use our proxy
-export GOPROXY="https://ayd:ayd@localhost:8443/go_group"
+export GOPROXY="https://ayd:ayd@localhost:8443/artifactory/go_group"
 export GOINSECURE="*"
 export GONOSUMDB="$MODULE_PATH"
 

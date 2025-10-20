@@ -99,4 +99,16 @@ public interface Settings {
      * @return Optional data source
      */
     Optional<DataSource> artifactsDatabase();
+
+    /**
+     * Global URL prefixes configuration.
+     * @return Prefixes configuration
+     */
+    PrefixesConfig prefixes();
+
+    /**
+     * Path to the artipie.yaml configuration file.
+     * @return Path to config file
+     */
+    java.nio.file.Path configPath();
 }

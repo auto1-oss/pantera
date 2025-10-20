@@ -32,6 +32,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/settings/global_prefixes:
+    get:
+      summary: Get global path prefixes configuration
+      description: Returns the list of global path prefixes and their version
+      operationId: getGlobalPrefixes
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Global prefixes configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalPrefixes'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update global path prefixes configuration
+      description: Updates the global path prefixes list. Validates that prefixes don't conflict with existing repository names.
+      operationId: updateGlobalPrefixes
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefixesList'
+      responses:
+        '200':
+          description: Prefixes updated successfully
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '409':
+          description: Conflict - One or more prefixes match existing repository names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -46,6 +99,34 @@ components:
       properties:
         port:
           type: integer
+    GlobalPrefixes:
+      type: object
+      required:
+        - prefixes
+        - version
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+          description: List of global path prefixes
+          example: ["org1", "org2", "team-alpha"]
+        version:
+          type: integer
+          format: int64
+          description: Configuration version number (increments on each update)
+          example: 5
+    PrefixesList:
+      type: object
+      required:
+        - prefixes
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+          description: List of global path prefixes to set
+          example: ["org1", "org2", "team-alpha"]
     Error:
       type: object
       required:

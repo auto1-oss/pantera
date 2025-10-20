@@ -28,7 +28,7 @@ echo "✓ Created test project"
 echo ""
 echo "2. Setting GOPROXY to use go_group..."
 # Extract URL components and inject credentials
-export GOPROXY="https://ayd:ayd@localhost:8443/go_group"
+export GOPROXY="https://ayd:ayd@localhost:8443/artifactory/go_group"
 export GOINSECURE="*"  # Allow insecure connections for localhost testing
 echo "   GOPROXY=$GOPROXY (with credentials)"
 echo "   GOINSECURE=* (allowing insecure connections)"

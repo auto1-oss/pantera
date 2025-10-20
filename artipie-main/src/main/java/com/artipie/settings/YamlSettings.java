@@ -34,8 +34,10 @@ import com.jcabi.log.Logger;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
@@ -125,6 +127,16 @@ public final class YamlSettings implements Settings {
     private final Optional<DataSource> artifactsDb;
 
     /**
+     * Global URL prefixes configuration.
+     */
+    private final PrefixesConfig prefixesConfig;
+
+    /**
+     * Path to artipie.yaml config file.
+     */
+    private final Path configFilePath;
+
+    /**
      * Ctor.
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
@@ -132,6 +144,8 @@ public final class YamlSettings implements Settings {
      */
     @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path, final QuartzService quartz) {
+        // Config file can be artipie.yaml or artipie.yml
+        this.configFilePath = YamlSettings.findConfigFile(path);
         this.meta = content.yamlMapping("meta");
         if (this.meta == null) {
             throw new IllegalStateException("Invalid settings: not empty `meta` section is expected");
@@ -151,6 +165,7 @@ public final class YamlSettings implements Settings {
         this.events = this.artifactsDb.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
+        this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
     }
 
     @Override
@@ -223,6 +238,16 @@ public final class YamlSettings implements Settings {
     @Override
     public Optional<DataSource> artifactsDatabase() {
         return this.artifactsDb;
+    }
+
+    @Override
+    public PrefixesConfig prefixes() {
+        return this.prefixesConfig;
+    }
+
+    @Override
+    public Path configPath() {
+        return this.configFilePath;
     }
 
     @Override
@@ -316,6 +341,26 @@ public final class YamlSettings implements Settings {
     }
 
     /**
+     * Read global_prefixes from meta section.
+     * @param meta Meta section of artipie.yml
+     * @return List of prefixes
+     */
+    private static List<String> readPrefixes(final YamlMapping meta) {
+        final YamlSequence seq = meta.yamlSequence("global_prefixes");
+        if (seq == null || seq.isEmpty()) {
+            return Collections.emptyList();
+        }
+        final List<String> result = new ArrayList<>(seq.size());
+        seq.values().forEach(node -> {
+            final String value = node.asScalar().value();
+            if (value != null && !value.isBlank()) {
+                result.add(value);
+            }
+        });
+        return result;
+    }
+
+    /**
      * Policy (auth and permissions) storage from config yaml.
      * @since 0.13
      */
@@ -373,6 +418,24 @@ public final class YamlSettings implements Settings {
             }
             return res;
         }
+    }
+
+    /**
+     * Find the actual config file (artipie.yaml or artipie.yml).
+     * @param dir Directory containing the config file
+     * @return Path to the config file
+     */
+    private static Path findConfigFile(final Path dir) {
+        final Path yaml = dir.resolve("artipie.yaml");
+        if (Files.exists(yaml)) {
+            return yaml;
+        }
+        final Path yml = dir.resolve("artipie.yml");
+        if (Files.exists(yml)) {
+            return yml;
+        }
+        // Default to .yaml if neither exists (will fail later with better error)
+        return yaml;
     }
 
 }
