@@ -29,11 +29,12 @@ public final class Name {
 
     /**
      * Generates key for package in store.
+     * Uses Composer v2 metadata format: p2/vendor/package.json
      *
      * @return Key for package in store.
      */
     public Key key() {
-        return new Key.From(this.vendorPart(), String.format("%s.json", this.packagePart()));
+        return new Key.From("p2", this.vendorPart(), String.format("%s.json", this.packagePart()));
     }
 
     /**

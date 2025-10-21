@@ -85,7 +85,10 @@ public final class MainSlice extends Slice.Wrap {
             new RtRulePath(
                 RtRule.FALLBACK,
                 new DockerRoutingSlice(
-                    settings, new SliceByPath(slices, settings.prefixes())
+                    settings, 
+                    new ComposerRoutingSlice(
+                        new SliceByPath(slices, settings.prefixes())
+                    )
                 )
             )
         );

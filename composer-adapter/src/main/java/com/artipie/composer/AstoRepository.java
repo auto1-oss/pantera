@@ -105,8 +105,7 @@ public final class AstoRepository implements Repository {
     @Override
     public CompletableFuture<Void> addArchive(final Archive archive, final Content content) {
         final Key key = archive.name().artifact();
-        final Key rand = new Key.From(UUID.randomUUID().toString());
-        final Key tmp = new Key.From(rand, archive.name().full());
+        final Key tmp = new Key.From(String.format("%s.tmp", UUID.randomUUID()));
         return this.asto.save(key, content)
             .thenCompose(
                 nothing -> this.asto.value(key)
@@ -123,19 +122,33 @@ public final class AstoRepository implements Repository {
                                 ).thenCompose(arch -> this.asto.save(tmp, arch))
                                 .thenCompose(noth -> this.asto.delete(key))
                                 .thenCompose(noth -> this.asto.move(tmp, key))
-                                .thenCombine(
-                                    this.packages(),
-                                    (noth, packages) -> packages.orElse(new JsonPackages())
-                                        .add(
-                                            new JsonPackage(this.addDist(compos, key)),
-                                            Optional.empty()
-                                        )
-                                        .thenCompose(
-                                            pkgs -> pkgs.save(
-                                                this.asto, AstoRepository.ALL_PACKAGES
-                                            )
-                                        )
-                                ).thenCompose(Function.identity())
+                                .thenCompose(
+                                    noth -> {
+                                        final Package pack = new JsonPackage(this.addDist(compos, key));
+                                        return CompletableFuture.allOf(
+                                            // Update root packages.json
+                                            this.packages().thenCompose(
+                                                packages -> packages.orElse(new JsonPackages())
+                                                    .add(pack, Optional.empty())
+                                                    .thenCompose(
+                                                        pkgs -> pkgs.save(
+                                                            this.asto, AstoRepository.ALL_PACKAGES
+                                                        )
+                                                    )
+                                            ).toCompletableFuture(),
+                                            // Update per-package vendor/package.json
+                                            pack.name().thenCompose(
+                                                name -> this.packages(name).thenCompose(
+                                                    packages -> packages.orElse(new JsonPackages())
+                                                        .add(pack, Optional.empty())
+                                                        .thenCompose(
+                                                            pkgs -> pkgs.save(this.asto, name.key())
+                                                        )
+                                                )
+                                            ).toCompletableFuture()
+                                        );
+                                    }
+                                )
                             ).thenCompose(Function.identity())
                     )
             );

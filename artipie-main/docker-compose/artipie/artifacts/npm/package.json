@@ -7,11 +7,7 @@
     "test": "echo \"Proxy test complete\""
   },
   "dependencies": {
-    "lodash": "^4.17.21",
-    "nailgun": "^1.0.32",
-    "express": "^4.18.2",
-    "moment": "^2.29.4",
-    "@wkda/npm-proxy-test": "^1.2.0"
+    "@common/api-client-node": "^0.1.5"
   },
   "publishConfig": {
     "registry": "http://localhost:8081/npm"

@@ -10,6 +10,7 @@ import com.artipie.gradle.GradleProxyPackageProcessor;
 import com.artipie.maven.MavenProxyPackageProcessor;
 import com.artipie.npm.events.NpmProxyPackageProcessor;
 import com.artipie.pypi.PyProxyPackageProcessor;
+import com.artipie.composer.http.proxy.ComposerProxyPackageProcessor;
 import com.artipie.settings.repo.RepoConfig;
 import com.jcabi.log.Logger;
 import java.util.Locale;
@@ -210,6 +211,13 @@ public final class MetadataEventQueues {
             @Override
             Class<? extends QuartzJob> job() {
                 return GoProxyPackageProcessor.class;
+            }
+        },
+
+        PHP_PROXY {
+            @Override
+            Class<? extends QuartzJob> job() {
+                return ComposerProxyPackageProcessor.class;
             }
         };
 

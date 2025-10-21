@@ -46,7 +46,7 @@ final class ComposerStorageCacheTest {
     @Test
     void getsContentFromRemoteCachesItAndSaveKeyToCacheFile() {
         final byte[] body = "some info".getBytes();
-        final String key = "vendor/package";
+        final String key = "p2/vendor/package";
         MatcherAssert.assertThat(
             "Content was not obtained from remote",
             new ComposerStorageCache(this.repo).load(
@@ -59,7 +59,7 @@ final class ComposerStorageCacheTest {
         MatcherAssert.assertThat(
             "Item was not cached",
             this.storage.exists(
-                new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key))
+                new Key.From(String.format("%s.json", key))
             ).toCompletableFuture().join(),
             new IsEqual<>(true)
         );
@@ -74,10 +74,10 @@ final class ComposerStorageCacheTest {
     @Test
     void getsContentFromCache() {
         final byte[] body = "some info".getBytes();
-        final String key = "vendor/package";
+        final String key = "p2/vendor/package";
         this.saveCacheFile(key);
         this.storage.save(
-            new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key)),
+            new Key.From(String.format("%s.json", key)),
             new Content.From(body)
         ).join();
         MatcherAssert.assertThat(
@@ -94,13 +94,13 @@ final class ComposerStorageCacheTest {
     void getsContentFromRemoteForExpiredCacheAndOverwriteValues() {
         final byte[] body = "some info".getBytes();
         final byte[] updated = "updated some info".getBytes();
-        final String key = "vendor/package";
+        final String key = "p2/vendor/package";
         final String expired = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC)
             .minus(Duration.ofDays(100))
             .toString();
         this.saveCacheFile(key, expired);
         this.storage.save(
-            new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key)),
+            new Key.From(String.format("%s.json", key)),
             new Content.From(body)
         ).join();
         MatcherAssert.assertThat(
@@ -121,7 +121,7 @@ final class ComposerStorageCacheTest {
         MatcherAssert.assertThat(
             "Cached item was not overwritten",
             this.storage.value(
-                new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key))
+                new Key.From(String.format("%s.json", key))
             ).join().asBytes(),
             new IsEqual<>(updated)
         );

@@ -14,6 +14,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ArtifactEvent;
+import com.jcabi.log.Logger;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -32,7 +33,7 @@ final class AddArchiveSlice implements Slice {
      * See <a href="https://getcomposer.org/doc/04-schema.md#version">docs</a>.
      */
     public static final Pattern PATH = Pattern.compile(
-        "^/(?<full>(?<name>[a-z0-9_.\\-]*)-(?<version>v?\\d+.\\d+.\\d+[-\\w]*).zip)$"
+        "^/(?:(?<dir>(?!\\.\\.)(?:[A-Za-z0-9_.\\-]+/)+))?(?<full>(?<name>[A-Za-z0-9_.\\-]*)-(?<version>v?\\d+\\.\\d+\\.\\d+(?:[-\\w]*))\\.zip)$"
     );
 
     /**
@@ -84,22 +85,56 @@ final class AddArchiveSlice implements Slice {
         final String uri = line.uri().getPath();
         final Matcher matcher = AddArchiveSlice.PATH.matcher(uri);
         if (matcher.matches()) {
+            final String packageName = matcher.group("name");
+            final String version = matcher.group("version");
+            final String dir = matcher.group("dir");
+            if (dir != null && dir.contains("..")) {
+                Logger.warn(this, "Rejected archive path with '..': %s", uri);
+                return CompletableFuture.completedFuture(ResponseBuilder.badRequest().build());
+            }
+            final String full = (dir == null ? "" : dir) + matcher.group("full");
             final Archive.Zip archive =
-                new Archive.Zip(new Archive.Name(matcher.group("full"), matcher.group("version")));
+                new Archive.Zip(new Archive.Name(full, version));
+            
             CompletableFuture<Void> res =
                 this.repository.addArchive(archive, new Content.From(body));
+            
             if (this.events.isPresent()) {
-                res = res.thenCompose(
-                    nothing -> this.repository.storage().metadata(archive.name().artifact())
-                        .thenApply(meta -> meta.read(Meta.OP_SIZE).orElseThrow())
-                ).thenAccept(
-                    size -> this.events.get().add(
-                        new ArtifactEvent(
-                            AddArchiveSlice.REPO_TYPE, this.rname,
-                            new Login(headers).getValue(), archive.name().full(),
-                            archive.name().version(), size
-                        )
-                    )
+                res = res.thenAccept(
+                    nothing -> {
+                        final long size;
+                        try {
+                            size = this.repository.storage().metadata(archive.name().artifact())
+                                .thenApply(meta -> meta.read(Meta.OP_SIZE))
+                                .join()
+                                .map(Long::longValue)
+                                .orElse(0L);
+                        } catch (final Exception e) {
+                            Logger.warn(this, "Failed to get file size: %s", e.getMessage());
+                            return;
+                        }
+                        final long created = System.currentTimeMillis();
+                        this.events.get().add(
+                            new ArtifactEvent(
+                                AddArchiveSlice.REPO_TYPE,
+                                this.rname,
+                                new Login(headers).getValue(),
+                                packageName,
+                                version,
+                                size,
+                                created,
+                                (Long) null  // No release date for local uploads
+                            )
+                        );
+                        Logger.info(
+                            this,
+                            "Recorded Composer upload: %s:%s (repo=%s, size=%d)",
+                            packageName,
+                            version,
+                            this.rname,
+                            size
+                        );
+                    }
                 );
             }
             return res.thenApply(nothing -> ResponseBuilder.created().build());

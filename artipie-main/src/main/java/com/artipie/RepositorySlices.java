@@ -9,6 +9,7 @@ import com.artipie.adapters.file.FileProxy;
 import com.artipie.adapters.go.GoProxy;
 import com.artipie.adapters.gradle.GradleProxy;
 import com.artipie.adapters.maven.MavenProxy;
+import com.artipie.adapters.php.ComposerGroupSlice;
 import com.artipie.adapters.php.ComposerProxy;
 import com.artipie.adapters.pypi.PypiProxy;
 import com.artipie.asto.Key;
@@ -289,7 +290,12 @@ public class RepositorySlices {
                 clientSlices = jettyClientSlices(cfg);
                 slice = trimPathSlice(
                     new TimeoutSlice(
-                        new ComposerProxy(clientSlices, cfg),
+                        new ComposerProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ),
                         settings.httpClientSettings().proxyTimeout()
                     )
                 );
@@ -426,6 +432,24 @@ public class RepositorySlices {
             case "pypi":
                 slice = trimPathSlice(
                     new PySlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents())
+                );
+                break;
+            case "php-group":
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new ComposerGroupSlice(
+                            key -> this.slice(key, port),
+                            cfg.name(),
+                            cfg.members(),
+                            port
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
                 );
                 break;
             case "file-group":

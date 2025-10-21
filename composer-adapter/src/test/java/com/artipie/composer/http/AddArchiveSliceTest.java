@@ -47,7 +47,7 @@ final class AddArchiveSliceTest {
     @CsvSource({
         "/log-1.1.3.zip,log,1.1.3",
         "/log-bad.1.3.zip,,",
-        "/path/name-2.1.3.zip,,",
+        "/path/name-2.1.3.zip,name,2.1.3",
         "/name-prefix-0.10.321.zip,name-prefix,0.10.321",
         "/name.suffix-1.2.2-patch.zip,name.suffix,1.2.2-patch",
         "/name-2.3.1-beta1.zip,name,2.3.1-beta1"

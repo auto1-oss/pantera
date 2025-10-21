@@ -38,7 +38,7 @@ final class CacheTimeControlTest {
     @ParameterizedTest
     @CsvSource({"1,true", "12,false"})
     void verifiesTimeValueCorrectly(final long minutes, final boolean valid) {
-        final String pkg = "vendor/package";
+        final String pkg = "p2/vendor/package";
         new BlockingStorage(this.storage).save(
             CacheTimeControl.CACHE_FILE,
             Json.createObjectBuilder()

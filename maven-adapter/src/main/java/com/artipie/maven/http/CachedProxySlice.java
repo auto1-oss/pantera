@@ -177,6 +177,27 @@ final class CachedProxySlice implements Slice {
         final Key key,
         final Headers request
     ) {
+        // Check if this is a maven-metadata.xml request
+        final String path = key.string();
+        final boolean isMetadata = path.contains("maven-metadata.xml");
+        
+        // For metadata files, bypass cache and fetch directly from upstream
+        if (isMetadata) {
+            final String owner = new Login(request).getValue();
+            Logger.info(this, "Bypassing cache for maven-metadata.xml: %s", path);
+            return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+                .thenApply(resp -> {
+                    if (resp.status().success()) {
+                        this.enqueueFromHeaders(resp.headers(), key, owner);
+                        return ResponseBuilder.ok()
+                            .headers(resp.headers())
+                            .body(resp.body())
+                            .build();
+                    }
+                    return ResponseBuilder.notFound().build();
+                });
+        }
+        
         final AtomicReference<Headers> rshdr = new AtomicReference<>(Headers.EMPTY);
         final String owner = new Login(request).getValue();
         return new RepoHead(this.client)

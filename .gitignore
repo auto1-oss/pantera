@@ -21,3 +21,4 @@ classes/
 artipie-main/docker-compose/artipie/data/**
 artipie-main/docker-compose/artipie/artifacts/npm/node_modules/**
 artipie-main/docker-compose/artipie/cache/**
+artipie-main/docker-compose/artipie/artifacts/php/vendor/**
