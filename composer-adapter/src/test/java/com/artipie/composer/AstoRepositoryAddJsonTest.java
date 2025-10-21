@@ -121,7 +121,7 @@ class AstoRepositoryAddJsonTest {
             this.storage.list(Key.ROOT).join().stream()
                 .map(Key::string)
                 .collect(Collectors.toList()),
-            Matchers.contains("packages.json", "vendor/package.json")
+            Matchers.containsInAnyOrder("packages.json", "p2/vendor/package.json")
         );
     }
 

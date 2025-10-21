@@ -71,11 +71,11 @@ class PhpComposerTest {
     void shouldGetPackageContent() throws Exception {
         final byte[] data = "data".getBytes();
         new BlockingStorage(this.storage).save(
-            new Key.From("vendor", "package.json"),
+            new Key.From("p2", "vendor", "package.json"),
             data
         );
         final Response response = this.php.response(
-            new RequestLine(RqMethod.GET, "/p/vendor/package.json"),
+            new RequestLine(RqMethod.GET, "/p2/vendor/package.json"),
             this.authorization,
             Content.EMPTY
         ).join();

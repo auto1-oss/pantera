@@ -24,7 +24,7 @@ final class CacheTimeControl implements CacheControl {
     /**
      * Name to file which contains info about cached items (e.g. when an item was saved).
      */
-    static final Key CACHE_FILE = new Key.From("cache/cache-info.json");
+    static final Key CACHE_FILE = new Key.From("cache-info.json");
 
     /**
      * Time during which the file is valid.

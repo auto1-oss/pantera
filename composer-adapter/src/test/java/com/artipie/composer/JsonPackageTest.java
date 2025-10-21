@@ -35,7 +35,7 @@ class JsonPackageTest {
             this.pack.name()
                 .toCompletableFuture().join()
                 .key().string(),
-            new IsEqual<>("vendor/package.json")
+            new IsEqual<>("p2/vendor/package.json")
         );
     }
 

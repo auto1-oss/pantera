@@ -50,9 +50,8 @@ public final class ComposerStorageCache implements Cache {
     public CompletionStage<Optional<? extends Content>> load(
         final Key name, final Remote remote, final CacheControl control
     ) {
-        final Key cached = new Key.From(
-            ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", name.string())
-        );
+        // Store directly in repo root as {packageName}.json
+        final Key cached = new Key.From(String.format("%s.json", name.string()));
         return this.repo.exists(cached)
             .thenCompose(
                 exists -> {

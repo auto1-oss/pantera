@@ -22,7 +22,7 @@ meta:
   cooldown:
     enabled: true
     # Use duration strings: m = minutes, h = hours, d = days
-    minimum_allowed_age: 45m
+    minimum_allowed_age: 7d
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432
@@ -35,12 +35,14 @@ meta:
     idle_timeout: 3600000 # Idle timeout (milliseconds, 0 = infinite)
     follow_redirects: true
   logging:
-    level: INFO
+    level: DEBUG
     loggers:
       # Artipie core packages
       com.artipie: INFO
       com.artipie.asto: INFO
-      com.artipie.composer: INFO
+      com.artipie.composer.http.proxy: DEBUG
+      com.artipie.http.client.jetty: DEBUG
+
       # Common third-party libraries
       io.netty: INFO
       io.vertx: INFO

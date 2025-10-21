@@ -1,7 +1,8 @@
 repo:
+  url: http://localhost:8081/php_proxy
   type: php-proxy
   storage:
     type: fs
     path: /var/artipie/data
-  remote:
-    url: https://packagist.org
+  remotes:
+    - url: https://packagist.org
