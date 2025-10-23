@@ -6,7 +6,7 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
-    image: auto1-artipie:1.0-SNAPSHOT
+    image: auto1-artipie:1.18.9
     container_name: artipie
     restart: unless-stopped
     environment:
@@ -19,8 +19,13 @@ services:
       - AWS_SDK_LOAD_CONFIG=1
       - AWS_PROFILE=shared-services-qa-devops
       - AWS_REGION=eu-west-1
+      # Version (change this when bumping version)
+      - ARTIPIE_VERSION=1.18.9
+      # Log4j2 configuration file location
+      - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
+      - ./log4j2.xml:/etc/artipie/log4j2.xml
       - ./artipie/repo:/var/artipie/repo
       - ./artipie/security:/var/artipie/security
       - ./artipie/data:/var/artipie/data
@@ -30,6 +35,7 @@ services:
       - artipie-net
     ports:
       - "8086:8086"
+      - "8087:8087"
 
   nginx:
     image: nginx:latest

@@ -27,8 +27,11 @@ import org.eclipse.jetty.http3.server.RawHTTP3ServerConnectionFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -44,6 +47,11 @@ public final class Http3Server {
     private final Server server;
     private final int port;
     private final SslContextFactory.Server ssl;
+    
+    /**
+     * PEM work directory for cleanup.
+     */
+    private Path pemWorkDir;
 
     /**
      * @param slice Artipie slice
@@ -71,8 +79,9 @@ public final class Http3Server {
         connector.getQuicConfiguration().setMaxBidirectionalRemoteStreams(1024);
         connector.setPort(this.port);
         try {
+            this.pemWorkDir = Files.createTempDirectory("http3-pem");
             connector.getQuicConfiguration()
-                .setPemWorkDirectory(Files.createTempDirectory("http3-pem"));
+                .setPemWorkDirectory(this.pemWorkDir);
             this.server.addConnector(connector);
             this.server.start();
         } catch (final Exception err) {
@@ -85,7 +94,25 @@ public final class Http3Server {
      * @throws Exception On error
      */
     public void stop() throws Exception {
-        this.server.stop();
+        try {
+            this.server.stop();
+        } finally {
+            // Clean up PEM work directory
+            if (this.pemWorkDir != null && Files.exists(this.pemWorkDir)) {
+                try (java.util.stream.Stream<Path> walk = Files.walk(this.pemWorkDir)) {
+                    walk.sorted(Comparator.reverseOrder())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException ignore) {
+                                // Ignore cleanup errors
+                            }
+                        });
+                } catch (IOException ignore) {
+                    // Ignore cleanup errors
+                }
+            }
+        }
     }
 
     /**

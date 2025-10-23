@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Artipie Log4j2 Configuration - External Configuration File
+  
+  This file controls logging for Artipie and all its dependencies.
+  Place this file alongside artipie.yaml and mount it to /etc/artipie/log4j2.xml
+  
+  To apply changes: Restart Artipie or wait for automatic reload (30 seconds)
+-->
+<Configuration status="WARN" monitorInterval="30">
+    <Properties>
+        <!-- Service identification (appears in logs) -->
+        <Property name="service.name">artipie</Property>
+        <!-- Version is read from ARTIPIE_VERSION environment variable -->
+        <Property name="service.version">${env:ARTIPIE_VERSION:-unknown}</Property>
+        <Property name="service.environment">${env:ARTIPIE_ENV:-production}</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- Console appender with ECS JSON format for Elasticsearch/Kibana -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <EcsLayout serviceName="${service.name}" 
+                       serviceVersion="${service.version}"
+                       serviceEnvironment="${service.environment}"
+                       includeMarkers="true"
+                       includeOrigin="true"
+                       stackTraceAsArray="false"/>
+        </Console>
+
+        <!-- Async wrapper for better performance (10x faster) -->
+        <Async name="AsyncConsole" includeLocation="true">
+            <AppenderRef ref="Console"/>
+        </Async>
+    </Appenders>
+
+    <Loggers>
+        <!-- ============================================ -->
+        <!-- ARTIPIE APPLICATION LOGGERS                  -->
+        <!-- ============================================ -->
+        
+        <!-- Main Artipie packages - Set to INFO for production, DEBUG for troubleshooting -->
+        <Logger name="com.artipie" level="INFO" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        
+        <!-- Security and authentication events - Keep at DEBUG to track auth issues -->
+        <Logger name="security" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        
+        <!-- Storage operations (S3, file system, etc.) -->
+        <Logger name="com.artipie.asto" level="INFO"/>
+        
+        <!-- HTTP client operations -->
+        <Logger name="com.artipie.http.client" level="INFO"/>
+        
+        <!-- Repository adapters - Uncomment specific adapters for debugging -->
+        <!-- <Logger name="com.artipie.maven" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.npm" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.docker" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.pypi" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.helm" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.debian" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.rpm" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.composer" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.nuget" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.gem" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.conda" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.conan" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.go" level="DEBUG"/> -->
+        <!-- <Logger name="com.artipie.hexpm" level="DEBUG"/> -->
+
+        <!-- ============================================ -->
+        <!-- THIRD-PARTY LIBRARY LOGGERS                  -->
+        <!-- ============================================ -->
+        
+        <!-- Vert.x (HTTP server framework) -->
+        <Logger name="io.vertx" level="INFO"/>
+        <Logger name="io.vertx.core.impl.BlockedThreadChecker" level="WARN"/>
+        
+        <!-- Jetty (HTTP client) -->
+        <Logger name="org.eclipse.jetty" level="INFO"/>
+        <Logger name="org.eclipse.jetty.client" level="INFO"/>
+        <Logger name="org.eclipse.jetty.http" level="INFO"/>
+        <Logger name="org.eclipse.jetty.io" level="INFO"/>
+        
+        <!-- AWS SDK (S3 operations) -->
+        <Logger name="software.amazon.awssdk" level="INFO"/>
+        <Logger name="software.amazon.awssdk.request" level="WARN"/>
+        <Logger name="com.amazonaws" level="INFO"/>
+        
+        <!-- Netty (async I/O) -->
+        <Logger name="io.netty" level="INFO"/>
+        <Logger name="io.netty.buffer.PooledByteBufAllocator" level="WARN"/>
+        
+        <!-- Redis client (if using Redis storage) -->
+        <Logger name="io.lettuce" level="INFO"/>
+        <Logger name="io.lettuce.core.protocol" level="WARN"/>
+        
+        <!-- YAML parser -->
+        <Logger name="com.amihaiemil.eoyaml" level="WARN"/>
+        
+        <!-- HTTP components -->
+        <Logger name="org.apache.http" level="INFO"/>
+        <Logger name="org.apache.http.wire" level="WARN"/>
+        
+        <!-- Quartz scheduler (for cron jobs) -->
+        <Logger name="org.quartz" level="INFO"/>
+        
+        <!-- TestContainers (only active during tests) -->
+        <Logger name="org.testcontainers" level="WARN"/>
+        <Logger name="com.github.dockerjava" level="WARN"/>
+        
+        <!-- ============================================ -->
+        <!-- ROOT LOGGER (catches everything else)        -->
+        <!-- ============================================ -->
+        
+        <Root level="INFO">
+            <AppenderRef ref="AsyncConsole"/>
+        </Root>
+    </Loggers>
+</Configuration>

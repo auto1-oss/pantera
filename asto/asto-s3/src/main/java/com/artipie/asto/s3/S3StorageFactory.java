@@ -133,14 +133,16 @@ public final class S3StorageFactory implements StorageFactory {
         final S3AsyncClientBuilder builder = S3AsyncClient.builder();
 
         // HTTP client: Netty async
-        // Increased defaults to handle concurrent S3 operations without connection pool exhaustion
+        // Connection pool sizing: Balance between throughput and resource usage
+        // For high-load scenarios (1000+ concurrent requests), increase max-concurrency proportionally
+        // Rule of thumb: max-concurrency should be >= peak concurrent requests / 4
         final Config http = cfg.config("http");
-        final int maxConc = optInt(http, "max-concurrency").orElse(2048);
-        final int maxPend = optInt(http, "max-pending-acquires").orElse(4096);
+        final int maxConc = optInt(http, "max-concurrency").orElse(1024);  // Reduced from 2048 for better memory usage
+        final int maxPend = optInt(http, "max-pending-acquires").orElse(2048);  // Reduced from 4096
         final Duration acqTmo = Duration.ofMillis(optLong(http, "acquisition-timeout-millis").orElse(30_000L));
-        final Duration readTmo = Duration.ofMillis(optLong(http, "read-timeout-millis").orElse(60_000L));
-        final Duration writeTmo = Duration.ofMillis(optLong(http, "write-timeout-millis").orElse(60_000L));
-        final Duration idleMax = Duration.ofMillis(optLong(http, "connection-max-idle-millis").orElse(60_000L));
+        final Duration readTmo = Duration.ofMillis(optLong(http, "read-timeout-millis").orElse(120_000L));  // Increased to 2 minutes
+        final Duration writeTmo = Duration.ofMillis(optLong(http, "write-timeout-millis").orElse(120_000L));  // Increased to 2 minutes
+        final Duration idleMax = Duration.ofMillis(optLong(http, "connection-max-idle-millis").orElse(30_000L));  // Reduced to 30s for faster cleanup
 
         final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder()
             .maxConcurrency(maxConc)

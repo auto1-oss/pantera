@@ -8,12 +8,16 @@ ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
   -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError \
   -XX:HeapDumpPath=/var/artipie/logs/dumps/heapdump.hprof \
   -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=100m \
+  -Djava.io.tmpdir=/var/artipie/cache/tmp \
+  -Dvertx.cacheDirBase=/var/artipie/cache/tmp \
   -Dio.netty.leakDetection.level=simple"
 
 RUN addgroup -g 2020 -S artipie && \
     adduser -u 2021 -S -G artipie -s /sbin/nologin artipie && \
-    mkdir -p /etc/artipie /usr/lib/artipie /var/artipie/logs/dumps && \
+    mkdir -p /etc/artipie /usr/lib/artipie /var/artipie/logs/dumps /var/artipie/cache/tmp && \
     chown -R artipie:artipie /etc/artipie /usr/lib/artipie /var/artipie
+
+ENV TMPDIR=/var/artipie/cache/tmp
 
 USER 2021:2020
 

@@ -18,7 +18,11 @@ import com.google.common.base.Strings;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
+import com.google.common.cache.RemovalListener;
+import com.google.common.cache.RemovalNotification;
 import org.apache.commons.lang3.NotImplementedException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -26,8 +30,11 @@ import java.util.concurrent.TimeUnit;
 /**
  * Implementation of cache for storages with similar configurations
  * in Artipie settings using {@link LoadingCache}.
+ * Properly closes Storage instances when evicted from cache to prevent resource leaks.
  */
 public class StoragesCache implements Cleanable<YamlMapping> {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(StoragesCache.class);
 
     /**
      * Cache for storages.
@@ -42,7 +49,9 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .expireAfterWrite(
                 new Property(ArtipieProperties.STORAGE_TIMEOUT).asLongOrDefault(180_000L),
                 TimeUnit.MILLISECONDS
-            ).softValues()
+            )
+            .softValues()
+            .removalListener(new StorageCleanupListener())
             .build();
     }
 
@@ -111,5 +120,46 @@ public class StoragesCache implements Cleanable<YamlMapping> {
     @Override
     public void invalidateAll() {
         this.cache.invalidateAll();
+    }
+
+    /**
+     * Removal listener that properly closes Storage instances to prevent resource leaks.
+     * This is critical for S3Storage which holds S3AsyncClient with connection pools and threads.
+     */
+    private static class StorageCleanupListener implements RemovalListener<YamlMapping, Storage> {
+        @Override
+        public void onRemoval(final RemovalNotification<YamlMapping, Storage> notification) {
+            final Storage storage = notification.getValue();
+            if (storage == null) {
+                return;
+            }
+            
+            try {
+                // Unwrap JfrStorage using reflection to access the wrapped storage
+                Storage actual = storage;
+                if (storage instanceof JfrStorage) {
+                    try {
+                        final java.lang.reflect.Field field = JfrStorage.class.getDeclaredField("original");
+                        field.setAccessible(true);
+                        actual = (Storage) field.get(storage);
+                    } catch (final Exception ex) {
+                        LOGGER.warn("Failed to unwrap JfrStorage, will try to close wrapper", ex);
+                        actual = storage;
+                    }
+                }
+                
+                // Close if AutoCloseable (e.g., DiskCacheStorage, S3Storage via ManagedStorage)
+                if (actual instanceof AutoCloseable) {
+                    ((AutoCloseable) actual).close();
+                    LOGGER.debug("Closed storage: {} (reason: {})", 
+                        actual.identifier(), notification.getCause());
+                } else {
+                    LOGGER.debug("Storage {} is not AutoCloseable, skipping cleanup", 
+                        actual.identifier());
+                }
+            } catch (final Exception ex) {
+                LOGGER.error("Failed to close storage: {}", storage.identifier(), ex);
+            }
+        }
     }
 }

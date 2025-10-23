@@ -5,143 +5,53 @@
 package com.artipie.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import java.util.Collections;
-import java.util.Map;
-import java.util.Optional;
-import java.util.stream.Collectors;
-import org.apache.log4j.LogManager;
-import org.apache.log4j.Level;
-import org.apache.log4j.Logger;
 
 /**
- * Logging context for managing global and per-logger logging levels.
- * Parses the `logging` section from Artipie YAML configuration and allows
- * dynamic configuration of logging levels.
- * 
- * Example YAML configuration:
- * <pre>
- * logging:
- *   level: INFO
- *   loggers:
- *     com.artipie: DEBUG
- *     com.artipie.maven.http.CachedProxySlice: TRACE
- * </pre>
+ * Logging context - DEPRECATED.
+ * Logging is now configured via log4j2.xml instead of YAML.
+ * This class is kept for backward compatibility only.
  *
  * @since 0.28.0
+ * @deprecated Use log4j2.xml for logging configuration
  */
+@Deprecated
 public final class LoggingContext {
 
     /**
-     * Logging yaml section.
-     */
-    private static final String LOGGING = "logging";
-
-    /**
-     * Global logging level key.
-     */
-    private static final String LEVEL = "level";
-
-    /**
-     * Loggers configuration key.
-     */
-    private static final String LOGGERS = "loggers";
-
-    /**
-     * Default logging level.
-     */
-    private static final String DEFAULT_LEVEL = "INFO";
-
-    /**
-     * Global logging level.
-     */
-    private final String globalLevel;
-
-    /**
-     * Per-logger logging levels.
-     */
-    private final Map<String, String> loggerLevels;
-
-    /**
      * Constructor.
-     * @param meta Meta section from Artipie YAML settings
+     * @param meta Meta section from Artipie YAML settings (ignored)
      */
     public LoggingContext(final YamlMapping meta) {
-        final YamlMapping logging = meta.yamlMapping(LoggingContext.LOGGING);
-        
-        // Parse global level
-        this.globalLevel = Optional.ofNullable(logging)
-            .map(log -> log.string(LoggingContext.LEVEL))
-            .orElse(LoggingContext.DEFAULT_LEVEL);
-
-        // Parse per-logger levels
-        this.loggerLevels = Optional.ofNullable(logging)
-            .map(log -> log.yamlMapping(LoggingContext.LOGGERS))
-            .map(loggers -> loggers.keys().stream()
-                .collect(Collectors.toMap(
-                    node -> node.asScalar().value(),
-                    node -> loggers.string(node.asScalar().value())
-                ))
-            )
-            .orElse(Collections.emptyMap());
-    }
-
-    /**
-     * Get the global logging level.
-     * @return Global logging level
-     */
-    public String globalLevel() {
-        return this.globalLevel;
-    }
-
-    /**
-     * Get per-logger logging levels.
-     * @return Map of logger names to their levels
-     */
-    public Map<String, String> loggerLevels() {
-        return Collections.unmodifiableMap(this.loggerLevels);
+        // No-op: logging is now configured via log4j2.xml
     }
 
     /**
      * Check if logging configuration is present.
-     * @return True if logging section exists in configuration
+     * @return Always false (logging via log4j2.xml now)
+     * @deprecated Use log4j2.xml
      */
+    @Deprecated
     public boolean hasConfiguration() {
-        return !this.loggerLevels.isEmpty() || !LoggingContext.DEFAULT_LEVEL.equals(this.globalLevel);
+        return false;
     }
 
     /**
-     * Check if logging configuration is configured (alias for hasConfiguration).
-     * This method is used by VertxMain startup code.
-     * @return True if logging section exists in configuration
+     * Check if logging configuration is configured.
+     * @return Always false (logging via log4j2.xml now)
+     * @deprecated Use log4j2.xml
      */
+    @Deprecated
     public boolean configured() {
-        return hasConfiguration();
+        return false;
     }
 
     /**
-     * Apply the logging configuration to the logging system.
-     * This method configures the logging levels for all configured loggers.
+     * Apply the logging configuration.
+     * No-op: logging is configured via log4j2.xml.
+     * @deprecated Use log4j2.xml
      */
+    @Deprecated
     public void apply() {
-        // Set global root logger level if different from default
-        if (!LoggingContext.DEFAULT_LEVEL.equals(this.globalLevel)) {
-            final Logger rootLogger = LogManager.getRootLogger();
-            rootLogger.setLevel(Level.toLevel(this.globalLevel.toUpperCase()));
-        }
-
-        // Set individual logger levels
-        this.loggerLevels.forEach((loggerName, level) -> {
-            final Logger logger = LogManager.getLogger(loggerName);
-            logger.setLevel(Level.toLevel(level.toUpperCase()));
-        });
-    }
-
-    /**
-     * Get the configured level for a specific logger.
-     * @param loggerName Logger name
-     * @return Optional level for the logger, empty if not specifically configured
-     */
-    public Optional<String> levelFor(final String loggerName) {
-        return Optional.ofNullable(this.loggerLevels.get(loggerName));
+        // No-op: logging is now configured via log4j2.xml
     }
 }
