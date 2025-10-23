@@ -41,7 +41,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import com.artipie.asto.factory.StorageFactory;
+import com.artipie.asto.factory.StoragesLoader;
 
 /**
  * Settings built from YAML.
@@ -137,6 +140,17 @@ public final class YamlSettings implements Settings {
     private final Path configFilePath;
 
     /**
+     * Tracked storages for proper cleanup.
+     * Thread-safe list to track all storage instances created by this settings.
+     */
+    private final List<Storage> trackedStorages = new CopyOnWriteArrayList<>();
+
+    /**
+     * Config storage instance (cached).
+     */
+    private volatile Storage configStorageInstance;
+
+    /**
      * Ctor.
      * @param content YAML file content.
      * @param path Path to the folder with yaml settings file
@@ -170,11 +184,19 @@ public final class YamlSettings implements Settings {
 
     @Override
     public Storage configStorage() {
-        final YamlMapping yaml = meta().yamlMapping("storage");
-        if (yaml == null) {
-            throw new ArtipieException("Failed to find storage configuration in \n" + this);
+        if (this.configStorageInstance == null) {
+            synchronized (this) {
+                if (this.configStorageInstance == null) {
+                    final YamlMapping yaml = meta().yamlMapping("storage");
+                    if (yaml == null) {
+                        throw new ArtipieException("Failed to find storage configuration in \n" + this);
+                    }
+                    this.configStorageInstance = this.acach.storagesCache().storage(yaml);
+                    this.trackedStorages.add(this.configStorageInstance);
+                }
+            }
         }
-        return this.acach.storagesCache().storage(yaml);
+        return this.configStorageInstance;
     }
 
     @Override
@@ -243,6 +265,49 @@ public final class YamlSettings implements Settings {
     @Override
     public PrefixesConfig prefixes() {
         return this.prefixesConfig;
+    }
+
+    @Override
+    public void close() {
+        Logger.info(this, "Closing YamlSettings and cleaning up storage resources...");
+        for (final Storage storage : this.trackedStorages) {
+            try {
+                // Try to close via factory first (preferred method)
+                final String storageType = detectStorageType(storage);
+                if (storageType != null) {
+                    final StorageFactory factory = StoragesLoader.STORAGES.getFactory(storageType);
+                    factory.closeStorage(storage);
+                    Logger.info(this, "Closed storage via factory: %s", storageType);
+                } else if (storage instanceof AutoCloseable) {
+                    // Fallback: direct close for AutoCloseable storages
+                    ((AutoCloseable) storage).close();
+                    Logger.info(this, "Closed storage directly: %s", storage.getClass().getSimpleName());
+                }
+            } catch (final Exception e) {
+                Logger.error(this, "Failed to close storage: %s", e.getMessage());
+            }
+        }
+        this.trackedStorages.clear();
+        Logger.info(this, "YamlSettings cleanup complete");
+    }
+
+    /**
+     * Detect storage type from storage instance.
+     * @param storage Storage instance
+     * @return Storage type string (e.g., "s3", "fs") or null if unknown
+     */
+    private String detectStorageType(final Storage storage) {
+        final String className = storage.getClass().getSimpleName().toLowerCase();
+        if (className.contains("s3")) {
+            return "s3";
+        } else if (className.contains("file")) {
+            return "fs";
+        } else if (className.contains("etcd")) {
+            return "etcd";
+        } else if (className.contains("redis")) {
+            return "redis";
+        }
+        return null;
     }
 
     @Override

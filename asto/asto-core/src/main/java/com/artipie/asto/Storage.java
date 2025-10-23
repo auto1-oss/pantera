@@ -158,6 +158,17 @@ public interface Storage {
             this.delegate = delegate;
         }
 
+        /**
+         * Get the underlying delegate storage.
+         * Enables wrapper classes to properly close delegate resources.
+         * 
+         * @return Delegate storage
+         * @since 1.0
+         */
+        protected Storage delegate() {
+            return this.delegate;
+        }
+
         @Override
         public CompletableFuture<Boolean> exists(final Key key) {
             return this.delegate.exists(key);

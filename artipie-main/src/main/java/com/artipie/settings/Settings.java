@@ -17,10 +17,22 @@ import javax.sql.DataSource;
 
 /**
  * Application settings.
+ * Implements AutoCloseable to ensure proper cleanup of storage resources,
+ * particularly important for S3Storage which holds S3AsyncClient connections.
  *
  * @since 0.1
  */
-public interface Settings {
+public interface Settings extends AutoCloseable {
+
+    /**
+     * Close and cleanup all resources held by this settings instance.
+     * This includes closing any storage instances that implement AutoCloseable.
+     * Default implementation does nothing - implementations should override.
+     */
+    @Override
+    default void close() {
+        // Default: no-op. Implementations should override to cleanup resources.
+    }
 
     /**
      * Provides a configuration storage.

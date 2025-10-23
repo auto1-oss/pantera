@@ -13,8 +13,12 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
 import com.jcabi.log.Logger;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.quartz.JobExecutionContext;
 
 /**
@@ -44,49 +48,125 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyControlStatement", "PMD.CognitiveComplexity"})
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyControlStatement"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
             super.stopJob(context);
         } else {
-            while (!this.packages.isEmpty()) {
-                final ProxyArtifactEvent event = this.packages.poll();
-                if (event != null) {
-                    final Collection<Key> keys = this.asto.list(event.artifactKey()).join();
-                    try {
-                        final Key archive = MavenSlice.EVENT_INFO.artifactPackage(keys);
-                        final String owner = event.ownerLogin();
-                        final long created = System.currentTimeMillis();
-                        final Long release = event.releaseMillis().orElse(null);
-                        this.events.add(
-                            new ArtifactEvent(
-                                MavenProxyPackageProcessor.REPO_TYPE,
-                                event.repoName(),
-                                owner == null || owner.isBlank()
-                                    ? ArtifactEvent.DEF_OWNER
-                                    : owner,
-                                MavenSlice.EVENT_INFO.formatArtifactName(
-                                    event.artifactKey().parent().get()
-                                ),
-                                new KeyLastPart(event.artifactKey()).get(),
-                                this.asto.metadata(archive)
-                                    .thenApply(meta -> meta.read(Meta.OP_SIZE)).join().get(),
-                                created,
-                                release
-                            )
-                        );
-                        while (this.packages.remove(event)) { }
-                    } catch (final Exception err) {
-                        Logger.error(
-                            this,
-                            String.format(
-                                "Failed to process maven proxy package %s", event.artifactKey()
-                            )
-                        );
-                    }
-                }
-            }
+            this.processPackagesBatch();
         }
+    }
+
+    /**
+     * Process packages in parallel batches for better performance.
+     */
+    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidCatchingGenericException"})
+    private void processPackagesBatch() {
+        // Drain up to 100 packages for batch processing
+        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
+        ProxyArtifactEvent event = this.packages.poll();
+        while (batch.size() < 100 && event != null) {
+            batch.add(event);
+            event = this.packages.poll();
+        }
+
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        // Deduplicate by artifact key - only process unique packages
+        final List<ProxyArtifactEvent> uniquePackages = batch.stream()
+            .collect(Collectors.toMap(
+                e -> e.artifactKey().string(),  // Key: artifact path
+                e -> e,                          // Value: first event
+                (existing, duplicate) -> existing // Keep first, ignore duplicates
+            ))
+            .values()
+            .stream()
+            .collect(Collectors.toList());
+
+        Logger.info(
+            this,
+            "Processing Maven batch of %d packages (%d unique, %d duplicates removed)",
+            batch.size(), uniquePackages.size(), batch.size() - uniquePackages.size()
+        );
+
+        // Process all unique packages in parallel
+        List<CompletableFuture<Void>> futures = uniquePackages.stream()
+            .map(this::processPackageAsync)
+            .collect(Collectors.toList());
+
+        // Wait for batch completion with timeout
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(30, TimeUnit.SECONDS)
+                .join();
+            Logger.info(this, "Maven batch processing complete");
+        } catch (final RuntimeException err) {
+            Logger.error(this, "Maven batch processing failed: %s", err.getMessage());
+        }
+    }
+
+    /**
+     * Process a single package asynchronously.
+     * @param event Package event to process
+     * @return CompletableFuture that completes when processing is done
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
+        return this.asto.list(event.artifactKey())
+            .thenCompose(keys -> {
+                try {
+                    final Key archive = MavenSlice.EVENT_INFO.artifactPackage(keys);
+                    return this.asto.metadata(archive)
+                        .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
+                        .thenAccept(size -> {
+                            final String owner = event.ownerLogin();
+                            final long created = System.currentTimeMillis();
+                            final Long release = event.releaseMillis().orElse(null);
+                            final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(
+                                event.artifactKey().parent().get()
+                            );
+                            final String version = new KeyLastPart(event.artifactKey()).get();
+                            
+                            this.events.add(
+                                new ArtifactEvent(
+                                    MavenProxyPackageProcessor.REPO_TYPE,
+                                    event.repoName(),
+                                    owner == null || owner.isBlank()
+                                        ? ArtifactEvent.DEF_OWNER
+                                        : owner,
+                                    artifactName,
+                                    version,
+                                    size,
+                                    created,
+                                    release
+                                )
+                            );
+                            
+                            Logger.info(
+                                this,
+                                "Recorded Maven proxy artifact %s:%s (size=%d)",
+                                artifactName, version, size
+                            );
+                        });
+                } catch (final RuntimeException err) {
+                    Logger.error(
+                        this,
+                        "Failed to extract Maven archive from keys: %s",
+                        err.getMessage()
+                    );
+                    return CompletableFuture.completedFuture(null);
+                }
+            })
+            .exceptionally(err -> {
+                Logger.error(
+                    this,
+                    "Failed to process Maven package %s: %s",
+                    event.artifactKey(), err.getMessage()
+                );
+                return null;
+            });
     }
 
     /**

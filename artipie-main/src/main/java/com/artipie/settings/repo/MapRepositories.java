@@ -16,10 +16,13 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class MapRepositories implements Repositories {
 
@@ -32,6 +35,7 @@ public class MapRepositories implements Repositories {
     public MapRepositories(final Settings settings) {
         this.settings = settings;
         this.map = new ConcurrentHashMap<>();
+        // Initial synchronous refresh for backward compatibility
         refresh();
     }
 
@@ -47,29 +51,97 @@ public class MapRepositories implements Repositories {
 
     @Override
     public void refresh() {
+        // Synchronous wrapper for backward compatibility
+        refreshAsync().join();
+    }
+
+    /**
+     * Refresh repository configurations asynchronously.
+     * Loads all repositories in parallel for fast startup.
+     *
+     * @return CompletableFuture that completes when all repos are loaded
+     */
+    public CompletableFuture<Void> refreshAsync() {
         this.map.clear();
-        final Collection<Key> keys = settings.repoConfigsStorage()
-            .list(Key.ROOT).
-            toCompletableFuture().join();
-        for (Key key : keys) {
-            final ConfigFile file = new ConfigFile(key);
-            if (!file.isSystem() && file.isYamlOrYml()) {
-                final Storage storage = this.settings.repoConfigsStorage();
-                final CompletableFuture<StorageByAlias> alias = new AliasSettings(storage)
-                    .find(key);
-                final String content = file.valueFrom(storage)
-                    .toCompletableFuture().join().asString();
-                try {
-                    this.map.put(file.name(), RepoConfig.from(
-                        Yaml.createYamlInput(content).readYamlMapping(),
-                        alias.join(), new Key.From(file.name()),
-                        this.settings.caches().storagesCache(),
-                        this.settings.metrics().storage()
-                    ));
-                } catch (Exception e) {
-                    LOGGER.error("Can't parse the repository config file: " + file.name(), e);
+        
+        return settings.repoConfigsStorage()
+            .list(Key.ROOT)
+            .thenCompose(keys -> {
+                // Load all repositories in parallel
+                List<CompletableFuture<RepoConfig>> futures = keys.stream()
+                    .map(key -> loadRepoConfigAsync(key))
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+                
+                if (futures.isEmpty()) {
+                    return CompletableFuture.completedFuture(null);
                 }
-            }
+                
+                // Wait for all to complete
+                return CompletableFuture.allOf(
+                    futures.toArray(new CompletableFuture[0])
+                ).thenApply(v -> {
+                    // Collect results and update map
+                    futures.forEach(f -> {
+                        try {
+                            RepoConfig config = f.join();
+                            if (config != null) {
+                                this.map.put(config.name(), config);
+                            }
+                        } catch (Exception e) {
+                            LOGGER.error("Failed to load repository config", e);
+                        }
+                    });
+                    LOGGER.info("Loaded {} repository configurations", this.map.size());
+                    return null;
+                });
+            });
+    }
+
+    /**
+     * Load a single repository configuration asynchronously.
+     *
+     * @param key Repository config file key
+     * @return CompletableFuture with RepoConfig or null if not applicable
+     */
+    private CompletableFuture<RepoConfig> loadRepoConfigAsync(final Key key) {
+        final ConfigFile file = new ConfigFile(key);
+        
+        if (!file.isSystem() && file.isYamlOrYml()) {
+            final Storage storage = this.settings.repoConfigsStorage();
+            
+            // Load alias and content in parallel
+            CompletableFuture<StorageByAlias> aliasFuture = 
+                new AliasSettings(storage).find(key);
+            
+            CompletableFuture<String> contentFuture = 
+                file.valueFrom(storage)
+                    .thenApply(content -> content.asString())
+                    .toCompletableFuture();
+            
+            // Combine results
+            return aliasFuture.thenCombine(
+                contentFuture,
+                (alias, content) -> {
+                    try {
+                        return RepoConfig.from(
+                            Yaml.createYamlInput(content).readYamlMapping(),
+                            alias,
+                            new Key.From(file.name()),
+                            this.settings.caches().storagesCache(),
+                            this.settings.metrics().storage()
+                        );
+                    } catch (Exception e) {
+                        LOGGER.error("Can't parse repository config file: {}", file.name(), e);
+                        return null;
+                    }
+                }
+            ).exceptionally(err -> {
+                LOGGER.error("Failed to load repository config: {}", file.name(), err);
+                return null;
+            });
         }
+        
+        return null;
     }
 }

@@ -24,18 +24,11 @@ import java.util.regex.Pattern;
 
 /**
  * Slice for adding a package to the repository in ZIP format.
+ * Accepts any .zip file and extracts metadata from composer.json inside.
  * See <a href="https://getcomposer.org/doc/05-repositories.md#artifact">Artifact repository</a>.
  */
 @SuppressWarnings({"PMD.SingularField", "PMD.UnusedPrivateField"})
 final class AddArchiveSlice implements Slice {
-    /**
-     * Composer HTTP for entry point.
-     * See <a href="https://getcomposer.org/doc/04-schema.md#version">docs</a>.
-     */
-    public static final Pattern PATH = Pattern.compile(
-        "^/(?:(?<dir>(?!\\.\\.)(?:[A-Za-z0-9_.\\-]+/)+))?(?<full>(?<name>[A-Za-z0-9_.\\-]*)-(?<version>v?\\d+\\.\\d+\\.\\d+(?:[-\\w]*))\\.zip)$"
-    );
-
     /**
      * Repository type.
      */
@@ -83,62 +76,236 @@ final class AddArchiveSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final String uri = line.uri().getPath();
-        final Matcher matcher = AddArchiveSlice.PATH.matcher(uri);
-        if (matcher.matches()) {
-            final String packageName = matcher.group("name");
-            final String version = matcher.group("version");
-            final String dir = matcher.group("dir");
-            if (dir != null && dir.contains("..")) {
-                Logger.warn(this, "Rejected archive path with '..': %s", uri);
-                return CompletableFuture.completedFuture(ResponseBuilder.badRequest().build());
-            }
-            final String full = (dir == null ? "" : dir) + matcher.group("full");
-            final Archive.Zip archive =
-                new Archive.Zip(new Archive.Name(full, version));
+        
+        // Validate path doesn't contain directory traversal
+        if (uri.contains("..")) {
+            Logger.warn(this, "Rejected archive path with '..': %s", uri);
+            return ResponseBuilder.badRequest()
+                .textBody("Path traversal not allowed")
+                .completedFuture();
+        }
+        
+        // Validate archive format - support .zip, .tar.gz, .tgz
+        final String lowerUri = uri.toLowerCase();
+        final boolean isZip = lowerUri.endsWith(".zip");
+        final boolean isTarGz = lowerUri.endsWith(".tar.gz") || lowerUri.endsWith(".tgz");
+        
+        if (!isZip && !isTarGz) {
+            Logger.warn(this, "Rejected unsupported archive format: %s", uri);
+            return ResponseBuilder.badRequest()
+                .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
+                .completedFuture();
+        }
+        
+        // Extract the filename from the URI for initial storage
+        final String filename = uri.substring(uri.lastIndexOf('/') + 1);
+        
+        // First, extract composer.json to get the real package metadata
+        return body.asBytesFuture().thenCompose(bytes -> {
+            // Choose appropriate archive handler based on format
+            final Archive tempArchive = isZip
+                ? new Archive.Zip(new Archive.Name(filename, "unknown"))
+                : new TarArchive(new Archive.Name(filename, "unknown"));
             
-            CompletableFuture<Void> res =
-                this.repository.addArchive(archive, new Content.From(body));
-            
-            if (this.events.isPresent()) {
-                res = res.thenAccept(
-                    nothing -> {
-                        final long size;
-                        try {
-                            size = this.repository.storage().metadata(archive.name().artifact())
-                                .thenApply(meta -> meta.read(Meta.OP_SIZE))
-                                .join()
-                                .map(Long::longValue)
-                                .orElse(0L);
-                        } catch (final Exception e) {
-                            Logger.warn(this, "Failed to get file size: %s", e.getMessage());
-                            return;
-                        }
-                        final long created = System.currentTimeMillis();
-                        this.events.get().add(
-                            new ArtifactEvent(
-                                AddArchiveSlice.REPO_TYPE,
-                                this.rname,
-                                new Login(headers).getValue(),
-                                packageName,
-                                version,
-                                size,
-                                created,
-                                (Long) null  // No release date for local uploads
-                            )
-                        );
-                        Logger.info(
-                            this,
-                            "Recorded Composer upload: %s:%s (repo=%s, size=%d)",
-                            packageName,
-                            version,
-                            this.rname,
-                            size
+            return tempArchive.composerFrom(new Content.From(bytes))
+                .thenCompose(composerJson -> {
+                    // Extract name and version from composer.json (source of truth)
+                    final String packageName = composerJson.getString("name", null);
+                    if (packageName == null || packageName.trim().isEmpty()) {
+                        Logger.warn(this, "Missing or empty 'name' in composer.json for: %s", uri);
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.badRequest()
+                                .textBody("composer.json must contain non-empty 'name' field")
+                                .build()
                         );
                     }
-                );
-            }
-            return res.thenApply(nothing -> ResponseBuilder.created().build());
+                    
+                    // Handle version - try multiple sources in priority order:
+                    // 1. composer.json version field
+                    // 2. Extract from filename (e.g., package-1.0.0.tar.gz)
+                    // 3. Fallback to "dev-master"
+                    final String version;
+                    final String versionFromJson = composerJson.getString("version", null);
+                    if (versionFromJson != null && !versionFromJson.trim().isEmpty()) {
+                        version = versionFromJson.trim();
+                    } else {
+                        // Try to extract version from filename
+                        version = extractVersionFromFilename(filename).orElse("dev-master");
+                        Logger.info(
+                            this,
+                            "Version not found in composer.json, extracted '%s' from filename: %s",
+                            version,
+                            filename
+                        );
+                    }
+                    
+                    // Validate package name format (must be vendor/package)
+                    final String[] parts = packageName.split("/");
+                    if (parts.length != 2) {
+                        Logger.warn(
+                            this,
+                            "Invalid package name format '%s', expected 'vendor/package'",
+                            packageName
+                        );
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.badRequest()
+                                .textBody("Package name must be in format 'vendor/package'")
+                                .build()
+                        );
+                    }
+                    
+                    final String vendor = parts[0];
+                    final String packagePart = parts[1];
+                    
+                    // Preserve original archive format extension
+                    final String extension = isZip ? ".zip" : ".tar.gz";
+                    
+                    // For dev versions, preserve unique identifier from original filename to avoid overwrites
+                    // Extract timestamp-hash pattern like "20220119164424-1e02e050" from filename
+                    String uniqueSuffix = "";
+                    if (version.startsWith("dev-") || version.contains("dev")) {
+                        final java.util.regex.Pattern devPattern = java.util.regex.Pattern.compile(
+                            "-(\\d{14}-[a-f0-9]{8,40})(?:\\.tar\\.gz|\\.tgz|\\.zip)$"
+                        );
+                        final java.util.regex.Matcher matcher = devPattern.matcher(filename);
+                        if (matcher.find()) {
+                            uniqueSuffix = "-" + matcher.group(1);
+                            Logger.info(
+                                this,
+                                "Dev version detected, preserving unique identifier: %s",
+                                uniqueSuffix
+                            );
+                        }
+                    }
+                    
+                    // Generate artifact filename: vendor-package-version[-unique].{zip|tar.gz}
+                    final String artifactFilename = String.format(
+                        "%s-%s-%s%s%s",
+                        vendor,
+                        packagePart,
+                        version,
+                        uniqueSuffix,
+                        extension
+                    );
+                    
+                    // Store organized by vendor/package/version (like PyPI)
+                    // Path: artifacts/vendor/package/version/vendor-package-version.{ext}
+                    final String artifactPath = String.format(
+                        "%s/%s/%s/%s",
+                        vendor,
+                        packagePart,
+                        version,
+                        artifactFilename
+                    );
+                    
+                    Logger.info(
+                        this,
+                        "Processing Composer package: %s version %s -> %s (format: %s)",
+                        packageName,
+                        version,
+                        artifactPath,
+                        isZip ? "ZIP" : "TAR.GZ"
+                    );
+                    
+                    // Create appropriate archive handler for final storage
+                    final Archive archive = isZip
+                        ? new Archive.Zip(new Archive.Name(artifactPath, version))
+                        : new TarArchive(new Archive.Name(artifactPath, version));
+                    
+                    // Add archive to repository
+                    CompletableFuture<Void> res = this.repository.addArchive(
+                        archive,
+                        new Content.From(bytes)
+                    );
+                    
+                    // Record artifact event if enabled
+                    if (this.events.isPresent()) {
+                        res = res.thenAccept(
+                            nothing -> {
+                                final long size;
+                                try {
+                                    size = this.repository.storage()
+                                        .metadata(archive.name().artifact())
+                                        .thenApply(meta -> meta.read(Meta.OP_SIZE))
+                                        .join()
+                                        .map(Long::longValue)
+                                        .orElse(0L);
+                                } catch (final Exception e) {
+                                    Logger.warn(
+                                        this,
+                                        "Failed to get file size: %s",
+                                        e.getMessage()
+                                    );
+                                    return;
+                                }
+                                final long created = System.currentTimeMillis();
+                                this.events.get().add(
+                                    new ArtifactEvent(
+                                        AddArchiveSlice.REPO_TYPE,
+                                        this.rname,
+                                        new Login(headers).getValue(),
+                                        packageName,
+                                        version,
+                                        size,
+                                        created,
+                                        (Long) null  // No release date for local uploads
+                                    )
+                                );
+                                Logger.info(
+                                    this,
+                                    "Recorded Composer upload: %s:%s (repo=%s, size=%d)",
+                                    packageName,
+                                    version,
+                                    this.rname,
+                                    size
+                                );
+                            }
+                        );
+                    }
+                    
+                    return res.thenApply(nothing -> ResponseBuilder.created().build());
+                })
+                .exceptionally(error -> {
+                    Logger.error(
+                        this,
+                        "Failed to process Composer package %s: %s",
+                        filename,
+                        error.getMessage()
+                    );
+                    return ResponseBuilder.internalError()
+                        .textBody(
+                            String.format(
+                                "Failed to process package: %s",
+                                error.getMessage()
+                            )
+                        )
+                        .build();
+                });
+        });
+    }
+    
+    /**
+     * Extract version from filename.
+     * Supports patterns like:
+     * - package-1.0.0.zip -> 1.0.0
+     * - vendor-package-2.5.1.tar.gz -> 2.5.1
+     * - name-v1.2.3-beta.tgz -> v1.2.3-beta
+     * 
+     * @param filename Archive filename
+     * @return Optional version string if found
+     */
+    private static Optional<String> extractVersionFromFilename(final String filename) {
+        // Pattern to match semantic version in filename
+        // Matches: major.minor.patch with optional pre-release/build metadata
+        // Examples: 1.0.0, 2.5.1-beta, v3.0.0-rc.1, 1.2.3+20130313144700
+        final Pattern pattern = Pattern.compile(
+            "(v?\\d+\\.\\d+\\.\\d+(?:[-+][\\w\\.]+)?)"
+        );
+        final Matcher matcher = pattern.matcher(filename);
+        
+        if (matcher.find()) {
+            return Optional.of(matcher.group(1));
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        return Optional.empty();
     }
 }

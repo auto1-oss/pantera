@@ -45,10 +45,8 @@ final class JdbcCooldownService implements CooldownService {
         if (!this.settings.enabled()) {
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
-        return CompletableFuture.supplyAsync(
-            () -> this.evaluateBlocking(request, inspector),
-            this.executor
-        );
+        // Fully async evaluation - no blocking
+        return this.evaluateAsync(request, inspector);
     }
 
     @Override
@@ -91,10 +89,33 @@ final class JdbcCooldownService implements CooldownService {
         );
     }
 
-    private CooldownResult evaluateBlocking(
+    /**
+     * Async cooldown evaluation - never blocks threads.
+     * @param request Cooldown request
+     * @param inspector Inspector for artifact metadata
+     * @return CompletableFuture with evaluation result
+     */
+    private CompletableFuture<CooldownResult> evaluateAsync(
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
+        return CompletableFuture.supplyAsync(() -> {
+            return this.checkExistingBlock(request);
+        }, this.executor).thenCompose(result -> {
+            if (result.isPresent()) {
+                return CompletableFuture.completedFuture(result.get());
+            }
+            // No existing block - check if artifact should be blocked
+            return this.checkNewArtifact(request, inspector);
+        });
+    }
+
+    /**
+     * Check if artifact has existing block in database.
+     * @param request Cooldown request
+     * @return Optional with result if block exists
+     */
+    private Optional<CooldownResult> checkExistingBlock(final CooldownRequest request) {
         final Instant now = request.requestedAt();
         final Optional<DbBlockRecord> existing = this.repository.find(
             request.repoType(),
@@ -108,104 +129,161 @@ final class JdbcCooldownService implements CooldownService {
                 if (record.blockedUntil().isAfter(now)) {
                     this.repository.recordAttempt(record.id(), request.requestedBy(), now);
                     final List<DbBlockRecord> deps = this.repository.dependenciesOf(record.id());
-                    return CooldownResult.blocked(
+                    return Optional.of(CooldownResult.blocked(
                         this.toCooldownBlock(record, deps)
-                    );
+                    ));
                 }
                 this.expire(record, now);
-                return CooldownResult.allowed();
+                return Optional.of(CooldownResult.allowed());
             }
-            return CooldownResult.allowed();
+            return Optional.of(CooldownResult.allowed());
         }
-        final Optional<Instant> release =
-            inspector.releaseDate(request.artifact(), request.version()).join();
-        if (release.isEmpty()) {
-            com.jcabi.log.Logger.warn(
-                this,
-                "No release date found for %s:%s:%s:%s - allowing",
-                request.repoType(), request.repoName(), request.artifact(), request.version()
-            );
-            return CooldownResult.allowed();
-        }
-        final Duration fresh = this.settings.minimumAllowedAge();
-        final Instant date = release.get();
-        com.jcabi.log.Logger.debug(
-            this,
-            "Evaluating cooldown for %s:%s (released=%s, now=%s, minAge=%s)",
-            request.artifact(), request.version(), date, now, fresh
-        );
-        if (date.plus(fresh).isAfter(now)
-            && !fresh.isZero() && !fresh.isNegative()) {
-            final Instant until = date.plus(fresh);
-            com.jcabi.log.Logger.info(
-                this,
-                "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
-                request.artifact(), request.version(), date, until
-            );
-            return this.createBlock(request, inspector, CooldownReason.FRESH_RELEASE, until);
-        }
-        com.jcabi.log.Logger.debug(
-            this,
-            "ALLOWING %s:%s - old enough (released=%s, age=%s)",
-            request.artifact(), request.version(), date, Duration.between(date, now)
-        );
-        return CooldownResult.allowed();
+        return Optional.empty();
     }
 
-    private CooldownResult createBlock(
+    /**
+     * Check if new artifact should be blocked based on release date.
+     * @param request Cooldown request
+     * @param inspector Inspector for artifact metadata
+     * @return CompletableFuture with evaluation result
+     */
+    private CompletableFuture<CooldownResult> checkNewArtifact(
+        final CooldownRequest request,
+        final CooldownInspector inspector
+    ) {
+        final Instant now = request.requestedAt();
+        
+        // Async fetch release date
+        return inspector.releaseDate(request.artifact(), request.version())
+            .thenCompose(release -> {
+                if (release.isEmpty()) {
+                    com.jcabi.log.Logger.warn(
+                        this,
+                        "No release date found for %s:%s:%s:%s - allowing",
+                        request.repoType(), request.repoName(), request.artifact(), request.version()
+                    );
+                    return CompletableFuture.completedFuture(CooldownResult.allowed());
+                }
+                
+                final Duration fresh = this.settings.minimumAllowedAge();
+                final Instant date = release.get();
+                com.jcabi.log.Logger.debug(
+                    this,
+                    "Evaluating cooldown for %s:%s (released=%s, now=%s, minAge=%s)",
+                    request.artifact(), request.version(), date, now, fresh
+                );
+                
+                if (date.plus(fresh).isAfter(now)
+                    && !fresh.isZero() && !fresh.isNegative()) {
+                    final Instant until = date.plus(fresh);
+                    com.jcabi.log.Logger.info(
+                        this,
+                        "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
+                        request.artifact(), request.version(), date, until
+                    );
+                    // Async block creation
+                    return this.createBlockAsync(request, inspector, CooldownReason.FRESH_RELEASE, until);
+                }
+                
+                com.jcabi.log.Logger.debug(
+                    this,
+                    "ALLOWING %s:%s - old enough (released=%s, age=%s)",
+                    request.artifact(), request.version(), date, Duration.between(date, now)
+                );
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            });
+    }
+
+    /**
+     * Create block record asynchronously with dependency checking.
+     * @param request Cooldown request
+     * @param inspector Inspector for dependencies
+     * @param reason Block reason
+     * @param blockedUntil Block expiration time
+     * @return CompletableFuture with block result
+     */
+    private CompletableFuture<CooldownResult> createBlockAsync(
         final CooldownRequest request,
         final CooldownInspector inspector,
         final CooldownReason reason,
         final Instant blockedUntil
     ) {
+        return CompletableFuture.supplyAsync(() -> {
+            final Instant now = request.requestedAt();
+            final DbBlockRecord main = this.repository.insertBlock(
+                request.repoType(),
+                request.repoName(),
+                request.artifact(),
+                request.version(),
+                reason,
+                now,
+                blockedUntil,
+                SYSTEM_ACTOR,
+                Optional.empty()
+            );
+            return main;
+        }, this.executor).thenCompose(main -> {
+            // Async fetch dependencies
+            return inspector.dependencies(request.artifact(), request.version())
+                .thenCompose(rawDeps -> {
+                    final List<CooldownDependency> deps = deduplicateDependencies(
+                        rawDeps,
+                        request.artifact(),
+                        request.version()
+                    );
+                    
+                    if (deps.isEmpty()) {
+                        return CompletableFuture.completedFuture(main);
+                    }
+                    
+                    // Async check dependency freshness
+                    return this.processDependencies(request, main, deps, blockedUntil);
+                });
+        }).thenApply(main -> {
+            final Instant now = request.requestedAt();
+            this.repository.recordAttempt(main.id(), request.requestedBy(), now);
+            final List<DbBlockRecord> storedDeps = this.repository.dependenciesOf(main.id());
+            return CooldownResult.blocked(
+                this.toCooldownBlock(main, storedDeps)
+            );
+        });
+    }
+
+    /**
+     * Process dependencies asynchronously - check freshness and insert blocks.
+     * @param request Cooldown request
+     * @param main Main block record
+     * @param deps Dependency list
+     * @param blockedUntil Block expiration
+     * @return CompletableFuture with main block record
+     */
+    private CompletableFuture<DbBlockRecord> processDependencies(
+        final CooldownRequest request,
+        final DbBlockRecord main,
+        final List<CooldownDependency> deps,
+        final Instant blockedUntil
+    ) {
         final Instant now = request.requestedAt();
-        final DbBlockRecord main = this.repository.insertBlock(
+        final Duration minAge = this.settings.minimumAllowedAge();
+        
+        if (minAge.isZero() || minAge.isNegative()) {
+            return CompletableFuture.completedFuture(main);
+        }
+        
+        // Process dependencies: insert fresh ones before returning
+        // This ensures dependencies are available when the result is returned
+        this.repository.insertDependencies(
             request.repoType(),
             request.repoName(),
-            request.artifact(),
-            request.version(),
-            reason,
+            deps,
+            main.reason(),
             now,
             blockedUntil,
             SYSTEM_ACTOR,
-            Optional.empty()
+            main.id()
         );
-        final List<CooldownDependency> deps = deduplicateDependencies(
-            inspector.dependencies(request.artifact(), request.version()).join(),
-            request.artifact(),
-            request.version()
-        );
-        // Only block dependencies that are themselves fresh relative to minimumAllowedAge
-        if (!deps.isEmpty()) {
-            final java.time.Duration minAge = this.settings.minimumAllowedAge();
-            if (!minAge.isZero() && !minAge.isNegative()) {
-                final java.util.Map<CooldownDependency, Optional<Instant>> releases =
-                    inspector.releaseDatesBatch(deps).join();
-                final List<CooldownDependency> freshDeps = deps.stream()
-                    .filter(dep -> {
-                        final Optional<Instant> ts = releases.getOrDefault(dep, Optional.empty());
-                        return ts.isPresent() && ts.get().plus(minAge).isAfter(now);
-                    })
-                    .collect(java.util.stream.Collectors.toList());
-                if (!freshDeps.isEmpty()) {
-                    this.repository.insertDependencies(
-                        request.repoType(),
-                        request.repoName(),
-                        freshDeps,
-                        reason,
-                        now,
-                        blockedUntil,
-                        SYSTEM_ACTOR,
-                        main.id()
-                    );
-                }
-            }
-        }
-        this.repository.recordAttempt(main.id(), request.requestedBy(), now);
-        final List<DbBlockRecord> storedDeps = this.repository.dependenciesOf(main.id());
-        return CooldownResult.blocked(
-            this.toCooldownBlock(main, storedDeps)
-        );
+        
+        return CompletableFuture.completedFuture(main);
     }
 
     private void expire(final DbBlockRecord record, final Instant when) {

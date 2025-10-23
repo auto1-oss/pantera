@@ -9,6 +9,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
+import com.artipie.http.headers.Header;
 import com.artipie.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
@@ -27,11 +28,15 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Vert.x Slice.
  */
 public final class VertxSliceServer implements Closeable {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(VertxSliceServer.class);
 
     /**
      * The Vert.x.
@@ -49,14 +54,9 @@ public final class VertxSliceServer implements Closeable {
     private final HttpServerOptions options;
 
     /**
-     * The Http server.
+     * The Http server reference (lock-free).
      */
-    private HttpServer server;
-
-    /**
-     * An object to sync on.
-     */
-    private final Object sync;
+    private final AtomicReference<HttpServer> serverRef;
 
     /**
      * @param vertx The vertx.
@@ -92,11 +92,34 @@ public final class VertxSliceServer implements Closeable {
         this.vertx = vertx;
         this.served = served;
         this.options = options;
-        this.sync = new Object();
+        this.serverRef = new AtomicReference<>();
     }
 
-    public int port() {
+    /**
+     * Get the configured port (may be 0 for random assignment).
+     * Use actualPort() to get the port the server is actually listening on.
+     * @return Configured port
+     */
+    public int configuredPort() {
         return options.getPort();
+    }
+
+    /**
+     * Get the actual port the server is listening on.
+     * @return Actual port, or -1 if server not started
+     */
+    public int actualPort() {
+        HttpServer server = this.serverRef.get();
+        return server != null ? server.actualPort() : -1;
+    }
+
+    /**
+     * @deprecated Use configuredPort() or actualPort() instead
+     * @return Configured port
+     */
+    @Deprecated
+    public int port() {
+        return configuredPort();
     }
 
     /**
@@ -105,23 +128,29 @@ public final class VertxSliceServer implements Closeable {
      * @return Port the server is listening on.
      */
     public int start() {
-        synchronized (this.sync) {
-            if (this.server != null) {
-                throw new IllegalStateException("Server was already started");
-            }
-            this.server = this.vertx.createHttpServer(this.options);
-            this.server.requestHandler(this.proxyHandler());
-            this.server.rxListen().blockingGet();
-            return this.server.actualPort();
+        HttpServer server = this.vertx.createHttpServer(this.options);
+        server.requestHandler(this.proxyHandler());
+        
+        // Set atomically before blocking - fails if already started
+        if (!this.serverRef.compareAndSet(null, server)) {
+            throw new IllegalStateException("Server was already started");
         }
+        
+        // Block OUTSIDE of any lock
+        server.rxListen().blockingGet();
+        return server.actualPort();
     }
 
     /**
      * Stop the server.
      */
     public void stop() {
-        synchronized (this.sync) {
-            this.server.rxClose().blockingAwait();
+        HttpServer server = this.serverRef.getAndSet(null);
+        if (server != null) {
+            // Block OUTSIDE of any lock
+            server.rxClose().blockingAwait();
+        } else {
+            LOGGER.warn("stop() called but server was not started");
         }
     }
 
@@ -194,9 +223,11 @@ public final class VertxSliceServer implements Closeable {
         response.setStatusCode(status.code());
         headers.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
         
-        if (isHead) {
-            System.err.println("HEAD: Content-Length in headers? " + response.headers().contains("Content-Length"));
-            System.err.println("HEAD: Content-Length value: " + response.headers().get("Content-Length"));
+        if (isHead && LOGGER.isTraceEnabled()) {
+            LOGGER.trace("HEAD request: Content-Length present={}, value={}", 
+                response.headers().contains("Content-Length"),
+                response.headers().get("Content-Length")
+            );
         }
         
         final Flowable<Buffer> vpb = Flowable.fromPublisher(body)
@@ -235,18 +266,33 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
-     * Check if request expects {@code continue} status to be sent before sending request body.
+     * Check if request expects 100-continue.
      *
      * @param headers Request headers
-     * @return True if expects
+     * @return True if expects 100-continue
+     */
+    private static boolean expects100Continue(Headers headers) {
+        for (Header h : headers.find("expect")) {
+            if ("100-continue".equalsIgnoreCase(h.getValue())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Send continue response if expected.
+     *
+     * @param headers Request headers
+     * @param response Response to write to
+     * @return CompletableFuture
      */
     private static CompletableFuture<Void> continueResponseFut(Headers headers, HttpServerResponse response) {
-        if (headers.find("expect")
-            .stream()
-            .anyMatch(h -> "100-continue".equalsIgnoreCase(h.getValue()))) {
-            return CompletableFuture.runAsync(() -> VertxSliceServer.accept(
-                response, RsStatus.CONTINUE, Headers.EMPTY, Content.EMPTY)
-            );
+        if (expects100Continue(headers)) {
+            // Direct call - accept() already returns CompletionStage
+            return VertxSliceServer.accept(
+                response, RsStatus.CONTINUE, Headers.EMPTY, Content.EMPTY
+            ).toCompletableFuture();
         }
         return CompletableFuture.completedFuture(null);
     }

@@ -85,7 +85,7 @@ public final class PhpComposer extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
-                        new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.zip$")),
+                        new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.(zip|tar\\.gz|tgz)$")),
                         MethodRule.GET
                     ),
                     PhpComposer.createAuthSlice(
@@ -113,7 +113,7 @@ public final class PhpComposer extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
-                        new RtRule.ByPath(AddArchiveSlice.PATH),
+                        new RtRule.ByPath(".*\\.(zip|tar\\.gz|tgz)$"),
                         MethodRule.PUT
                     ),
                     PhpComposer.createAuthSlice(

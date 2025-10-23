@@ -12,7 +12,7 @@ VERSION="v1.0.1"
 ARTIPIE_URL="${ARTIPIE_URL:-https://localhost:8443}"
 ARTIPIE_USER="${ARTIPIE_USER:-ayd}"
 ARTIPIE_PASS="${ARTIPIE_PASS:-ayd}"
-REPO_NAME="${REPO_NAME:-artifactory/go}"
+REPO_NAME="${REPO_NAME:-artifactory/api/go/go}"
 
 echo "Publishing Go module: $MODULE_PATH @ $VERSION"
 echo "Target repository: $ARTIPIE_URL/$REPO_NAME"

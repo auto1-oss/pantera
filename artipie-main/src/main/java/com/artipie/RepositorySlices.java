@@ -249,7 +249,7 @@ public class RepositorySlices {
             case "npm":
                 slice = trimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
                     )
                 );
                 break;
@@ -406,43 +406,91 @@ public class RepositorySlices {
                 final NpmProxy npmProxy = new NpmProxy(
                     npmRemoteUri, cfg.storage(), clientSlices
                 );
-                slice = new CombinedAuthzSliceWrap(
-                    new TimeoutSlice(
-                        new NpmProxySlice(
-                            cfg.path(),
-                            npmProxy,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)
-                            ),
-                            cfg.name(),
-                            cfg.type(),
-                            this.cooldown,
-                            new com.artipie.http.client.UriClientSlice(clientSlices, npmRemoteUri),
-                            Optional.of(cfg.url())
-                        ),
-                        settings.httpClientSettings().proxyTimeout()
+                final Slice npmProxySlice = new TimeoutSlice(
+                    new NpmProxySlice(
+                        cfg.path(),
+                        npmProxy,
+                        settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                        cfg.name(),
+                        cfg.type(),
+                        this.cooldown,
+                        new com.artipie.http.client.UriClientSlice(clientSlices, npmRemoteUri),
+                        Optional.of(cfg.url())
                     ),
-                    authentication(),
-                    tokens.auth(),
-                    new OperationControl(
-                        securityPolicy(),
-                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                    settings.httpClientSettings().proxyTimeout()
+                );
+                // npm-proxy routing: audit anonymous (via SecurityAuditProxySlice), login blocked, downloads require JWT
+                slice = new com.artipie.http.rt.SliceRoute(
+                    // Audit - anonymous, SecurityAuditProxySlice already strips headers
+                    new com.artipie.http.rt.RtRulePath(
+                        new com.artipie.http.rt.RtRule.All(
+                            com.artipie.http.rt.MethodRule.POST,
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
+                        ),
+                        npmProxySlice
+                    ),
+                    // Block login/adduser/whoami - proxy is read-only
+                    new com.artipie.http.rt.RtRulePath(
+                        new com.artipie.http.rt.RtRule.Any(
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
+                        ),
+                        new com.artipie.http.slice.SliceSimple(
+                            com.artipie.http.ResponseBuilder.forbidden()
+                                .textBody("User management not supported on proxy. Use local npm repository.")
+                                .build()
+                        )
+                    ),
+                    // Downloads - require Keycloak JWT
+                    new com.artipie.http.rt.RtRulePath(
+                        com.artipie.http.rt.RtRule.FALLBACK,
+                        new CombinedAuthzSliceWrap(
+                            npmProxySlice,
+                            authentication(),
+                            tokens.auth(),
+                            new OperationControl(
+                                securityPolicy(),
+                                new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            )
+                        )
                     )
                 );
                 break;
-            case "pypi":
+            case "npm-group":
+                final Slice npmGroupSlice = new GroupSlice(this::slice, cfg.name(), cfg.members(), port);
+                // npm-group: audit anonymous, all other operations require auth
                 slice = trimPathSlice(
-                    new PySlice(cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents())
+                    new com.artipie.http.rt.SliceRoute(
+                        // Audit - anonymous
+                        new com.artipie.http.rt.RtRulePath(
+                            new com.artipie.http.rt.RtRule.All(
+                                com.artipie.http.rt.MethodRule.POST,
+                                new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
+                            ),
+                            npmGroupSlice
+                        ),
+                        // All other operations - require JWT
+                        new com.artipie.http.rt.RtRulePath(
+                            com.artipie.http.rt.RtRule.FALLBACK,
+                            new CombinedAuthzSliceWrap(
+                                npmGroupSlice,
+                                authentication(),
+                                tokens.auth(),
+                                new OperationControl(
+                                    securityPolicy(),
+                                    new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                                )
+                            )
+                        )
+                    )
                 );
                 break;
+            case "file-group":
             case "php-group":
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new ComposerGroupSlice(
-                            key -> this.slice(key, port),
-                            cfg.name(),
-                            cfg.members(),
-                            port
-                        ),
+                        new ComposerGroupSlice(this::slice, cfg.name(), cfg.members(), port),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -452,12 +500,10 @@ public class RepositorySlices {
                     )
                 );
                 break;
-            case "file-group":
             case "gem-group":
             case "go-group":
             case "gradle-group":
             case "maven-group":
-            case "npm-group":
             case "pypi-group":
             case "docker-group":
                 slice = trimPathSlice(
@@ -551,6 +597,14 @@ public class RepositorySlices {
                 slice = trimPathSlice(
                     new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                         artifactEvents(), cfg.name())
+                );
+                break;
+            case "pypi":
+                slice = trimPathSlice(
+                    new com.artipie.pypi.http.PySlice(
+                        cfg.storage(), securityPolicy(), authentication(), 
+                        tokens.auth(), cfg.name(), artifactEvents()
+                    )
                 );
                 break;
             default:

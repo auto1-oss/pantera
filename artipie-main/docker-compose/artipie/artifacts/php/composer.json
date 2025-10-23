@@ -3,7 +3,13 @@
   "description": "Sample PHP project using Composer with a private artifact repo",
   "type": "project",
   "require": {
-    "php": ">=8.0"
+    "php": ">=8.0",
+    "doekos/shipkit": "^1.0.0",
+    "ayd/helper-lib" : "^1.0.0",
+    "wkda/notification-service": "^0.1.0",
+    "symfony/polyfill-php85": "*",
+    "doctrine/inflector": "*",
+    "symfony/yaml": "^6.0"
   },
   "repositories": [
     {
@@ -11,7 +17,7 @@
       "url": "http://localhost:8081/artifactory/api/composer/php_group"
     },
     {
-      "packagist.org": false
+      "packagist": false
     }
   ],
   "autoload": {
@@ -20,10 +26,10 @@
     }
   },
   "require-dev": {
-    "symfony/web-profiler-bundle": "^7.3",
-    "doekos/shipkit": "^1.0.0",
-    "ayd/helper-lib" : "^1.0.0"
+    "symfony/web-profiler-bundle": "^7.3"
   },
+  "minimum-stability": "stable",
+  "prefer-stable": true,
   "config": {
     "secure-http": false,
     "http-basic": {

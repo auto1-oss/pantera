@@ -5,4 +5,4 @@ repo:
     type: fs
     path: /var/artipie/data
   remotes:
-    - url: https://packagist.org
+    - url: https://repo.packagist.org

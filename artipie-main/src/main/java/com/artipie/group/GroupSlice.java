@@ -66,12 +66,45 @@ public final class GroupSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(final RequestLine line, final Headers headers, final Content body) {
         final String method = line.method().value();
+        final String path = line.uri().getPath();
+        
         // Allow read-only methods
-        if (!("GET".equals(method) || "HEAD".equals(method))) {
-            return ResponseBuilder.methodNotAllowed().completedFuture();
+        if ("GET".equals(method) || "HEAD".equals(method)) {
+            return tryMember(0, line, headers, body);
         }
-        // Try members sequentially
-        return tryMember(0, line, headers, body);
+        
+        // Allow POST for npm audit endpoints
+        if ("POST".equals(method) && path.contains("/-/npm/v1/security/")) {
+            return tryMember(0, line, headers, body);
+        }
+        
+        // Allow PUT for npm adduser/login endpoints (only for npm-group)
+        if ("PUT".equals(method) && this.isNpmGroup() && this.isNpmAuthEndpoint(path)) {
+            // Forward to first member (typically the local npm repo)
+            return tryMember(0, line, headers, body);
+        }
+        
+        // Block all other write operations (PUT, DELETE, etc.)
+        return ResponseBuilder.methodNotAllowed().completedFuture();
+    }
+    
+    /**
+     * Check if this is an npm-group repository.
+     * @return True if group name indicates npm-group
+     */
+    private boolean isNpmGroup() {
+        // Check if group name ends with _group (npm_group) or contains "npm"
+        return this.group != null && 
+               (this.group.contains("npm") || this.group.equals("npm-group"));
+    }
+    
+    /**
+     * Check if path is an npm authentication endpoint.
+     * @param path Request path
+     * @return True if this is npm adduser/login endpoint
+     */
+    private boolean isNpmAuthEndpoint(final String path) {
+        return path.contains("/-/user/org.couchdb.user:");
     }
 
     private CompletableFuture<Response> tryMember(

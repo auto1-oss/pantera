@@ -8,6 +8,7 @@ import com.artipie.ArtipieException;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.HttpClientSettings;
+import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Strings;
 import org.eclipse.jetty.client.BasicAuthentication;
 import org.eclipse.jetty.client.HttpClient;
@@ -25,7 +26,7 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  *
  * @since 0.1
  */
-public final class JettyClientSlices implements ClientSlices {
+public final class JettyClientSlices implements ClientSlices, AutoCloseable {
 
     /**
      * Default HTTP port.
@@ -41,6 +42,16 @@ public final class JettyClientSlices implements ClientSlices {
      * HTTP client.
      */
     private final HttpClient clnt;
+
+    /**
+     * Started flag.
+     */
+    private final AtomicBoolean started = new AtomicBoolean(false);
+
+    /**
+     * Stopped flag.
+     */
+    private final AtomicBoolean stopped = new AtomicBoolean(false);
 
     /**
      * Ctor.
@@ -62,10 +73,16 @@ public final class JettyClientSlices implements ClientSlices {
      * Prepare for usage.
      */
     public void start() {
-        try {
-            this.clnt.start();
-        } catch (Exception e) {
-            throw new ArtipieException(e);
+        if (started.compareAndSet(false, true)) {
+            try {
+                this.clnt.start();
+            } catch (Exception e) {
+                started.set(false);  // Reset on failure
+                throw new ArtipieException(
+                    "Failed to start Jetty HTTP client. Check logs for connection/SSL issues.",
+                    e
+                );
+            }
         }
     }
 
@@ -73,11 +90,24 @@ public final class JettyClientSlices implements ClientSlices {
      * Release used resources and stop requests in progress.
      */
     public void stop() {
-        try {
-            this.clnt.stop();
-        } catch (Exception e) {
-            throw new ArtipieException(e);
+        if (stopped.compareAndSet(false, true)) {
+            try {
+                this.clnt.stop();
+            } catch (Exception e) {
+                throw new ArtipieException(
+                    "Failed to stop Jetty HTTP client. Some connections may not be closed properly.",
+                    e
+                );
+            }
         }
+    }
+
+    /**
+     * Close and release resources (implements AutoCloseable).
+     */
+    @Override
+    public void close() {
+        stop();
     }
 
     @Override

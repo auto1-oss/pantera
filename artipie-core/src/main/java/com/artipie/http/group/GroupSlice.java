@@ -52,17 +52,44 @@ public final class GroupSlice implements Slice {
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {
-        for (Slice remote : targets) {
-            try {
-                Response res = remote.response(line, headers, body).get();
+        // Try repositories in order, but asynchronously (non-blocking)
+        // This is crucial for group repositories with proxies (avoid blocking on remote calls)
+        return this.tryNext(0, line, headers, body);
+    }
+
+    /**
+     * Try the next repository in the list asynchronously.
+     * @param index Current repository index
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response future
+     */
+    private CompletableFuture<Response> tryNext(
+        final int index,
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        if (index >= this.targets.size()) {
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+
+        final Slice current = this.targets.get(index);
+        return current.response(line, headers, body)
+            .handle((res, err) -> {
+                if (err != null) {
+                    LOGGER.warn("Failed to get response from repository at index " + index, err);
+                    // On error, try next repository
+                    return this.tryNext(index + 1, line, headers, body);
+                }
                 if (res.status() != RsStatus.NOT_FOUND) {
+                    // Found it, return immediately
                     return CompletableFuture.completedFuture(res);
                 }
-            } catch (InterruptedException | ExecutionException e) {
-                LOGGER.warn("Can't get response for remote " + remote, e);
-            }
-        }
-        return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
-
+                // Not found, try next repository
+                return this.tryNext(index + 1, line, headers, body);
+            })
+            .thenCompose(future -> future);
     }
 }

@@ -8,6 +8,7 @@ import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Content;
 import com.artipie.asto.FailedCompletionStage;
 import com.artipie.asto.Key;
+import com.artipie.asto.ManagedStorage;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.UnderLockOperation;
@@ -43,6 +44,14 @@ import software.amazon.awssdk.services.s3.model.ChecksumMode;
 
 /**
  * Storage that holds data in S3 storage.
+ * Implements ManagedStorage to properly cleanup S3AsyncClient resources.
+ * 
+ * <p><strong>Important:</strong> Always close S3Storage when done to prevent resource leaks:
+ * <pre>{@code
+ * try (S3Storage storage = new S3Storage(client, bucket, endpoint)) {
+ *     storage.save(key, content).join();
+ * }
+ * }</pre>
  *
  * @since 0.1
  * @todo #87:60min Do not await abort to complete if save() failed.
@@ -53,7 +62,7 @@ import software.amazon.awssdk.services.s3.model.ChecksumMode;
  *  but it makes testing the method difficult.
  */
 @SuppressWarnings("PMD.TooManyMethods")
-public final class S3Storage implements Storage {
+public final class S3Storage implements ManagedStorage {
 
     /**
      * Minimum content size to consider uploading it as multipart.
@@ -431,6 +440,12 @@ public final class S3Storage implements Storage {
         return this.id;
     }
 
+    @Override
+    public void close() {
+        // Close S3 client to release connection pool and netty threads
+        this.client.close();
+    }
+
     /**
      * Uploads content using put request.
      *
@@ -524,16 +539,27 @@ public final class S3Storage implements Storage {
     }
 
     private Publisher<ByteBuffer> rangePublisher(final Key key, final long start, final long end) {
-        final CompletableFuture<Content> res = new CompletableFuture<>();
-        this.client.getObject(
-            GetObjectRequest.builder()
-                .bucket(this.bucket)
-                .key(key.string())
-                .range(String.format("bytes=%d-%d", start, end))
-                .build(),
-            new ResponseAdapter(res)
-        );
-        return res.thenApply(c -> (Publisher<ByteBuffer>) c).join();
+        // Return a publisher that initiates the S3 request on subscription (lazy)
+        // This avoids blocking .join() and allows proper async flow
+        return Flowable.defer(() -> {
+            final CompletableFuture<Content> res = new CompletableFuture<>();
+            this.client.getObject(
+                GetObjectRequest.builder()
+                    .bucket(this.bucket)
+                    .key(key.string())
+                    .range(String.format("bytes=%d-%d", start, end))
+                    .build(),
+                new ResponseAdapter(res)
+            );
+            return Flowable.fromPublisher(
+                subscriber -> res.thenAccept(
+                    content -> content.subscribe(subscriber)
+                ).exceptionally(err -> {
+                    subscriber.onError(err);
+                    return null;
+                })
+            );
+        });
     }
 
 

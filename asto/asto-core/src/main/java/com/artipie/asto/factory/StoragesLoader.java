@@ -51,6 +51,21 @@ public final class StoragesLoader
     }
 
     /**
+     * Get storage factory by type.
+     * 
+     * @param type Storage type (e.g., "s3", "fs")
+     * @return Storage factory instance
+     * @throws StorageNotFoundException if type is not found
+     */
+    public StorageFactory getFactory(final String type) {
+        final StorageFactory factory = super.factories.get(type);
+        if (factory == null) {
+            throw new StorageNotFoundException(type);
+        }
+        return factory;
+    }
+
+    /**
      * Known storage types.
      *
      * @return Set of storage types.
