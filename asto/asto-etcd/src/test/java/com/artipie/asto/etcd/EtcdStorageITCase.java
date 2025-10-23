@@ -9,10 +9,9 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
-import com.github.dockerjava.api.DockerClient;
 import io.etcd.jetcd.Client;
-import io.etcd.jetcd.launcher.EtcdContainer;
-import io.etcd.jetcd.test.EtcdClusterExtension;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
@@ -23,7 +22,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
-import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.wait.strategy.Wait;
+import java.time.Duration;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -38,15 +38,22 @@ import java.util.stream.Collectors;
 final class EtcdStorageITCase {
 
     /**
-     * Test cluster.
+     * Test etcd container using multi-arch image.
      */
-    static final EtcdClusterExtension ETCD = new EtcdClusterExtension(
-        "test-etcd",
-        1,
-        false,
-        "--data-dir",
-        "/data.etcd0"
-    );
+    @SuppressWarnings("resource")
+    static final GenericContainer<?> ETCD = new GenericContainer<>(
+        DockerImageName.parse("quay.io/coreos/etcd:v3.5.17")
+    )
+        .withCommand(
+            "/usr/local/bin/etcd",
+            "--listen-client-urls", "http://0.0.0.0:2379",
+            "--advertise-client-urls", "http://0.0.0.0:2379"
+        )
+        .withExposedPorts(2379)
+        .waitingFor(
+            Wait.forLogMessage(".*ready to serve client requests.*\n", 1)
+                .withStartupTimeout(Duration.ofMinutes(2))
+        );
 
     /**
      * Storage.
@@ -54,20 +61,20 @@ final class EtcdStorageITCase {
     private Storage storage;
 
     @BeforeAll
-    static void beforeAll() throws InterruptedException {
-        final DockerClient client = DockerClientFactory.instance().client();
-        client.pullImageCmd(EtcdContainer.ETCD_DOCKER_IMAGE_NAME)
-            .start()
-            .awaitCompletion();
+    static void beforeAll() {
         ETCD.start();
     }
 
     @BeforeEach
     void setUp() {
-        final List<URI> endpoints = ETCD.getClientEndpoints();
+        final String endpoint = String.format(
+            "http://%s:%d",
+            ETCD.getHost(),
+            ETCD.getMappedPort(2379)
+        );
         this.storage = new EtcdStorage(
-            Client.builder().endpoints(endpoints).build(),
-            endpoints.stream().map(URI::toString).collect(Collectors.joining())
+            Client.builder().endpoints(URI.create(endpoint)).build(),
+            endpoint
         );
     }
 
@@ -173,12 +180,14 @@ final class EtcdStorageITCase {
 
     @Test
     void returnsIdentifier() {
+        final String endpoint = String.format(
+            "http://%s:%d",
+            ETCD.getHost(),
+            ETCD.getMappedPort(2379)
+        );
         MatcherAssert.assertThat(
             this.storage.identifier(),
-            Matchers.stringContainsInOrder(
-                "Etcd",
-                ETCD.getClientEndpoints().stream().map(URI::toString).collect(Collectors.joining())
-            )
+            Matchers.stringContainsInOrder("Etcd", endpoint)
         );
     }
 }
