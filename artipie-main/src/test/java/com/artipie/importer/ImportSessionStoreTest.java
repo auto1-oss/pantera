@@ -4,21 +4,19 @@
  */
 package com.artipie.importer;
 
+import com.amihaiemil.eoyaml.Yaml;
 import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.PostgreSQLTestConfig;
+import com.artipie.db.SharedPostgreSQLContainer;
 import com.artipie.http.Headers;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.importer.api.ChecksumPolicy;
 import com.artipie.importer.api.DigestType;
 import com.artipie.importer.api.ImportHeaders;
-import java.io.IOException;
 import java.util.EnumMap;
 import java.util.Map;
 import javax.sql.DataSource;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 
@@ -27,33 +25,17 @@ import org.testcontainers.containers.PostgreSQLContainer;
  */
 final class ImportSessionStoreTest {
 
-    private static PostgreSQLContainer<?> postgres;
-
-    @BeforeAll
-    static void startContainer() {
-        postgres = PostgreSQLTestConfig.createContainer();
-        postgres.start();
-    }
-
-    @AfterAll
-    static void stopContainer() {
-        if (postgres != null) {
-            postgres.stop();
-        }
-    }
-
     @Test
     void completesSessionLifecycle() throws Exception {
         final DataSource dataSource = datasource();
         try {
             final ImportSessionStore store = new ImportSessionStore(dataSource);
             final ImportRequest request = ImportRequest.parse(
-                new RequestLine(RqMethod.PUT, "/.import/db-repo/pkg/name.bin"),
-                new Headers()
-                    .add(ImportHeaders.REPO_TYPE, "file")
-                    .add(ImportHeaders.IDEMPOTENCY_KEY, "session-1")
-                    .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name())
-            );
+                    new RequestLine(RqMethod.PUT, "/.import/db-repo/pkg/name.bin"),
+                    new Headers()
+                            .add(ImportHeaders.REPO_TYPE, "file")
+                            .add(ImportHeaders.IDEMPOTENCY_KEY, "session-1")
+                            .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name()));
             final ImportSession session = store.start(request);
             Assertions.assertEquals(ImportSessionStatus.IN_PROGRESS, session.status());
             store.markCompleted(session, 42L, new EnumMap<>(DigestType.class));
@@ -70,20 +52,18 @@ final class ImportSessionStoreTest {
         try {
             final ImportSessionStore store = new ImportSessionStore(dataSource);
             final ImportRequest request = ImportRequest.parse(
-                new RequestLine(RqMethod.PUT, "/.import/db-repo/pkg/bad.bin"),
-                new Headers()
-                    .add(ImportHeaders.REPO_TYPE, "file")
-                    .add(ImportHeaders.IDEMPOTENCY_KEY, "session-2")
-                    .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name())
-            );
+                    new RequestLine(RqMethod.PUT, "/.import/db-repo/pkg/bad.bin"),
+                    new Headers()
+                            .add(ImportHeaders.REPO_TYPE, "file")
+                            .add(ImportHeaders.IDEMPOTENCY_KEY, "session-2")
+                            .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.METADATA.name()));
             final ImportSession session = store.start(request);
             store.markQuarantined(
-                session,
-                128L,
-                Map.of(DigestType.SHA1, "deadbeef"),
-                "checksum mismatch",
-                ".import/quarantine/session-2"
-            );
+                    session,
+                    128L,
+                    Map.of(DigestType.SHA1, "deadbeef"),
+                    "checksum mismatch",
+                    ".import/quarantine/session-2");
             final ImportSession quarantined = store.start(request);
             Assertions.assertEquals(ImportSessionStatus.QUARANTINED, quarantined.status());
         } finally {
@@ -92,24 +72,19 @@ final class ImportSessionStoreTest {
     }
 
     private static DataSource datasource() {
-        final String yaml = String.join(
-            "\n",
-            "artifacts_database:",
-            String.format("  postgres_host: %s", postgres.getHost()),
-            String.format("  postgres_port: %d", postgres.getMappedPort(5432)),
-            String.format("  postgres_database: %s", postgres.getDatabaseName()),
-            String.format("  postgres_user: %s", postgres.getUsername()),
-            String.format("  postgres_password: %s", postgres.getPassword())
-        );
-        try {
-            final ArtifactDbFactory factory = new ArtifactDbFactory(
-                com.amihaiemil.eoyaml.Yaml.createYamlInput(yaml).readYamlMapping(),
-                postgres.getDatabaseName()
-            );
-            return factory.initialize();
-        } catch (final IOException err) {
-            throw new IllegalStateException("Failed to read configuration", err);
-        }
+        PostgreSQLContainer<?> postgres = SharedPostgreSQLContainer.getInstance();
+        return new ArtifactDbFactory(
+                Yaml.createYamlMappingBuilder().add(
+                        "artifacts_database",
+                        Yaml.createYamlMappingBuilder()
+                                .add(ArtifactDbFactory.YAML_HOST, postgres.getHost())
+                                .add(ArtifactDbFactory.YAML_PORT, String.valueOf(postgres.getFirstMappedPort()))
+                                .add(ArtifactDbFactory.YAML_DATABASE, postgres.getDatabaseName())
+                                .add(ArtifactDbFactory.YAML_USER, postgres.getUsername())
+                                .add(ArtifactDbFactory.YAML_PASSWORD, postgres.getPassword())
+                                .build())
+                        .build(),
+                postgres.getDatabaseName()).initialize();
     }
 
     private static void close(final DataSource dataSource) {

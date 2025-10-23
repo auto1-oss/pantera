@@ -7,6 +7,7 @@ package com.artipie.cooldown;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.db.ArtifactDbFactory;
+import com.artipie.db.SharedPostgreSQLContainer;
 import com.artipie.cooldown.CooldownReason;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -31,14 +32,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-@Testcontainers(disabledWithoutDocker = true)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 final class JdbcCooldownServiceTest {
-
-    @Container
-    @SuppressWarnings("unused")
-    private static final PostgreSQLContainer<?> POSTGRES =
-        new PostgreSQLContainer<>("postgres:15");
 
     private DataSource dataSource;
 
@@ -54,10 +49,9 @@ final class JdbcCooldownServiceTest {
         this.repository = new CooldownRepository(this.dataSource);
         this.executor = Executors.newSingleThreadExecutor();
         this.service = new JdbcCooldownService(
-            CooldownSettings.defaults(),
-            this.repository,
-            this.executor
-        );
+                CooldownSettings.defaults(),
+                this.repository,
+                this.executor);
         this.truncate();
     }
 
@@ -70,8 +64,8 @@ final class JdbcCooldownServiceTest {
     @Test
     void allowsWhenNewerVersionThanCache() {
         this.insertArtifact("maven-proxy", "central", "com.test.pkg", "1.0.0");
-        final CooldownRequest request =
-            new CooldownRequest("maven-proxy", "central", "com.test.pkg", "2.0.0", "alice", Instant.now());
+        final CooldownRequest request = new CooldownRequest("maven-proxy", "central", "com.test.pkg", "2.0.0", "alice",
+                Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -79,7 +73,8 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
@@ -90,8 +85,8 @@ final class JdbcCooldownServiceTest {
 
     @Test
     void blocksFreshReleaseWithinWindow() {
-        final CooldownRequest request =
-            new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob", Instant.now());
+        final CooldownRequest request = new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob",
+                Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -99,7 +94,8 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of(new CooldownDependency("dependency", "1.0.0")));
             }
         };
@@ -111,8 +107,8 @@ final class JdbcCooldownServiceTest {
 
     @Test
     void allowsWhenReleaseDateIsUnknown() {
-        final CooldownRequest request =
-            new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob", Instant.now());
+        final CooldownRequest request = new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob",
+                Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -120,7 +116,8 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
@@ -131,8 +128,8 @@ final class JdbcCooldownServiceTest {
     @Test
     void allowsAfterManualUnblock() {
         this.insertArtifact("maven-proxy", "central", "com.test.pkg", "1.0.0");
-        final CooldownRequest request =
-            new CooldownRequest("maven-proxy", "central", "com.test.pkg", "2.0.0", "alice", Instant.now());
+        final CooldownRequest request = new CooldownRequest("maven-proxy", "central", "com.test.pkg", "2.0.0", "alice",
+                Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -140,7 +137,8 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
@@ -152,8 +150,7 @@ final class JdbcCooldownServiceTest {
 
     @Test
     void unblockAllReleasesDependencies() {
-        final CooldownRequest request =
-            new CooldownRequest("npm-proxy", "npm", "main", "1.0.0", "eve", Instant.now());
+        final CooldownRequest request = new CooldownRequest("npm-proxy", "npm", "main", "1.0.0", "eve", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -161,11 +158,11 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of(
-                    new CooldownDependency("dep-a", "1.0.0"),
-                    new CooldownDependency("dep-b", "2.0.0")
-                ));
+                        new CooldownDependency("dep-a", "1.0.0"),
+                        new CooldownDependency("dep-b", "2.0.0")));
             }
         };
         this.service.evaluate(request, inspector).join();
@@ -177,8 +174,8 @@ final class JdbcCooldownServiceTest {
 
     @Test
     void storesSystemAsBlockerAndTracksRequester() {
-        final CooldownRequest request =
-            new CooldownRequest("maven-proxy", "central", "com.test.blocked", "3.0.0", "carol", Instant.now());
+        final CooldownRequest request = new CooldownRequest("maven-proxy", "central", "com.test.blocked", "3.0.0",
+                "carol", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
             @Override
             public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
@@ -186,45 +183,43 @@ final class JdbcCooldownServiceTest {
             }
 
             @Override
-            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact,
+                    final String version) {
                 return CompletableFuture.completedFuture(List.of());
             }
         };
         this.service.evaluate(request, inspector).join();
         MatcherAssert.assertThat(
-            this.blockedBy("central", "com.test.blocked", "3.0.0"),
-            Matchers.is("system")
-        );
+                this.blockedBy("central", "com.test.blocked", "3.0.0"),
+                Matchers.is("system"));
         final long id = this.blockId("central", "com.test.blocked", "3.0.0");
         MatcherAssert.assertThat(
-            this.requesters(id),
-            Matchers.contains("carol")
-        );
+                this.requesters(id),
+                Matchers.contains("carol"));
     }
 
     private YamlMapping settings() {
+        PostgreSQLContainer<?> postgres = SharedPostgreSQLContainer.getInstance();
         return Yaml.createYamlMappingBuilder().add(
-            "artifacts_database",
-            Yaml.createYamlMappingBuilder()
-                .add(ArtifactDbFactory.YAML_HOST, POSTGRES.getHost())
-                .add(ArtifactDbFactory.YAML_PORT, String.valueOf(POSTGRES.getFirstMappedPort()))
-                .add(ArtifactDbFactory.YAML_DATABASE, POSTGRES.getDatabaseName())
-                .add(ArtifactDbFactory.YAML_USER, POSTGRES.getUsername())
-                .add(ArtifactDbFactory.YAML_PASSWORD, POSTGRES.getPassword())
-                .build()
-        ).build();
+                "artifacts_database",
+                Yaml.createYamlMappingBuilder()
+                        .add(ArtifactDbFactory.YAML_HOST, postgres.getHost())
+                        .add(ArtifactDbFactory.YAML_PORT, String.valueOf(postgres.getFirstMappedPort()))
+                        .add(ArtifactDbFactory.YAML_DATABASE, postgres.getDatabaseName())
+                        .add(ArtifactDbFactory.YAML_USER, postgres.getUsername())
+                        .add(ArtifactDbFactory.YAML_PASSWORD, postgres.getPassword())
+                        .build())
+                .build();
     }
 
     private void insertArtifact(
-        final String repoType,
-        final String repoName,
-        final String name,
-        final String version
-    ) {
+            final String repoType,
+            final String repoName,
+            final String name,
+            final String version) {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "INSERT INTO artifacts(repo_type, repo_name, name, version, size, created_date, owner) VALUES (?,?,?,?,?,?,?)"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "INSERT INTO artifacts(repo_type, repo_name, name, version, size, created_date, owner) VALUES (?,?,?,?,?,?,?)")) {
             stmt.setString(1, repoType);
             stmt.setString(2, repoName);
             stmt.setString(3, name);
@@ -240,9 +235,8 @@ final class JdbcCooldownServiceTest {
 
     private String status(final String repo, final String artifact, final String version) {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT status FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "SELECT status FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?")) {
             stmt.setString(1, repo);
             stmt.setString(2, artifact);
             stmt.setString(3, version);
@@ -259,9 +253,8 @@ final class JdbcCooldownServiceTest {
 
     private String blockedBy(final String repo, final String artifact, final String version) {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT blocked_by FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "SELECT blocked_by FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?")) {
             stmt.setString(1, repo);
             stmt.setString(2, artifact);
             stmt.setString(3, version);
@@ -278,9 +271,8 @@ final class JdbcCooldownServiceTest {
 
     private long blockId(final String repo, final String artifact, final String version) {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT id FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "SELECT id FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?")) {
             stmt.setString(1, repo);
             stmt.setString(2, artifact);
             stmt.setString(3, version);
@@ -297,9 +289,8 @@ final class JdbcCooldownServiceTest {
 
     private List<String> requesters(final long blockId) {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT requested_by FROM artifact_cooldown_attempts WHERE block_id = ? ORDER BY attempted_at"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "SELECT requested_by FROM artifact_cooldown_attempts WHERE block_id = ? ORDER BY attempted_at")) {
             stmt.setLong(1, blockId);
             try (ResultSet rs = stmt.executeQuery()) {
                 final List<String> result = new ArrayList<>();
@@ -315,9 +306,8 @@ final class JdbcCooldownServiceTest {
 
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "TRUNCATE TABLE artifact_cooldown_attempts, artifact_cooldowns, artifacts RESTART IDENTITY"
-            )) {
+                PreparedStatement stmt = conn.prepareStatement(
+                        "TRUNCATE TABLE artifact_cooldown_attempts, artifact_cooldowns, artifacts RESTART IDENTITY")) {
             stmt.executeUpdate();
         } catch (final SQLException err) {
             throw new IllegalStateException(err);
