@@ -24,6 +24,16 @@ import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
 import com.artipie.http.slice.SliceSimple;
+import com.artipie.npm.http.auth.AddUserSlice;
+import com.artipie.npm.http.auth.ArtipieAddUserSlice;
+import com.artipie.npm.http.auth.NpmTokenAuthentication;
+import com.artipie.npm.http.auth.WhoAmISlice;
+import com.artipie.npm.http.search.SearchSlice;
+import com.artipie.npm.http.search.InMemoryPackageIndex;
+import com.artipie.npm.repository.StorageUserRepository;
+import com.artipie.npm.repository.StorageTokenRepository;
+import com.artipie.npm.security.BCryptPasswordHasher;
+import com.artipie.npm.security.TokenGenerator;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
@@ -128,6 +138,35 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, false);
+    }
+    
+    /**
+     * Ctor with JWT-only option.
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication (Keycloak JWT).
+     * @param name Repository name
+     * @param events Events queue
+     * @param jwtOnly If true, use only JWT auth (no npm-specific tokens)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly
+    ) {
+        // Use either JWT-only or npm token auth with JWT fallback
+        final TokenAuthentication npmTokenAuth = jwtOnly 
+            ? tokenAuth  // JWT only
+            : new NpmTokenAuthentication(new StorageTokenRepository(storage), tokenAuth);
+        
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
@@ -137,7 +176,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new SliceSimple(ResponseBuilder.ok().build()),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -151,7 +190,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new AddDistTagsSlice(storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -165,7 +204,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new DeleteDistTagsSlice(storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -182,7 +221,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new UploadSlice(new CliPublish(storage), storage, events, name),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -199,7 +238,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new DeprecateSlice(storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -216,7 +255,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new UnpublishPutSlice(storage, events, name),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -230,7 +269,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new UploadSlice(new CurlPublish(storage), storage, events, name),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -244,7 +283,73 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new GetDistTagsSlice(storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(".*/-/npm/v1/security/.*")
+                ),
+                // Use LocalAuditSlice (returns empty) - anonymous access
+                new com.artipie.npm.http.audit.LocalAuditSlice()
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/user/org\\.couchdb\\.user:.+")
+                ),
+                // Use JWT-only OAuth login or npm token-based adduser
+                jwtOnly && basicAuth != null
+                    ? new com.artipie.npm.http.auth.OAuthLoginSlice(basicAuth)  // JWT-only
+                    : (basicAuth != null 
+                        ? new ArtipieAddUserSlice(  // Creates npm tokens
+                            basicAuth,
+                            new StorageTokenRepository(storage),
+                            new TokenGenerator()
+                        )
+                        : new AddUserSlice(  // Standalone npm tokens
+                            new StorageUserRepository(storage, new BCryptPasswordHasher()),
+                            new StorageTokenRepository(storage),
+                            new BCryptPasswordHasher(),
+                            new TokenGenerator()
+                        ))
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/whoami")
+                ),
+                jwtOnly
+                    ? NpmSlice.createAuthSlice(  // JWT-only whoami
+                        new com.artipie.npm.http.auth.JwtWhoAmISlice(),
+                        basicAuth,
+                        npmTokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                    : NpmSlice.createAuthSlice(  // Old whoami with npm tokens
+                        new WhoAmISlice(),
+                        basicAuth,
+                        npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/v1/search")
+                ),
+                NpmSlice.createAuthSlice(
+                    new SearchSlice(storage, new InMemoryPackageIndex()),
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -258,7 +363,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new DownloadPackageSlice(base, storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -272,7 +377,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new SliceDownload(storage),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -286,7 +391,7 @@ public final class NpmSlice implements Slice {
                 NpmSlice.createAuthSlice(
                     new UnpublishForceSlice(storage, events, name),
                     basicAuth,
-                    tokenAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )

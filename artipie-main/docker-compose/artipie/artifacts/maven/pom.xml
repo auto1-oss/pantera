@@ -106,11 +106,12 @@
             <version>2.0.13</version>
             <scope>runtime</scope>
         </dependency>
-        <dependency>
-            <groupId>io.github.xiaomisum</groupId>
-            <artifactId>ryze</artifactId>
-            <version>6.0.6</version>
-        </dependency>
+        <!-- add fresh maven central package here -->
+<!--        <dependency>-->
+<!--            <groupId>io.github.xiaomisum</groupId>-->
+<!--            <artifactId>ryze</artifactId>-->
+<!--            <version>6.0.6</version>-->
+<!--        </dependency>-->
     </dependencies>
     <build>
         <plugins>

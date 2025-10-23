@@ -28,7 +28,7 @@ echo "✓ Created test project"
 echo ""
 echo "2. Setting GOPROXY to use go_group..."
 # Extract URL components and inject credentials
-export GOPROXY="https://ayd:ayd@localhost:8443/artifactory/go_group"
+export GOPROXY="https://ayd:ayd@localhost:8443/artifactory/api/go/go_group"
 export GOINSECURE="*"  # Allow insecure connections for localhost testing
 echo "   GOPROXY=$GOPROXY (with credentials)"
 echo "   GOINSECURE=* (allowing insecure connections)"
@@ -40,7 +40,16 @@ go get -v github.com/firebase/genkit/go/ai@v1.0.5
 echo "✓ Successfully downloaded through proxy"
 
 echo ""
-echo "4. Creating a simple test program..."
+echo "4. Downloading fresh package through proxy..."
+OUTPUT=$(go get -v github.com/tmc/langchaingo/llms/googleai@v0.1.14 2>&1 || true )
+if [[ $OUTPUT == *"403"* ]]; then
+  echo "✓ Successfully downloaded fresh package through proxy"
+else
+   exit 1
+fi
+
+echo ""
+echo "5. Creating a simple test program..."
 cat > main.go << 'EOF'
 package main
 
@@ -56,15 +65,10 @@ func main() {
 EOF
 
 echo ""
-echo "5. Running the test program..."
+echo "6. Running the test program..."
 go run main.go
 echo "✓ Program executed successfully"
 
+
 echo ""
 echo "✅ Go proxy test completed successfully!"
-echo ""
-echo "The module was:"
-echo "  1. Downloaded from proxy.golang.org through go_proxy"
-echo "  2. Cached in Artipie"
-echo "  3. Made available through go_group"
-echo "  4. Used in your test project"

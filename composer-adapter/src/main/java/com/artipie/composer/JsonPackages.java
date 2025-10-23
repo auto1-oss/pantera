@@ -70,7 +70,7 @@ public final class JsonPackages implements Packages {
                         .thenCompose(
                             pname -> {
                                 final JsonObjectBuilder builder;
-                                if (pkgs.isEmpty() || pkgs.isNull(pname)) {
+                                if (pkgs.isEmpty() || !pkgs.containsKey(pname) || pkgs.isNull(pname)) {
                                     builder = Json.createObjectBuilder();
                                 } else {
                                     builder = Json.createObjectBuilder(pkgs.getJsonObject(pname));

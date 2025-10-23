@@ -6,6 +6,7 @@ package com.artipie.adapters.php;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.group.SliceResolver;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
@@ -23,7 +24,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 
 /**
  * Composer group repository slice.
@@ -39,7 +39,7 @@ public final class ComposerGroupSlice implements Slice {
     /**
      * Slice resolver for getting member slices.
      */
-    private final Function<Key, Slice> resolver;
+    private final SliceResolver resolver;
 
     /**
      * Group repository name.
@@ -52,7 +52,7 @@ public final class ComposerGroupSlice implements Slice {
     private final List<String> members;
 
     /**
-     * Server port.
+     * Server port for resolving member slices.
      */
     private final int port;
 
@@ -65,7 +65,7 @@ public final class ComposerGroupSlice implements Slice {
      * @param port Server port
      */
     public ComposerGroupSlice(
-        final Function<Key, Slice> resolver,
+        final SliceResolver resolver,
         final String group,
         final List<String> members,
         final int port
@@ -92,7 +92,26 @@ public final class ComposerGroupSlice implements Slice {
         // For packages.json, merge responses from all members
         if (path.endsWith("/packages.json") || path.equals("/packages.json")) {
             Logger.info(this, "Composer group %s: merging packages.json from %d members", this.group, this.members.size());
-            return mergePackagesJson(line, headers, body);
+            // Get original path before any routing rewrites
+            // Priority: X-Original-Path (from ApiRoutingSlice) > X-FullPath (from TrimPathSlice) > current path
+            final String originalPath = headers.find("X-Original-Path").stream()
+                .findFirst()
+                .map(h -> h.getValue())
+                .or(() -> headers.find("X-FullPath").stream()
+                    .findFirst()
+                    .map(h -> h.getValue())
+                )
+                .orElse(path);
+            Logger.info(this, "Path: %s, X-FullPath: %s, X-Original-Path: %s, Using: %s", 
+                path, 
+                headers.find("X-FullPath").stream().findFirst().map(h -> h.getValue()).orElse("none"),
+                headers.find("X-Original-Path").stream().findFirst().map(h -> h.getValue()).orElse("none"),
+                originalPath
+            );
+            // Extract base path for metadata-url (everything before /packages.json)
+            final String basePath = extractBasePath(originalPath);
+            Logger.info(this, "Base path for metadata-url: %s", basePath);
+            return mergePackagesJson(line, headers, body, basePath);
         }
 
         // For other requests (individual packages), try members sequentially
@@ -106,17 +125,19 @@ public final class ComposerGroupSlice implements Slice {
      * @param line Request line
      * @param headers Headers
      * @param body Body
+     * @param basePath Base path for metadata-url (e.g., "/artifactory/api/composer/php_group" or "/php_group")
      * @return Merged response
      */
     private CompletableFuture<Response> mergePackagesJson(
         final RequestLine line,
         final Headers headers,
-        final Content body
+        final Content body,
+        final String basePath
     ) {
         // Fetch packages.json from all members in parallel
         final List<CompletableFuture<JsonObject>> futures = this.members.stream()
             .map(member -> {
-                final Slice memberSlice = this.resolver.apply(new Key.From(member));
+                final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
                 final RequestLine rewritten = rewritePath(line, member);
                 final Headers sanitized = dropFullPathHeader(headers);
                 
@@ -181,8 +202,9 @@ public final class ComposerGroupSlice implements Slice {
                 final JsonObjectBuilder packagesBuilder = Json.createObjectBuilder();
 
                 // Merge all packages from all members
+                // Note: futures are already complete at this point (after allOf)
                 for (CompletableFuture<JsonObject> future : futures) {
-                    final JsonObject json = future.join();
+                    final JsonObject json = future.join();  // ✅ Already complete - no blocking!
                     if (json.containsKey("packages")) {
                         final JsonObject packages = json.getJsonObject("packages");
                         packages.forEach((name, versionsObj) -> {
@@ -201,16 +223,20 @@ public final class ComposerGroupSlice implements Slice {
                         });
                     }
                     
-                    // Preserve metadata-url and other fields from the first non-empty response
+                    // Preserve other fields from the first non-empty response
+                    // But do NOT preserve metadata-url - we'll rewrite it to point to the group
                     if (merged.build().isEmpty()) {
                         json.forEach((key, value) -> {
-                            if (!"packages".equals(key)) {
+                            if (!"packages".equals(key) && !"metadata-url".equals(key)) {
                                 merged.add(key, value);
                             }
                         });
                     }
                 }
 
+                // Add group-specific metadata-url that routes through the group
+                // Use the base path from the request to ensure proper routing
+                merged.add("metadata-url", basePath + "/p2/%package%.json");
                 merged.add("packages", packagesBuilder.build());
                 final JsonObject result = merged.build();
                 
@@ -252,7 +278,7 @@ public final class ComposerGroupSlice implements Slice {
         }
 
         final String member = this.members.get(index);
-        final Slice memberSlice = this.resolver.apply(new Key.From(member));
+        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
         final RequestLine rewritten = rewritePath(line, member);
         final Headers sanitized = dropFullPathHeader(headers);
 
@@ -315,5 +341,26 @@ public final class ComposerGroupSlice implements Slice {
                 .filter(h -> !"X-FullPath".equalsIgnoreCase(h.getKey()))
                 .toList()
         );
+    }
+
+    /**
+     * Extract base path from packages.json request path.
+     * Examples:
+     * - "/packages.json" -> ""
+     * - "/php_group/packages.json" -> "/php_group"
+     * - "/artifactory/api/composer/php_group/packages.json" -> "/artifactory/api/composer/php_group"
+     *
+     * @param path Full request path
+     * @return Base path (without /packages.json suffix)
+     */
+    private static String extractBasePath(final String path) {
+        if (path.endsWith("/packages.json")) {
+            return path.substring(0, path.length() - "/packages.json".length());
+        }
+        if (path.equals("/packages.json")) {
+            return "";
+        }
+        // Fallback: return path as-is
+        return path;
     }
 }

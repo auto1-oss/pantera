@@ -1,0 +1,168 @@
+/*
+ * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
+ * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ */
+package com.artipie.npm.http.auth;
+
+import com.artipie.asto.Content;
+import com.artipie.http.Headers;
+import com.artipie.http.Response;
+import com.artipie.http.ResponseBuilder;
+import com.artipie.http.Slice;
+import com.artipie.http.auth.Authentication;
+import com.artipie.http.auth.AuthUser;
+import com.artipie.http.rq.RequestLine;
+import com.artipie.npm.model.NpmToken;
+import com.artipie.npm.repository.TokenRepository;
+import com.artipie.npm.security.TokenGenerator;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.json.Json;
+import javax.json.JsonObject;
+
+/**
+ * NPM add user slice integrated with Artipie authentication.
+ * Authenticates users against Artipie (Keycloak) and generates NPM tokens.
+ * 
+ * @since 1.1
+ */
+public final class ArtipieAddUserSlice implements Slice {
+    
+    /**
+     * URL pattern for user creation.
+     */
+    public static final Pattern PATTERN = Pattern.compile(
+        "^.*/-/user/org\\.couchdb\\.user:(.+)$"
+    );
+    
+    /**
+     * Artipie authentication.
+     */
+    private final Authentication auth;
+    
+    /**
+     * Token repository.
+     */
+    private final TokenRepository tokens;
+    
+    /**
+     * Token generator.
+     */
+    private final TokenGenerator tokenGen;
+    
+    /**
+     * Constructor.
+     * @param auth Artipie authentication
+     * @param tokens Token repository
+     * @param tokenGen Token generator
+     */
+    public ArtipieAddUserSlice(
+        final Authentication auth,
+        final TokenRepository tokens,
+        final TokenGenerator tokenGen
+    ) {
+        this.auth = auth;
+        this.tokens = tokens;
+        this.tokenGen = tokenGen;
+    }
+    
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        final Matcher matcher = PATTERN.matcher(line.uri().getPath());
+        if (!matcher.matches()) {
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.badRequest()
+                    .textBody("Invalid user path")
+                    .build()
+            );
+        }
+        
+        final String username = matcher.group(1);
+        
+        return body.asBytesFuture()
+            .thenCompose(bytes -> {
+                final JsonObject json = Json.createReader(
+                    new StringReader(new String(bytes, StandardCharsets.UTF_8))
+                ).readObject();
+                
+                final String password = json.getString("password", "");
+                
+                if (password.isEmpty()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.badRequest()
+                            .jsonBody(Json.createObjectBuilder()
+                                .add("error", "Password required")
+                                .build())
+                            .build()
+                    );
+                }
+                
+                // Authenticate against Artipie
+                return this.authenticateUser(username, password)
+                    .thenCompose(authUser -> {
+                        if (authUser == null) {
+                            return CompletableFuture.completedFuture(
+                                ResponseBuilder.unauthorized()
+                                    .jsonBody(Json.createObjectBuilder()
+                                        .add("error", "Invalid credentials. Use your Artipie username and password.")
+                                        .build())
+                                    .build()
+                            );
+                        }
+                        
+                        // Generate NPM token for Artipie user
+                        return this.tokenGen.generate(authUser.name())
+                            .thenCompose(token -> this.tokens.save(token)
+                                .thenApply(saved -> this.successResponse(authUser.name(), saved))
+                            );
+                    });
+            })
+            .exceptionally(err -> {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                return ResponseBuilder.internalError()
+                    .jsonBody(Json.createObjectBuilder()
+                        .add("error", cause.getMessage())
+                        .build())
+                    .build();
+            });
+    }
+    
+    /**
+     * Authenticate user against Artipie.
+     * @param username Username
+     * @param password Password
+     * @return Future with AuthUser or null if invalid
+     */
+    private CompletableFuture<AuthUser> authenticateUser(
+        final String username,
+        final String password
+    ) {
+        return CompletableFuture.supplyAsync(() -> 
+            this.auth.user(username, password).orElse(null)
+        );
+    }
+    
+    /**
+     * Create success response with token.
+     * @param username Username
+     * @param token NPM token
+     * @return Response
+     */
+    private Response successResponse(final String username, final NpmToken token) {
+        return ResponseBuilder.created()
+            .jsonBody(Json.createObjectBuilder()
+                .add("ok", true)
+                .add("id", String.format("org.couchdb.user:%s", username))
+                .add("rev", "1-" + System.currentTimeMillis())
+                .add("token", token.token())
+                .build())
+            .build();
+    }
+}

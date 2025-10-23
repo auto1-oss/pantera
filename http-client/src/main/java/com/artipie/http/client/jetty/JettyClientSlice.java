@@ -25,9 +25,11 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -75,7 +77,7 @@ final class JettyClientSlice implements Slice {
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
-        final List<Content.Chunk> buffers = new LinkedList<>();
+        final List<Content.Chunk> buffers = new ArrayList<>();  // Better cache locality than LinkedList
         if (line.method() != RqMethod.HEAD) {
             final AsyncRequestContent async = new AsyncRequestContent();
             Flowable.fromPublisher(body).doOnComplete(async::close).forEach(
@@ -201,7 +203,20 @@ final class JettyClientSlice implements Slice {
 
         @Override
         public void run() {
-            while (true) {
+            final long startTime = System.nanoTime();
+            final long timeoutNanos = TimeUnit.SECONDS.toNanos(30);  // 30 second timeout
+            int iterations = 0;
+            final int maxIterations = 10000;  // Safety limit
+            
+            while (iterations++ < maxIterations) {
+                // Check timeout
+                if (System.nanoTime() - startTime > timeoutNanos) {
+                    LOGGER.error("Response reading timeout after 30 seconds for {}", 
+                        this.response.getRequest().getURI());
+                    this.response.abort(new TimeoutException("Response reading timeout"));
+                    return;
+                }
+                
                 final Content.Chunk chunk = this.source.read();
                 if (chunk == null) {
                     this.source.demand(this);
@@ -211,17 +226,23 @@ final class JettyClientSlice implements Slice {
                     final Throwable failure = chunk.getFailure();
                     if (chunk.isLast()) {
                         this.response.abort(failure);
-                        LOGGER.error(failure.getMessage());
+                        LOGGER.error("HTTP response read failed for {}", 
+                            this.response.getRequest().getURI(), failure);
                         return;
                     } else {
                         // A transient failure such as a read timeout.
                         if (RsStatus.byCode(this.response.getStatus()).success()) {
+                            // Release chunk before retry to prevent leak
+                            if (chunk.canRetain()) {
+                                chunk.release();
+                            }
                             // Try to read again.
                             continue;
                         } else {
                             // The transient failure is treated as a terminal failure.
                             this.response.abort(failure);
-                            LOGGER.error(failure.getMessage());
+                            LOGGER.error("Transient failure treated as terminal for {}", 
+                                this.response.getRequest().getURI(), failure);
                             return;
                         }
                     }
@@ -232,6 +253,11 @@ final class JettyClientSlice implements Slice {
                     return;
                 }
             }
+            
+            // Max iterations exceeded
+            LOGGER.error("Max iterations ({}) exceeded while reading response from {}", 
+                maxIterations, this.response.getRequest().getURI());
+            this.response.abort(new IllegalStateException("Too many chunks - possible infinite loop"));
         }
     }
 }

@@ -15,8 +15,13 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
 import com.jcabi.log.Logger;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import javax.json.Json;
 import javax.json.JsonObject;
 import org.quartz.JobExecutionContext;
@@ -61,29 +66,73 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             || this.events == null) {
             super.stopJob(context);
         } else {
-            while (!this.packages.isEmpty()) {
-                final ProxyArtifactEvent item = this.packages.poll();
-                if (item != null) {
-                    final Optional<Publish.PackageInfo> info = this.info(item.artifactKey());
-                    if (info.isPresent() && this.checkMetadata(info.get(), item)) {
-                        final long created = System.currentTimeMillis();
-                        final Long release = item.releaseMillis().orElse(null);
-                        this.events.add(
-                            new ArtifactEvent(
-                                UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
-                                info.get().packageName(), info.get().packageVersion(),
-                                info.get().tarSize(), created, release
-                            )
-                        );
-                    } else {
-                        Logger.info(
-                            this,
-                            String.format("Package %s is not valid", item.artifactKey().string())
-                        );
-                    }
-                }
-            }
+            this.processPackagesBatch();
         }
+    }
+
+    /**
+     * Process packages in parallel batches.
+     */
+    private void processPackagesBatch() {
+        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
+        ProxyArtifactEvent item;
+        while (batch.size() < 100 && (item = this.packages.poll()) != null) {
+            batch.add(item);
+        }
+
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        Logger.info(this, "Processing NPM batch of %d packages", batch.size());
+
+        List<CompletableFuture<Void>> futures = batch.stream()
+            .map(this::processPackageAsync)
+            .collect(Collectors.toList());
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(30, TimeUnit.SECONDS)
+                .join();
+            Logger.info(this, "NPM batch processing complete");
+        } catch (Exception err) {
+            Logger.error(this, "NPM batch processing failed: %s", err.getMessage());
+        }
+    }
+
+    /**
+     * Process a single package asynchronously.
+     * @param item Package event
+     * @return CompletableFuture
+     */
+    private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent item) {
+        return this.infoAsync(item.artifactKey())
+            .thenCompose(info -> {
+                if (info.isEmpty()) {
+                    Logger.info(this, "Package %s has no info", item.artifactKey().string());
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.checkMetadataAsync(info.get(), item)
+                    .thenAccept(valid -> {
+                        if (valid) {
+                            final long created = System.currentTimeMillis();
+                            final Long release = item.releaseMillis().orElse(null);
+                            this.events.add(
+                                new ArtifactEvent(
+                                    UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
+                                    info.get().packageName(), info.get().packageVersion(),
+                                    info.get().tarSize(), created, release
+                                )
+                            );
+                        } else {
+                            Logger.info(this, "Package %s is not valid", item.artifactKey().string());
+                        }
+                    });
+            })
+            .exceptionally(err -> {
+                Logger.error(this, "Failed to process NPM package: %s", err.getMessage());
+                return null;
+            });
     }
 
     /**
@@ -175,38 +224,87 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
     }
 
     /**
-     * Read package info, canonical name, version and calc package size for tgz.
+     * Read package info asynchronously.
      * @param tgz Tgz storage key
-     * @return Package info
+     * @return CompletableFuture with package info
      */
-    private Optional<Publish.PackageInfo> info(final Key tgz) {
+    private CompletableFuture<Optional<Publish.PackageInfo>> infoAsync(final Key tgz) {
         return this.asto.value(tgz).thenCompose(
             content -> new ContentAsStream<>(content).<JsonObject>process(
                 input -> new TgzArchive.JsonFromStream(input).json()
             )
         ).thenCombine(
-            this.asto.metadata(tgz).<Long>thenApply(meta -> meta.read(Meta.OP_SIZE).get()),
+            this.asto.metadata(tgz).thenApply(meta -> meta.read(Meta.OP_SIZE).get()),
             (json, size) -> new Publish.PackageInfo(
                 ((JsonObject) json).getString("name"),
                 ((JsonObject) json).getString("version"), size
             )
         ).handle(
             (info, error) -> {
-                final Optional<Publish.PackageInfo> res;
                 if (error == null) {
-                    res = Optional.of(info);
+                    return Optional.of(info);
                 } else {
                     Logger.error(
                         this,
-                        String.format(
-                            "Error while reading tgz %s info\n%s", tgz.string(), error.getMessage()
-                        )
+                        "Error while reading tgz %s info: %s",
+                        tgz.string(), error.getMessage()
                     );
-                    res = Optional.empty();
+                    return Optional.<Publish.PackageInfo>empty();
                 }
-                return res;
             }
-        ).join();
+        );
+    }
+
+    /**
+     * Check metadata asynchronously.
+     * @param info Package info
+     * @param item Proxy artifact event
+     * @return CompletableFuture with validation result
+     */
+    private CompletableFuture<Boolean> checkMetadataAsync(
+        final Publish.PackageInfo info,
+        final ProxyArtifactEvent item
+    ) {
+        final Key key = new Key.From(info.packageName(), "meta.json");
+        return this.asto.value(key)
+            .thenCompose(
+                content -> new ContentAsStream<>(content).process(
+                    input -> Json.createReader(input).readObject()
+                )
+            ).thenApply(obj -> {
+                final JsonObject json = (JsonObject) obj;
+                // Check if metadata contains the version and dist.tarball
+                boolean correct = false;
+                if (json.containsKey("versions")) {
+                    final JsonObject versions = json.getJsonObject("versions");
+                    if (versions.containsKey(info.packageVersion())) {
+                        final JsonObject version = versions.getJsonObject(info.packageVersion());
+                        if (version.containsKey("dist")) {
+                            final JsonObject dist = version.getJsonObject("dist");
+                            if (dist.containsKey("tarball")) {
+                                final String tarball = dist.getString("tarball");
+                                final String artifactPath = item.artifactKey().string();
+                                // Check if tarball URL ends with the artifact path
+                                // This handles various URL formats (absolute, relative, with/without host)
+                                correct = tarball.endsWith(artifactPath) || 
+                                         tarball.equals(String.format("%s/%s", this.host, artifactPath));
+                            }
+                        }
+                    }
+                }
+                return correct;
+            }).handle((correct, error) -> {
+                if (error == null) {
+                    return correct;
+                } else {
+                    Logger.error(
+                        this,
+                        "Error while checking %s for dist %s: %s",
+                        key.string(), item.artifactKey().string(), error.getMessage()
+                    );
+                    return false;
+                }
+            });
     }
 
 }

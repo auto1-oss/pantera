@@ -12,10 +12,15 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
 import com.jcabi.log.Logger;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.quartz.JobExecutionContext;
 
 /**
@@ -54,90 +59,137 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity", "PMD.EmptyControlStatement"})
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
             Logger.warn(this, "Gradle proxy processor not initialized properly - stopping job");
             super.stopJob(context);
         } else {
             Logger.debug(this, "Gradle proxy processor running, queue size: %d", this.packages.size());
-            while (!this.packages.isEmpty()) {
-                final ProxyArtifactEvent event = this.packages.poll();
-                if (event != null) {
-                    final Key key = event.artifactKey();
-                    Logger.debug(this, "Processing Gradle proxy event for key: %s", key.string());
-                    try {
-                        // Find the actual artifact file (jar, aar, war, etc)
-                        final Collection<Key> keys = this.asto.list(key).join();
-                        Logger.debug(this, "Found %d keys under %s", keys.size(), key.string());
-                        final Key artifactFile = findArtifactFile(keys);
-                        
-                        if (artifactFile == null) {
-                            Logger.warn(
-                                this,
-                                "No artifact file found for %s (found %d keys), skipping",
-                                key.string(),
-                                keys.size()
-                            );
-                            continue;
-                        }
+            this.processPackagesBatch();
+        }
+    }
 
-                        // Parse artifact coordinates from path
-                        final ArtifactCoordinates coords = parseCoordinates(artifactFile);
-                        if (coords == null) {
-                            Logger.debug(
-                                this,
-                                "Could not parse coordinates from %s, skipping",
-                                artifactFile.string()
-                            );
-                            continue;
-                        }
+    /**
+     * Process packages in parallel batches.
+     */
+    @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidCatchingGenericException"})
+    private void processPackagesBatch() {
+        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
+        ProxyArtifactEvent event = this.packages.poll();
+        while (batch.size() < 100 && event != null) {
+            batch.add(event);
+            event = this.packages.poll();
+        }
 
-                        final String owner = event.ownerLogin();
-                        final long created = System.currentTimeMillis();
-                        final Long release = event.releaseMillis().orElse(null);
-                        
-                        this.events.add(
-                            new ArtifactEvent(
-                                GradleProxyPackageProcessor.REPO_TYPE,
-                                event.repoName(),
-                                owner == null || owner.isBlank()
-                                    ? ArtifactEvent.DEF_OWNER
-                                    : owner,
-                                coords.artifactName(),
-                                coords.version(),
-                                this.asto.metadata(artifactFile)
-                                    .thenApply(meta -> meta.read(Meta.OP_SIZE)).join().get(),
-                                created,
-                                release
-                            )
-                        );
-                        
-                        Logger.info(
-                            this,
-                            "Recorded Gradle proxy artifact %s:%s (repo=%s, release=%s)",
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        // Deduplicate by artifact key - only process unique packages
+        final List<ProxyArtifactEvent> uniquePackages = batch.stream()
+            .collect(Collectors.toMap(
+                e -> e.artifactKey().string(),  // Key: artifact path
+                e -> e,                          // Value: first event
+                (existing, duplicate) -> existing // Keep first, ignore duplicates
+            ))
+            .values()
+            .stream()
+            .collect(Collectors.toList());
+
+        Logger.info(
+            this,
+            "Processing Gradle batch of %d packages (%d unique, %d duplicates removed)",
+            batch.size(), uniquePackages.size(), batch.size() - uniquePackages.size()
+        );
+
+        List<CompletableFuture<Void>> futures = uniquePackages.stream()
+            .map(this::processPackageAsync)
+            .collect(Collectors.toList());
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(30, TimeUnit.SECONDS)
+                .join();
+            Logger.info(this, "Gradle batch processing complete");
+        } catch (final RuntimeException err) {
+            Logger.error(this, "Gradle batch processing failed: %s", err.getMessage());
+        }
+    }
+
+    /**
+     * Process a single package asynchronously.
+     * @param event Package event
+     * @return CompletableFuture
+     */
+    private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
+        final Key key = event.artifactKey();
+        Logger.debug(this, "Processing Gradle proxy event for key: %s", key.string());
+
+        return this.asto.list(key).thenCompose(keys -> {
+            Logger.debug(this, "Found %d keys under %s", keys.size(), key.string());
+            final Key artifactFile = findArtifactFile(keys);
+            
+            if (artifactFile == null) {
+                Logger.warn(
+                    this,
+                    "No artifact file found for %s (found %d keys), skipping",
+                    key.string(),
+                    keys.size()
+                );
+                return CompletableFuture.completedFuture(null);
+            }
+
+            final ArtifactCoordinates coords = parseCoordinates(artifactFile);
+            if (coords == null) {
+                Logger.debug(
+                    this,
+                    "Could not parse coordinates from %s, skipping",
+                    artifactFile.string()
+                );
+                return CompletableFuture.completedFuture(null);
+            }
+
+            return this.asto.metadata(artifactFile)
+                .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
+                .thenAccept(size -> {
+                    final String owner = event.ownerLogin();
+                    final long created = System.currentTimeMillis();
+                    final Long release = event.releaseMillis().orElse(null);
+                    
+                    this.events.add(
+                        new ArtifactEvent(
+                            GradleProxyPackageProcessor.REPO_TYPE,
+                            event.repoName(),
+                            owner == null || owner.isBlank()
+                                ? ArtifactEvent.DEF_OWNER
+                                : owner,
                             coords.artifactName(),
                             coords.version(),
-                            event.repoName(),
-                            release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString()
-                        );
-                        
-                        // Remove all duplicate events from queue
-                        while (this.packages.remove(event)) {
-                            // Continue removing duplicates
-                        }
-                        
-                    } catch (final Exception err) {
-                        Logger.error(
-                            this,
-                            "Failed to process gradle proxy package %s: %s",
-                            key.string(),
-                            err.getMessage()
-                        );
-                    }
-                }
-            }
-        }
+                            size,
+                            created,
+                            release
+                        )
+                    );
+                    
+                    Logger.info(
+                        this,
+                        "Recorded Gradle proxy artifact %s:%s (repo=%s, release=%s)",
+                        coords.artifactName(),
+                        coords.version(),
+                        event.repoName(),
+                        release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString()
+                    );
+                });
+        }).exceptionally(err -> {
+            Logger.error(
+                this,
+                "Failed to process Gradle package %s: %s",
+                key.string(),
+                err.getMessage()
+            );
+            return null;
+        });
     }
 
     /**

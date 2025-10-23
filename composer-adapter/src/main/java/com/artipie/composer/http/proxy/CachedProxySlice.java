@@ -138,9 +138,9 @@ final class CachedProxySlice implements Slice {
         final String path = line.uri().getPath();
         Logger.info(this, "Composer proxy request: %s", path);
         
+        // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
         final String name = path
             .replaceAll("^/p2?/", "")
-            .replaceAll("~.*", "")
             .replaceAll("\\^.*", "")
             .replaceAll(".json$", "");
         
@@ -199,15 +199,17 @@ final class CachedProxySlice implements Slice {
         final String name,
         final Headers headers
     ) {
+        // Package name for merge: strip ~dev suffix since Packagist JSON uses base name
+        final String packageName = name.replaceAll("~dev$", "");
         return this.cache.load(
-            new Key.From(name),
+            new Key.From(name),  // Cache key keeps ~dev to prevent collision
             new Remote.WithErrorHandling(
                 () -> this.repo.packages().thenApply(
                         pckgs -> pckgs.orElse(new JsonPackages())
                     ).thenCompose(Packages::content)
                     .thenCombine(
                         this.packageFromRemote(line, headers),
-                        (lcl, rmt) -> new MergePackage.WithRemote(name, lcl).merge(rmt)
+                        (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
                     .thenApply(content -> {
                         // Note: Do NOT emit events here - this is just metadata
@@ -229,16 +231,29 @@ final class CachedProxySlice implements Slice {
             // Read once and reuse for cooldown + rewrite to avoid OneTimePublisher double-consumption
             return pkgs.get().asBytesFuture().thenCompose(bytes ->
                 this.evaluateMetadataCooldown(name, headers, bytes)
-                    .thenApply(result -> {
+                    .thenCompose(result -> {
                         if (result.blocked()) {
                             Logger.info(this, "Cooldown BLOCKED metadata for %s", name);
-                            return CooldownResponses.forbidden(result.block().orElseThrow());
+                            return CompletableFuture.completedFuture(
+                                CooldownResponses.forbidden(result.block().orElseThrow())
+                            );
                         }
                         // Rewrite URLs in metadata to proxy through Artipie
-                        return ResponseBuilder.ok()
-                            .header("Content-Type", "application/json")
-                            .body(this.rewriteMetadata(bytes, headers))
-                            .build();
+                        final Content rewritten = this.rewriteMetadata(bytes, headers);
+                        
+                        // Save rewritten metadata to storage so ProxyDownloadSlice can find original URLs
+                        final Key metadataKey = new Key.From(name + ".json");
+                        return rewritten.asBytesFuture().thenCompose(rewrittenBytes -> {
+                            final Content saved = new Content.From(rewrittenBytes);
+                            return this.repo.storage().save(metadataKey, saved)
+                                .thenApply(ignored -> {
+                                    Logger.debug(this, "Saved metadata to storage: %s", metadataKey);
+                                    return ResponseBuilder.ok()
+                                        .header("Content-Type", "application/json")
+                                        .body(new Content.From(rewrittenBytes))
+                                        .build();
+                                });
+                        });
                     })
             );
         }).exceptionally(throwable -> {
@@ -433,9 +448,21 @@ final class CachedProxySlice implements Slice {
         return new Remote.WithErrorHandling(
             () -> this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                 .thenApply(response -> {
+                    Logger.debug(
+                        this,
+                        "Remote response for %s: status=%s",
+                        line.uri().getPath(),
+                        response.status()
+                    );
                     if (response.status().success()) {
                         return Optional.of(response.body());
                     }
+                    Logger.warn(
+                        this,
+                        "Remote returned non-success status for %s: %s",
+                        line.uri().getPath(),
+                        response.status()
+                    );
                     return Optional.empty();
                 })
         ).get();

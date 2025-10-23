@@ -58,7 +58,7 @@ public final class ComposerStorageCache implements Cache {
                     final CompletionStage<Optional<? extends Content>> res;
                     if (exists) {
                         res = control.validate(
-                            name,
+                            cached,  // Pass the actual cached file key, not the package name
                             () -> CompletableFuture.completedFuture(Optional.empty())
                         ).thenCompose(
                             valid -> {
@@ -105,10 +105,17 @@ public final class ComposerStorageCache implements Cache {
                 (nothing, content) -> {
                     final CompletionStage<Optional<? extends Content>> res;
                     if (content.isPresent()) {
-                        res = this.repo.save(cached, content.get())
-                            .thenCompose(noth -> this.updateCacheFile(cached, name))
-                            .thenCompose(ignore -> this.repo.value(cached))
-                            .thenApply(Optional::of);
+                        // Materialize content to bytes first to avoid stream consumption issues
+                        // This ensures the content is fully available before saving and serving
+                        res = content.get().asBytesFuture()
+                            .thenCompose(bytes -> {
+                                final Content materialized = new Content.From(bytes);
+                                // No need to update cache-info.json anymore
+                                // CacheTimeControl now uses filesystem timestamps
+                                return this.repo.save(cached, materialized)
+                                    .thenCompose(noth -> this.repo.value(cached))
+                                    .thenApply(Optional::of);
+                            });
                     } else {
                         res = CompletableFuture.completedFuture(Optional.empty());
                     }

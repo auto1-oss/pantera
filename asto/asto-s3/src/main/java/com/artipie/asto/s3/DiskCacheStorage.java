@@ -38,8 +38,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.reactivestreams.Subscriber;
 
 /**
@@ -48,10 +50,38 @@ import org.reactivestreams.Subscriber;
  * - Streams data to caller while persisting to disk, to avoid full buffering.
  * - Validates cache entries against remote ETag/size before serving (configurable).
  * - Scheduled cleanup with LRU/LFU eviction; high/low watermarks.
+ * - Uses shared executor service to prevent thread proliferation.
  */
-final class DiskCacheStorage extends Storage.Wrap {
+final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
 
     enum Policy { LRU, LFU }
+
+    /**
+     * Shared executor service for all cache cleanup tasks.
+     * Uses bounded thread pool to prevent thread proliferation.
+     */
+    private static final ScheduledExecutorService SHARED_CLEANER = 
+        Executors.newScheduledThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 4),
+            r -> {
+                final Thread t = new Thread(r, "shared-disk-cache-cleaner");
+                t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY);
+                return t;
+            }
+        );
+
+    /**
+     * Striped locks for metadata updates to avoid string interning anti-pattern.
+     */
+    private static final int LOCK_STRIPES = 256;
+    private static final Object[] LOCKS = new Object[LOCK_STRIPES];
+    
+    static {
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            LOCKS[i] = new Object();
+        }
+    }
 
     private final Path root;
     private final long maxBytes;
@@ -61,8 +91,8 @@ final class DiskCacheStorage extends Storage.Wrap {
     private final int lowPct;
     private final boolean validateOnRead;
     private final String namespace; // per-storage namespace directory (sha1 of identifier)
-
-    private final ScheduledExecutorService cleaner;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final java.util.concurrent.Future<?> cleanupTask;
 
     DiskCacheStorage(
         final Storage delegate,
@@ -83,19 +113,21 @@ final class DiskCacheStorage extends Storage.Wrap {
         this.lowPct = lowPct;
         this.validateOnRead = validateOnRead;
         this.namespace = sha1(delegate.identifier());
-        this.cleaner = Executors.newSingleThreadScheduledExecutor(r -> {
-            final Thread t = new Thread(r, "disk-cache-cleaner");
-            t.setDaemon(true);
-            return t;
-        });
         try {
             Files.createDirectories(this.nsRoot());
         } catch (final IOException err) {
             throw new ArtipieIOException(err);
         }
-        // Schedule periodic cleanup
+        // Schedule periodic cleanup using shared executor
         if (this.intervalMillis > 0) {
-            this.cleaner.scheduleWithFixedDelay(this::safeCleanup, this.intervalMillis, this.intervalMillis, TimeUnit.MILLISECONDS);
+            this.cleanupTask = SHARED_CLEANER.scheduleWithFixedDelay(
+                this::safeCleanup, 
+                this.intervalMillis, 
+                this.intervalMillis, 
+                TimeUnit.MILLISECONDS
+            );
+        } else {
+            this.cleanupTask = null;
         }
     }
 
@@ -113,9 +145,19 @@ final class DiskCacheStorage extends Storage.Wrap {
                             cm.size > 0 ? Optional.of(cm.size) : Optional.empty(),
                             filePublisher(file)
                         );
-                        cm.hits += 1;
-                        cm.lastAccess = Instant.now().toEpochMilli();
-                        CacheMeta.write(meta, cm);
+                        // Update metadata asynchronously to avoid blocking and race conditions
+                        CompletableFuture.runAsync(() -> {
+                            try {
+                                synchronized (getLock(meta)) {
+                                    final CacheMeta updated = CacheMeta.read(meta);
+                                    updated.hits += 1;
+                                    updated.lastAccess = Instant.now().toEpochMilli();
+                                    CacheMeta.write(meta, updated);
+                                }
+                            } catch (final IOException ignored) {
+                                // Best effort - cache hit still served
+                            }
+                        });
                         return cnt;
                     }
                 }
@@ -215,7 +257,12 @@ final class DiskCacheStorage extends Storage.Wrap {
 
     private boolean matchRemote(final Key key, final CacheMeta local) {
         try {
-            final Meta meta = super.metadata(key).join();
+            // FIXME: This blocks! Should be made async or validation disabled for high-load scenarios
+            // For now, add timeout to prevent indefinite blocking
+            final Meta meta = super.metadata(key)
+                .toCompletableFuture()
+                .orTimeout(5, TimeUnit.SECONDS)
+                .join();
             final boolean md5ok = meta.read(Meta.OP_MD5)
                 .map(val -> Objects.equals(val, local.etag))
                 .orElse(false);
@@ -224,7 +271,7 @@ final class DiskCacheStorage extends Storage.Wrap {
                 .orElse(false);
             return md5ok && sizeok;
         } catch (final Exception err) {
-            // If cannot validate, assume stale
+            // If cannot validate or timeout, assume stale
             return false;
         }
     }
@@ -250,8 +297,45 @@ final class DiskCacheStorage extends Storage.Wrap {
         }, ch -> { try { ch.close(); } catch (final IOException ignored) { } });
     }
 
+    @Override
+    public void close() {
+        if (this.closed.compareAndSet(false, true)) {
+            // Cancel cleanup task first
+            if (this.cleanupTask != null) {
+                this.cleanupTask.cancel(false);
+            }
+            
+            // Close underlying storage if it's closeable (e.g., S3Storage)
+            // This ensures proper resource cleanup through the delegation chain
+            final Storage delegate = this.delegate();
+            if (delegate instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) delegate).close();
+                } catch (final Exception e) {
+                    // Log but continue - best effort cleanup
+                    System.err.println("Failed to close delegate storage: " + e.getMessage());
+                }
+            }
+        }
+    }
+
     private void safeCleanup() {
-        try { cleanup(); } catch (final Throwable ignored) { }
+        if (!this.closed.get()) {
+            try { 
+                cleanup(); 
+            } catch (final Throwable ignored) { 
+                // Ignore errors during cleanup
+            }
+        }
+    }
+
+    /**
+     * Get lock object for given path using striped locking.
+     * Avoids string interning anti-pattern.
+     */
+    private Object getLock(final Path path) {
+        int hash = path.hashCode();
+        return LOCKS[Math.abs(hash % LOCK_STRIPES)];
     }
 
     private void cleanup() throws IOException {
@@ -260,8 +344,17 @@ final class DiskCacheStorage extends Storage.Wrap {
             return;
         }
         final List<Path> dataFiles = new ArrayList<>();
-        try (var walk = Files.walk(base)) {
-            walk.filter(p -> Files.isRegularFile(p) && !p.getFileName().toString().endsWith(".meta") && !p.getFileName().toString().contains(".part-") ).forEach(dataFiles::add);
+        try (Stream<Path> walk = Files.walk(base)) {
+            walk.filter(p -> {
+                    try {
+                        return Files.isRegularFile(p) 
+                            && !p.getFileName().toString().endsWith(".meta")
+                            && !p.getFileName().toString().contains(".part-");
+                    } catch (final Exception e) {
+                        return false;  // Skip on error
+                    }
+                })
+                .forEach(dataFiles::add);
         }
         long used = 0L;
         final List<Candidate> candidates = new ArrayList<>();

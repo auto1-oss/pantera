@@ -314,7 +314,7 @@ public final class ProxyDownloadSlice implements Slice {
         final String packageName,
         final String version
     ) {
-        // Metadata is stored directly in repo root as {packageName}.json
+        // Metadata is cached by CachedProxySlice with .json extension
         final Key metadataKey = new Key.From(packageName + ".json");
         
         return this.storage.exists(metadataKey).thenCompose(exists -> {
@@ -367,13 +367,23 @@ public final class ProxyDownloadSlice implements Slice {
                             return Optional.empty();
                         }
 
-                        // Prefer original dist.url from cached metadata (pre-rewrite).
-                        String originalUrl = dist.getString("url", null);
-                        if (originalUrl == null) {
-                            // Fallback to reference if present
-                            originalUrl = dist.getString("reference", null);
+                        // Get original URL from cached metadata
+                        // Cached file now has rewritten format with "original_url" field
+                        // containing the actual remote URL (GitHub/packagist)
+                        String originalUrl = null;
+                        if (dist.containsKey("original_url")) {
+                            originalUrl = dist.getString("original_url");
+                            Logger.info(this, "Using original_url from metadata for %s:%s = %s", packageName, version, originalUrl);
+                        } else if (dist.containsKey("url")) {
+                            // Fallback to "url" for backward compatibility
+                            originalUrl = dist.getString("url");
+                            Logger.warn(this, "No original_url found in dist, using url field for %s:%s = %s", packageName, version, originalUrl);
                         }
-                        Logger.debug(this, "Found original URL for %s:%s = %s", packageName, version, originalUrl);
+                        if (originalUrl == null || originalUrl.isEmpty()) {
+                            Logger.warn(this, "No dist URL found for %s:%s", packageName, version);
+                            return Optional.empty();
+                        }
+                        Logger.info(this, "Found original URL for %s:%s = %s", packageName, version, originalUrl);
                         return Optional.ofNullable(originalUrl);
                     } catch (Exception ex) {
                         Logger.error(this, "Failed to parse metadata for %s: %[exception]s", packageName, ex);

@@ -177,26 +177,38 @@ public final class MetadataUrlRewriter {
         final String version,
         final JsonObject dist
     ) {
+        // Check if already rewritten (has original_url field)
+        if (dist.containsKey("original_url")) {
+            // Already rewritten, return as-is
+            return dist;
+        }
+
         final JsonObjectBuilder distBuilder = Json.createObjectBuilder();
 
+        // Store original URL first (before copying other fields)
+        final String originalUrl = dist.getString("url", null);
+        
         // Copy all dist fields except url
         for (final Map.Entry<String, JsonValue> entry : dist.entrySet()) {
             final String key = entry.getKey();
-            if ("url".equals(key)) {
-                // Store original URL as reference  
-                distBuilder.add("reference", entry.getValue());
-                // Use full URL - Composer will use HTTP basic auth for same domain
-                final String proxyUrl = String.format(
-                    "%s/dist/%s/%s",
-                    this.baseUrl,
-                    packageName,
-                    version
-                );
-                distBuilder.add("url", proxyUrl);
-            } else {
+            if (!"url".equals(key)) {
                 distBuilder.add(key, entry.getValue());
             }
         }
+        
+        // Add original URL for ProxyDownloadSlice to use
+        if (originalUrl != null) {
+            distBuilder.add("original_url", originalUrl);
+        }
+        
+        // Add rewritten proxy URL
+        final String proxyUrl = String.format(
+            "%s/dist/%s/%s",
+            this.baseUrl,
+            packageName,
+            version
+        );
+        distBuilder.add("url", proxyUrl);
 
         return distBuilder.build();
     }

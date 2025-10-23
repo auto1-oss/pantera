@@ -22,7 +22,7 @@ meta:
   cooldown:
     enabled: true
     # Use duration strings: m = minutes, h = hours, d = days
-    minimum_allowed_age: 7d
+    minimum_allowed_age: 12h
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432

@@ -207,25 +207,32 @@ public final class AstoRepository implements Repository {
     /**
      * Add `dist` field to composer json.
      * @param compos Composer json file
-     * @param path Prefix path for uploading tgz archive
+     * @param path Prefix path for uploading archive (includes extension)
      * @return Composer json with added `dist` field.
      */
     private byte[] addDist(final JsonObject compos, final Key path) {
         final String url = this.prefix.orElseThrow(
             () -> new IllegalStateException("Prefix url for `dist` for uploaded archive was empty.")
         ).replaceAll("/$", "");
+        
+        // Detect archive type from path extension
+        final String pathStr = path.string();
+        final String distType = pathStr.endsWith(".tar.gz") || pathStr.endsWith(".tgz") 
+            ? "tar" 
+            : "zip";
+        
         try {
             return Json.createObjectBuilder(compos).add(
                 "dist", Json.createObjectBuilder()
-                    .add("url", new URI(String.format("%s/%s", url, path.string())).toString())
-                    .add("type", "zip")
+                    .add("url", new URI(String.format("%s/%s", url, pathStr)).toString())
+                    .add("type", distType)
                     .build()
                 ).build()
                 .toString()
                 .getBytes(StandardCharsets.UTF_8);
         } catch (final URISyntaxException exc) {
             throw new IllegalStateException(
-                String.format("Failed to combine url `%s` with path `%s`", url, path.string()),
+                String.format("Failed to combine url `%s` with path `%s`", url, pathStr),
                 exc
             );
         }

@@ -87,6 +87,10 @@ public final class VertxMain {
     private final List<VertxSliceServer> servers;
     private QuartzService quartz;
 
+    /**
+     * Settings instance - must be closed on shutdown.
+     */
+    private Settings settings;
 
     /**
      * Port and http3 server.
@@ -120,7 +124,7 @@ public final class VertxMain {
      */
     public int start(final int apiPort) throws IOException {
         quartz = new QuartzService();
-        final Settings settings = new SettingsFromPath(this.config).find(quartz);
+        this.settings = new SettingsFromPath(this.config).find(quartz);
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
@@ -211,6 +215,7 @@ public final class VertxMain {
     }
 
     public void stop() {
+        LOGGER.info("Stopping Artipie and cleaning up resources...");
         this.servers.forEach(s -> {
             s.stop();
             LOGGER.info("Artipie's server on port {} was stopped", s.port());
@@ -221,6 +226,16 @@ public final class VertxMain {
         if (this.configWatch != null) {
             this.configWatch.close();
         }
+        // Close settings to cleanup storage resources (S3AsyncClient, etc.)
+        if (this.settings != null) {
+            try {
+                this.settings.close();
+                LOGGER.info("Settings and storage resources closed successfully");
+            } catch (final Exception e) {
+                LOGGER.error("Failed to close settings", e);
+            }
+        }
+        LOGGER.info("Artipie shutdown complete");
     }
 
     /**
@@ -253,8 +268,16 @@ public final class VertxMain {
             throw new IllegalStateException("Storage is not configured");
         }
         LOGGER.info("Used version of Artipie: {}", new ArtipieProperties().version());
-        new VertxMain(config, port)
-            .start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
+        final VertxMain app = new VertxMain(config, port);
+        
+        // Register shutdown hook to ensure proper cleanup on JVM exit
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            LOGGER.info("Shutdown hook triggered - cleaning up resources");
+            app.stop();
+        }, "artipie-shutdown-hook"));
+        
+        app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
+        LOGGER.info("Artipie started successfully. Press Ctrl+C to shutdown.");
     }
 
     /**

@@ -4,9 +4,9 @@
  */
 package com.artipie.pypi;
 
+import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.ext.KeyLastPart;
 import com.artipie.pypi.NormalizedProjectName;
 import com.artipie.pypi.meta.Metadata;
@@ -18,7 +18,12 @@ import com.artipie.scheduling.QuartzJob;
 import com.jcabi.log.Logger;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.quartz.JobExecutionContext;
 
 /**
@@ -46,39 +51,84 @@ public final class PyProxyPackageProcessor extends QuartzJob {
     /**
      * Repository storage.
      */
-    private BlockingStorage asto;
+    private Storage asto;
 
     @Override
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
             super.stopJob(context);
         } else {
-            while (!this.packages.isEmpty()) {
-                final ProxyArtifactEvent event = this.packages.poll();
-                if (event != null) {
-                    final Key key = event.artifactKey();
-                    final String filename = new KeyLastPart(key).get();
-                    if (!this.asto.exists(key)) {
-                        Logger.debug(
-                            this,
-                            "Artifact %s is not yet cached, re-queueing to retry later",
-                            key.string()
-                        );
-                        this.packages.add(event);
-                        break;
-                    }
-                    final byte[] archive = this.asto.value(key);
+            this.processPackagesBatch();
+        }
+    }
+
+    /**
+     * Process packages in parallel batches.
+     */
+    private void processPackagesBatch() {
+        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
+        ProxyArtifactEvent event;
+        while (batch.size() < 100 && (event = this.packages.poll()) != null) {
+            batch.add(event);
+        }
+
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        Logger.info(this, "Processing PyPI batch of %d packages", batch.size());
+
+        List<CompletableFuture<Void>> futures = batch.stream()
+            .map(this::processPackageAsync)
+            .collect(Collectors.toList());
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(30, TimeUnit.SECONDS)
+                .join();
+            Logger.info(this, "PyPI batch processing complete");
+        } catch (Exception err) {
+            Logger.error(this, "PyPI batch processing failed: %s", err.getMessage());
+        }
+    }
+
+    /**
+     * Process a single package asynchronously.
+     * @param event Package event
+     * @return CompletableFuture
+     */
+    private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
+        final Key key = event.artifactKey();
+        final String filename = new KeyLastPart(key).get();
+
+        return this.asto.exists(key).thenCompose(exists -> {
+            if (!exists) {
+                Logger.debug(
+                    this,
+                    "Artifact %s is not yet cached, re-queuing for retry",
+                    key.string()
+                );
+                // Re-add event to queue for retry
+                this.packages.add(event);
+                return CompletableFuture.completedFuture(null);
+            }
+
+            return this.asto.value(key)
+                .thenCompose(content -> new Content.From(content).asBytesFuture())
+                .thenAccept(archive -> {
                     try {
                         final PackageInfo info = new Metadata.FromArchive(
                             new ByteArrayInputStream(archive), filename
                         ).read();
+
                         if (new ValidFilename(info, filename).valid()) {
                             final String owner = event.ownerLogin();
                             final long created = System.currentTimeMillis();
                             final Long release = event.releaseMillis().orElse(null);
                             final String project =
                                 new NormalizedProjectName.Simple(info.name()).value();
+
                             this.events.add(
                                 new ArtifactEvent(
                                     PyProxyPackageProcessor.REPO_TYPE,
@@ -93,36 +143,39 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     release
                                 )
                             );
+
                             Logger.info(
                                 this,
-                                String.format(
-                                    "Recorded PyPI proxy release %s:%s (repo=%s, size=%dB, release=%s)",
-                                    project,
-                                    info.version(),
-                                    event.repoName(),
-                                    archive.length,
-                                    release == null ? "unknown"
-                                        : Instant.ofEpochMilli(release).toString()
-                                )
+                                "Recorded PyPI proxy release %s:%s (repo=%s, size=%dB, release=%s)",
+                                project,
+                                info.version(),
+                                event.repoName(),
+                                archive.length,
+                                release == null ? "unknown"
+                                    : Instant.ofEpochMilli(release).toString()
                             );
                         } else {
                             Logger.error(
                                 this,
-                                String.format("Python proxy package %s is not valid", key.string())
+                                "Python proxy package %s is not valid", key.string()
                             );
                         }
                     } catch (final Exception err) {
                         Logger.error(
                             this,
-                            String.format(
-                                "Failed to parse/check python proxy package %s: %s",
-                                key.string(), err.getMessage()
-                            )
+                            "Failed to parse/check python proxy package %s: %s",
+                            key.string(), err.getMessage()
                         );
                     }
-                }
-            }
-        }
+                });
+        }).exceptionally(err -> {
+            Logger.error(
+                this,
+                "Failed to process PyPI package %s: %s",
+                key.string(), err.getMessage()
+            );
+            return null;
+        });
     }
 
     /**
@@ -146,7 +199,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
      * @param storage Storage
      */
     public void setStorage(final Storage storage) {
-        this.asto = new BlockingStorage(storage);
+        this.asto = storage;
     }
 
 }

@@ -24,12 +24,15 @@ import java.util.LinkedList;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 /**
  * Simple implementation of Storage that holds all data in memory.
+ * Uses ConcurrentSkipListMap for lock-free reads and fine-grained locking.
  *
  * @since 0.14
  */
@@ -38,33 +41,41 @@ public final class InMemoryStorage implements Storage {
 
     /**
      * Values stored by key strings.
+     * ConcurrentSkipListMap provides thread-safe operations without coarse-grained locking.
      * It is package private for avoid using sync methods for operations of storage for benchmarks.
      */
-    final NavigableMap<String, byte[]> data;
+    final ConcurrentNavigableMap<String, byte[]> data;
 
     /**
      * Ctor.
      */
     public InMemoryStorage() {
-        this(new TreeMap<>());
+        this(new ConcurrentSkipListMap<>());
     }
 
     /**
      * Ctor.
      * @param data Content of storage
      */
-    InMemoryStorage(final NavigableMap<String, byte[]> data) {
+    InMemoryStorage(final ConcurrentNavigableMap<String, byte[]> data) {
         this.data = data;
+    }
+
+    /**
+     * Legacy constructor for backward compatibility with tests.
+     * @param data Content of storage as TreeMap
+     * @deprecated Use constructor with ConcurrentNavigableMap
+     */
+    @Deprecated
+    InMemoryStorage(final NavigableMap<String, byte[]> data) {
+        this.data = new ConcurrentSkipListMap<>(data);
     }
 
     @Override
     public CompletableFuture<Boolean> exists(final Key key) {
-        return CompletableFuture.supplyAsync(
-            () -> {
-                synchronized (this.data) {
-                    return this.data.containsKey(key.string());
-                }
-            }
+        // ConcurrentSkipListMap.containsKey() is lock-free
+        return CompletableFuture.completedFuture(
+            this.data.containsKey(key.string())
         );
     }
 
@@ -72,18 +83,17 @@ public final class InMemoryStorage implements Storage {
     public CompletableFuture<Collection<Key>> list(final Key root) {
         return CompletableFuture.supplyAsync(
             () -> {
-                synchronized (this.data) {
-                    final String prefix = root.string();
-                    final Collection<Key> keys = new LinkedList<>();
-                    for (final String string : this.data.navigableKeySet().tailSet(prefix)) {
-                        if (string.startsWith(prefix)) {
-                            keys.add(new Key.From(string));
-                        } else {
-                            break;
-                        }
+                // ConcurrentSkipListMap provides thread-safe iteration
+                final String prefix = root.string();
+                final Collection<Key> keys = new LinkedList<>();
+                for (final String string : this.data.navigableKeySet().tailSet(prefix)) {
+                    if (string.startsWith(prefix)) {
+                        keys.add(new Key.From(string));
+                    } else {
+                        break;
                     }
-                    return keys;
                 }
+                return keys;
             }
         );
     }
@@ -102,9 +112,8 @@ public final class InMemoryStorage implements Storage {
                 .thenApply(Remaining::bytes)
                 .thenAccept(
                     bytes -> {
-                        synchronized (this.data) {
-                            this.data.put(key.string(), bytes);
-                        }
+                        // ConcurrentSkipListMap.put() is thread-safe
+                        this.data.put(key.string(), bytes);
                     }
                 ).toCompletableFuture();
         }
@@ -115,16 +124,16 @@ public final class InMemoryStorage implements Storage {
     public CompletableFuture<Void> move(final Key source, final Key destination) {
         return CompletableFuture.runAsync(
             () -> {
-                synchronized (this.data) {
-                    final String key = source.string();
-                    if (!this.data.containsKey(key)) {
-                        throw new ArtipieIOException(
-                            String.format("No value for source key: %s", source.string())
-                        );
-                    }
-                    this.data.put(destination.string(), this.data.get(key));
-                    this.data.remove(source.string());
+                final String key = source.string();
+                // Atomic remove operation
+                final byte[] value = this.data.remove(key);
+                if (value == null) {
+                    throw new ArtipieIOException(
+                        String.format("No value for source key: %s", source.string())
+                    );
                 }
+                // Put to destination (thread-safe)
+                this.data.put(destination.string(), value);
             }
         );
     }
@@ -133,13 +142,12 @@ public final class InMemoryStorage implements Storage {
     public CompletableFuture<? extends Meta> metadata(final Key key) {
         return CompletableFuture.supplyAsync(
             () -> {
-                synchronized (this.data) {
-                    if (!this.data.containsKey(key.string())) {
-                        throw new ValueNotFoundException(key);
-                    }
-                    final byte[] content = this.data.get(key.string());
-                    return new MemoryMeta(content.length);
+                // Thread-safe get operation
+                final byte[] content = this.data.get(key.string());
+                if (content == null) {
+                    throw new ValueNotFoundException(key);
                 }
+                return new MemoryMeta(content.length);
             }
         );
     }
@@ -154,13 +162,12 @@ public final class InMemoryStorage implements Storage {
         } else {
             res = CompletableFuture.supplyAsync(
                 () -> {
-                    synchronized (this.data) {
-                        final byte[] content = this.data.get(key.string());
-                        if (content == null) {
-                            throw new ValueNotFoundException(key);
-                        }
-                        return new Content.OneTime(new Content.From(content));
+                    // ConcurrentSkipListMap.get() is lock-free
+                    final byte[] content = this.data.get(key.string());
+                    if (content == null) {
+                        throw new ValueNotFoundException(key);
                     }
+                    return new Content.OneTime(new Content.From(content));
                 }
             );
         }
@@ -171,14 +178,12 @@ public final class InMemoryStorage implements Storage {
     public CompletableFuture<Void> delete(final Key key) {
         return CompletableFuture.runAsync(
             () -> {
-                synchronized (this.data) {
-                    final String str = key.string();
-                    if (!this.data.containsKey(str)) {
-                        throw new ArtipieIOException(
-                            String.format("Key does not exist: %s", str)
-                        );
-                    }
-                    this.data.remove(str);
+                final String str = key.string();
+                // Atomic remove with null check
+                if (this.data.remove(str) == null) {
+                    throw new ArtipieIOException(
+                        String.format("Key does not exist: %s", str)
+                    );
                 }
             }
         );
