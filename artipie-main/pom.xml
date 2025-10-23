@@ -400,7 +400,7 @@ SOFTWARE.
                 <version>3.2.3</version>
                 <configuration>
                     <forkCount>1</forkCount>
-                    <reuseForks>false</reuseForks>
+                    <reuseForks>true</reuseForks>
                     <parallel>none</parallel>
                     <threadCount>1</threadCount>
                     <systemPropertyVariables>

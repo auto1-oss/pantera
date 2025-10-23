@@ -22,24 +22,17 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.quartz.SchedulerException;
+import com.artipie.db.SharedPostgreSQLContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Test for {@link QuartzService} and
  * {@link com.artipie.db.DbConsumer}.
+ * 
  * @since 0.31
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
-@Testcontainers
+@SuppressWarnings({ "PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods" })
 public final class SchedulerDbTest {
-
-    /**
-     * PostgreSQL test container.
-     */
-    @Container
-    static final PostgreSQLContainer<?> POSTGRES = PostgreSQLTestConfig.createContainer();
 
     /**
      * Test connection.
@@ -53,19 +46,19 @@ public final class SchedulerDbTest {
 
     @BeforeEach
     void init() {
+        PostgreSQLContainer<?> postgres = SharedPostgreSQLContainer.getInstance();
         this.source = new ArtifactDbFactory(
-            Yaml.createYamlMappingBuilder().add(
-                "artifacts_database",
-                Yaml.createYamlMappingBuilder()
-                    .add(ArtifactDbFactory.YAML_HOST, POSTGRES.getHost())
-                    .add(ArtifactDbFactory.YAML_PORT, String.valueOf(POSTGRES.getFirstMappedPort()))
-                    .add(ArtifactDbFactory.YAML_DATABASE, POSTGRES.getDatabaseName())
-                    .add(ArtifactDbFactory.YAML_USER, POSTGRES.getUsername())
-                    .add(ArtifactDbFactory.YAML_PASSWORD, POSTGRES.getPassword())
-                    .build()
-            ).build(),
-            "artifacts"
-        ).initialize();
+                Yaml.createYamlMappingBuilder().add(
+                        "artifacts_database",
+                        Yaml.createYamlMappingBuilder()
+                                .add(ArtifactDbFactory.YAML_HOST, postgres.getHost())
+                                .add(ArtifactDbFactory.YAML_PORT, String.valueOf(postgres.getFirstMappedPort()))
+                                .add(ArtifactDbFactory.YAML_DATABASE, postgres.getDatabaseName())
+                                .add(ArtifactDbFactory.YAML_USER, postgres.getUsername())
+                                .add(ArtifactDbFactory.YAML_PASSWORD, postgres.getPassword())
+                                .build())
+                        .build(),
+                "artifacts").initialize();
         this.service = new QuartzService();
     }
 
@@ -78,33 +71,28 @@ public final class SchedulerDbTest {
     void insertsRecords() throws SchedulerException, InterruptedException {
         this.service.start();
         final Queue<ArtifactEvent> queue = this.service.addPeriodicEventsProcessor(
-            1, List.of(new DbConsumer(this.source), new DbConsumer(this.source))
-        );
+                1, List.of(new DbConsumer(this.source), new DbConsumer(this.source)));
         Thread.sleep(500);
         final long created = System.currentTimeMillis();
         for (int i = 0; i < 1000; i++) {
             queue.add(
-                new ArtifactEvent(
-                    "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i), 1250L, created
-                )
-            );
+                    new ArtifactEvent(
+                            "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i), 1250L, created));
             if (i % 50 == 0) {
                 Thread.sleep(990);
             }
         }
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
-            () -> {
-                try (
-                    Connection conn = this.source.getConnection();
-                    Statement stat = conn.createStatement()
-                ) {
-                    stat.execute("SELECT COUNT(*) FROM artifacts");
-                    final ResultSet rs = stat.getResultSet();
-                    rs.next();
-                    return rs.getInt(1) == 1000;
-                }
-            }
-        );
+                () -> {
+                    try (
+                            Connection conn = this.source.getConnection();
+                            Statement stat = conn.createStatement()) {
+                        stat.execute("SELECT COUNT(*) FROM artifacts");
+                        final ResultSet rs = stat.getResultSet();
+                        rs.next();
+                        return rs.getInt(1) == 1000;
+                    }
+                });
     }
 
 }

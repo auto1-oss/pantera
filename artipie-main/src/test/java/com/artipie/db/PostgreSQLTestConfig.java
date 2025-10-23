@@ -9,6 +9,7 @@ import org.testcontainers.utility.DockerImageName;
 
 /**
  * PostgreSQL test configuration for cross-platform compatibility.
+ * 
  * @since 1.0
  */
 public final class PostgreSQLTestConfig {
@@ -42,19 +43,21 @@ public final class PostgreSQLTestConfig {
 
     /**
      * Creates a PostgreSQL container configured for cross-platform testing.
+     * 
      * @return Configured PostgreSQL container
      */
     public static PostgreSQLContainer<?> createContainer() {
         return new PostgreSQLContainer<>(DockerImageName.parse(POSTGRES_IMAGE))
-            .withDatabaseName(DATABASE_NAME)
-            .withUsername(USERNAME)
-            .withPassword(PASSWORD)
-            .withReuse(true)
-            .withLabel("test-container", "artipie-postgres");
+                .withDatabaseName(DATABASE_NAME)
+                .withUsername(USERNAME)
+                .withPassword(PASSWORD)
+                .withReuse(true) // Enable reuse - singleton ensures one instance per JVM
+                .withLabel("test-container", "artipie-postgres");
     }
 
     /**
      * Gets the database name.
+     * 
      * @return Database name
      */
     public static String getDatabaseName() {
@@ -63,6 +66,7 @@ public final class PostgreSQLTestConfig {
 
     /**
      * Gets the username.
+     * 
      * @return Username
      */
     public static String getUsername() {
@@ -71,6 +75,7 @@ public final class PostgreSQLTestConfig {
 
     /**
      * Gets the password.
+     * 
      * @return Password
      */
     public static String getPassword() {
