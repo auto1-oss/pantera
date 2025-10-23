@@ -11,6 +11,7 @@ import com.jcabi.matchers.XhtmlMatchers;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import org.cactoos.list.ListOf;
 import org.hamcrest.Matcher;
 import org.hamcrest.MatcherAssert;
@@ -51,7 +52,7 @@ class RpmMetadataRemoveTest {
         ).perform(new ListOf<>(checksum));
         MatcherAssert.assertThat(
             "Record was not removed from primary xml",
-            primary.toString(),
+            primary.toString(StandardCharsets.UTF_8),
             new AllOf<>(
                 new ListOf<Matcher<? super String>>(
                     XhtmlMatchers.hasXPaths(
@@ -64,7 +65,7 @@ class RpmMetadataRemoveTest {
         );
         MatcherAssert.assertThat(
             "Record was not removed from filelist xml",
-            filelist.toString(),
+            filelist.toString(StandardCharsets.UTF_8),
             new AllOf<>(
                 new ListOf<Matcher<? super String>>(
                     XhtmlMatchers.hasXPaths(

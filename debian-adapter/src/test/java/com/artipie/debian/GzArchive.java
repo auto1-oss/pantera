@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 
@@ -56,6 +57,6 @@ public final class GzArchive {
         } catch (final IOException err) {
             throw new UncheckedIOException(err);
         }
-        return out.toString();
+        return out.toString(StandardCharsets.UTF_8);
     }
 }

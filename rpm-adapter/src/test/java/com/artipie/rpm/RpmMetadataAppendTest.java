@@ -14,6 +14,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import org.cactoos.list.ListOf;
 import org.hamcrest.MatcherAssert;
@@ -61,7 +62,7 @@ class RpmMetadataAppendTest {
         );
         MatcherAssert.assertThat(
             "Records were not added to primary xml",
-            primary.toString(),
+            primary.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths(
                 "/*[local-name()='metadata' and @packages='4']",
                 "/*[local-name()='metadata']/*[local-name()='package']/*[local-name()='name' and text()='nginx']",
@@ -72,7 +73,7 @@ class RpmMetadataAppendTest {
         );
         MatcherAssert.assertThat(
             "Records were not added to others xml",
-            other.toString(),
+            other.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths(
                 "/*[local-name()='otherdata' and @packages='4']",
                 "/*[local-name()='otherdata']/*[local-name()='package' and @name='aom']",
@@ -112,7 +113,7 @@ class RpmMetadataAppendTest {
         );
         MatcherAssert.assertThat(
             "Records were not added to primary xml",
-            primary.toString(),
+            primary.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths(
                 "/*[local-name()='metadata' and @packages='2']",
                 "/*[local-name()='metadata']/*[local-name()='package']/*[local-name()='name' and text()='time']",
@@ -121,7 +122,7 @@ class RpmMetadataAppendTest {
         );
         MatcherAssert.assertThat(
             "Records were not added to others xml",
-            other.toString(),
+            other.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths(
                 "/*[local-name()='otherdata' and @packages='2']",
                 "/*[local-name()='otherdata']/*[local-name()='package' and @name='time']",
@@ -176,17 +177,17 @@ class RpmMetadataAppendTest {
         ).perform(Collections.emptyList());
         MatcherAssert.assertThat(
             "Empty primary xml was not generated",
-            primary.toString(),
+            primary.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths("/*[local-name()='metadata' and @packages='0']")
         );
         MatcherAssert.assertThat(
             "Empty other xml was not generated",
-            other.toString(),
+            other.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths("/*[local-name()='otherdata' and @packages='0']")
         );
         MatcherAssert.assertThat(
             "Empty filelists xml was not generated",
-            filelists.toString(),
+            filelists.toString(StandardCharsets.UTF_8),
             XhtmlMatchers.hasXPaths("/*[local-name()='filelists' and @packages='0']")
         );
     }

@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import org.cactoos.set.SetOf;
 import org.json.JSONException;
 import org.junit.jupiter.api.Test;
@@ -33,7 +34,7 @@ class CondaRepodataRemoveTest {
                 )
             );
             JSONAssert.assertEquals(
-                out.toString(),
+                out.toString(StandardCharsets.UTF_8),
                 String.join(
                     "",
                     "{",
@@ -66,7 +67,7 @@ class CondaRepodataRemoveTest {
             new ByteArrayInputStream(file.getBytes()), out
         ).perform(new SetOf<>("abc123", "xyx098"));
         JSONAssert.assertEquals(
-            out.toString(), file, true
+                            out.toString(StandardCharsets.UTF_8), file, true
         );
     }
 
