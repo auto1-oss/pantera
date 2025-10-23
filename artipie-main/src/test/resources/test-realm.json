@@ -1,6 +1,6 @@
 {
-  "id": "test_realm",
-  "realm": "test_realm",
+  "id": "test",
+  "realm": "test",
   "enabled": true,
   "verifyEmail": false,
   "loginWithEmailAllowed": true,
@@ -22,8 +22,12 @@
       "fullScopeAllowed": true,
       "alwaysDisplayInConsole": false,
       "surrogateAuthRequired": false,
-      "redirectUris": ["*"],
-      "webOrigins": ["*"],
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
       "protocolMappers": [
         {
           "name": "audience",
@@ -55,7 +59,9 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["user"]
+      "realmRoles": [
+        "user"
+      ]
     }
   ],
   "roles": {

@@ -38,7 +38,7 @@ final class AuthFromKeycloakTest {
     /**
      * Keycloak realm.
      */
-    private static final String REALM = "test_realm";
+    private static final String REALM = "test";
 
     /**
      * Keycloak client application id.
@@ -62,13 +62,29 @@ final class AuthFromKeycloakTest {
 
     /**
      * Keycloak container instance seeded with the test realm.
+     * Configured to use native platform architecture (arm64 on ARM Macs, amd64 on x86).
      */
     @Container
-    private static final KeycloakContainer KEYCLOAK = new KeycloakContainer("quay.io/keycloak/keycloak:26.0.2")
-        .withAdminUsername(ADMIN_LOGIN)
-        .withAdminPassword(ADMIN_PASSWORD)
-        .withStartupTimeout(Duration.ofMinutes(8))
-        .withRealmImportFile("/test-realm.json");
+    private static final KeycloakContainer KEYCLOAK = configureKeycloakContainer();
+
+    private static KeycloakContainer configureKeycloakContainer() {
+        final String arch = System.getProperty("os.arch").toLowerCase();
+        final String platform = (arch.contains("aarch64") || arch.contains("arm")) 
+            ? "linux/arm64" 
+            : "linux/amd64";
+        
+        // Use latest 26.x - try to get the most recent ARM64 fixes
+        final KeycloakContainer container = new KeycloakContainer("quay.io/keycloak/keycloak:26.4")
+            .withAdminUsername(ADMIN_LOGIN)
+            .withAdminPassword(ADMIN_PASSWORD)
+            .withStartupTimeout(Duration.ofMinutes(8))
+            .withRealmImportFile("/test-realm.json");
+        
+        // Force native platform to avoid QEMU emulation issues
+        container.withCreateContainerCmdModifier(cmd -> cmd.withPlatform(platform));
+        
+        return container;
+    }
 
     private Optional<AuthUser> authenticateWithRetry(final AuthFromKeycloak auth,
         final String username, final String password, final int attempts, final long delayMs) {
