@@ -118,6 +118,9 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         } catch (final IOException err) {
             throw new ArtipieIOException(err);
         }
+        // Clean up orphaned files from previous runs
+        this.cleanupOrphanedFiles();
+        
         // Schedule periodic cleanup using shared executor
         if (this.intervalMillis > 0) {
             this.cleanupTask = SHARED_CLEANER.scheduleWithFixedDelay(
@@ -128,6 +131,40 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             );
         } else {
             this.cleanupTask = null;
+        }
+    }
+    
+    /**
+     * Clean up orphaned .part- files and .meta files from previous runs.
+     * Called on startup to recover from crashes.
+     */
+    private void cleanupOrphanedFiles() {
+        try (java.util.stream.Stream<Path> walk = Files.walk(nsRoot())) {
+            walk.filter(Files::isRegularFile)
+                .forEach(p -> {
+                    try {
+                        final String name = p.getFileName().toString();
+                        // Delete .part- files older than 1 hour (failed writes)
+                        if (name.contains(".part-")) {
+                            final long age = System.currentTimeMillis() - 
+                                Files.getLastModifiedTime(p).toMillis();
+                            if (age > 3600_000) { // 1 hour
+                                Files.deleteIfExists(p);
+                            }
+                        }
+                        // Delete orphaned .meta files without corresponding data files
+                        if (name.endsWith(".meta")) {
+                            final Path dataFile = Path.of(p.toString().replace(".meta", ""));
+                            if (!Files.exists(dataFile)) {
+                                Files.deleteIfExists(p);
+                            }
+                        }
+                    } catch (final IOException ignore) {
+                        // Ignore cleanup errors
+                    }
+                });
+        } catch (final IOException ignore) {
+            // Ignore if directory doesn't exist yet
         }
     }
 
@@ -343,6 +380,10 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         if (!Files.exists(base)) {
             return;
         }
+        
+        // Clean up orphaned files during periodic cleanup
+        this.cleanupOrphanedFiles();
+        
         final List<Path> dataFiles = new ArrayList<>();
         try (Stream<Path> walk = Files.walk(base)) {
             walk.filter(p -> {

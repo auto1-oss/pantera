@@ -48,6 +48,14 @@ public class HttpClientSettings {
             if (!Strings.isNullOrEmpty(proxyTimeout)) {
                 res.setProxyTimeout(Long.parseLong(proxyTimeout));
             }
+            final String maxConnPerDest = mapping.string("max_connections_per_destination");
+            if (!Strings.isNullOrEmpty(maxConnPerDest)) {
+                res.setMaxConnectionsPerDestination(Integer.parseInt(maxConnPerDest));
+            }
+            final String maxQueuedPerDest = mapping.string("max_requests_queued_per_destination");
+            if (!Strings.isNullOrEmpty(maxQueuedPerDest)) {
+                res.setMaxRequestsQueuedPerDestination(Integer.parseInt(maxQueuedPerDest));
+            }
             final YamlMapping jks = mapping.yamlMapping("jks");
             if (jks != null) {
                 res.setJksPath(
@@ -138,6 +146,18 @@ public class HttpClientSettings {
      */
     private long proxyTimeout;
 
+    /**
+     * Max connections per destination (upstream host).
+     * Default is 128.
+     */
+    private int maxConnectionsPerDestination;
+
+    /**
+     * Max queued requests per destination.
+     * Default is 512.
+     */
+    private int maxRequestsQueuedPerDestination;
+
     public HttpClientSettings() {
         this.trustAll = false;
         this.followRedirects = true;
@@ -145,6 +165,8 @@ public class HttpClientSettings {
         this.idleTimeout = 0L;
         this.http3 = false;
         this.proxyTimeout = 120L;  // Default 2 minutes
+        this.maxConnectionsPerDestination = 128;
+        this.maxRequestsQueuedPerDestination = 512;
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
@@ -230,6 +252,24 @@ public class HttpClientSettings {
 
     public HttpClientSettings setProxyTimeout(final long proxyTimeout) {
         this.proxyTimeout = proxyTimeout;
+        return this;
+    }
+
+    public int maxConnectionsPerDestination() {
+        return maxConnectionsPerDestination;
+    }
+
+    public HttpClientSettings setMaxConnectionsPerDestination(final int maxConnectionsPerDestination) {
+        this.maxConnectionsPerDestination = maxConnectionsPerDestination;
+        return this;
+    }
+
+    public int maxRequestsQueuedPerDestination() {
+        return maxRequestsQueuedPerDestination;
+    }
+
+    public HttpClientSettings setMaxRequestsQueuedPerDestination(final int maxRequestsQueuedPerDestination) {
+        this.maxRequestsQueuedPerDestination = maxRequestsQueuedPerDestination;
         return this;
     }
 }

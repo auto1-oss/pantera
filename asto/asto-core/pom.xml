@@ -26,7 +26,7 @@ SOFTWARE.
   <parent>
     <artifactId>asto</artifactId>
     <groupId>com.artipie</groupId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.18.9</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>asto-core</artifactId>

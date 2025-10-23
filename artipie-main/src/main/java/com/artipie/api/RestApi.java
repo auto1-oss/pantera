@@ -188,7 +188,10 @@ public final class RestApi extends AbstractVerticle {
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
         router.route("/api/*").handler(
-            StaticHandler.create("swagger-ui").setIndexPage("index.html")
+            StaticHandler.create("swagger-ui")
+                .setIndexPage("index.html")
+                .setCachingEnabled(false)
+                .setFilesReadOnly(false)
         );
         final HttpServer server;
         final String schema;

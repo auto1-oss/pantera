@@ -17,6 +17,8 @@ import org.eclipse.jetty.client.Origin;
 import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.transport.HttpClientTransportOverHTTP3;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -27,6 +29,8 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  * @since 0.1
  */
 public final class JettyClientSlices implements ClientSlices, AutoCloseable {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(JettyClientSlices.class);
 
     /**
      * Default HTTP port.
@@ -88,12 +92,24 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
 
     /**
      * Release used resources and stop requests in progress.
+     * This properly closes all connections and releases thread pools.
      */
     public void stop() {
         if (stopped.compareAndSet(false, true)) {
             try {
+                LOGGER.debug("Stopping Jetty HTTP client (destinations: {})", 
+                    this.clnt.getDestinations().size());
+                
+                // First, stop accepting new requests
                 this.clnt.stop();
+                
+                // Then destroy to release all resources (connection pools, threads)
+                // This is critical to prevent connection leaks
+                this.clnt.destroy();
+                
+                LOGGER.debug("Jetty HTTP client stopped and destroyed successfully");
             } catch (Exception e) {
+                LOGGER.error("Failed to stop Jetty HTTP client cleanly", e);
                 throw new ArtipieException(
                     "Failed to stop Jetty HTTP client. Some connections may not be closed properly.",
                     e
@@ -180,6 +196,12 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         result.setFollowRedirects(settings.followRedirects());
         result.setConnectTimeout(settings.connectTimeout());
         result.setIdleTimeout(settings.idleTimeout());
+        
+        // Connection pool limits to prevent resource exhaustion
+        // These prevent unlimited connection accumulation to upstream repositories
+        result.setMaxConnectionsPerDestination(settings.maxConnectionsPerDestination());
+        result.setMaxRequestsQueuedPerDestination(settings.maxRequestsQueuedPerDestination());
+        
         return result;
     }
 }

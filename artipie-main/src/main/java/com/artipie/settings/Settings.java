@@ -93,8 +93,12 @@ public interface Settings extends AutoCloseable {
     /**
      * Logging configuration.
      * @return Logging context
+     * @deprecated Logging is now configured via log4j2.xml. This method is no longer used.
      */
-    LoggingContext logging();
+    @Deprecated
+    default LoggingContext logging() {
+        return null;
+    }
 
     default HttpClientSettings httpClientSettings() {
         return new HttpClientSettings();
