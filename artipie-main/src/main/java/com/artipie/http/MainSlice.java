@@ -62,35 +62,40 @@ public final class MainSlice extends Slice.Wrap {
             sessions,
             events
         );
-        return new SliceRoute(
-            MainSlice.EMPTY_PATH,
-            new RtRulePath(
-                new RtRule.ByPath(Pattern.compile("/\\.health")),
-                new HealthSlice(settings)
-            ),
-            new RtRulePath(
-                new RtRule.All(
-                    MethodRule.GET,
-                    new RtRule.ByPath("/.version")
+        // Wrap entire routing in TimeoutSlice to prevent request leaks
+        // Without this, hung requests never timeout and accumulate indefinitely
+        return new TimeoutSlice(
+            new SliceRoute(
+                MainSlice.EMPTY_PATH,
+                new RtRulePath(
+                    new RtRule.ByPath(Pattern.compile("/\\.health")),
+                    new HealthSlice(settings)
                 ),
-                new VersionSlice(new ArtipieProperties())
-            ),
-            new RtRulePath(
-                new RtRule.All(
-                    new RtRule.ByPath("/\\.import/.*"),
-                    new RtRule.Any(MethodRule.PUT, MethodRule.POST)
+                new RtRulePath(
+                    new RtRule.All(
+                        MethodRule.GET,
+                        new RtRule.ByPath("/.version")
+                    ),
+                    new VersionSlice(new ArtipieProperties())
                 ),
-                new ImportSlice(imports)
-            ),
-            new RtRulePath(
-                RtRule.FALLBACK,
-                new DockerRoutingSlice(
-                    settings, 
-                    new ApiRoutingSlice(
-                        new SliceByPath(slices, settings.prefixes())
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("/\\.import/.*"),
+                        new RtRule.Any(MethodRule.PUT, MethodRule.POST)
+                    ),
+                    new ImportSlice(imports)
+                ),
+                new RtRulePath(
+                    RtRule.FALLBACK,
+                    new DockerRoutingSlice(
+                        settings, 
+                        new ApiRoutingSlice(
+                            new SliceByPath(slices, settings.prefixes())
+                        )
                     )
                 )
-            )
+            ),
+            settings.httpClientSettings().proxyTimeout()  // Use configured timeout (default 120s)
         );
     }
 }
