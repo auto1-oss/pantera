@@ -272,10 +272,24 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                             ch.force(true);
                             ch.close();
                             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                            final CacheMeta cm = CacheMeta.fromRemote(remoteMeta.join());
-                            cm.lastAccess = Instant.now().toEpochMilli();
-                            cm.hits = 1;
-                            CacheMeta.write(meta, cm);
+                            // Write metadata asynchronously to avoid blocking stream completion
+                            // If metadata fetch fails/times out, write basic metadata
+                            remoteMeta.handle((rm, metaErr) -> {
+                                try {
+                                    final CacheMeta cm = metaErr == null ? CacheMeta.fromRemote(rm) : new CacheMeta();
+                                    if (metaErr != null) {
+                                        // Fallback: use file size for metadata
+                                        cm.size = Files.size(file);
+                                        cm.etag = "";
+                                    }
+                                    cm.lastAccess = Instant.now().toEpochMilli();
+                                    cm.hits = 1;
+                                    CacheMeta.write(meta, cm);
+                                } catch (final IOException ignored) {
+                                    // Best effort - file is already cached
+                                }
+                                return null;
+                            });
                         } catch (final IOException ioe) {
                             throw new ArtipieIOException(ioe);
                         }
