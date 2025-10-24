@@ -106,7 +106,12 @@ public final class MavenProxySlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
+                    // Wrap with ChecksumProxySlice to auto-generate .sha1/.md5 files
+                    // This dramatically improves Maven client performance by eliminating
+                    // "Checksum validation failed, no checksums available" errors
+                    new ChecksumProxySlice(
+                        new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
+                    )
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,
