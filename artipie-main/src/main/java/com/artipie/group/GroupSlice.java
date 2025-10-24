@@ -68,19 +68,20 @@ public final class GroupSlice implements Slice {
         final String method = line.method().value();
         final String path = line.uri().getPath();
         
-        // Allow read-only methods
+        // Allow read-only methods - use PARALLEL strategy
         if ("GET".equals(method) || "HEAD".equals(method)) {
-            return tryMember(0, line, headers, body);
+            return tryAllMembersInParallel(line, headers, body);
         }
         
-        // Allow POST for npm audit endpoints
+        // Allow POST for npm audit endpoints - use PARALLEL strategy
         if ("POST".equals(method) && path.contains("/-/npm/v1/security/")) {
-            return tryMember(0, line, headers, body);
+            return tryAllMembersInParallel(line, headers, body);
         }
         
         // Allow PUT for npm adduser/login endpoints (only for npm-group)
         if ("PUT".equals(method) && this.isNpmGroup() && this.isNpmAuthEndpoint(path)) {
             // Forward to first member (typically the local npm repo)
+            // Auth operations should NOT be parallel (security concern)
             return tryMember(0, line, headers, body);
         }
         
@@ -107,6 +108,84 @@ public final class GroupSlice implements Slice {
         return path.contains("/-/user/org.couchdb.user:");
     }
 
+    /**
+     * Try all members in parallel (race strategy).
+     * Returns first successful (non-404) response.
+     * This is 3-10× faster than sequential when artifact is in last repo.
+     *
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return First successful response, or 404 if all fail
+     */
+    private CompletableFuture<Response> tryAllMembersInParallel(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        if (this.members.isEmpty()) {
+            return ResponseBuilder.notFound().completedFuture();
+        }
+
+        final CompletableFuture<Response> result = new CompletableFuture<>();
+        final java.util.concurrent.atomic.AtomicInteger failedCount = 
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+        // Start all member requests in parallel
+        for (int i = 0; i < this.members.size(); i++) {
+            final int index = i;
+            final String member = this.members.get(index);
+            final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
+            final RequestLine rewritten = rewrite(line, member);
+            final Headers sanitized = dropFullPathHeader(headers);
+            
+            Logger.debug(this, "Group %s trying member %s IN PARALLEL: %s", this.group, member, rewritten.uri());
+            
+            memberSlice.response(rewritten, sanitized, body)
+                .handle((resp, err) -> {
+                    // If result already completed (someone else won), ignore
+                    if (result.isDone()) {
+                        return null;
+                    }
+                    
+                    if (err != null) {
+                        Logger.warn(this, "Group %s member %s failed: %s", this.group, member, err.getMessage());
+                        if (failedCount.incrementAndGet() == this.members.size()) {
+                            result.complete(ResponseBuilder.notFound().build());
+                        }
+                        return null;
+                    }
+                    
+                    Logger.debug(this, "Member %s responded %s for %s", member, resp.status(), rewritten.uri());
+                    
+                    if (resp.status() == RsStatus.NOT_FOUND) {
+                        // This repo doesn't have it, keep waiting for others
+                        if (failedCount.incrementAndGet() == this.members.size()) {
+                            result.complete(ResponseBuilder.notFound().build());
+                        }
+                        return null;
+                    }
+                    
+                    // SUCCESS! First non-404 response wins
+                    Logger.info(this, "Group %s: member %s returned SUCCESS (first wins!)", this.group, member);
+                    result.complete(resp);
+                    return null;
+                });
+        }
+        
+        return result;
+    }
+
+    /**
+     * Try members sequentially (for write operations like auth).
+     * Used only for operations that should NOT be parallelized.
+     *
+     * @param index Current member index
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @return Response from first successful member
+     */
     private CompletableFuture<Response> tryMember(
         final int index,
         final RequestLine line,

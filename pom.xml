@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.18.10</version>
+  <version>1.18.12</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -81,7 +81,7 @@ SOFTWARE.
     <!-- Tests enabled by default; set -Dmaven.test.skip=true to skip locally -->
     <header.license>LICENSE.header</header.license>
     <junit-platform.version>5.10.0</junit-platform.version>
-    <vertx.version>4.5.6</vertx.version>
+    <vertx.version>4.5.21</vertx.version>
     <guava.version>33.0.0-jre</guava.version>
     <javax.json.version>1.1.4</javax.json.version>
     <jetty.version>12.0.6</jetty.version>

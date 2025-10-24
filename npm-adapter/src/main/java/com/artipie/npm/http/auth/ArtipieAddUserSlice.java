@@ -156,12 +156,15 @@ public final class ArtipieAddUserSlice implements Slice {
      * @return Response
      */
     private Response successResponse(final String username, final NpmToken token) {
+        // npm v11+ requires the token in BOTH locations for proper credential storage
+        // See: https://github.com/npm/cli/issues/7206
         return ResponseBuilder.created()
+            .header("npm-auth-token", token.token())  // Header for npm v11+
             .jsonBody(Json.createObjectBuilder()
                 .add("ok", true)
                 .add("id", String.format("org.couchdb.user:%s", username))
                 .add("rev", "1-" + System.currentTimeMillis())
-                .add("token", token.token())
+                .add("token", token.token())  // Body for npm v10 and below
                 .build())
             .build();
     }

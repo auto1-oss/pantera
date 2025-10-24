@@ -65,6 +65,11 @@ public final class ImportService {
     private final Optional<Queue<ArtifactEvent>> events;
 
     /**
+     * Enable metadata regeneration (default: false for backward compatibility).
+     */
+    private final boolean regenerateMetadata;
+
+    /**
      * Ctor.
      *
      * @param repositories Repositories
@@ -76,9 +81,27 @@ public final class ImportService {
         final Optional<ImportSessionStore> sessions,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(repositories, sessions, events, false);
+    }
+
+    /**
+     * Ctor with metadata regeneration flag.
+     *
+     * @param repositories Repositories
+     * @param sessions Session store
+     * @param events Metadata queue
+     * @param regenerateMetadata Enable metadata regeneration
+     */
+    public ImportService(
+        final Repositories repositories,
+        final Optional<ImportSessionStore> sessions,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean regenerateMetadata
+    ) {
         this.repositories = repositories;
         this.sessions = sessions;
         this.events = events;
+        this.regenerateMetadata = regenerateMetadata;
     }
 
     /**
@@ -249,17 +272,45 @@ public final class ImportService {
         }
 
         return storage.move(staging, target)
-            .thenApply(
+            .thenCompose(
                 ignored -> {
-                    this.sessions.ifPresent(store -> store.markCompleted(session, size, toPersist));
-                    this.enqueueEvent(request, size);
-                    return new ImportResult(
-                        ImportStatus.CREATED,
-                        "Artifact imported",
-                        toPersist,
-                        size,
-                        null
-                    );
+                    // Regenerate metadata if enabled
+                    if (this.regenerateMetadata) {
+                        final MetadataRegenerator regenerator = new MetadataRegenerator(
+                            storage, request.repoType(), request.repo()
+                        );
+                        return regenerator.regenerate(target, request)
+                            .exceptionally(err -> {
+                                LOG.warn(
+                                    "Metadata regeneration failed for {} :: {}: {}",
+                                    request.repo(), target.string(), err.getMessage()
+                                );
+                                return null; // Continue even if metadata regeneration fails
+                            })
+                            .thenApply(nothing -> {
+                                this.sessions.ifPresent(store -> store.markCompleted(session, size, toPersist));
+                                this.enqueueEvent(request, size);
+                                return new ImportResult(
+                                    ImportStatus.CREATED,
+                                    "Artifact imported",
+                                    toPersist,
+                                    size,
+                                    null
+                                );
+                            });
+                    } else {
+                        this.sessions.ifPresent(store -> store.markCompleted(session, size, toPersist));
+                        this.enqueueEvent(request, size);
+                        return CompletableFuture.completedFuture(
+                            new ImportResult(
+                                ImportStatus.CREATED,
+                                "Artifact imported",
+                                toPersist,
+                                size,
+                                null
+                            )
+                        );
+                    }
                 }
             );
     }
