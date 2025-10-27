@@ -65,11 +65,11 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}Verify image was created${NC}"
+echo -e "${YELLOW}Step 3: Verify image was created${NC}"
 docker images ${IMAGE_NAME} --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}\t{{.Size}}"
 
 echo ""
-echo -e "${YELLOW}Restart Docker Compose${NC}"
+echo -e "${YELLOW}Step 4: Restart Docker Compose${NC}"
 cd ${COMPOSE_DIR}
 
 echo "Stopping containers..."
