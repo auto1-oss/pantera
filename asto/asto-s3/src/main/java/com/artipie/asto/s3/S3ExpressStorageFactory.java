@@ -27,17 +27,40 @@ import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
+import software.amazon.awssdk.services.s3.model.StorageClass;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.StsClientBuilder;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
 
 /**
- * Factory to create S3 storage.
+ * Factory to create S3 Express One Zone storage.
  *
- * @since 0.1
+ * S3 Express One Zone provides single-digit millisecond data access with consistent performance
+ * for latency-sensitive applications. This storage class is optimized for performance and is
+ * designed for workloads that require the fastest access to data.
+ *
+ * Key features:
+ * - Single availability zone storage
+ * - Up to 10x faster than S3 Standard
+ * - Lower request costs
+ * - Ideal for analytics, ML training, and interactive applications
+ *
+ * Configuration example:
+ * <pre>{@code
+ * storage:
+ *   type: s3-express
+ *   bucket: my-bucket--usw2-az1--x-s3  # Must use directory bucket naming format
+ *   region: us-west-2
+ *   credentials:
+ *     type: basic
+ *     accessKeyId: AKIAIOSFODNN7EXAMPLE
+ *     secretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+ * }</pre>
+ *
+ * @since 1.18.0
  */
-@ArtipieStorageFactory("s3")
-public final class S3StorageFactory implements StorageFactory {
+@ArtipieStorageFactory("s3-express")
+public final class S3ExpressStorageFactory implements StorageFactory {
     @Override
     public Storage newStorage(final Config cfg) {
         final String bucket = new Config.StrictStorageConfig(cfg).string("bucket");
@@ -63,6 +86,8 @@ public final class S3StorageFactory implements StorageFactory {
             })
             .orElse(ChecksumAlgorithm.SHA256);
 
+        // S3 Express One Zone does not support server-side encryption configuration
+        // Encryption is always enabled by default with SSE-S3
         final Config sse = cfg.config("sse");
         final ServerSideEncryption sseAlg = sse.isEmpty()
             ? null
@@ -78,7 +103,7 @@ public final class S3StorageFactory implements StorageFactory {
         final int pdlConc = optInt(cfg, "parallel-download-concurrency").orElse(8);
 
         final Storage base = new S3Storage(
-            S3StorageFactory.s3Client(cfg),
+            S3ExpressStorageFactory.s3Client(cfg),
             bucket,
             multipart,
             endpoint(cfg).orElse("def endpoint"),
@@ -88,7 +113,7 @@ public final class S3StorageFactory implements StorageFactory {
             algo,
             sseAlg,
             kmsId,
-            null,  // storage class - null for default STANDARD
+            StorageClass.EXPRESS_ONEZONE,  // S3 Express One Zone storage class
             enablePdl,
             pdlThreshold,
             pdlChunk,
@@ -162,7 +187,8 @@ public final class S3StorageFactory implements StorageFactory {
         endpoint(cfg).ifPresent(val -> builder.endpointOverride(URI.create(val)));
 
         // S3-specific configuration
-        final boolean pathStyle = !"false".equalsIgnoreCase(cfg.string("path-style"));
+        // Note: S3 Express One Zone requires path-style access to be disabled
+        final boolean pathStyle = "true".equalsIgnoreCase(cfg.string("path-style"));
         final boolean dualstack = "true".equalsIgnoreCase(cfg.string("dualstack"));
         builder.serviceConfiguration(
             S3Configuration.builder()
