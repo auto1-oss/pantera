@@ -41,6 +41,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 import software.amazon.awssdk.services.s3.model.ChecksumMode;
+import software.amazon.awssdk.services.s3.model.StorageClass;
 
 /**
  * Storage that holds data in S3 storage.
@@ -119,6 +120,11 @@ public final class S3Storage implements ManagedStorage {
     private final String kms;
 
     /**
+     * S3 storage class (null for default STANDARD).
+     */
+    private final StorageClass storageClass;
+
+    /**
      * Enable parallel download.
      */
     private final boolean parallelDownload;
@@ -162,6 +168,7 @@ public final class S3Storage implements ManagedStorage {
             ChecksumAlgorithm.SHA256,
             null,
             null,
+            null,
             false,
             64L * 1024 * 1024,
             8 * 1024 * 1024,
@@ -192,6 +199,7 @@ public final class S3Storage implements ManagedStorage {
             ChecksumAlgorithm.SHA256,
             null,
             null,
+            null,
             false,
             64L * 1024 * 1024,
             8 * 1024 * 1024,
@@ -212,6 +220,7 @@ public final class S3Storage implements ManagedStorage {
      * @param checksum Upload checksum algorithm.
      * @param sse Server-side encryption type (or null).
      * @param kms KMS key id (optional, for SSE-KMS).
+     * @param storageClass S3 storage class (or null for default STANDARD).
      * @param parallelDownload Enable parallel downloads.
      * @param parallelThreshold Threshold for parallel downloads.
      * @param parallelChunk Chunk size for parallel downloads.
@@ -228,6 +237,7 @@ public final class S3Storage implements ManagedStorage {
         final ChecksumAlgorithm checksum,
         final ServerSideEncryption sse,
         final String kms,
+        final StorageClass storageClass,
         final boolean parallelDownload,
         final long parallelThreshold,
         final int parallelChunk,
@@ -242,6 +252,7 @@ public final class S3Storage implements ManagedStorage {
         this.checksum = checksum;
         this.sse = sse;
         this.kms = kms;
+        this.storageClass = storageClass;
         this.parallelDownload = parallelDownload;
         this.parallelThreshold = parallelThreshold;
         this.parallelChunk = parallelChunk;
@@ -463,6 +474,9 @@ public final class S3Storage implements ManagedStorage {
                 req.ssekmsKeyId(this.kms);
             }
         }
+        if (this.storageClass != null) {
+            req.storageClass(this.storageClass);
+        }
         // Stream directly without buffering entire content in memory
         // This reduces memory usage from 3x file size to streaming buffers only
         if (this.checksum != null && this.checksum != ChecksumAlgorithm.SHA256) {
@@ -491,6 +505,9 @@ public final class S3Storage implements ManagedStorage {
             if (this.sse == ServerSideEncryption.AWS_KMS && this.kms != null) {
                 mpreq.ssekmsKeyId(this.kms);
             }
+        }
+        if (this.storageClass != null) {
+            mpreq.storageClass(this.storageClass);
         }
         if (this.checksum == ChecksumAlgorithm.SHA256) {
             mpreq.checksumAlgorithm(this.checksum);
