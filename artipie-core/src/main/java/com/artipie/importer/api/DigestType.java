@@ -26,7 +26,12 @@ public enum DigestType {
     /**
      * MD5 digest.
      */
-    MD5("MD5");
+    MD5("MD5"),
+
+    /**
+     * SHA-512 digest.
+     */
+    SHA512("SHA-512");
 
     /**
      * JCA algorithm name.
@@ -63,6 +68,7 @@ public enum DigestType {
             case SHA1 -> "sha1";
             case SHA256 -> "sha256";
             case MD5 -> "md5";
+            case SHA512 -> "sha512";
         };
     }
 }

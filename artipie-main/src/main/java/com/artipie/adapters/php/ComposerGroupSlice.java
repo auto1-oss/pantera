@@ -152,13 +152,24 @@ public final class ComposerGroupSlice implements Slice {
                                         new ByteArrayInputStream(bytes)
                                     )) {
                                         final JsonObject json = reader.readObject();
+                                        
+                                        // Safely count packages - handle both array (Satis) and object (traditional)
+                                        int packageCount = 0;
+                                        if (json.containsKey("packages")) {
+                                            final var packagesValue = json.get("packages");
+                                            if (packagesValue instanceof JsonObject) {
+                                                packageCount = ((JsonObject) packagesValue).size();
+                                            } else if (json.containsKey("provider-includes")) {
+                                                // Satis format - count provider-includes instead
+                                                packageCount = json.getJsonObject("provider-includes").size();
+                                            }
+                                        }
+                                        
                                         Logger.debug(
                                             this,
-                                            "Member %s returned packages.json with %d packages",
+                                            "Member %s returned packages.json with %d packages/providers",
                                             member,
-                                            json.containsKey("packages") 
-                                                ? json.getJsonObject("packages").size() 
-                                                : 0
+                                            packageCount
                                         );
                                         return json;
                                     } catch (Exception e) {
@@ -200,52 +211,91 @@ public final class ComposerGroupSlice implements Slice {
             .thenApply(v -> {
                 final JsonObjectBuilder merged = Json.createObjectBuilder();
                 final JsonObjectBuilder packagesBuilder = Json.createObjectBuilder();
+                final JsonObjectBuilder providersBuilder = Json.createObjectBuilder();
+                
+                boolean hasSatisFormat = false;
 
                 // Merge all packages from all members
                 // Note: futures are already complete at this point (after allOf)
                 for (CompletableFuture<JsonObject> future : futures) {
                     final JsonObject json = future.join();  // ✅ Already complete - no blocking!
-                    if (json.containsKey("packages")) {
-                        final JsonObject packages = json.getJsonObject("packages");
-                        packages.forEach((name, versionsObj) -> {
-                            // Add UIDs to each package version
-                            final JsonObject versions = (JsonObject) versionsObj;
-                            final JsonObjectBuilder pkgWithUids = Json.createObjectBuilder();
-                            versions.forEach((version, versionData) -> {
-                                final JsonObject versionObj = (JsonObject) versionData;
-                                final JsonObjectBuilder versionWithUid = Json.createObjectBuilder(versionObj);
-                                if (!versionObj.containsKey("uid")) {
-                                    versionWithUid.add("uid", UUID.randomUUID().toString());
-                                }
-                                pkgWithUids.add(version, versionWithUid.build());
-                            });
-                            packagesBuilder.add(name, pkgWithUids.build());
+                    
+                    // Handle Satis format (providers)
+                    if (json.containsKey("providers")) {
+                        hasSatisFormat = true;
+                        final JsonObject providers = json.getJsonObject("providers");
+                        providers.forEach((key, value) -> {
+                            providersBuilder.add(key, value);
                         });
+                        Logger.debug(
+                            this,
+                            "Member returned Satis format with %d providers",
+                            providers.size()
+                        );
+                    }
+                    
+                    // Handle traditional format (packages object)
+                    if (json.containsKey("packages")) {
+                        final var packagesValue = json.get("packages");
+                        // Check if it's an object (traditional) or array (Satis empty)
+                        if (packagesValue instanceof JsonObject) {
+                            final JsonObject packages = (JsonObject) packagesValue;
+                            packages.forEach((name, versionsObj) -> {
+                                // Add UIDs to each package version
+                                final JsonObject versions = (JsonObject) versionsObj;
+                                final JsonObjectBuilder pkgWithUids = Json.createObjectBuilder();
+                                versions.forEach((version, versionData) -> {
+                                    final JsonObject versionObj = (JsonObject) versionData;
+                                    final JsonObjectBuilder versionWithUid = Json.createObjectBuilder(versionObj);
+                                    if (!versionObj.containsKey("uid")) {
+                                        versionWithUid.add("uid", UUID.randomUUID().toString());
+                                    }
+                                    pkgWithUids.add(version, versionWithUid.build());
+                                });
+                                packagesBuilder.add(name, pkgWithUids.build());
+                            });
+                        }
                     }
                     
                     // Preserve other fields from the first non-empty response
-                    // But do NOT preserve metadata-url - we'll rewrite it to point to the group
+                    // But do NOT preserve metadata-url/providers-url - we'll rewrite them
                     if (merged.build().isEmpty()) {
                         json.forEach((key, value) -> {
-                            if (!"packages".equals(key) && !"metadata-url".equals(key)) {
+                            if (!"packages".equals(key) 
+                                && !"metadata-url".equals(key) 
+                                && !"providers-url".equals(key)
+                                && !"providers".equals(key)) {
                                 merged.add(key, value);
                             }
                         });
                     }
                 }
 
-                // Add group-specific metadata-url that routes through the group
-                // Use the base path from the request to ensure proper routing
-                merged.add("metadata-url", basePath + "/p2/%package%.json");
-                merged.add("packages", packagesBuilder.build());
-                final JsonObject result = merged.build();
+                // Build appropriate response format
+                if (hasSatisFormat) {
+                    // Use Satis format for group
+                    merged.add("packages", Json.createObjectBuilder()); // Empty object
+                    merged.add("providers-url", basePath + "/p2/%package%.json");
+                    merged.add("providers", providersBuilder.build());
+                    Logger.info(
+                        this,
+                        "Using Satis format for group %s: %d providers",
+                        this.group,
+                        providersBuilder.build().size()
+                    );
+                } else {
+                    // Use traditional format
+                    merged.add("metadata-url", basePath + "/p2/%package%.json");
+                    merged.add("packages", packagesBuilder.build());
+                    Logger.info(
+                        this,
+                        "Using traditional format for group %s: %d packages",
+                        this.group,
+                        packagesBuilder.build().size()
+                    );
+                }
                 
-                Logger.info(
-                    this,
-                    "Merged packages.json for group %s: %d total packages",
-                    this.group,
-                    result.getJsonObject("packages").size()
-                );
+                final JsonObject result = merged.build();
 
                 final String jsonString = result.toString();
                 final byte[] bytes = jsonString.getBytes(StandardCharsets.UTF_8);

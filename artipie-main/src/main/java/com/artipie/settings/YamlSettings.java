@@ -43,6 +43,8 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
 import com.artipie.asto.factory.StorageFactory;
 import com.artipie.asto.factory.StoragesLoader;
 
@@ -135,6 +137,11 @@ public final class YamlSettings implements Settings {
     private final PrefixesConfig prefixesConfig;
 
     /**
+     * HTTP server request timeout.
+     */
+    private final Duration httpServerRequestTimeout;
+
+    /**
      * Path to artipie.yaml config file.
      */
     private final Path configFilePath;
@@ -180,6 +187,7 @@ public final class YamlSettings implements Settings {
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));
+        this.httpServerRequestTimeout = YamlSettings.parseRequestTimeout(this.meta());
     }
 
     @Override
@@ -253,6 +261,11 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Duration httpServerRequestTimeout() {
+        return this.httpServerRequestTimeout;
+    }
+
+    @Override
     public CooldownSettings cooldown() {
         return this.cooldown;
     }
@@ -313,6 +326,45 @@ public final class YamlSettings implements Settings {
     @Override
     public Path configPath() {
         return this.configFilePath;
+    }
+
+    private static Duration parseRequestTimeout(final YamlMapping meta) {
+        final YamlMapping server = meta.yamlMapping("http_server");
+        final Duration fallback = Duration.ofMinutes(2);
+        if (server == null) {
+            return fallback;
+        }
+        final String value = server.string("request_timeout");
+        if (value == null) {
+            return fallback;
+        }
+        final String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return fallback;
+        }
+        try {
+            final Duration parsed = Duration.parse(trimmed);
+            if (parsed.isNegative()) {
+                throw new IllegalStateException("`http_server.request_timeout` must be zero or positive duration");
+            }
+            return parsed;
+        } catch (final DateTimeParseException ex) {
+            try {
+                final long millis = Long.parseLong(trimmed);
+                if (millis < 0) {
+                    throw new IllegalStateException("`http_server.request_timeout` must be zero or positive");
+                }
+                return Duration.ofMillis(millis);
+            } catch (final NumberFormatException num) {
+                throw new IllegalStateException(
+                    String.format(
+                        "Invalid `http_server.request_timeout` value '%s'. Provide ISO-8601 duration (e.g. PT30S) or milliseconds.",
+                        trimmed
+                    ),
+                    ex
+                );
+            }
+        }
     }
 
     @Override

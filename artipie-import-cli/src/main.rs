@@ -93,6 +93,18 @@ struct Args {
     /// Checksum policy: COMPUTE, METADATA, or SKIP
     #[arg(long, default_value = "SKIP")]
     checksum_policy: String,
+
+    /// Include only these repositories (comma-separated, e.g., "repo1,repo2")
+    #[arg(long)]
+    include_repos: Option<String>,
+
+    /// Exclude these repositories (comma-separated, e.g., "repo3,repo4")
+    #[arg(long)]
+    exclude_repos: Option<String>,
+
+    /// Automatically trigger metadata merges for all supported repo types (php, maven, gradle, helm, pypi)
+    #[arg(long, default_value_t = true)]
+    auto_merge: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -120,10 +132,11 @@ impl UploadTask {
 
     async fn compute_checksums(&self) -> Result<(String, String, String)> {
         use tokio::io::AsyncReadExt;
-        
-        let mut file = tokio::fs::File::open(&self.file_path).await
+
+        let mut file = tokio::fs::File::open(&self.file_path)
+            .await
             .with_context(|| format!("Failed to open file: {:?}", self.file_path))?;
-        
+
         let mut md5 = md5::Context::new();
         let mut sha1 = Sha1::new();
         let mut sha256 = Sha256::new();
@@ -188,7 +201,10 @@ impl ProgressTracker {
 
         Ok(Self {
             completed: Arc::new(Mutex::new(completed)),
-            file: Arc::new(Mutex::new(std::io::BufWriter::with_capacity(1024 * 1024, file))),
+            file: Arc::new(Mutex::new(std::io::BufWriter::with_capacity(
+                1024 * 1024,
+                file,
+            ))),
             success_count: Arc::new(AtomicUsize::new(0)),
             already_count: Arc::new(AtomicUsize::new(0)),
             failed_count: Arc::new(AtomicUsize::new(0)),
@@ -208,7 +224,7 @@ impl ProgressTracker {
     async fn mark_completed(&self, task: &UploadTask, status: &UploadStatus) -> Result<()> {
         let key = task.idempotency_key();
         let mut completed = self.completed.lock().await;
-        
+
         if completed.insert(key.clone()) {
             let mut bufw = self.file.lock().await;
             writeln!(
@@ -282,7 +298,7 @@ impl RepoStats {
             quarantined: 0,
         }
     }
-    
+
     fn total(&self) -> usize {
         self.success + self.already + self.failed + self.quarantined
     }
@@ -298,7 +314,7 @@ impl SummaryTracker {
             stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
-    
+
     async fn mark_success(&self, repo: &str, already: bool) {
         let mut stats = self.stats.lock().await;
         let repo_stats = stats.entry(repo.to_string()).or_insert_with(RepoStats::new);
@@ -308,35 +324,35 @@ impl SummaryTracker {
             repo_stats.success += 1;
         }
     }
-    
+
     async fn mark_failed(&self, repo: &str) {
         let mut stats = self.stats.lock().await;
         let repo_stats = stats.entry(repo.to_string()).or_insert_with(RepoStats::new);
         repo_stats.failed += 1;
     }
-    
+
     async fn mark_quarantined(&self, repo: &str) {
         let mut stats = self.stats.lock().await;
         let repo_stats = stats.entry(repo.to_string()).or_insert_with(RepoStats::new);
         repo_stats.quarantined += 1;
     }
-    
+
     async fn write_report(&self, path: &Path) -> Result<()> {
         use serde_json::json;
-        
+
         let stats = self.stats.lock().await;
         let mut total_success = 0;
         let mut total_already = 0;
         let mut total_failed = 0;
         let mut total_quarantined = 0;
-        
+
         let mut repos = serde_json::Map::new();
         for (repo, repo_stats) in stats.iter() {
             total_success += repo_stats.success;
             total_already += repo_stats.already;
             total_failed += repo_stats.failed;
             total_quarantined += repo_stats.quarantined;
-            
+
             repos.insert(
                 repo.clone(),
                 json!({
@@ -348,40 +364,40 @@ impl SummaryTracker {
                 }),
             );
         }
-        
+
         let report = json!({
             "totalSuccess": total_success,
             "totalAlready": total_already,
             "totalFailures": total_failed + total_quarantined,
             "repos": repos,
         });
-        
+
         tokio::fs::write(path, serde_json::to_string_pretty(&report)?).await?;
         Ok(())
     }
-    
+
     async fn render_table(&self) -> String {
         let stats = self.stats.lock().await;
-        
+
         // Sort repositories by name
         let mut entries: Vec<_> = stats.iter().collect();
         entries.sort_by_key(|(name, _)| *name);
-        
+
         // Calculate totals
         let mut total_success = 0;
         let mut total_already = 0;
         let mut total_failed = 0;
         let mut total_quarantined = 0;
-        
+
         for (_, repo_stats) in entries.iter() {
             total_success += repo_stats.success;
             total_already += repo_stats.already;
             total_failed += repo_stats.failed;
             total_quarantined += repo_stats.quarantined;
         }
-        
+
         let total_all = total_success + total_already + total_failed + total_quarantined;
-        
+
         // Calculate column widths
         let mut w_repo = "Repository".len();
         let mut w_success = "Success".len();
@@ -389,7 +405,7 @@ impl SummaryTracker {
         let mut w_failed = "Failed".len();
         let mut w_quarantined = "Quarantined".len();
         let mut w_total = "Total".len();
-        
+
         for (repo, repo_stats) in entries.iter() {
             w_repo = w_repo.max(repo.len());
             w_success = w_success.max(repo_stats.success.to_string().len());
@@ -398,7 +414,7 @@ impl SummaryTracker {
             w_quarantined = w_quarantined.max(repo_stats.quarantined.to_string().len());
             w_total = w_total.max(repo_stats.total().to_string().len());
         }
-        
+
         // Account for TOTAL row
         w_repo = w_repo.max("TOTAL".len());
         w_success = w_success.max(total_success.to_string().len());
@@ -406,9 +422,9 @@ impl SummaryTracker {
         w_failed = w_failed.max(total_failed.to_string().len());
         w_quarantined = w_quarantined.max(total_quarantined.to_string().len());
         w_total = w_total.max(total_all.to_string().len());
-        
+
         let mut table = String::new();
-        
+
         // Header
         table.push_str(&format!(
             "| {:<w_repo$} | {:>w_success$} | {:>w_already$} | {:>w_failed$} | {:>w_quarantined$} | {:>w_total$} |\n",
@@ -420,7 +436,7 @@ impl SummaryTracker {
             w_quarantined = w_quarantined,
             w_total = w_total,
         ));
-        
+
         // Separator
         table.push_str(&format!(
             "+{}+{}+{}+{}+{}+{}+\n",
@@ -431,7 +447,7 @@ impl SummaryTracker {
             "-".repeat(w_quarantined + 2),
             "-".repeat(w_total + 2),
         ));
-        
+
         // Rows
         for (repo, repo_stats) in entries.iter() {
             table.push_str(&format!(
@@ -450,7 +466,7 @@ impl SummaryTracker {
                 w_total = w_total,
             ));
         }
-        
+
         // Separator before totals
         table.push_str(&format!(
             "+{}+{}+{}+{}+{}+{}+\n",
@@ -461,7 +477,7 @@ impl SummaryTracker {
             "-".repeat(w_quarantined + 2),
             "-".repeat(w_total + 2),
         ));
-        
+
         // Totals row
         table.push_str(&format!(
             "| {:<w_repo$} | {:>w_success$} | {:>w_already$} | {:>w_failed$} | {:>w_quarantined$} | {:>w_total$} |\n",
@@ -478,13 +494,15 @@ impl SummaryTracker {
             w_quarantined = w_quarantined,
             w_total = w_total,
         ));
-        
+
         table
     }
 }
 
 // Attempt to load checksum values from sidecar files ("file.ext.sha1" etc.)
-async fn read_sidecar_checksums(path: &Path) -> Result<(Option<String>, Option<String>, Option<String>)> {
+async fn read_sidecar_checksums(
+    path: &Path,
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let mut md5: Option<String> = None;
     let mut sha1: Option<String> = None;
     let mut sha256: Option<String> = None;
@@ -500,7 +518,12 @@ async fn read_sidecar_checksums(path: &Path) -> Result<(Option<String>, Option<S
         if line.trim().is_empty() {
             return Ok(None);
         }
-        let token = line.split_whitespace().next().unwrap_or("").trim().to_lowercase();
+        let token = line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
         Ok(if token.is_empty() { None } else { Some(token) })
     };
 
@@ -522,28 +545,31 @@ async fn upload_file(
     progress: &ProgressTracker,
 ) -> Result<UploadStatus> {
     // Use /.import/ endpoint like Java CLI - this is critical!
-    let url = format!("{}/.import/{}/{}", args.url, task.repo_name, task.relative_path);
+    let url = format!(
+        "{}/.import/{}/{}",
+        args.url, task.repo_name, task.relative_path
+    );
 
     // Resolve checksum policy and values
     let policy = args.checksum_policy.trim().to_uppercase();
-    let (md5, sha1, sha256): (Option<String>, Option<String>, Option<String>) = match policy.as_str() {
-        // Only compute when explicitly requested
-        "COMPUTE" => {
-            debug!("Computing checksums for {:?}", task.file_path);
-            let (m, s1, s256) = task.compute_checksums().await
-                .with_context(|| format!("Failed to compute checksums for {:?}", task.file_path))?;
-            (Some(m), Some(s1), Some(s256))
-        }
-        // Prefer sidecar files if present
-        "METADATA" => {
-            match read_sidecar_checksums(&task.file_path).await {
+    let (md5, sha1, sha256): (Option<String>, Option<String>, Option<String>) =
+        match policy.as_str() {
+            // Only compute when explicitly requested
+            "COMPUTE" => {
+                debug!("Computing checksums for {:?}", task.file_path);
+                let (m, s1, s256) = task.compute_checksums().await.with_context(|| {
+                    format!("Failed to compute checksums for {:?}", task.file_path)
+                })?;
+                (Some(m), Some(s1), Some(s256))
+            }
+            // Prefer sidecar files if present
+            "METADATA" => match read_sidecar_checksums(&task.file_path).await {
                 Ok((m, s1, s256)) => (m, s1, s256),
                 Err(_) => (None, None, None),
-            }
-        }
-        // SKIP or unknown: do not send checksum headers
-        _ => (None, None, None),
-    };
+            },
+            // SKIP or unknown: do not send checksum headers
+            _ => (None, None, None),
+        };
 
     // Determine authorization header once (outside retry loop)
     let auth_header = if let (Some(user), Some(pass)) = (&args.username, &args.password) {
@@ -561,11 +587,15 @@ async fn upload_file(
     };
 
     for attempt in 1..=args.max_retries {
-        debug!("Attempt {}/{} for {}", attempt, args.max_retries, task.relative_path);
-        
+        debug!(
+            "Attempt {}/{} for {}",
+            attempt, args.max_retries, task.relative_path
+        );
+
         // Open file and stream body without loading into memory
         debug!("Opening file {:?}", task.file_path);
-        let file = tokio::fs::File::open(&task.file_path).await
+        let file = tokio::fs::File::open(&task.file_path)
+            .await
             .with_context(|| format!("Failed to open file: {:?}", task.file_path))?;
         let stream = ReaderStream::new(file);
         let body = reqwest::Body::wrap_stream(stream);
@@ -577,9 +607,16 @@ async fn upload_file(
             // Core Artipie import headers (must match Java CLI)
             .header("X-Artipie-Repo-Type", &task.repo_type)
             .header("X-Artipie-Idempotency-Key", task.idempotency_key())
-            .header("X-Artipie-Artifact-Name", task.file_path.file_name().unwrap().to_string_lossy().to_string())
-            .header("X-Artipie-Artifact-Version", "")  // TODO: Extract from metadata
-            .header("X-Artipie-Artifact-Owner", "admin")  // TODO: Make configurable
+            .header(
+                "X-Artipie-Artifact-Name",
+                task.file_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .header("X-Artipie-Artifact-Version", "") // TODO: Extract from metadata
+            .header("X-Artipie-Artifact-Owner", "admin") // TODO: Make configurable
             .header("X-Artipie-Artifact-Size", task.size.to_string())
             .header("X-Artipie-Artifact-Created", task.created.to_string())
             .header("X-Artipie-Checksum-Mode", policy.as_str())
@@ -603,7 +640,7 @@ async fn upload_file(
             Ok(response) => {
                 let status = response.status();
                 debug!("Response status {} for {}", status, task.relative_path);
-                
+
                 if status.is_success() {
                     let upload_status = if status.as_u16() == 201 {
                         UploadStatus::Success
@@ -689,18 +726,103 @@ fn detect_repo_type_from_dir(dir_name: &str) -> String {
     }
 }
 
-fn collect_tasks(export_dir: &Path) -> Result<Vec<UploadTask>> {
+fn is_known_repo_dir(dir_name: &str) -> bool {
+    matches!(
+        dir_name.to_lowercase().as_str(),
+        "maven"
+            | "gradle"
+            | "npm"
+            | "pypi"
+            | "nuget"
+            | "docker"
+            | "oci"
+            | "composer"
+            | "php"
+            | "go"
+            | "debian"
+            | "deb"
+            | "helm"
+            | "rpm"
+            | "files"
+            | "generic"
+    )
+}
+
+#[derive(Debug, Clone)]
+enum ExportLayout {
+    Root,
+    TypeOnly { type_dir: String },
+    TypeAndRepo { type_dir: String, repo_name: String },
+}
+
+fn detect_export_layout(export_dir: &Path) -> ExportLayout {
+    let parts: Vec<String> = export_dir
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    if parts.is_empty() {
+        return ExportLayout::Root;
+    }
+    if let Some(last) = parts.last() {
+        if is_known_repo_dir(last) {
+            return ExportLayout::TypeOnly {
+                type_dir: last.clone(),
+            };
+        }
+    }
+    if parts.len() >= 2 {
+        let type_candidate = &parts[parts.len() - 2];
+        if is_known_repo_dir(type_candidate) {
+            return ExportLayout::TypeAndRepo {
+                type_dir: type_candidate.clone(),
+                repo_name: parts.last().unwrap().clone(),
+            };
+        }
+    }
+    ExportLayout::Root
+}
+
+fn join_path_parts(parts: &[String]) -> String {
+    parts.join("/")
+}
+
+fn resolve_candidate_file(path: PathBuf) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path);
+    }
+    let path_str = path.to_string_lossy();
+    if path_str.contains('+') {
+        let alt = PathBuf::from(path_str.replace('+', " "));
+        if alt.is_file() {
+            return Some(alt);
+        }
+    }
+    None
+}
+
+fn collect_tasks(export_dir: &Path, include_repos: &Option<HashSet<String>>, exclude_repos: &Option<HashSet<String>>) -> Result<Vec<UploadTask>> {
     info!("Scanning for artifacts in {:?}...", export_dir);
     let mut tasks = Vec::new();
     let start = Instant::now();
 
+    let layout = detect_export_layout(export_dir);
+    info!("Detected export layout: {:?}", layout);
+    let mut seen_keys: HashSet<String> = HashSet::new();
+
     for entry in WalkDir::new(export_dir)
         .into_iter()
+        .filter_entry(|e| {
+            // Skip hidden files and directories (starting with .)
+            e.file_name()
+                .to_str()
+                .map(|s| !s.starts_with('.'))
+                .unwrap_or(false)
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        
+
         // Skip checksum files
         let path_str = path.to_string_lossy();
         if path_str.ends_with(".md5")
@@ -714,34 +836,70 @@ fn collect_tasks(export_dir: &Path) -> Result<Vec<UploadTask>> {
         let metadata = entry.metadata()?;
         let size = metadata.len();
 
-        let relative = path.strip_prefix(export_dir)
+        let relative = path
+            .strip_prefix(export_dir)
             .with_context(|| format!("Failed to strip prefix from {:?}", path))?;
-        let components: Vec<_> = relative.components().collect();
-        
-        // Need at least 3 components: type/repo-name/artifact-path
-        if components.len() < 3 {
-            continue;
-        }
+        let parts: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
 
-        // First component is the repository type (Maven, npm, Debian, etc.)
-        let repo_type_dir = components[0].as_os_str().to_string_lossy().to_string();
-        
-        // Second component is the repository name
-        let repo_name = components[1].as_os_str().to_string_lossy().to_string();
-        
-        // Remaining components form the artifact path
-        let relative_path = components[2..]
-            .iter()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
+        let extracted = match &layout {
+            ExportLayout::Root => {
+                if parts.len() < 3 {
+                    None
+                } else {
+                    Some((
+                        parts[0].clone(),
+                        parts[1].clone(),
+                        join_path_parts(&parts[2..]),
+                    ))
+                }
+            }
+            ExportLayout::TypeOnly { type_dir } => {
+                if parts.len() < 2 {
+                    None
+                } else {
+                    Some((
+                        type_dir.clone(),
+                        parts[0].clone(),
+                        join_path_parts(&parts[1..]),
+                    ))
+                }
+            }
+            ExportLayout::TypeAndRepo {
+                type_dir,
+                repo_name,
+            } => {
+                let rel = join_path_parts(&parts);
+                Some((type_dir.clone(), repo_name.clone(), rel))
+            }
+        };
 
-        if relative_path.is_empty() {
-            continue;
-        }
+        let (repo_type_dir, repo_name, relative_path) = match extracted {
+            Some((r_type, r_name, rel)) if !rel.is_empty() => (r_type, r_name, rel),
+            _ => continue,
+        };
 
-        // Detect repo type from directory name
         let repo_type = detect_repo_type_from_dir(&repo_type_dir);
+
+        // Apply repository filters
+        if let Some(ref include) = include_repos {
+            if !include.contains(&repo_name) {
+                continue;
+            }
+        }
+        if let Some(ref exclude) = exclude_repos {
+            if exclude.contains(&repo_name) {
+                continue;
+            }
+        }
+
+        let dedupe_key = format!("{}|{}", repo_name, relative_path);
+        if !seen_keys.insert(dedupe_key.clone()) {
+            debug!("Skipping duplicate artifact {}", dedupe_key);
+            continue;
+        }
 
         let created = metadata
             .modified()
@@ -773,27 +931,33 @@ fn collect_tasks(export_dir: &Path) -> Result<Vec<UploadTask>> {
     Ok(tasks)
 }
 
-fn collect_retry_tasks(export_dir: &Path, failures_dir: &Path, completed: &HashSet<String>) -> Result<Vec<UploadTask>> {
+fn collect_retry_tasks(
+    export_dir: &Path,
+    failures_dir: &Path,
+    completed: &HashSet<String>,
+) -> Result<Vec<UploadTask>> {
     info!("Collecting failed uploads from {:?}...", failures_dir);
     let mut tasks = Vec::new();
     let mut seen = HashSet::new();
-    
+    let layout = detect_export_layout(export_dir);
+    info!("Detected export layout for retry: {:?}", layout);
+
     if !failures_dir.exists() {
         warn!("Failures directory does not exist: {:?}", failures_dir);
         return Ok(tasks);
     }
-    
+
     // Read all *-failures.log files (Java format) or *.txt files (Rust format)
     for entry in fs::read_dir(failures_dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if !path.is_file() {
             continue;
         }
-        
+
         let filename = path.file_name().unwrap().to_string_lossy();
-        
+
         // Extract repo name from filename
         let repo_name = if filename.ends_with("-failures.log") {
             // Java format: repo-name-failures.log
@@ -804,78 +968,136 @@ fn collect_retry_tasks(export_dir: &Path, failures_dir: &Path, completed: &HashS
         } else {
             continue;
         };
-        
+
         // Read failure log
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
-        
+
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             // Parse line: "relative/path|error message"
             let relative_path = if let Some(sep_idx) = line.find('|') {
                 &line[..sep_idx]
             } else {
                 &line
             };
-            
+
             let key = format!("{}|{}", repo_name, relative_path);
             if !seen.insert(key.clone()) {
                 continue; // Skip duplicates
             }
-            
+
             if completed.contains(&key) {
                 continue; // Skip already completed
             }
-            
+
             // Try to find the file in export_dir
-            // Search under Type/repo-name/path structure
             let mut found = false;
-            for type_entry in fs::read_dir(export_dir)? {
-                let type_entry = type_entry?;
-                if !type_entry.path().is_dir() {
-                    continue;
+            match &layout {
+                ExportLayout::Root => {
+                    for type_entry in fs::read_dir(export_dir)? {
+                        let type_entry = type_entry?;
+                        if !type_entry.path().is_dir() {
+                            continue;
+                        }
+                        let candidate = type_entry.path().join(&repo_name).join(relative_path);
+                        if let Some(actual) = resolve_candidate_file(candidate) {
+                            let metadata = fs::metadata(&actual)?;
+                            let size = metadata.len();
+                            let repo_type_dir =
+                                type_entry.file_name().to_string_lossy().to_string();
+                            let repo_type = detect_repo_type_from_dir(&repo_type_dir);
+                            let created = metadata
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+
+                            tasks.push(UploadTask {
+                                repo_name: repo_name.clone(),
+                                repo_type,
+                                relative_path: relative_path.to_string(),
+                                file_path: actual,
+                                size,
+                                created,
+                            });
+                            found = true;
+                            break;
+                        }
+                    }
                 }
-                
-                let candidate = type_entry.path().join(&repo_name).join(relative_path);
-                if candidate.is_file() {
-                    // Found the file! Create upload task
-                    let metadata = fs::metadata(&candidate)?;
-                    let size = metadata.len();
-                    
-                    let repo_type_dir = type_entry.file_name().to_string_lossy().to_string();
-                    let repo_type = detect_repo_type_from_dir(&repo_type_dir);
-                    
-                    let created = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    
-                    tasks.push(UploadTask {
-                        repo_name: repo_name.clone(),
-                        repo_type,
-                        relative_path: relative_path.to_string(),
-                        file_path: candidate,
-                        size,
-                        created,
-                    });
-                    
-                    found = true;
-                    break;
+                ExportLayout::TypeOnly { type_dir } => {
+                    let candidate = export_dir.join(&repo_name).join(relative_path);
+                    if let Some(actual) = resolve_candidate_file(candidate) {
+                        let metadata = fs::metadata(&actual)?;
+                        let size = metadata.len();
+                        let repo_type = detect_repo_type_from_dir(type_dir);
+                        let created = metadata
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        tasks.push(UploadTask {
+                            repo_name: repo_name.clone(),
+                            repo_type,
+                            relative_path: relative_path.to_string(),
+                            file_path: actual,
+                            size,
+                            created,
+                        });
+                        found = true;
+                    }
+                }
+                ExportLayout::TypeAndRepo {
+                    type_dir,
+                    repo_name: base_repo,
+                } => {
+                    if repo_name != *base_repo {
+                        warn!(
+                            "Failure log repo '{}' does not match export repo '{}', skipping",
+                            repo_name, base_repo
+                        );
+                    } else {
+                        let candidate = export_dir.join(relative_path);
+                        if let Some(actual) = resolve_candidate_file(candidate) {
+                            let metadata = fs::metadata(&actual)?;
+                            let size = metadata.len();
+                            let repo_type = detect_repo_type_from_dir(type_dir);
+                            let created = metadata
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            tasks.push(UploadTask {
+                                repo_name: repo_name.clone(),
+                                repo_type,
+                                relative_path: relative_path.to_string(),
+                                file_path: actual,
+                                size,
+                                created,
+                            });
+                            found = true;
+                        }
+                    }
                 }
             }
-            
+
             if !found {
-                warn!("Could not find failed file: {}/{}", repo_name, relative_path);
+                warn!(
+                    "Could not find failed file: {}/{}",
+                    repo_name, relative_path
+                );
             }
         }
     }
-    
+
     info!("Found {} failed uploads to retry", tasks.len());
     Ok(tasks)
 }
@@ -892,11 +1114,106 @@ async fn write_failure_log(
         .append(true)
         .open(failure_file)
         .await?;
-    
+
     use tokio::io::AsyncWriteExt;
-    file.write_all(format!("{}|{}\n", relative_path, message).as_bytes()).await?;
+    file.write_all(format!("{}|{}\n", relative_path, message).as_bytes())
+        .await?;
     file.flush().await?;
     Ok(())
+}
+
+/// Collect unique repositories that need merge
+/// If auto_merge is true, include PHP/Composer, Maven/Gradle, Helm, and PyPI repos
+/// Otherwise, only PHP/Composer and PyPI repos are selected (backward-compatible default)
+fn collect_merge_repositories(tasks: &[UploadTask], auto_merge: bool) -> Vec<String> {
+    let mut php_repos = HashSet::new();
+    
+    for task in tasks {
+        let repo_type = task.repo_type.to_lowercase();
+        let include = if auto_merge {
+            matches!(repo_type.as_str(), "php" | "composer" | "maven" | "gradle" | "helm" | "pypi" | "python")
+        } else {
+            matches!(repo_type.as_str(), "php" | "composer" | "pypi" | "python")
+        };
+        if include { php_repos.insert(task.repo_name.clone()); }
+    }
+    
+    let mut repos: Vec<String> = php_repos.into_iter().collect();
+    repos.sort();
+    repos
+}
+
+/// Trigger global merge for a repository (server will handle type-specific merge)
+async fn trigger_repo_merge(
+    client: &Client,
+    server_url: &str,
+    repo_name: &str,
+) -> Result<String> {
+    info!("Triggering metadata merge for repository: {}", repo_name);
+    
+    // Use the internal merge API endpoint
+    let merge_url = format!("{}/.merge/{}", server_url, repo_name);
+    
+    let response = client
+        .post(&merge_url)
+        .timeout(Duration::from_secs(300)) // Merge can take up to 5 minutes
+        .send()
+        .await
+        .with_context(|| format!("Failed to trigger merge for {}", repo_name))?;
+    
+    let status = response.status();
+    
+    if status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| "Success".to_string());
+        
+        // Try to parse as JSON to extract statistics (type-specific fields)
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Some(obj) = json.as_object() {
+                let repo_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let msg = match repo_type {
+                    "php" | "composer" => {
+                        let c = obj.get("composer").and_then(|v| v.as_object()).unwrap_or(obj);
+                        let packages = c.get("mergedPackages").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let versions = c.get("mergedVersions").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let failed = c.get("failedPackages").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("{} packages, {} versions, {} failures", packages, versions, failed)
+                    }
+                    "maven" | "gradle" => {
+                        let artifacts = obj.get("mavenArtifactsUpdated").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let bases = obj.get("mavenBases").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("{} artifacts updated ({} bases)", artifacts, bases)
+                    }
+                    "helm" => {
+                        let charts = obj.get("helmChartsUpdated").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let versions = obj.get("helmVersions").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("{} charts, {} versions", charts, versions)
+                    }
+                    "pypi" | "python" => {
+                        let packages = obj.get("pypiPackagesUpdated").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let files = obj.get("pypiFilesIndexed").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("{} packages, {} files indexed", packages, files)
+                    }
+                    _ => {
+                        // Fallback: try old Composer fields
+                        let packages = obj.get("mergedPackages").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let versions = obj.get("mergedVersions").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let failed = obj.get("failedPackages").and_then(|v| v.as_i64()).unwrap_or(0);
+                        format!("{} packages, {} versions, {} failures", packages, versions, failed)
+                    }
+                };
+                return Ok(msg);
+            }
+        }
+        
+        Ok(body)
+    } else {
+        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        Err(anyhow::anyhow!(
+            "Merge failed with HTTP {}: {}",
+            status,
+            error_body
+        ))
+    }
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -924,17 +1241,48 @@ async fn main() -> Result<()> {
     let concurrency = args.concurrency.unwrap_or_else(|| {
         let cpus = num_cpus::get();
         let default = std::cmp::max(32, cpus * 16);
-        info!("Auto-detected {} CPU cores, using {} concurrent tasks", cpus, default);
+        info!(
+            "Auto-detected {} CPU cores, using {} concurrent tasks",
+            cpus, default
+        );
         default
     });
     info!("  Concurrency: {}", concurrency);
 
     // Create failures directory
-    fs::create_dir_all(&args.failures_dir)
-        .with_context(|| format!("Failed to create failures directory: {:?}", args.failures_dir))?;
+    fs::create_dir_all(&args.failures_dir).with_context(|| {
+        format!(
+            "Failed to create failures directory: {:?}",
+            args.failures_dir
+        )
+    })?;
+
+    // Parse repository filters
+    let include_repos = args.include_repos.as_ref().map(|s| {
+        s.split(',')
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .collect::<HashSet<String>>()
+    });
+    let exclude_repos = args.exclude_repos.as_ref().map(|s| {
+        s.split(',')
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .collect::<HashSet<String>>()
+    });
+
+    if let Some(ref include) = include_repos {
+        info!("Including only repositories: {:?}", include);
+    }
+    if let Some(ref exclude) = exclude_repos {
+        info!("Excluding repositories: {:?}", exclude);
+    }
 
     // Initialize progress tracker
-    let progress = Arc::new(ProgressTracker::new(args.progress_log.clone(), args.resume)?);
+    let progress = Arc::new(ProgressTracker::new(
+        args.progress_log.clone(),
+        args.resume,
+    )?);
 
     // Collect tasks based on mode
     let mut tasks = if args.retry {
@@ -944,7 +1292,7 @@ async fn main() -> Result<()> {
         collect_retry_tasks(&args.export_dir, &args.failures_dir, &completed)?
     } else {
         // Normal mode: collect all tasks
-        collect_tasks(&args.export_dir)?
+        collect_tasks(&args.export_dir, &include_repos, &exclude_repos)?
     };
 
     if tasks.is_empty() {
@@ -1040,8 +1388,12 @@ async fn main() -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
     for (batch_num, batch) in tasks.chunks(args.batch_size).enumerate() {
-        debug!("Processing batch {}/{}", batch_num + 1, (tasks.len() + args.batch_size - 1) / args.batch_size);
-        
+        debug!(
+            "Processing batch {}/{}",
+            batch_num + 1,
+            (tasks.len() + args.batch_size - 1) / args.batch_size
+        );
+
         let futures = batch.iter().map(|task| {
             let client = client.clone();
             let task = task.clone();
@@ -1055,24 +1407,39 @@ async fn main() -> Result<()> {
                 let _permit = semaphore.acquire().await.unwrap();
                 let result = upload_file(&client, &task, &args_clone, &progress_clone).await;
                 main_pb.inc(1);
-                
+
                 // Update summary tracker
                 if let Ok(ref status) = result {
                     match status {
-                        UploadStatus::Success => summary_clone.mark_success(&task.repo_name, false).await,
-                        UploadStatus::Already => summary_clone.mark_success(&task.repo_name, true).await,
+                        UploadStatus::Success => {
+                            summary_clone.mark_success(&task.repo_name, false).await
+                        }
+                        UploadStatus::Already => {
+                            summary_clone.mark_success(&task.repo_name, true).await
+                        }
                         UploadStatus::Failed(_) => summary_clone.mark_failed(&task.repo_name).await,
-                        UploadStatus::Quarantined(_) => summary_clone.mark_quarantined(&task.repo_name).await,
+                        UploadStatus::Quarantined(_) => {
+                            summary_clone.mark_quarantined(&task.repo_name).await
+                        }
                     }
                 }
-                
+
                 // Log failures
-                if let Ok(UploadStatus::Failed(ref msg)) | Ok(UploadStatus::Quarantined(ref msg)) = result {
-                    if let Err(e) = write_failure_log(&args_clone.failures_dir, &task.repo_name, &task.relative_path, msg).await {
+                if let Ok(UploadStatus::Failed(ref msg)) | Ok(UploadStatus::Quarantined(ref msg)) =
+                    result
+                {
+                    if let Err(e) = write_failure_log(
+                        &args_clone.failures_dir,
+                        &task.repo_name,
+                        &task.relative_path,
+                        msg,
+                    )
+                    .await
+                    {
                         error!("Failed to write failure log: {}", e);
                     }
                 }
-                
+
                 (task, result)
             }
         });
@@ -1089,22 +1456,57 @@ async fn main() -> Result<()> {
     // Final statistics
     let (success, already, failed, _quarantine, bytes) = progress.get_stats();
     let elapsed = start_time.elapsed();
-    
+
     // Display per-repository summary table
     println!("\n{}", summary.render_table().await);
-    
+
     println!("\n=== Overall Statistics ===");
-    println!("Data uploaded: {:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0);
+    println!(
+        "Data uploaded: {:.2} GB",
+        bytes as f64 / 1024.0 / 1024.0 / 1024.0
+    );
     println!("Time elapsed:  {}", humantime::format_duration(elapsed));
-    println!("Average rate:  {:.1} files/second", (success + already) as f64 / elapsed.as_secs_f64());
-    println!("Throughput:    {:.2} MB/second", (bytes as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64());
+    println!(
+        "Average rate:  {:.1} files/second",
+        (success + already) as f64 / elapsed.as_secs_f64()
+    );
+    println!(
+        "Throughput:    {:.2} MB/second",
+        (bytes as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64()
+    );
 
     // Write detailed JSON report with per-repository stats
     summary.write_report(&args.report).await?;
     info!("Report written to {:?}", args.report);
 
+    // Trigger metadata merge for repositories
+    let merge_repos = collect_merge_repositories(&tasks, args.auto_merge);
+    if !merge_repos.is_empty() {
+        info!("\n=== Metadata Merge Post-Processing ===");
+        if args.auto_merge {
+            info!("Auto-merge enabled: merging {} repositories (php, maven, gradle, helm, pypi)", merge_repos.len());
+        } else {
+            info!("Merging {} PHP/Composer and PyPI repositories (use --auto-merge to include maven/gradle/helm)", merge_repos.len());
+        }
+        
+        for repo_name in merge_repos {
+            match trigger_repo_merge(&client, &args.url, &repo_name).await {
+                Ok(result) => {
+                    info!("✓ Merged {}: {}", repo_name, result);
+                }
+                Err(e) => {
+                    warn!("✗ Failed to merge {}: {}", repo_name, e);
+                    // Don't fail the entire import if merge fails - it can be retried manually
+                }
+            }
+        }
+    }
+
     if failed > 0 {
-        warn!("Some uploads failed. Check {:?} for details", args.failures_dir);
+        warn!(
+            "Some uploads failed. Check {:?} for details",
+            args.failures_dir
+        );
         std::process::exit(1);
     }
 

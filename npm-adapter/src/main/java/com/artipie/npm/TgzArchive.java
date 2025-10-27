@@ -117,7 +117,8 @@ public final class TgzArchive {
         @SuppressWarnings("PMD.AssignmentInOperand")
         public JsonObject json() {
             try (
-                GzipCompressorInputStream gzip = new GzipCompressorInputStream(this.input);
+                InputStream source = this.input;
+                GzipCompressorInputStream gzip = new GzipCompressorInputStream(source, true);
                 TarArchiveInputStream tar = new TarArchiveInputStream(gzip)
             ) {
                 ArchiveEntry entry;
@@ -128,7 +129,22 @@ public final class TgzArchive {
                     }
                     final String[] parts = entry.getName().split("/");
                     if ("package.json".equals(parts[parts.length - 1])) {
-                        json = Optional.of(Json.createReader(tar).readObject());
+                        // Read package.json without closing the tar stream
+                        final byte[] jsonBytes = new byte[(int) entry.getSize()];
+                        int totalRead = 0;
+                        while (totalRead < jsonBytes.length) {
+                            final int read = tar.read(jsonBytes, totalRead, jsonBytes.length - totalRead);
+                            if (read == -1) {
+                                break;
+                            }
+                            totalRead += read;
+                        }
+                        json = Optional.of(
+                            Json.createReader(
+                                new ByteArrayInputStream(jsonBytes)
+                            ).readObject()
+                        );
+                        break;
                     }
                 }
                 return json.orElseThrow(

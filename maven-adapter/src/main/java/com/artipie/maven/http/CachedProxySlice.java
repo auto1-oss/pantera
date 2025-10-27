@@ -6,6 +6,7 @@ package com.artipie.maven.http;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.DigestVerification;
@@ -101,6 +102,11 @@ final class CachedProxySlice implements Slice {
     private final String rtype;
 
     /**
+     * Storage for persisting checksums.
+     */
+    private final Optional<Storage> storage;
+
+    /**
      * Wraps origin slice with caching layer.
      * @param client Client slice
      * @param cache Cache
@@ -109,10 +115,12 @@ final class CachedProxySlice implements Slice {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
+     * @param storage Storage for persisting checksums (optional)
      */
     CachedProxySlice(final Slice client, final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events, final String rname,
-        final String rtype, final CooldownService cooldown, final CooldownInspector inspector) {
+        final String rtype, final CooldownService cooldown, final CooldownInspector inspector,
+        final Optional<Storage> storage) {
         this.client = client;
         this.cache = cache;
         this.events = events;
@@ -120,6 +128,7 @@ final class CachedProxySlice implements Slice {
         this.rtype = rtype;
         this.cooldown = cooldown;
         this.inspector = inspector;
+        this.storage = storage;
     }
 
     /**
@@ -218,6 +227,8 @@ final class CachedProxySlice implements Slice {
                                                 .doOnTerminate(() -> term.complete(null));
                                         this.enqueueFromHeaders(resp.headers(), key, owner);
                                         promise.complete(Optional.of(new Content.From(res)));
+                                        // Download and cache checksum files asynchronously
+                                        this.cacheChecksumFiles(line, key);
                                     } else {
                                         promise.complete(Optional.empty());
                                     }
@@ -353,5 +364,69 @@ final class CachedProxySlice implements Slice {
                 }
                 return ResponseBuilder.notFound().build();
             });
+    }
+
+    /**
+     * Download and save checksum files (.md5, .sha1, .sha256, .sha512) for an artifact.
+     * Saves to storage for persistence, and also to cache if available for fast access.
+     * This runs asynchronously and doesn't block the main response.
+     * @param line Original request line
+     * @param artifactKey Key of the main artifact
+     */
+    private void cacheChecksumFiles(final RequestLine line, final Key artifactKey) {
+        // Only download checksums if storage is available
+        if (this.storage.isEmpty()) {
+            return;
+        }
+        
+        final String artifactPath = line.uri().getPath();
+        final String[] checksumExtensions = {".md5", ".sha1", ".sha256", ".sha512"};
+        
+        for (final String ext : checksumExtensions) {
+            final String checksumPath = artifactPath + ext;
+            final Key checksumKey = new Key.From(artifactKey.string() + ext);
+            final RequestLine checksumLine = new RequestLine(
+                line.method().value(),
+                checksumPath,
+                line.version()
+            );
+            
+            // Download checksum from upstream
+            this.client.response(checksumLine, Headers.EMPTY, Content.EMPTY)
+                .thenCompose(resp -> {
+                    if (resp.status().success()) {
+                        // Use cache.load() to save to BOTH storage and cache in one operation
+                        // This is more efficient than saving separately
+                        return this.cache.load(
+                            checksumKey,
+                            () -> CompletableFuture.completedFuture(Optional.of(resp.body())),
+                            CacheControl.Standard.ALWAYS
+                        ).thenApply(content -> {
+                            Logger.debug(
+                                this,
+                                "Saved checksum to storage and cache: %s",
+                                checksumPath
+                            );
+                            return null;
+                        });
+                    } else {
+                        Logger.debug(
+                            this,
+                            "Checksum file not available upstream: %s",
+                            checksumPath
+                        );
+                        return CompletableFuture.completedFuture(null);
+                    }
+                })
+                .exceptionally(err -> {
+                    Logger.debug(
+                        this,
+                        "Failed to save checksum %s: %s",
+                        checksumPath,
+                        err.getMessage()
+                    );
+                    return null;
+                });
+        }
     }
 }

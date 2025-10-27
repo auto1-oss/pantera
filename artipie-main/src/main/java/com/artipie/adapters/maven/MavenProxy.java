@@ -51,7 +51,8 @@ public final class MavenProxy implements Slice {
                     asto.flatMap(ignored -> queue),
                     cfg.name(),
                     cfg.type(),
-                    cooldown
+                    cooldown,
+                    asto  // Pass storage for checksum persistence
                 )
             ).collect(Collectors.toList())
         );

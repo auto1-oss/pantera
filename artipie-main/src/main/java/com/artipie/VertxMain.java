@@ -51,6 +51,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -138,6 +139,13 @@ public final class VertxMain {
         );
         final Repositories repos = new MapRepositories(settings);
         final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt));
+        if (settings.metrics().http()) {
+            try {
+                slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
+            } catch (final IllegalStateException ex) {
+                LOGGER.warn("HTTP metrics enabled but MeterRegistry unavailable", ex);
+            }
+        }
         // Listen for repository change events to refresh runtime without restart
         vertx.getDelegate().eventBus().consumer(
             RepositoryEvents.ADDRESS,
@@ -169,7 +177,13 @@ public final class VertxMain {
                                         // Start dedicated HTTP server if not already serving this port
                                         final boolean exists = this.servers.stream().anyMatch(s -> s.port() == prt);
                                         if (!exists) {
-                                            this.listenOn(slice, prt, vertx, settings.metrics());
+                                            this.listenOn(
+                                                slice,
+                                                prt,
+                                                vertx,
+                                                settings.metrics(),
+                                                settings.httpServerRequestTimeout()
+                                            );
                                         }
                                     }
                                 }
@@ -192,7 +206,8 @@ public final class VertxMain {
             new MainSlice(settings, slices),
             this.port,
             vertx,
-            settings.metrics()
+            settings.metrics(),
+            settings.httpServerRequestTimeout()
         );
         LOGGER.info("Artipie was started on port {}", main);
         this.startRepos(vertx, settings, repos, this.port, slices);
@@ -313,7 +328,13 @@ public final class VertxMain {
                                 }
                             );
                         } else {
-                            this.listenOn(slice, prt, vertx, settings.metrics());
+                            this.listenOn(
+                                slice,
+                                prt,
+                                vertx,
+                                settings.metrics(),
+                                settings.httpServerRequestTimeout()
+                            );
                         }
                         LOGGER.info("Artipie repo '{}' was started on port {}", name, prt);
                     },
@@ -337,10 +358,17 @@ public final class VertxMain {
      * @return Port server started to listen on.
      */
     private int listenOn(
-        final Slice slice, final int serverPort, final Vertx vertx, final MetricsContext mctx
+        final Slice slice,
+        final int serverPort,
+        final Vertx vertx,
+        final MetricsContext mctx,
+        final Duration requestTimeout
     ) {
         final VertxSliceServer server = new VertxSliceServer(
-            vertx, new BaseSlice(mctx, slice), serverPort
+            vertx,
+            new BaseSlice(mctx, slice),
+            serverPort,
+            requestTimeout
         );
         this.servers.add(server);
         return server.start();

@@ -122,4 +122,27 @@ final class RelativePathTest {
             new IsEqual<>(target)
         );
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "http://localhost:8081/artifactory/api/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz",
+        "http://localhost:8081/npm/@scope/package/-/@scope/package-1.0.0.tgz",
+        "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+        "http://example.com:8080/npm/test/-/test-1.0.0.tgz"
+    })
+    void handlesAbsoluteUrlsCorrectly(final String absoluteUrl) {
+        final String relative = new TgzRelativePath(absoluteUrl).relative();
+        // Should extract the path portion without protocol/host
+        MatcherAssert.assertThat(
+            "Should not contain protocol",
+            relative.contains("http://") || relative.contains("https://"),
+            new IsEqual<>(false)
+        );
+        // Should start with package name or @scope
+        MatcherAssert.assertThat(
+            "Should extract valid relative path",
+            relative.matches("^(@?[\\w._-]+/.*\\.tgz|[\\w._-]+/-/.*\\.tgz)$"),
+            new IsEqual<>(true)
+        );
+    }
 }

@@ -160,10 +160,14 @@ final class AddArchiveSlice implements Slice {
                     // Preserve original archive format extension
                     final String extension = isZip ? ".zip" : ".tar.gz";
                     
+                    // Sanitize version for use in URLs and filenames
+                    // Replace spaces and other invalid URL characters with hyphens
+                    final String sanitizedVersion = sanitizeVersion(version);
+                    
                     // For dev versions, preserve unique identifier from original filename to avoid overwrites
                     // Extract timestamp-hash pattern like "20220119164424-1e02e050" from filename
                     String uniqueSuffix = "";
-                    if (version.startsWith("dev-") || version.contains("dev")) {
+                    if (sanitizedVersion.startsWith("dev-") || sanitizedVersion.contains("dev")) {
                         final java.util.regex.Pattern devPattern = java.util.regex.Pattern.compile(
                             "-(\\d{14}-[a-f0-9]{8,40})(?:\\.tar\\.gz|\\.tgz|\\.zip)$"
                         );
@@ -183,7 +187,7 @@ final class AddArchiveSlice implements Slice {
                         "%s-%s-%s%s%s",
                         vendor,
                         packagePart,
-                        version,
+                        sanitizedVersion,
                         uniqueSuffix,
                         extension
                     );
@@ -194,7 +198,7 @@ final class AddArchiveSlice implements Slice {
                         "%s/%s/%s/%s",
                         vendor,
                         packagePart,
-                        version,
+                        sanitizedVersion,
                         artifactFilename
                     );
                     
@@ -208,9 +212,10 @@ final class AddArchiveSlice implements Slice {
                     );
                     
                     // Create appropriate archive handler for final storage
+                    // Use sanitized version for metadata consistency
                     final Archive archive = isZip
-                        ? new Archive.Zip(new Archive.Name(artifactPath, version))
-                        : new TarArchive(new Archive.Name(artifactPath, version));
+                        ? new Archive.Zip(new Archive.Name(artifactPath, sanitizedVersion))
+                        : new TarArchive(new Archive.Name(artifactPath, sanitizedVersion));
                     
                     // Add archive to repository
                     CompletableFuture<Void> res = this.repository.addArchive(
@@ -307,5 +312,30 @@ final class AddArchiveSlice implements Slice {
             return Optional.of(matcher.group(1));
         }
         return Optional.empty();
+    }
+    
+    /**
+     * Sanitize version string for use in URLs and file paths.
+     * Replaces spaces and other invalid URL characters with plus signs.
+     * Using + instead of - to avoid conflicts with existing hyphen usage in versions.
+     * 
+     * Examples:
+     * - "1.406 62ee6db" -> "1.406+62ee6db"
+     * - "2.0 beta" -> "2.0+beta"
+     * - "1.0.0-beta" -> "1.0.0-beta" (hyphens preserved)
+     * - "1.0.0" -> "1.0.0" (unchanged)
+     * 
+     * @param version Original version string
+     * @return Sanitized version safe for URLs
+     */
+    private static String sanitizeVersion(final String version) {
+        if (version == null || version.isEmpty()) {
+            return version;
+        }
+        // Replace spaces with plus signs (URL-safe and avoids hyphen conflicts)
+        // Also replace other problematic characters that might appear in versions
+        return version
+            .replaceAll("\\s+", "+")              // spaces -> plus signs
+            .replaceAll("[^a-zA-Z0-9._+-]", "+"); // other invalid chars -> plus signs
     }
 }

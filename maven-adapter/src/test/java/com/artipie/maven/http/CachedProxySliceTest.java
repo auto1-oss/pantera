@@ -5,6 +5,7 @@
 package com.artipie.maven.http;
 
 import com.artipie.asto.Content;
+import com.artipie.asto.Storage;
 import com.artipie.asto.FailedCompletionStage;
 import com.artipie.cooldown.CooldownDependency;
 import com.artipie.cooldown.CooldownInspector;
@@ -42,6 +43,11 @@ final class CachedProxySliceTest {
      */
     private Queue<ProxyArtifactEvent> events;
 
+    /**
+     * Optional storage placeholder for tests.
+     */
+    private static final Optional<Storage> NO_STORAGE = Optional.empty();
+
     @BeforeEach
     void init() {
         this.events = new LinkedList<>();
@@ -58,7 +64,8 @@ final class CachedProxySliceTest {
                 ),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -79,7 +86,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -98,7 +106,8 @@ final class CachedProxySliceTest {
                     -> new FailedCompletionStage<>(new RuntimeException("Any error")),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -123,7 +132,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -151,7 +161,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 Matchers.allOf(

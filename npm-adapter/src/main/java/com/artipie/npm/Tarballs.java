@@ -77,15 +77,41 @@ public final class Tarballs {
     private static JsonObject updateJson(final JsonObject original, final String prefix) {
         final JsonPatchBuilder builder = Json.createPatchBuilder();
         final Set<String> versions = original.getJsonObject("versions").keySet();
+        // Ensure prefix doesn't end with slash for consistent concatenation
+        final String cleanPrefix = prefix.replaceAll("/$", "");
         for (final String version : versions) {
+            String tarballPath = original.getJsonObject("versions").getJsonObject(version)
+                .getJsonObject("dist").getString("tarball");
+            
+            // Strip absolute URL if present (handles already-malformed URLs from old metadata)
+            if (tarballPath.startsWith("http://") || tarballPath.startsWith("https://")) {
+                try {
+                    final java.net.URI uri = new java.net.URI(tarballPath);
+                    tarballPath = uri.getPath();
+                } catch (final java.net.URISyntaxException ex) {
+                    // Fallback: extract path after host
+                    final int pathStart = tarballPath.indexOf('/', tarballPath.indexOf("://") + 3);
+                    if (pathStart > 0) {
+                        tarballPath = tarballPath.substring(pathStart);
+                    }
+                }
+            }
+            
+            // Extract package-relative path using TgzRelativePath
+            // This handles paths like /artifactory/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz
+            // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
+            try {
+                tarballPath = new TgzRelativePath(tarballPath).relative();
+            } catch (final com.artipie.ArtipieException ex) {
+                // If TgzRelativePath can't parse it, use as-is
+                // This preserves backward compatibility
+            }
+            
+            // Ensure tarball path starts with slash
+            final String cleanTarball = tarballPath.startsWith("/") ? tarballPath : "/" + tarballPath;
             builder.add(
                 String.format("/versions/%s/dist/tarball", version),
-                String.join(
-                    "",
-                    prefix.replaceAll("/$", ""),
-                    original.getJsonObject("versions").getJsonObject(version)
-                        .getJsonObject("dist").getString("tarball")
-                )
+                cleanPrefix + cleanTarball
             );
         }
         return builder.build().apply(original);

@@ -15,8 +15,9 @@ import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.BearerAuthzSlice;
 import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.auth.Authentication;
+import com.artipie.http.auth.TokenAuthentication;
+import com.artipie.http.auth.Tokens;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
@@ -79,6 +80,11 @@ public final class NpmSlice implements Slice {
     private final SliceRoute route;
 
     /**
+     * Token service (optional, used for JWT-only logins).
+     */
+    private final Tokens tokens;
+
+    /**
      * Ctor with existing front and default parameters for free access.
      * @param base Base URL.
      * @param storage Storage for package
@@ -138,7 +144,7 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
-        this(base, storage, policy, basicAuth, tokenAuth, name, events, false);
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null);
     }
     
     /**
@@ -162,11 +168,64 @@ public final class NpmSlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events,
         final boolean jwtOnly
     ) {
-        // Use either JWT-only or npm token auth with JWT fallback
-        final TokenAuthentication npmTokenAuth = jwtOnly 
-            ? tokenAuth  // JWT only
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null);
+    }
+
+    /**
+     * Ctor with JWT-only option and token service.
+     *
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param tokens Token service
+     * @param name Repository name
+     * @param events Events queue
+     * @param jwtOnly If true, use only JWT auth (no npm-specific tokens)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens);
+    }
+
+    /**
+     * Primary ctor.
+     * @param base Base URL.
+     * @param storage Storage.
+     * @param policy Policy.
+     * @param basicAuth Basic auth.
+     * @param tokenAuth Token auth.
+     * @param name Repository name.
+     * @param events Events queue.
+     * @param jwtOnly Use JWT-only mode.
+     * @param tokens Token service (optional).
+     */
+    private NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final Tokens tokens
+    ) {
+        this.tokens = tokens;
+        final TokenAuthentication npmTokenAuth = jwtOnly
+            ? tokenAuth
             : new NpmTokenAuthentication(new StorageTokenRepository(storage), tokenAuth);
-        
+
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
@@ -304,7 +363,7 @@ public final class NpmSlice implements Slice {
                 ),
                 // Use JWT-only OAuth login or npm token-based adduser
                 jwtOnly && basicAuth != null
-                    ? new com.artipie.npm.http.auth.OAuthLoginSlice(basicAuth)  // JWT-only
+                    ? new com.artipie.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
                     : (basicAuth != null 
                         ? new ArtipieAddUserSlice(  // Creates npm tokens
                             basicAuth,

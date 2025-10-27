@@ -10,6 +10,7 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
 import java.nio.charset.StandardCharsets;
+import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
@@ -36,6 +37,14 @@ final class MetaUpdateByTgzTest {
     void createsMetaFileWhenItNotExist() throws InterruptedException {
         final Key prefix = new Key.From("@hello/simple-npm-project");
         this.updateByTgz(prefix);
+        // After update, generate meta.json from per-version files
+        new PerVersionLayout(this.asto).generateMetaJson(prefix)
+            .thenCompose(meta -> this.asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             new BlockingStorage(this.asto).exists(new Key.From(prefix, "meta.json")),
             new IsEqual<>(true)
@@ -47,7 +56,19 @@ final class MetaUpdateByTgzTest {
         final Key prefix = new Key.From("@hello/simple-npm-project");
         new TestResource("storage/@hello/simple-npm-project/meta.json")
             .saveTo(this.asto, new Key.From(prefix, "meta.json"));
+        
+        // Migrate existing meta.json to per-version layout
+        this.migrateExistingMetaToPerVersion(prefix);
+        
         this.updateByTgz(prefix);
+        // Generate meta.json from per-version files
+        new PerVersionLayout(this.asto).generateMetaJson(prefix)
+            .thenCompose(meta -> this.asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             new JsonFromMeta(this.asto, prefix).json().getJsonObject("versions").keySet(),
             Matchers.containsInAnyOrder("1.0.1", "1.0.2")
@@ -58,6 +79,14 @@ final class MetaUpdateByTgzTest {
     void metaContainsDistFields() {
         final Key prefix = new Key.From("@hello/simple-npm-project");
         this.updateByTgz(prefix);
+        // Generate meta.json from per-version files
+        new PerVersionLayout(this.asto).generateMetaJson(prefix)
+            .thenCompose(meta -> this.asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             new JsonFromMeta(this.asto, prefix).json()
                 .getJsonObject("versions")
@@ -73,7 +102,19 @@ final class MetaUpdateByTgzTest {
         final Key prefix = new Key.From("@hello/simple-npm-project");
         new TestResource("storage/@hello/simple-npm-project/meta.json")
             .saveTo(this.asto, new Key.From(prefix, "meta.json"));
+        
+        // Migrate existing meta.json to per-version layout
+        this.migrateExistingMetaToPerVersion(prefix);
+        
         this.updateByTgz(prefix);
+        // Generate meta.json from per-version files
+        new PerVersionLayout(this.asto).generateMetaJson(prefix)
+            .thenCompose(meta -> this.asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             new JsonFromMeta(this.asto, prefix).json()
                 .getJsonObject("dist-tags")
@@ -92,5 +133,37 @@ final class MetaUpdateByTgzTest {
             )
         ).update(new Key.From(prefix), this.asto)
             .join();
+    }
+    
+    /**
+     * Migrate existing meta.json versions to per-version layout.
+     * This simulates the migration that would happen in production.
+     * 
+     * @param prefix Package prefix
+     */
+    private void migrateExistingMetaToPerVersion(final Key prefix) {
+        final Key metaKey = new Key.From(prefix, "meta.json");
+        if (!this.asto.exists(metaKey).join()) {
+            return;
+        }
+        
+        // Read existing meta.json
+        final JsonObject meta = this.asto.value(metaKey)
+            .thenCompose(com.artipie.asto.Content::asJsonObjectFuture)
+            .toCompletableFuture()
+            .join();
+        
+        // Extract all versions and write to per-version files
+        if (meta.containsKey("versions")) {
+            final javax.json.JsonObject versions = meta.getJsonObject("versions");
+            final PerVersionLayout layout = new PerVersionLayout(this.asto);
+            
+            for (String version : versions.keySet()) {
+                final javax.json.JsonObject versionData = versions.getJsonObject(version);
+                layout.addVersion(prefix, version, versionData)
+                    .toCompletableFuture()
+                    .join();
+            }
+        }
     }
 }

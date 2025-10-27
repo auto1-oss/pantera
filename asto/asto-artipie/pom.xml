@@ -26,7 +26,7 @@ SOFTWARE.
   <parent>
     <artifactId>asto</artifactId>
     <groupId>com.artipie</groupId>
-    <version>1.18.12</version>
+    <version>1.18.15</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>asto-artipie</artifactId>
@@ -37,13 +37,13 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.18.12</version>
+      <version>1.18.15</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>http-client</artifactId>
-      <version>1.18.12</version>
+      <version>1.18.15</version>
     </dependency>
   </dependencies>
 </project>

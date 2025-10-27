@@ -48,9 +48,12 @@ import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.auth.OperationControl;
 import com.artipie.http.auth.Tokens;
+import com.artipie.http.client.HttpClientSettings;
+import com.artipie.http.client.ProxySettings;
 import com.artipie.http.client.jetty.JettyClientSlices;
 import com.artipie.http.filter.FilterSlice;
 import com.artipie.http.filter.Filters;
+import com.artipie.http.slice.PathPrefixStripSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.TrimPathSlice;
 import com.artipie.maven.http.MavenSlice;
@@ -68,16 +71,31 @@ import com.artipie.settings.repo.RepoConfig;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.settings.repo.Repositories;
+import com.google.common.base.Strings;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.cache.RemovalListener;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.vertx.core.Vertx;
+import org.eclipse.jetty.client.AbstractConnectionPool;
+import org.eclipse.jetty.client.Destination;
 
 import java.net.URI;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.ToIntFunction;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 public class RepositorySlices {
@@ -110,6 +128,11 @@ public class RepositorySlices {
     private final CooldownService cooldown;
 
     /**
+     * Shared Jetty HTTP clients keyed by settings signature.
+     */
+    private final SharedJettyClients sharedClients;
+
+    /**
      * @param settings Artipie settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -123,12 +146,12 @@ public class RepositorySlices {
         this.repos = repos;
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
+        this.sharedClients = new SharedJettyClients();
         this.slices = CacheBuilder.newBuilder()
-            .expireAfterAccess(30, TimeUnit.MINUTES)
             .removalListener(
                 (RemovalListener<SliceKey, SliceValue>) notification -> notification.getValue()
                     .client()
-                    .ifPresent(JettyClientSlices::stop)
+                    .ifPresent(SharedJettyClients.Lease::close)
             )
             .build(
                 new CacheLoader<>() {
@@ -207,6 +230,10 @@ public class RepositorySlices {
             .forEach(this.slices::invalidate);
     }
 
+    public void enableJettyMetrics(final MeterRegistry registry) {
+        this.sharedClients.enableMetrics(registry);
+    }
+
     /**
      * Access underlying repositories registry.
      *
@@ -222,9 +249,11 @@ public class RepositorySlices {
     }
 
     private SliceValue sliceFromConfig(final RepoConfig cfg, final int port) {
-        final Slice slice;
+        Slice slice;
+        SharedJettyClients.Lease clientLease = null;
         JettyClientSlices clientSlices = null;
-        switch (cfg.type()) {
+        try {
+            switch (cfg.type()) {
             case "file":
                 slice = trimPathSlice(
                     new FilesSlice(
@@ -238,7 +267,8 @@ public class RepositorySlices {
                 );
                 break;
             case "file-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new TimeoutSlice(
                         new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
@@ -249,7 +279,7 @@ public class RepositorySlices {
             case "npm":
                 slice = trimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
                     )
                 );
                 break;
@@ -279,24 +309,51 @@ public class RepositorySlices {
                 );
                 break;
             case "php":
+                // Extract base URL from config, handling trailing slashes consistently
+                // The URL should be the full path to the repository for provider URLs to work
+                String baseUrl = cfg.settings()
+                    .flatMap(yaml -> Optional.ofNullable(yaml.string("url")))
+                    .orElseGet(() -> cfg.url().toString());
+                
+                // Normalize: remove all trailing slashes
+                baseUrl = baseUrl.replaceAll("/+$", "");
+                
+                // Ensure URL ends with the repository name for correct routing
+                // Provider URLs will be: {baseUrl}/p2/%package%.json
+                String normalizedRepo = cfg.name().replaceAll("^/+", "").replaceAll("/+$", "");
+                if (!baseUrl.endsWith("/" + normalizedRepo)) {
+                    baseUrl = baseUrl + "/" + normalizedRepo;
+                }
+                
                 slice = trimPathSlice(
-                    new PhpComposer(
-                        new AstoRepository(cfg.storage(), Optional.of(cfg.url().toString())),
-                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                    new PathPrefixStripSlice(
+                        new PhpComposer(
+                            new AstoRepository(
+                                cfg.storage(),
+                                Optional.of(baseUrl),
+                                Optional.of(cfg.name())
+                            ),
+                            securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        ),
+                        "direct-dists"
                     )
                 );
                 break;
             case "php-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
-                    new TimeoutSlice(
-                        new ComposerProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
+                    new PathPrefixStripSlice(
+                        new TimeoutSlice(
+                            new ComposerProxy(
+                                clientSlices,
+                                cfg,
+                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                this.cooldown
+                            ),
+                            settings.httpClientSettings().proxyTimeout()
                         ),
-                        settings.httpClientSettings().proxyTimeout()
+                        "direct-dists"
                     )
                 );
                 break;
@@ -315,7 +372,8 @@ public class RepositorySlices {
                 );
                 break;
             case "gradle-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new TimeoutSlice(
@@ -343,7 +401,8 @@ public class RepositorySlices {
                 );
                 break;
             case "maven-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new TimeoutSlice(
@@ -377,7 +436,8 @@ public class RepositorySlices {
                 );
                 break;
             case "go-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new TimeoutSlice(
@@ -399,7 +459,8 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 final URI npmRemoteUri = URI.create(
                     cfg.settings().orElseThrow().yamlMapping("remote").string("url")
                 );
@@ -519,25 +580,29 @@ public class RepositorySlices {
                 );
                 break;
             case "pypi-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = trimPathSlice(
-                    new CombinedAuthzSliceWrap(
-                        new TimeoutSlice(
-                            new PypiProxy(
-                                clientSlices,
-                                cfg,
-                                settings.artifactMetadata()
-                                    .flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                this.cooldown
+                    new PathPrefixStripSlice(
+                        new CombinedAuthzSliceWrap(
+                            new TimeoutSlice(
+                                new PypiProxy(
+                                    clientSlices,
+                                    cfg,
+                                    settings.artifactMetadata()
+                                        .flatMap(queues -> queues.proxyEventQueues(cfg)),
+                                    this.cooldown
+                                ),
+                                settings.httpClientSettings().proxyTimeout()
                             ),
-                            settings.httpClientSettings().proxyTimeout()
+                            authentication(),
+                            tokens.auth(),
+                            new OperationControl(
+                                securityPolicy(),
+                                new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                            )
                         ),
-                        authentication(),
-                        tokens.auth(),
-                        new OperationControl(
-                            securityPolicy(),
-                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
-                        )
+                        "simple"
                     )
                 );
                 break;
@@ -558,7 +623,8 @@ public class RepositorySlices {
                 }
                 break;
             case "docker-proxy":
-                clientSlices = jettyClientSlices(cfg);
+                clientLease = jettyClientSlices(cfg);
+                clientSlices = clientLease.client();
                 slice = new TimeoutSlice(
                     new DockerProxy(
                         clientSlices,
@@ -601,9 +667,12 @@ public class RepositorySlices {
                 break;
             case "pypi":
                 slice = trimPathSlice(
-                    new com.artipie.pypi.http.PySlice(
-                        cfg.storage(), securityPolicy(), authentication(), 
-                        tokens.auth(), cfg.name(), artifactEvents()
+                    new PathPrefixStripSlice(
+                        new com.artipie.pypi.http.PySlice(
+                            cfg.storage(), securityPolicy(), authentication(),
+                            tokens.auth(), cfg.name(), artifactEvents()
+                        ),
+                        "simple"
                     )
                 );
                 break;
@@ -614,8 +683,14 @@ public class RepositorySlices {
         }
         return new SliceValue(
             wrapIntoCommonSlices(slice, cfg),
-            Optional.ofNullable(clientSlices)
+            Optional.ofNullable(clientLease)
         );
+        } catch (RuntimeException | Error ex) {
+            if (clientLease != null) {
+                clientLease.close();
+            }
+            throw ex;
+        }
     }
 
     private Slice wrapIntoCommonSlices(
@@ -639,17 +714,16 @@ public class RepositorySlices {
         return this.settings.authz().policy();
     }
 
-    private JettyClientSlices jettyClientSlices(final RepoConfig cfg) {
-        JettyClientSlices res = new JettyClientSlices(
-            cfg.httpClientSettings().orElseGet(settings::httpClientSettings)
-        );
-        res.start();
-        return res;
+    private SharedJettyClients.Lease jettyClientSlices(final RepoConfig cfg) {
+        final HttpClientSettings effective = cfg.httpClientSettings()
+            .orElseGet(settings::httpClientSettings);
+        return this.sharedClients.acquire(effective);
     }
 
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
     }
+
 
     /**
      * Slice's cache key.
@@ -660,6 +734,336 @@ public class RepositorySlices {
     /**
      * Slice's cache value.
      */
-    record SliceValue(Slice slice, Optional<JettyClientSlices> client) {
+    record SliceValue(Slice slice, Optional<SharedJettyClients.Lease> client) {
+    }
+
+    /**
+     * Stores and shares Jetty clients per unique HTTP client configuration.
+     */
+    private static final class SharedJettyClients {
+
+        private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
+        private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
+
+        Lease acquire(final HttpClientSettings settings) {
+            final HttpClientSettingsKey key = HttpClientSettingsKey.from(settings);
+            final SharedClient holder = this.clients.compute(
+                key,
+                (ignored, existing) -> {
+                    if (existing == null) {
+                        final SharedClient created = new SharedClient(key);
+                        created.retain();
+                        return created;
+                    }
+                    existing.retain();
+                    return existing;
+                }
+            );
+            final MeterRegistry registry = this.metrics.get();
+            if (registry != null) {
+                holder.registerMetrics(registry);
+            }
+            return new Lease(this, key, holder);
+        }
+
+        void enableMetrics(final MeterRegistry registry) {
+            this.metrics.set(registry);
+            this.clients.values().forEach(client -> client.registerMetrics(registry));
+        }
+
+        private void release(final HttpClientSettingsKey key, final SharedClient shared) {
+            this.clients.computeIfPresent(
+                key,
+                (ignored, existing) -> {
+                    if (existing != shared) {
+                        return existing;
+                    }
+                    final int remaining = existing.release();
+                    if (remaining == 0) {
+                        existing.stop();
+                        return null;
+                    }
+                    return existing;
+                }
+            );
+        }
+
+        static final class Lease implements AutoCloseable {
+            private final SharedJettyClients owner;
+            private final HttpClientSettingsKey key;
+            private final SharedClient shared;
+            private final AtomicBoolean closed = new AtomicBoolean(false);
+
+            Lease(
+                final SharedJettyClients owner,
+                final HttpClientSettingsKey key,
+                final SharedClient shared
+            ) {
+                this.owner = owner;
+                this.key = key;
+                this.shared = shared;
+            }
+
+            JettyClientSlices client() {
+                return this.shared.client();
+            }
+
+            @Override
+            public void close() {
+                if (this.closed.compareAndSet(false, true)) {
+                    this.owner.release(this.key, this.shared);
+                }
+            }
+        }
+
+        private static final class SharedClient {
+            private final HttpClientSettingsKey key;
+            private final JettyClientSlices client;
+            private final AtomicInteger references = new AtomicInteger(0);
+            private final AtomicBoolean metricsRegistered = new AtomicBoolean(false);
+
+            SharedClient(final HttpClientSettingsKey key) {
+                this.key = key;
+                this.client = new JettyClientSlices(key.toSettings());
+                this.client.start();
+            }
+
+            void retain() {
+                this.references.incrementAndGet();
+            }
+
+            int release() {
+                final int remaining = this.references.decrementAndGet();
+                if (remaining < 0) {
+                    throw new IllegalStateException("Jetty client reference count became negative");
+                }
+                return remaining;
+            }
+
+            JettyClientSlices client() {
+                return this.client;
+            }
+
+            void registerMetrics(final MeterRegistry registry) {
+                if (!this.metricsRegistered.compareAndSet(false, true)) {
+                    return;
+                }
+                Gauge.builder("jetty.connection_pool.active", this, SharedClient::activeConnections)
+                    .strongReference(true)
+                    .tag("settings", this.key.metricId())
+                    .register(registry);
+                Gauge.builder("jetty.connection_pool.idle", this, SharedClient::idleConnections)
+                    .strongReference(true)
+                    .tag("settings", this.key.metricId())
+                    .register(registry);
+                Gauge.builder("jetty.connection_pool.max", this, SharedClient::maxConnections)
+                    .strongReference(true)
+                    .tag("settings", this.key.metricId())
+                    .register(registry);
+                Gauge.builder("jetty.connection_pool.pending", this, SharedClient::pendingConnections)
+                    .strongReference(true)
+                    .tag("settings", this.key.metricId())
+                    .register(registry);
+            }
+
+            private double activeConnections() {
+                return this.connectionMetric(AbstractConnectionPool::getActiveConnectionCount);
+            }
+
+            private double idleConnections() {
+                return this.connectionMetric(AbstractConnectionPool::getIdleConnectionCount);
+            }
+
+            private double maxConnections() {
+                return this.connectionMetric(AbstractConnectionPool::getMaxConnectionCount);
+            }
+
+            private double pendingConnections() {
+                return this.connectionMetric(AbstractConnectionPool::getPendingConnectionCount);
+            }
+
+            private double connectionMetric(final ToIntFunction<AbstractConnectionPool> extractor) {
+                return this.client.httpClient().getDestinations().stream()
+                    .map(Destination::getConnectionPool)
+                    .filter(AbstractConnectionPool.class::isInstance)
+                    .map(AbstractConnectionPool.class::cast)
+                    .mapToInt(extractor)
+                    .sum();
+            }
+
+            void stop() {
+                this.client.stop();
+            }
+        }
+    }
+
+    /**
+     * Signature of HTTP client settings used as a cache key.
+     */
+    private static final class HttpClientSettingsKey {
+
+        private final boolean trustAll;
+        private final String jksPath;
+        private final String jksPwd;
+        private final boolean followRedirects;
+        private final boolean http3;
+        private final long connectTimeout;
+        private final long idleTimeout;
+        private final long proxyTimeout;
+        private final long connectionAcquireTimeout;
+        private final int maxConnectionsPerDestination;
+        private final int maxRequestsQueuedPerDestination;
+        private final List<ProxySettingsKey> proxies;
+
+        private HttpClientSettingsKey(
+            final boolean trustAll,
+            final String jksPath,
+            final String jksPwd,
+            final boolean followRedirects,
+            final boolean http3,
+            final long connectTimeout,
+            final long idleTimeout,
+            final long proxyTimeout,
+            final long connectionAcquireTimeout,
+            final int maxConnectionsPerDestination,
+            final int maxRequestsQueuedPerDestination,
+            final List<ProxySettingsKey> proxies
+        ) {
+            this.trustAll = trustAll;
+            this.jksPath = jksPath;
+            this.jksPwd = jksPwd;
+            this.followRedirects = followRedirects;
+            this.http3 = http3;
+            this.connectTimeout = connectTimeout;
+            this.idleTimeout = idleTimeout;
+            this.proxyTimeout = proxyTimeout;
+            this.connectionAcquireTimeout = connectionAcquireTimeout;
+            this.maxConnectionsPerDestination = maxConnectionsPerDestination;
+            this.maxRequestsQueuedPerDestination = maxRequestsQueuedPerDestination;
+            this.proxies = proxies;
+        }
+
+        static HttpClientSettingsKey from(final HttpClientSettings settings) {
+            return new HttpClientSettingsKey(
+                settings.trustAll(),
+                settings.jksPath(),
+                settings.jksPwd(),
+                settings.followRedirects(),
+                settings.http3(),
+                settings.connectTimeout(),
+                settings.idleTimeout(),
+                settings.proxyTimeout(),
+                settings.connectionAcquireTimeout(),
+                settings.maxConnectionsPerDestination(),
+                settings.maxRequestsQueuedPerDestination(),
+                settings.proxies()
+                    .stream()
+                    .map(ProxySettingsKey::from)
+                    .collect(Collectors.toUnmodifiableList())
+            );
+        }
+
+        HttpClientSettings toSettings() {
+            final HttpClientSettings copy = new HttpClientSettings()
+                .setTrustAll(this.trustAll)
+                .setFollowRedirects(this.followRedirects)
+                .setHttp3(this.http3)
+                .setConnectTimeout(this.connectTimeout)
+                .setIdleTimeout(this.idleTimeout)
+                .setProxyTimeout(this.proxyTimeout)
+                .setConnectionAcquireTimeout(this.connectionAcquireTimeout)
+                .setMaxConnectionsPerDestination(this.maxConnectionsPerDestination)
+                .setMaxRequestsQueuedPerDestination(this.maxRequestsQueuedPerDestination);
+            if (this.jksPath != null) {
+                copy.setJksPath(this.jksPath);
+            }
+            if (this.jksPwd != null) {
+                copy.setJksPwd(this.jksPwd);
+            }
+            final Set<String> seen = new HashSet<>();
+            copy.proxies().forEach(proxy -> seen.add(proxy.uri().toString()));
+            for (final ProxySettingsKey proxy : this.proxies) {
+                if (seen.add(proxy.uri())) {
+                    copy.addProxy(proxy.toProxySettings());
+                }
+            }
+            return copy;
+        }
+
+        String metricId() {
+            return Integer.toHexString(this.hashCode());
+        }
+
+        @Override
+        public boolean equals(final Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof HttpClientSettingsKey other)) {
+                return false;
+            }
+            return this.trustAll == other.trustAll
+                && this.followRedirects == other.followRedirects
+                && this.http3 == other.http3
+                && this.connectTimeout == other.connectTimeout
+                && this.idleTimeout == other.idleTimeout
+                && this.proxyTimeout == other.proxyTimeout
+                && this.connectionAcquireTimeout == other.connectionAcquireTimeout
+                && this.maxConnectionsPerDestination == other.maxConnectionsPerDestination
+                && this.maxRequestsQueuedPerDestination == other.maxRequestsQueuedPerDestination
+                && Objects.equals(this.jksPath, other.jksPath)
+                && Objects.equals(this.jksPwd, other.jksPwd)
+                && Objects.equals(this.proxies, other.proxies);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(
+                this.trustAll,
+                this.jksPath,
+                this.jksPwd,
+                this.followRedirects,
+                this.http3,
+                this.connectTimeout,
+                this.idleTimeout,
+                this.proxyTimeout,
+                this.connectionAcquireTimeout,
+                this.maxConnectionsPerDestination,
+                this.maxRequestsQueuedPerDestination,
+                this.proxies
+            );
+        }
+    }
+
+    private record ProxySettingsKey(
+        String uri,
+        String realm,
+        String user,
+        String password
+    ) {
+
+        static ProxySettingsKey from(final ProxySettings proxy) {
+            return new ProxySettingsKey(
+                proxy.uri().toString(),
+                proxy.basicRealm(),
+                proxy.basicUser(),
+                proxy.basicPwd()
+            );
+        }
+
+        ProxySettings toProxySettings() {
+            final ProxySettings proxy = new ProxySettings(URI.create(this.uri));
+            if (!Strings.isNullOrEmpty(this.realm)) {
+                proxy.setBasicRealm(this.realm);
+                proxy.setBasicUser(this.user);
+                proxy.setBasicPwd(this.password);
+            }
+            return proxy;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("ProxySettingsKey{uri='%s'}", this.uri);
+        }
     }
 }

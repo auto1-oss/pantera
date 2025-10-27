@@ -56,22 +56,28 @@ class AstoRepositoryPackagesTest {
 
     @Test
     void shouldLoadEmptyAllPackages() {
+        // With Satis layout, packages() always returns an index (never empty)
         MatcherAssert.assertThat(
+            "Satis index should always be present",
             new AstoRepository(this.storage).packages().toCompletableFuture().join().isPresent(),
-            new IsEqual<>(false)
+            new IsEqual<>(true)
         );
     }
 
     @Test
     void shouldLoadNonEmptyAllPackages() throws Exception {
-        final byte[] bytes = "all packages".getBytes();
-        new BlockingStorage(this.storage).save(new AllPackages(), bytes);
-        new AstoRepository(this.storage).packages().toCompletableFuture().join().get()
-            .save(this.storage, new AllPackages())
+        // With Satis layout, packages() returns the Satis index JSON
+        final Packages allPkgs = new AstoRepository(this.storage).packages()
+            .toCompletableFuture().join().get();
+        allPkgs.save(this.storage, new AllPackages())
             .toCompletableFuture().join();
+        // Verify saved packages.json contains Satis index structure
+        final byte[] saved = new BlockingStorage(this.storage).value(new AllPackages());
+        final String json = new String(saved);
         MatcherAssert.assertThat(
-            new BlockingStorage(this.storage).value(new AllPackages()),
-            new IsEqual<>(bytes)
+            "Should contain metadata-url",
+            json.contains("metadata-url"),
+            new IsEqual<>(true)
         );
     }
 }

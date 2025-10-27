@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.18.12</version>
+  <version>1.18.15</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -74,7 +74,7 @@ SOFTWARE.
     <url>https://github.com/artipie/artipie</url>
   </scm>
   <properties>
-    <docker.image.name>artipie/artipie</docker.image.name>
+    <docker.image.name>auto1-artipie</docker.image.name>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>21</maven.compiler.release>

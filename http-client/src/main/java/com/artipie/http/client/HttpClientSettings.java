@@ -48,6 +48,10 @@ public class HttpClientSettings {
             if (!Strings.isNullOrEmpty(proxyTimeout)) {
                 res.setProxyTimeout(Long.parseLong(proxyTimeout));
             }
+            final String acquireTimeout = mapping.string("connection_acquire_timeout");
+            if (!Strings.isNullOrEmpty(acquireTimeout)) {
+                res.setConnectionAcquireTimeout(Long.parseLong(acquireTimeout));
+            }
             final String maxConnPerDest = mapping.string("max_connections_per_destination");
             if (!Strings.isNullOrEmpty(maxConnPerDest)) {
                 res.setMaxConnectionsPerDestination(Integer.parseInt(maxConnPerDest));
@@ -142,19 +146,25 @@ public class HttpClientSettings {
 
     /**
      * Proxy request timeout in seconds.
-     * Default is 120 seconds (2 minutes).
+     * Default is 60 seconds.
      */
     private long proxyTimeout;
 
     /**
+     * Maximum time in milliseconds to wait for a pooled connection.
+     * Zero means wait indefinitely.
+     */
+    private long connectionAcquireTimeout;
+
+    /**
      * Max connections per destination (upstream host).
-     * Default is 128.
+     * Default is 512.
      */
     private int maxConnectionsPerDestination;
 
     /**
      * Max queued requests per destination.
-     * Default is 512.
+     * Default is 2048.
      */
     private int maxRequestsQueuedPerDestination;
 
@@ -164,9 +174,10 @@ public class HttpClientSettings {
         this.connectTimeout = 15_000L;
         this.idleTimeout = 0L;
         this.http3 = false;
-        this.proxyTimeout = 120L;  // Default 2 minutes
-        this.maxConnectionsPerDestination = 128;
-        this.maxRequestsQueuedPerDestination = 512;
+        this.proxyTimeout = 60L;  // Default 1 minute
+        this.connectionAcquireTimeout = 120_000L; // Default 2 minutes
+        this.maxConnectionsPerDestination = 512;
+        this.maxRequestsQueuedPerDestination = 2048;
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
@@ -252,6 +263,15 @@ public class HttpClientSettings {
 
     public HttpClientSettings setProxyTimeout(final long proxyTimeout) {
         this.proxyTimeout = proxyTimeout;
+        return this;
+    }
+
+    public long connectionAcquireTimeout() {
+        return connectionAcquireTimeout;
+    }
+
+    public HttpClientSettings setConnectionAcquireTimeout(final long connectionAcquireTimeout) {
+        this.connectionAcquireTimeout = connectionAcquireTimeout;
         return this;
     }
 

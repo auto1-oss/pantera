@@ -12,12 +12,18 @@ import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.jcabi.log.Logger;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Group/virtual repository slice.
@@ -27,6 +33,11 @@ import java.util.concurrent.CompletionStage;
  * Uploads are not supported and return 405.
  */
 public final class GroupSlice implements Slice {
+
+    /**
+     * Maximum number of members queried in parallel.
+     */
+    private static final int PARALLEL_BATCH_SIZE = 3;
 
     /**
      * Repository slices resolver/cache.
@@ -126,54 +137,166 @@ public final class GroupSlice implements Slice {
         if (this.members.isEmpty()) {
             return ResponseBuilder.notFound().completedFuture();
         }
-
         final CompletableFuture<Response> result = new CompletableFuture<>();
-        final java.util.concurrent.atomic.AtomicInteger failedCount = 
-            new java.util.concurrent.atomic.AtomicInteger(0);
+        final AtomicBoolean terminal = new AtomicBoolean(false);
+        this.tryBatch(
+            0,
+            GroupSlice.PARALLEL_BATCH_SIZE,
+            line,
+            headers,
+            body,
+            terminal,
+            result
+        );
+        return result;
+    }
 
-        // Start all member requests in parallel
-        for (int i = 0; i < this.members.size(); i++) {
-            final int index = i;
-            final String member = this.members.get(index);
+    private void tryBatch(
+        final int start,
+        final int batchSize,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final AtomicBoolean terminal,
+        final CompletableFuture<Response> result
+    ) {
+        if (terminal.get()) {
+            return;
+        }
+        if (start >= this.members.size()) {
+            this.completeNotFound(terminal, result, "members exhausted");
+            return;
+        }
+        final int end = Math.min(start + batchSize, this.members.size());
+        final int expected = end - start;
+        final AtomicInteger failures = new AtomicInteger(0);
+        final Headers sanitized = dropFullPathHeader(headers);
+        final CopyOnWriteArrayList<CompletableFuture<Response>> futures = new CopyOnWriteArrayList<>();
+        for (int idx = start; idx < end; idx++) {
+            final String member = this.members.get(idx);
             final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
             final RequestLine rewritten = rewrite(line, member);
-            final Headers sanitized = dropFullPathHeader(headers);
-            
-            Logger.debug(this, "Group %s trying member %s IN PARALLEL: %s", this.group, member, rewritten.uri());
-            
-            memberSlice.response(rewritten, sanitized, body)
-                .handle((resp, err) -> {
-                    // If result already completed (someone else won), ignore
-                    if (result.isDone()) {
-                        return null;
+            Logger.debug(
+                this,
+                "Group %s processing batch [%d,%d) member %s: %s",
+                this.group,
+                start,
+                end,
+                member,
+                rewritten.uri()
+            );
+            final CompletableFuture<Response> memberFuture = memberSlice.response(rewritten, sanitized, body);
+            futures.add(memberFuture);
+            memberFuture.whenComplete(
+                (resp, err) -> {
+                    if (terminal.get()) {
+                        if (resp != null) {
+                            Logger.debug(
+                                this,
+                                "Group %s ignoring late response from %s for %s - already completed",
+                                this.group,
+                                member,
+                                rewritten.uri()
+                            );
+                            drainResponseBody(resp.body());
+                        }
+                        return;
                     }
-                    
                     if (err != null) {
-                        Logger.warn(this, "Group %s member %s failed: %s", this.group, member, err.getMessage());
-                        if (failedCount.incrementAndGet() == this.members.size()) {
-                            result.complete(ResponseBuilder.notFound().build());
+                        if (err instanceof CancellationException) {
+                            Logger.debug(
+                                this,
+                                "Group %s member %s cancelled: %s",
+                                this.group,
+                                member,
+                                err.getMessage()
+                            );
+                        } else {
+                            Logger.warn(
+                                this,
+                                "Group %s member %s failed: %s",
+                                this.group,
+                                member,
+                                err.getMessage()
+                            );
                         }
-                        return null;
+                        if (failures.incrementAndGet() == expected) {
+                            this.tryBatch(end, batchSize, line, sanitized, body, terminal, result);
+                        }
+                        return;
                     }
-                    
-                    Logger.debug(this, "Member %s responded %s for %s", member, resp.status(), rewritten.uri());
-                    
+                    Logger.debug(
+                        this,
+                        "Member %s responded %s for %s",
+                        member,
+                        resp.status(),
+                        rewritten.uri()
+                    );
                     if (resp.status() == RsStatus.NOT_FOUND) {
-                        // This repo doesn't have it, keep waiting for others
-                        if (failedCount.incrementAndGet() == this.members.size()) {
-                            result.complete(ResponseBuilder.notFound().build());
+                        drainResponseBody(resp.body());
+                        if (failures.incrementAndGet() == expected) {
+                            this.tryBatch(end, batchSize, line, sanitized, body, terminal, result);
                         }
-                        return null;
+                        return;
                     }
-                    
-                    // SUCCESS! First non-404 response wins
-                    Logger.info(this, "Group %s: member %s returned SUCCESS (first wins!)", this.group, member);
-                    result.complete(resp);
-                    return null;
-                });
+                    if (terminal.compareAndSet(false, true)) {
+                        Logger.info(
+                            this,
+                            "Group %s: member %s returned SUCCESS",
+                            this.group,
+                            member
+                        );
+                        result.complete(resp);
+                        cancelPending(futures, memberFuture, String.format("member %s success", member));
+                    } else {
+                        Logger.warn(
+                            this,
+                            "Duplicate success from %s ignored for %s",
+                            member,
+                            rewritten.uri()
+                        );
+                        drainResponseBody(resp.body());
+                    }
+                }
+            );
         }
-        
-        return result;
+        if (terminal.get()) {
+            cancelPending(futures, null, "terminal cleanup");
+        }
+    }
+
+    private static void cancelPending(
+        final List<CompletableFuture<Response>> futures,
+        final CompletableFuture<Response> winner,
+        final String reason
+    ) {
+        for (CompletableFuture<Response> future : futures) {
+            if (future != winner && !future.isDone()) {
+                future.cancel(true);
+            }
+        }
+        Logger.debug(
+            GroupSlice.class,
+            "Cancelled non-winning futures after %s",
+            reason
+        );
+    }
+
+    private void completeNotFound(
+        final AtomicBoolean terminal,
+        final CompletableFuture<Response> result,
+        final String reason
+    ) {
+        if (terminal.compareAndSet(false, true)) {
+            result.complete(ResponseBuilder.notFound().build());
+        } else {
+            Logger.debug(
+                this,
+                "Group %s already completed when attempting 404 due to %s",
+                this.group,
+                reason
+            );
+        }
     }
 
     /**
@@ -245,5 +368,39 @@ public final class GroupSlice implements Slice {
                 .filter(h -> !h.getKey().equalsIgnoreCase(hdr))
                 .toList()
         );
+    }
+    
+    /**
+     * Drains a content body by consuming all bytes without processing them.
+     * This ensures the underlying HTTP connection is properly released.
+     */
+    private static void drainResponseBody(final Content body) {
+        if (body != null) {
+            body.subscribe(new Subscriber<ByteBuffer>() {
+                private Subscription subscription;
+                
+                @Override
+                public void onSubscribe(final Subscription s) {
+                    this.subscription = s;
+                    // Request all data to force consumption
+                    s.request(Long.MAX_VALUE);
+                }
+                
+                @Override
+                public void onNext(final ByteBuffer buffer) {
+                    // Discard the buffer - just consuming to drain
+                }
+                
+                @Override
+                public void onError(final Throwable t) {
+                    Logger.debug(GroupSlice.class, "Error draining response body: %s", t.getMessage());
+                }
+                
+                @Override
+                public void onComplete() {
+                    Logger.debug(GroupSlice.class, "Successfully drained response body");
+                }
+            });
+        }
     }
 }
