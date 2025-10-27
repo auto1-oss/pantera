@@ -1,0 +1,30 @@
+repo:
+  type: maven
+  storage:
+    type: s3
+    bucket: artipie-prod
+    region: eu-west-1
+    endpoint: https://s3.eu-west-1.amazonaws.com
+    credentials:
+      type: profile
+      profile: shared-services-prod-devops
+    multipart: true
+    multipart-min-size: 32MB
+    part-size: 16MB
+    multipart-concurrency: 4
+    checksum: SHA256
+    sse:
+      type: AES256
+    parallel-download: true
+    parallel-threshold: 1048576 # 1MB - enable for files >= 1MB
+    parallel-chunk: 262144 # 256KB chunks
+    parallel-concurrency: 8 # 8 concurrent chunks
+    cache:
+      enabled: true
+      path: /var/artipie/cache
+      max-bytes: 1099511627776
+      eviction-policy: LFU
+      cleanup-interval-millis: 0 # 10min cleanup interval
+      high-watermark-percent: 90
+      low-watermark-percent: 85
+      validate-on-read: false

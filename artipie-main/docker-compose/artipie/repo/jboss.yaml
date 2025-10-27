@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://repository.jboss.org/
+  storage:
+    type: fs
+    path: /var/artipie/data

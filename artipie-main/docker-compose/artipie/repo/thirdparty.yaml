@@ -1,0 +1,4 @@
+repo:
+  type: maven-group
+  members:
+    - ext-release-local

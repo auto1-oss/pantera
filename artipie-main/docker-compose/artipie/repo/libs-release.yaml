@@ -1,0 +1,7 @@
+repo:
+  type: maven-group
+  members:
+    - libs-release-local
+    - ext-release-local
+    - remote-repos
+

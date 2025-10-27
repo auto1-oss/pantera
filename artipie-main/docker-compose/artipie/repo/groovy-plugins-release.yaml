@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://groovy.jfrog.io/artifactory/plugins-release
+  storage:
+    type: fs
+    path: /var/artipie/data

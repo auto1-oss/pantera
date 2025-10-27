@@ -1,0 +1,5 @@
+repo:
+  type: helm
+  storage:
+    type: fs
+    path: /var/artipie/data

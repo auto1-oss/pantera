@@ -1,0 +1,9 @@
+repo:
+  type: maven-group
+  members:
+    - jboss
+    - maven-central
+    - build.shibboleth.net
+    - atlassian.com
+    - groovy-plugins-release
+    - jenkins-cli-release

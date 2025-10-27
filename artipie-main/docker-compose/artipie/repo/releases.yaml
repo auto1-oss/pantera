@@ -1,0 +1,9 @@
+repo:
+  type: maven-group
+  members:
+    - maven-central
+    - plugins-release
+    - ext-release-local
+    - libs-release-local
+    - spring-plugins-release
+    - plugins-release-local

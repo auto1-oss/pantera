@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://repo.spring.io/plugins-snapshot
+  storage:
+    type: fs
+    path: /var/artipie/data

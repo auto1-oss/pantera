@@ -1,0 +1,7 @@
+repo:
+  type: maven-group
+  members:
+    - libs-snapshot-local
+    - ext-snapshot-local
+    - libs-fixed-revs-local
+    - remote-repos

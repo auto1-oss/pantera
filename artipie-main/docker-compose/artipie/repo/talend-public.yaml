@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://artifacts-oss.talend.com/nexus/content/repositories/public/
+  storage:
+    type: fs
+    path: /var/artipie/data

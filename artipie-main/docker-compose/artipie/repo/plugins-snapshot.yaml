@@ -1,0 +1,6 @@
+repo:
+  type: maven-group
+  members:
+    - plugins-snapshot-local
+    - ext-snapshot-local
+    - remote-repos

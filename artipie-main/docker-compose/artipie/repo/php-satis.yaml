@@ -1,0 +1,9 @@
+repo:
+  type: php-proxy
+  url: https://artipie.qa.services.auto1.team/php-satis
+  remotes:
+    - url: https://github.com
+      username: token
+  storage:
+    type: fs
+    path: /var/artipie/data

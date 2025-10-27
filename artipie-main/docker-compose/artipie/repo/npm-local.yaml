@@ -1,0 +1,6 @@
+repo:
+  type: npm
+  url: https://artifactory.prod.auto1.team:8443/artifactory/npm-local
+  storage:
+    type: fs
+    path: /var/artipie/data

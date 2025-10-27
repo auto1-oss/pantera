@@ -1,0 +1,22 @@
+repo:
+  type: maven-group
+  members:
+    # Core proxies (most commonly used)
+    - maven-central
+    - spring-plugins-release
+    # Local release repos
+    - libs-release-local
+    - plugins-release-local
+    - ext-release-local
+    # Local snapshot repos
+    - libs-snapshot-local
+    - plugins-snapshot-local
+    - ext-snapshot-local
+    # Fixed revision repos
+    - libs-fixed-revs-local
+    # Additional proxy repos (from remote-repos group)
+    - jboss
+    - build.shibboleth.net
+    - atlassian.com
+    - groovy-plugins-release
+    - jenkins-cli-release

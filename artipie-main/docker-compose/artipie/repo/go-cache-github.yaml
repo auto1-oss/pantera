@@ -1,0 +1,8 @@
+repo:
+  type: go-proxy
+  url: https://artipie.qa.services.auto1.team/go-cache-github
+  remotes:
+    - url: https://github.com/
+  storage:
+    type: fs
+    path: /var/artipie/data

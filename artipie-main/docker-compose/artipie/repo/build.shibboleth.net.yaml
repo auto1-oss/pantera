@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://build.shibboleth.net/maven/releases
+  storage:
+    type: fs
+    path: /var/artipie/data

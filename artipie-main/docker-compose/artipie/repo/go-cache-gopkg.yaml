@@ -1,0 +1,8 @@
+repo:
+  type: go-proxy
+  url: https://artipie.qa.services.auto1.team/go-cache-gopkg
+  remotes:
+    - url: https://go.pkg.dev
+  storage:
+    type: fs
+    path: /var/artipie/data

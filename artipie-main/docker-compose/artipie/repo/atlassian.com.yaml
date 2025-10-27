@@ -1,0 +1,7 @@
+repo:
+  type: maven-proxy
+  remotes:
+    - url: https://packages.atlassian.com/artifactory/maven-external/
+  storage:
+    type: fs
+    path: /var/artipie/data
