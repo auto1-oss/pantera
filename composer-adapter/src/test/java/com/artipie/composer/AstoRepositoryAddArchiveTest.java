@@ -53,8 +53,12 @@ final class AstoRepositoryAddArchiveTest {
     @Test
     void shouldAddPackageToAll() {
         this.saveZipArchive();
+        // With Satis layout, check p2/psr/log.json instead of packages.json
+        final JsonObject p2File = this.storage.value(new Key.From("p2/psr/log.json"))
+            .join()
+            .asJsonObject();
         MatcherAssert.assertThat(
-            this.packages(new AllPackages())
+            p2File.getJsonObject("packages")
                 .getJsonObject("psr/log")
                 .keySet(),
             new IsEqual<>(new SetOf<>(this.name.version()))
@@ -63,13 +67,18 @@ final class AstoRepositoryAddArchiveTest {
 
     @Test
     void shouldAddPackageToAllWhenOtherVersionExists() {
+        // Save existing version to p2/psr/log.json (Satis layout)
         new BlockingStorage(this.storage).save(
-            new AllPackages(),
+            new Key.From("p2/psr/log.json"),
             "{\"packages\":{\"psr/log\":{\"1.1.2\":{}}}}".getBytes()
         );
         this.saveZipArchive();
+        // Read from p2/psr/log.json
+        final JsonObject p2File = this.storage.value(new Key.From("p2/psr/log.json"))
+            .join()
+            .asJsonObject();
         MatcherAssert.assertThat(
-            this.packages(new AllPackages())
+            p2File.getJsonObject("packages")
                 .getJsonObject("psr/log")
                 .keySet(),
             new IsEqual<>(new SetOf<>("1.1.2", this.name.version()))

@@ -5,12 +5,21 @@
 package com.artipie.maven.metadata;
 
 import com.vdurmont.semver4j.Semver;
+import com.vdurmont.semver4j.SemverException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.util.Objects;
 
 /**
  * Artifact version.
  * @since 0.5
  */
 public final class Version implements Comparable<Version> {
+
+    /**
+     * Logger.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(Version.class);
 
     /**
      * Version value as string.
@@ -27,8 +36,21 @@ public final class Version implements Comparable<Version> {
 
     @Override
     public int compareTo(final Version another) {
-        return new Semver(this.value, Semver.SemverType.LOOSE)
-            .compareTo(new Semver(another.value, Semver.SemverType.LOOSE));
+        final Version other = Objects.requireNonNull(another, "another version");
+        try {
+            // Try to parse as semantic version first
+            return new Semver(this.value, Semver.SemverType.LOOSE)
+                .compareTo(new Semver(other.value, Semver.SemverType.LOOSE));
+        } catch (final SemverException ex) {
+            // Fall back to string comparison for non-semver versions (common in Maven)
+            LOG.debug(
+                "Failed to compare versions as semver, falling back to string comparison: {} vs {}",
+                this.value,
+                other.value,
+                ex
+            );
+            return this.value.compareTo(other.value);
+        }
     }
 
 }

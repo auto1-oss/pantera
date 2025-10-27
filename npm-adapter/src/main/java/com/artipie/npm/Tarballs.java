@@ -77,15 +77,16 @@ public final class Tarballs {
     private static JsonObject updateJson(final JsonObject original, final String prefix) {
         final JsonPatchBuilder builder = Json.createPatchBuilder();
         final Set<String> versions = original.getJsonObject("versions").keySet();
+        // Ensure prefix doesn't end with slash for consistent concatenation
+        final String cleanPrefix = prefix.replaceAll("/$", "");
         for (final String version : versions) {
+            final String tarballPath = original.getJsonObject("versions").getJsonObject(version)
+                .getJsonObject("dist").getString("tarball");
+            // Ensure tarball path starts with slash
+            final String cleanTarball = tarballPath.startsWith("/") ? tarballPath : "/" + tarballPath;
             builder.add(
                 String.format("/versions/%s/dist/tarball", version),
-                String.join(
-                    "",
-                    prefix.replaceAll("/$", ""),
-                    original.getJsonObject("versions").getJsonObject(version)
-                        .getJsonObject("dist").getString("tarball")
-                )
+                cleanPrefix + cleanTarball
             );
         }
         return builder.build().apply(original);

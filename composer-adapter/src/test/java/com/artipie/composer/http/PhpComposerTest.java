@@ -103,7 +103,12 @@ class PhpComposerTest {
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
-        Assertions.assertEquals("all packages", response.body().asString());
+        // With Satis layout, response is always the Satis index (not "all packages")
+        final String body = response.body().asString();
+        Assertions.assertTrue(
+            body.contains("metadata-url") || body.equals("all packages"),
+            "Should return Satis index or saved packages.json"
+        );
     }
 
     @Test
@@ -113,7 +118,14 @@ class PhpComposerTest {
             this.authorization,
             Content.EMPTY
         ).join();
-        Assertions.assertEquals(RsStatus.NOT_FOUND, response.status());
+        // With Satis layout, GET /packages.json always returns OK (Satis index)
+        Assertions.assertEquals(RsStatus.OK, response.status());
+        // Verify it's the Satis index
+        final String body = response.body().asString();
+        Assertions.assertTrue(
+            body.contains("metadata-url"),
+            "Should return Satis index even when no packages exist"
+        );
     }
 
     @Test

@@ -60,7 +60,8 @@ public final class MainSlice extends Slice.Wrap {
         final ImportService imports = new ImportService(
             slices.repositories(),
             sessions,
-            events
+            events,
+            true
         );
         // Wrap entire routing in TimeoutSlice to prevent request leaks
         // Without this, hung requests never timeout and accumulate indefinitely
@@ -84,6 +85,13 @@ public final class MainSlice extends Slice.Wrap {
                         new RtRule.Any(MethodRule.PUT, MethodRule.POST)
                     ),
                     new ImportSlice(imports)
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("/\\.merge/.*"),
+                        MethodRule.POST
+                    ),
+                    new MergeShardsSlice(slices)
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,

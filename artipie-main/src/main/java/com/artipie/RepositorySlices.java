@@ -249,7 +249,7 @@ public class RepositorySlices {
             case "npm":
                 slice = trimPathSlice(
                     new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
+                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
                     )
                 );
                 break;
@@ -279,9 +279,29 @@ public class RepositorySlices {
                 );
                 break;
             case "php":
+                // Extract base URL from config, handling trailing slashes consistently
+                // The URL should be the full path to the repository for provider URLs to work
+                String baseUrl = cfg.settings()
+                    .flatMap(yaml -> Optional.ofNullable(yaml.string("url")))
+                    .orElseGet(() -> cfg.url().toString());
+                
+                // Normalize: remove all trailing slashes
+                baseUrl = baseUrl.replaceAll("/+$", "");
+                
+                // Ensure URL ends with the repository name for correct routing
+                // Provider URLs will be: {baseUrl}/p2/%package%.json
+                String normalizedRepo = cfg.name().replaceAll("^/+", "").replaceAll("/+$", "");
+                if (!baseUrl.endsWith("/" + normalizedRepo)) {
+                    baseUrl = baseUrl + "/" + normalizedRepo;
+                }
+                
                 slice = trimPathSlice(
                     new PhpComposer(
-                        new AstoRepository(cfg.storage(), Optional.of(cfg.url().toString())),
+                        new AstoRepository(
+                            cfg.storage(),
+                            Optional.of(baseUrl),
+                            Optional.of(cfg.name())
+                        ),
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
@@ -650,6 +670,7 @@ public class RepositorySlices {
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
     }
+
 
     /**
      * Slice's cache key.

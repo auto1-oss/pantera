@@ -29,9 +29,10 @@ public final class PackageMetadataSlice implements Slice {
     /**
      * RegEx pattern for package metadata path.
      * According to <a href="https://packagist.org/apidoc#get-package-data">docs</a>.
+     * Also handles Satis cache-busting format: /p2/vendor/package$hash.json
      */
     public static final Pattern PACKAGE = Pattern.compile(
-        "/p2?/(?<vendor>[^/]+)/(?<package>[^/]+)\\.json$"
+        "/p2?/(?<vendor>[^/]+)/(?<package>[^/$]+)(?:\\$[a-f0-9]+)?\\.json$"
     );
 
     /**

@@ -4,6 +4,7 @@
  */
 package com.artipie.gradle.http;
 
+import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
@@ -46,7 +47,7 @@ public final class GradleProxySlice extends Slice.Wrap {
     ) {
         this(
             clients, remote, auth, cache, Optional.empty(), "*",
-            "gradle-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
+            "gradle-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty()
         );
     }
 
@@ -64,7 +65,7 @@ public final class GradleProxySlice extends Slice.Wrap {
     ) {
         this(
             client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
-            "gradle-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
+            "gradle-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty()
         );
     }
 
@@ -79,6 +80,7 @@ public final class GradleProxySlice extends Slice.Wrap {
      * @param rname Repository name
      * @param rtype Repository type
      * @param cooldown Cooldown service
+     * @param storage Storage for persisting checksums
      */
     public GradleProxySlice(
         final ClientSlices clients,
@@ -88,20 +90,10 @@ public final class GradleProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
+        final com.artipie.cooldown.CooldownService cooldown,
+        final Optional<Storage> storage
     ) {
-        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown);
-    }
-
-    private GradleProxySlice(
-        final Slice remote,
-        final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events,
-        final String rname,
-        final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
-    ) {
-        this(remote, cache, events, rname, rtype, cooldown, new GradleCooldownInspector(remote));
+        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown, storage);
     }
 
     private GradleProxySlice(
@@ -111,7 +103,20 @@ public final class GradleProxySlice extends Slice.Wrap {
         final String rname,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
-        final GradleCooldownInspector inspector
+        final Optional<Storage> storage
+    ) {
+        this(remote, cache, events, rname, rtype, cooldown, new GradleCooldownInspector(remote), storage);
+    }
+
+    private GradleProxySlice(
+        final Slice remote,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown,
+        final GradleCooldownInspector inspector,
+        final Optional<Storage> storage
     ) {
         super(
             new SliceRoute(
@@ -121,7 +126,7 @@ public final class GradleProxySlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
+                    new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector, storage)
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,

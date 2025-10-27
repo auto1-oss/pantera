@@ -100,7 +100,9 @@ final class ImportSliceTest {
         );
         ctor.setAccessible(true);
         return ctor.newInstance(
-            Yaml.createYamlMappingBuilder().build(),
+            Yaml.createYamlMappingBuilder()
+                .add("url", "http://localhost:8080/cli-repo")
+                .build(),
             "cli-repo",
             "file",
             storage

@@ -82,12 +82,49 @@ Options:
   --max-retries <N>            Max retries per file [default: 5]
   --pool-size <N>              HTTP connection pool size [default: 10]
   --checksum-policy <MODE>     COMPUTE | METADATA | SKIP [default: SKIP]
+  --include-repos <REPOS>      Include only these repositories (comma-separated)
+  --exclude-repos <REPOS>      Exclude these repositories (comma-separated)
   --verbose, -v                Enable verbose logging
   --dry-run                    Scan only, don't upload
   --report <FILE>              Report file path [default: import_report.json]
 ```
 
 **Note**: You must provide either `--token` OR both `--username` and `--password`.
+
+### Repository Filtering
+
+You can selectively import specific repositories or exclude certain ones:
+
+```bash
+# Import only specific repositories
+./target/release/artipie-import-cli \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export \
+  --token YOUR_TOKEN \
+  --include-repos "maven-central,npm-registry,docker-images"
+
+# Exclude specific repositories (import all others)
+./target/release/artipie-import-cli \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export \
+  --token YOUR_TOKEN \
+  --exclude-repos "test-repo,old-snapshots,temp"
+
+# Combine with other options
+./target/release/artipie-import-cli \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export \
+  --token YOUR_TOKEN \
+  --include-repos "production-maven,production-npm" \
+  --concurrency 100 \
+  --resume
+```
+
+**Notes:**
+- Repository names are comma-separated without spaces
+- `--include-repos` and `--exclude-repos` are mutually exclusive (use one or the other)
+- If both are specified, `--include-repos` takes precedence
+- Repository names must match exactly (case-sensitive)
 
 ## Repository Layout Mapping
 

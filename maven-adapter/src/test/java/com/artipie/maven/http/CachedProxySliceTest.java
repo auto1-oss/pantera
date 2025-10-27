@@ -58,7 +58,8 @@ final class CachedProxySliceTest {
                 ),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                Optional.empty()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -79,7 +80,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                Optional.empty()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -98,7 +100,8 @@ final class CachedProxySliceTest {
                     -> new FailedCompletionStage<>(new RuntimeException("Any error")),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                Optional.empty()
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -123,7 +126,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                Optional.empty()
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -151,7 +155,8 @@ final class CachedProxySliceTest {
                 (key, supplier, control) -> supplier.get(),
                 Optional.of(this.events), "*", "maven-proxy",
                 NoopCooldownService.INSTANCE,
-                noopInspector()
+                noopInspector(),
+                Optional.empty()
             ),
             new SliceHasResponse(
                 Matchers.allOf(

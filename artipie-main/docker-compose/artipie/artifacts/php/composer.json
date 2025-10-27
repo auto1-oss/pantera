@@ -31,12 +31,6 @@
   "minimum-stability": "stable",
   "prefer-stable": true,
   "config": {
-    "secure-http": false,
-    "http-basic": {
-      "localhost:8081": {
-        "username": "ayd",
-        "password": "ayd"
-      }
-    }
+    "secure-http": false
   }
 }

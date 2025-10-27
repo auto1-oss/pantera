@@ -99,6 +99,20 @@ public final class PhpComposer extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
+                        new RtRule.ByPath(Pattern.compile("^/.*\\.(zip|tar\\.gz|tgz)$")),
+                        MethodRule.GET
+                    ),
+                    PhpComposer.createAuthSlice(
+                        new DownloadArchiveSlice(repository),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
                         new RtRule.ByPath(AddSlice.PATH_PATTERN),
                         MethodRule.PUT
                     ),

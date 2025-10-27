@@ -79,7 +79,8 @@ final class MavenProxySliceITCase {
                     Optional.of(this.events),
                     "my-maven-proxy",
                     "maven-proxy",
-                    com.artipie.cooldown.NoopCooldownService.INSTANCE
+                    com.artipie.cooldown.NoopCooldownService.INSTANCE,
+                    Optional.of(this.storage)
                 )
             )
         );

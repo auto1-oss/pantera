@@ -267,10 +267,26 @@ final class CachedProxySlice implements Slice {
     ) {
         try {
             final javax.json.JsonObject json = javax.json.Json.createReader(new java.io.StringReader(new String(bytes))).readObject();
-            final javax.json.JsonObject packages = json.getJsonObject("packages");
-            if (packages == null) {
+            
+            // Handle both Satis format (packages is array) and traditional format (packages is object)
+            final javax.json.JsonValue packagesValue = json.get("packages");
+            if (packagesValue == null) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
+            
+            // If packages is an array (Satis format), skip cooldown check
+            // Satis format has empty packages array and uses provider-includes instead
+            if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
+                Logger.debug(this, "Satis format detected (packages is array), skipping cooldown check");
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+            
+            // Traditional format: packages is an object
+            if (packagesValue.getValueType() != javax.json.JsonValue.ValueType.OBJECT) {
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+            
+            final javax.json.JsonObject packages = packagesValue.asJsonObject();
             final javax.json.JsonValue pkgVal = packages.get(name);
             if (pkgVal == null) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());

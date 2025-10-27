@@ -9,9 +9,15 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
+import com.artipie.http.headers.Header;
 import com.artipie.http.auth.Authentication;
+import com.artipie.http.auth.AuthUser;
+import com.artipie.http.auth.Tokens;
 import com.artipie.http.rq.RequestLine;
 import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -21,8 +27,7 @@ import javax.json.JsonReader;
 
 /**
  * NPM login slice that integrates with Artipie OAuth.
- * Validates credentials via Authentication (backed by OAuth) and returns JWT token.
- * Does NOT create npm-specific tokens - only uses global Keycloak JWT.
+ * Validates credentials via Authentication (backed by OAuth) and returns an Artipie JWT token.
  * 
  * @since 1.2
  */
@@ -37,11 +42,18 @@ public final class OAuthLoginSlice implements Slice {
     private final Authentication auth;
     
     /**
+     * Token service to mint registry tokens.
+     */
+    private final Tokens tokens;
+    
+    /**
      * Constructor.
      * @param auth Authentication that validates credentials
+     * @param tokens Token service for issuing registry tokens
      */
-    public OAuthLoginSlice(final Authentication auth) {
+    public OAuthLoginSlice(final Authentication auth, final Tokens tokens) {
         this.auth = auth;
+        this.tokens = tokens;
     }
     
     @Override
@@ -64,16 +76,11 @@ public final class OAuthLoginSlice implements Slice {
                 
                 if (optUser.isPresent()) {
                     // Authentication successful
-                    LOGGER.log(Level.INFO, "NPM login successful for: {0}", username);
-                    
-                    // Extract JWT token from Authorization header if present
-                    // npm CLI sends the JWT with the login request
-                    final String token = extractTokenFromHeaders(headers);
-                    
+                    final AuthUser authUser = optUser.get();
+                    LOGGER.log(Level.INFO, "NPM login successful for: {0}", authUser.name());
+                    final String token = createToken(authUser, username, password, headers);
                     return CompletableFuture.completedFuture(
-                        ResponseBuilder.ok()
-                            .jsonBody(createSuccessResponse(username, token))
-                            .build()
+                        successResponse(username, token)
                     );
                 }
                 
@@ -96,17 +103,53 @@ public final class OAuthLoginSlice implements Slice {
     }
     
     /**
+     * Create or reuse token for npm login response.
+     * @param user Authenticated Artipie user
+     * @param username Username provided
+     * @param password Password provided
+     * @param headers Request headers
+     * @return Token string
+     */
+    private String createToken(
+        final AuthUser user,
+        final String username,
+        final String password,
+        final Headers headers
+    ) {
+        String token = null;
+        if (this.tokens != null) {
+            try {
+                token = this.tokens.generate(user);
+            } catch (final Exception err) {
+                LOGGER.log(
+                    Level.WARNING,
+                    "Failed to generate npm token via Tokens service for {0}: {1}",
+                    new Object[] { user.name(), err.getMessage() }
+                );
+            }
+        }
+        if (token == null || token.isEmpty()) {
+            token = extractTokenFromHeaders(headers).orElse(null);
+        }
+        if ((token == null || token.isEmpty()) && password != null) {
+            final String basic = String.format("%s:%s", username, password);
+            token = Base64.getEncoder().encodeToString(basic.getBytes(StandardCharsets.UTF_8));
+        }
+        return token;
+    }
+    
+    /**
      * Extract JWT token from Authorization header.
      * @param headers Request headers
      * @return JWT token or null if not found
      */
-    private String extractTokenFromHeaders(final Headers headers) {
+    private Optional<String> extractTokenFromHeaders(final Headers headers) {
         return headers.find("authorization").stream()
             .findFirst()
-            .map(h -> h.getValue())
+            .map(Header::getValue)
             .filter(v -> v.toLowerCase().startsWith("bearer "))
             .map(v -> v.substring(7).trim())
-            .orElse(null);
+            .filter(v -> !v.isEmpty());
     }
     
     /**
@@ -115,18 +158,20 @@ public final class OAuthLoginSlice implements Slice {
      * @param token JWT token (from Authorization header)
      * @return JSON response string
      */
-    private String createSuccessResponse(final String username, final String token) {
-        final javax.json.JsonObjectBuilder builder = Json.createObjectBuilder()
+    private Response successResponse(final String username, final String token) {
+        final ResponseBuilder response = ResponseBuilder.created();
+        final javax.json.JsonObjectBuilder json = Json.createObjectBuilder()
             .add("ok", true)
             .add("id", "org.couchdb.user:" + username)
-            .add("rev", "_we_dont_use_revs_any_more");
+            .add("rev", "1-" + System.currentTimeMillis());
         
         // Include token if available (npm CLI needs this to store in ~/.npmrc)
         if (token != null && !token.isEmpty()) {
-            builder.add("token", token);
+            json.add("token", token);
+            response.header("npm-auth-token", token);
         }
         
-        return builder.build().toString();
+        return response.jsonBody(json.build()).build();
     }
     
     /**

@@ -3,4 +3,5 @@ repo:
   storage:
     type: fs
     path: /var/artipie/data
-  url: http://localhost:8081/php
+  settings:
+    url: http://localhost:8081/artifactory/api/composer/php

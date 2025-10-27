@@ -1,0 +1,5 @@
+repo:
+  type: gem-group
+  url: http://localhost:8081/artifactory/gem_group
+  members:
+    - gem

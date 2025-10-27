@@ -84,7 +84,8 @@ public final class GradleProxy {
             this.events,
             this.cfg.name(),
             this.cfg.type(),
-            this.cooldown
+            this.cooldown,
+            this.cfg.storageOpt()  // Pass storage for checksum persistence
         );
     }
 }

@@ -112,7 +112,9 @@ final class ImportServiceTest {
         );
         ctor.setAccessible(true);
         return ctor.newInstance(
-            Yaml.createYamlMappingBuilder().build(),
+            Yaml.createYamlMappingBuilder()
+                .add("url", "http://localhost:8080/my-repo")
+                .build(),
             "my-repo",
             "file",
             storage

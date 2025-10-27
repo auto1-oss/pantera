@@ -15,7 +15,6 @@ import org.apache.commons.codec.digest.DigestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Slice that generates checksum files (.sha1, .md5, .sha256) for Maven artifacts.
@@ -62,7 +61,9 @@ final class ChecksumProxySlice implements Slice {
     }
 
     /**
-     * Generate checksum for an artifact.
+     * Get checksum for an artifact with optimized strategy.
+     * Priority: 1) Cached/upstream checksum file, 2) Compute from cached artifact (fallback only)
+     * This avoids expensive hash computation when checksums are already available.
      * 
      * @param line Request line
      * @param headers Request headers
@@ -78,62 +79,65 @@ final class ChecksumProxySlice implements Slice {
         final String algorithm,
         final String extension
     ) {
-        // Remove checksum extension to get artifact path
-        final String artifactPath = checksumPath.substring(0, checksumPath.length() - extension.length());
-        
-        // Create modified request line for the actual artifact
-        final RequestLine artifactLine = new RequestLine(
-            line.method().value(),
-            artifactPath,
-            line.version()
-        );
-        
-        // Try to fetch the artifact itself
-        return this.upstream.response(artifactLine, headers, Content.EMPTY)
-            .thenCompose(resp -> {
-                if (!resp.status().success()) {
-                    // Artifact not found - try to fetch checksum directly from upstream
-                    return this.upstream.response(line, headers, Content.EMPTY);
+        // OPTIMIZATION: Try to fetch checksum directly from cache/upstream FIRST
+        // This is much faster than computing from artifact bytes
+        return this.upstream.response(line, headers, Content.EMPTY)
+            .thenCompose(checksumResp -> {
+                if (checksumResp.status().success()) {
+                    // Checksum file found in cache or upstream - use it directly!
+                    return CompletableFuture.completedFuture(checksumResp);
                 }
                 
-                // Artifact found - compute checksum from its content
-                final AtomicReference<String> checksum = new AtomicReference<>();
-                return new ContentWithSize(resp.body(), resp.headers())
-                    .asBytesFuture()
-                    .thenApply(bytes -> {
-                        // Compute checksum
-                        final String hash;
-                        switch (algorithm) {
-                            case "SHA-1":
-                                hash = DigestUtils.sha1Hex(bytes);
-                                break;
-                            case "MD5":
-                                hash = DigestUtils.md5Hex(bytes);
-                                break;
-                            case "SHA-256":
-                                hash = DigestUtils.sha256Hex(bytes);
-                                break;
-                            case "SHA-512":
-                                hash = DigestUtils.sha512Hex(bytes);
-                                break;
-                            default:
-                                throw new IllegalArgumentException("Unsupported algorithm: " + algorithm);
+                // Checksum not available - FALLBACK: compute from artifact
+                // This is expensive but ensures we can always provide checksums
+                final String artifactPath = checksumPath.substring(
+                    0, checksumPath.length() - extension.length()
+                );
+                final RequestLine artifactLine = new RequestLine(
+                    line.method().value(),
+                    artifactPath,
+                    line.version()
+                );
+                
+                return this.upstream.response(artifactLine, headers, Content.EMPTY)
+                    .thenCompose(artifactResp -> {
+                        if (!artifactResp.status().success()) {
+                            // Neither checksum nor artifact found
+                            return CompletableFuture.completedFuture(
+                                ResponseBuilder.notFound().build()
+                            );
                         }
-                        checksum.set(hash);
-                        return hash;
-                    })
-                    .thenApply(hash -> {
-                        // Return checksum as plain text
-                        final byte[] checksumBytes = hash.getBytes(StandardCharsets.UTF_8);
-                        return ResponseBuilder.ok()
-                            .header("Content-Type", "text/plain")
-                            .header("Content-Length", String.valueOf(checksumBytes.length))
-                            .body(checksumBytes)
-                            .build();
-                    })
-                    .exceptionally(err -> {
-                        // If checksum generation fails, try fetching from upstream
-                        return this.upstream.response(line, headers, Content.EMPTY).join();
+                        
+                        // Artifact found - compute checksum as last resort
+                        return new ContentWithSize(artifactResp.body(), artifactResp.headers())
+                            .asBytesFuture()
+                            .thenApply(bytes -> {
+                                final String hash;
+                                switch (algorithm) {
+                                    case "SHA-1":
+                                        hash = DigestUtils.sha1Hex(bytes);
+                                        break;
+                                    case "MD5":
+                                        hash = DigestUtils.md5Hex(bytes);
+                                        break;
+                                    case "SHA-256":
+                                        hash = DigestUtils.sha256Hex(bytes);
+                                        break;
+                                    case "SHA-512":
+                                        hash = DigestUtils.sha512Hex(bytes);
+                                        break;
+                                    default:
+                                        throw new IllegalArgumentException(
+                                            "Unsupported algorithm: " + algorithm
+                                        );
+                                }
+                                final byte[] checksumBytes = hash.getBytes(StandardCharsets.UTF_8);
+                                return ResponseBuilder.ok()
+                                    .header("Content-Type", "text/plain")
+                                    .header("Content-Length", String.valueOf(checksumBytes.length))
+                                    .body(checksumBytes)
+                                    .build();
+                            });
                     });
             });
     }

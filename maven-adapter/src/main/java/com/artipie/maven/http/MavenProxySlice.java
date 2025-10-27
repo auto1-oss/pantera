@@ -4,6 +4,7 @@
  */
 package com.artipie.maven.http;
 
+import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
@@ -39,7 +40,7 @@ public final class MavenProxySlice extends Slice.Wrap {
     public MavenProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Cache cache) {
         this(clients, remote, auth, cache, Optional.empty(), "*",
-            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE);
+            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
     }
 
     /**
@@ -53,7 +54,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator authenticator
     ) {
         this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
-            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE);
+            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
     }
 
     /**
@@ -64,6 +65,9 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param cache Repository cache
      * @param events Artifact events queue
      * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param storage Storage for persisting checksums
      */
     public MavenProxySlice(
         final ClientSlices clients,
@@ -73,20 +77,10 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
+        final com.artipie.cooldown.CooldownService cooldown,
+        final Optional<Storage> storage
     ) {
-        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown);
-    }
-
-    private MavenProxySlice(
-        final Slice remote,
-        final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events,
-        final String rname,
-        final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
-    ) {
-        this(remote, cache, events, rname, rtype, cooldown, new MavenCooldownInspector(remote));
+        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown, storage);
     }
 
     private MavenProxySlice(
@@ -96,7 +90,20 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
-        final MavenCooldownInspector inspector
+        final Optional<Storage> storage
+    ) {
+        this(remote, cache, events, rname, rtype, cooldown, new MavenCooldownInspector(remote), storage);
+    }
+
+    private MavenProxySlice(
+        final Slice remote,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown,
+        final MavenCooldownInspector inspector,
+        final Optional<Storage> storage
     ) {
         super(
             new SliceRoute(
@@ -110,7 +117,7 @@ public final class MavenProxySlice extends Slice.Wrap {
                     // This dramatically improves Maven client performance by eliminating
                     // "Checksum validation failed, no checksums available" errors
                     new ChecksumProxySlice(
-                        new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
+                        new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector, storage)
                     )
                 ),
                 new RtRulePath(
