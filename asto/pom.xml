@@ -6,10 +6,10 @@
     <parent>
         <groupId>com.artipie</groupId>
         <artifactId>artipie</artifactId>
-        <version>1.18.13</version>
+        <version>1.18.15</version>
     </parent>
     <artifactId>asto</artifactId>
-    <version>1.18.13</version>
+    <version>1.18.15</version>
     <packaging>pom</packaging>
     <name>asto</name>
     <description>A simple Java storage</description>

@@ -3,12 +3,9 @@ meta:
     type: fs
     path: /var/artipie/repo
   credentials:
-    -
-      type: env
-    -
-      type: artipie
-    -
-      type: keycloak
+    - type: env
+    - type: artipie
+    - type: keycloak
       url: "http://keycloak:8080"
       realm: artipie
       "client-id": artipie
@@ -20,7 +17,7 @@ meta:
       type: fs
       path: /var/artipie/security
   cooldown:
-    enabled: true
+    enabled: false
     # Use duration strings: m = minutes, h = hours, d = days
     minimum_allowed_age: 12h
   artifacts_database:
@@ -29,61 +26,20 @@ meta:
     postgres_database: artifacts
     postgres_user: artipie
     postgres_password: artipie
+  
   http_client:
-    proxy_timeout: 900 # 15 minutes (in seconds)
-    connection_timeout: 120000 # Connection timeout (milliseconds)
-    idle_timeout: 3600000 # Idle timeout (milliseconds, 0 = infinite)
+    proxy_timeout: 60
+    max_connections_per_destination: 512
+    max_requests_queued_per_destination: 2048
+    idle_timeout: 30000
+    connect_timeout: 10000
     follow_redirects: true
-  logging:
-    level: DEBUG
-    loggers:
-      # Artipie core packages
-      com.artipie: INFO
-      com.artipie.asto: INFO
-      com.artipie.composer.http.proxy: DEBUG
-      com.artipie.http.client.jetty: DEBUG
+    connection_acquire_timeout: 120000  # ms to wait for pooled connection before failing
 
-      # Common third-party libraries
-      io.netty: INFO
-      io.vertx: INFO
-      org.apache.http: INFO
-      org.eclipse.jetty: INFO
-      org.asynchttpclient: INFO
-      reactor: INFO
-      org.jooq: INFO
-      org.hibernate: INFO
-      org.quartz: INFO
-      org.springframework: INFO
-      org.h2: INFO
-      ch.qos.logback: INFO
-      org.slf4j: INFO
-      # Security-related
-      org.bouncycastle: INFO
-      org.jose4j: INFO
-      io.jsonwebtoken: INFO
-      org.keycloak: INFO
-      # Database and persistence
-      org.postgresql: INFO
-      org.mongodb: INFO
-      com.mongodb: INFO
-      org.elasticsearch: INFO
-      # Caching
-      com.github.benmanes.caffeine: INFO
-      net.sf.ehcache: INFO
-      org.infinispan: INFO
-      # Metrics and monitoring
-      io.micrometer: INFO
-      io.prometheus: INFO
-      com.codahale.metrics: INFO
-      # HTTP clients
-      okhttp3: INFO
-      retrofit2: INFO
-      feign: INFO
-      # XML/JSON processing
-      com.fasterxml.jackson: INFO
-      com.google.gson: INFO
-      com.thoughtworks.xstream: INFO
-      org.codehaus.jackson: INFO
+  http_server:
+    # ISO-8601 duration (or milliseconds) before failing long running requests. Use 0 to disable.
+    request_timeout: PT2M
+
   metrics:
     endpoint: /metrics/vertx # Path of the endpoint, starting with `/`, where the metrics will be served
     port: 8087 # Port to serve the metrics

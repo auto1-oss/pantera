@@ -14,6 +14,7 @@ import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.settings.cache.ArtipieCaches;
 import java.util.Optional;
 import javax.sql.DataSource;
+import java.time.Duration;
 
 /**
  * Application settings.
@@ -102,6 +103,14 @@ public interface Settings extends AutoCloseable {
 
     default HttpClientSettings httpClientSettings() {
         return new HttpClientSettings();
+    }
+
+    /**
+     * Maximum duration allowed for processing a single HTTP request on Vert.x server side.
+     * @return Request timeout duration; a zero duration disables the timeout.
+     */
+    default Duration httpServerRequestTimeout() {
+        return Duration.ofMinutes(2);
     }
 
     /**

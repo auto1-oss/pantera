@@ -1,36 +1,31 @@
 {
-  "name": "ayd/sample-app",
-  "description": "Sample PHP project using Composer with a private artifact repo",
-  "type": "project",
-  "require": {
-    "php": ">=8.0",
-    "doekos/shipkit": "^1.0.0",
-    "ayd/helper-lib" : "^1.0.0",
-    "wkda/notification-service": "^0.1.0",
-    "symfony/polyfill-php85": "*",
-    "doctrine/inflector": "*",
-    "symfony/yaml": "^6.0"
-  },
-  "repositories": [
-    {
-      "type": "composer",
-      "url": "http://localhost:8081/artifactory/api/composer/php_group"
+    "name": "ayd/helper-lib",
+    "description": "test",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ayd Asraf",
+            "email": "ayd.asraf@auto1.com"
+        }
+    ],
+    "require": {
+        "openai-php/client": "^0.17.1",
+        "symfony/http-client": "^7.3",
+        "nyholm/psr7": "^1.8"
     },
-    {
-      "packagist": false
-    }
-  ],
-  "autoload": {
-    "psr-4": {
-      "App\\": "app/"
-    }
-  },
-  "require-dev": {
-    "symfony/web-profiler-bundle": "^7.3"
-  },
-  "minimum-stability": "stable",
-  "prefer-stable": true,
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "http://localhost:8081/artifactory/php_group"
+        },
+      {
+        "pakagist":  false
+      }
+    ],
   "config": {
-    "secure-http": false
+    "secure-http": false,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
   }
 }

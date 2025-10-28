@@ -60,16 +60,28 @@ final class JettyClientSlice implements Slice {
     private final int port;
 
     /**
+     * Max time in milliseconds to wait for connection acquisition.
+     */
+    private final long acquireTimeoutMillis;
+
+    /**
      * @param client HTTP client.
      * @param secure Secure connection flag.
      * @param host Host name.
      * @param port Port.
      */
-    JettyClientSlice(HttpClient client, boolean secure, String host, int port) {
+    JettyClientSlice(
+        HttpClient client,
+        boolean secure,
+        String host,
+        int port,
+        long acquireTimeoutMillis
+    ) {
         this.client = client;
         this.secure = secure;
         this.host = host;
         this.port = port;
+        this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
     public CompletableFuture<Response> response(
@@ -155,6 +167,9 @@ final class JettyClientSlice implements Slice {
                 .setCustomQuery(uri.getQuery())
                 .toString()
         ).method(req.method().value());
+        if (this.acquireTimeoutMillis > 0) {
+            request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
+        }
         for (Header header : headers) {
             request.headers(mutable -> mutable.add(header.getKey(), header.getValue()));
         }

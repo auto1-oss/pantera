@@ -49,6 +49,30 @@ public final class TgzRelativePath {
     public String relative() {
         return this.relative(false);
     }
+    
+    /**
+     * Strips absolute URL prefix if present, keeping only the path portion.
+     * Handles URLs like: http://host:port/path/to/package.tgz -> /path/to/package.tgz
+     * @param path The potentially absolute URL
+     * @return Path without protocol and host
+     */
+    private String stripAbsoluteUrl(final String path) {
+        // Check if it's an absolute URL (starts with http:// or https://)
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            try {
+                final java.net.URI uri = new java.net.URI(path);
+                // Return the path portion (which includes leading /)
+                return uri.getPath();
+            } catch (final java.net.URISyntaxException ex) {
+                // If parsing fails, try simple string manipulation
+                final int pathStart = path.indexOf('/', path.indexOf("://") + 3);
+                if (pathStart > 0) {
+                    return path.substring(pathStart);
+                }
+            }
+        }
+        return path;
+    }
 
     /**
      * Extract the relative path.
@@ -86,10 +110,13 @@ public final class TgzRelativePath {
      * @return Matched values.
      */
     private Matched matchedValues() {
-        final Optional<Matched> npms = this.npmWithScope();
-        final Optional<Matched> npmws = this.npmWithoutScope();
-        final Optional<Matched> curls = this.curlWithScope();
-        final Optional<Matched> curlws = this.curlWithoutScope();
+        // Strip absolute URL prefix first if present
+        final String pathToMatch = this.stripAbsoluteUrl(this.full);
+        
+        final Optional<Matched> npms = this.npmWithScope(pathToMatch);
+        final Optional<Matched> npmws = this.npmWithoutScope(pathToMatch);
+        final Optional<Matched> curls = this.curlWithScope(pathToMatch);
+        final Optional<Matched> curlws = this.curlWithoutScope(pathToMatch);
         final Matched matched;
         if (npms.isPresent()) {
             matched = npms.get();
@@ -100,18 +127,21 @@ public final class TgzRelativePath {
         } else if (curlws.isPresent()) {
             matched = curlws.get();
         } else {
-            throw new ArtipieException("a relative path was not found");
+            throw new ArtipieException(
+                String.format("a relative path was not found for: %s", this.full)
+            );
         }
         return matched;
     }
 
     /**
      * Try to extract npm scoped path.
-     *
+     * @param path Path to match against
      * @return The npm scoped path if found.
      */
-    private Optional<Matched> npmWithScope() {
+    private Optional<Matched> npmWithScope(final String path) {
         return this.matches(
+            path,
             Pattern.compile(
                 String.format(
                     "(@%s/%s/-/@%s/(?<name>%s.tgz)$)", TgzRelativePath.NAME, TgzRelativePath.NAME,
@@ -123,11 +153,12 @@ public final class TgzRelativePath {
 
     /**
      * Try to extract npm path without scope.
-     *
+     * @param path Path to match against
      * @return The npm scoped path if found.
      */
-    private Optional<Matched> npmWithoutScope() {
+    private Optional<Matched> npmWithoutScope(final String path) {
         return this.matches(
+            path,
             Pattern.compile(
                 String.format(
                     "(%s/-/(?<name>%s.tgz)$)", TgzRelativePath.NAME, TgzRelativePath.NAME
@@ -138,11 +169,12 @@ public final class TgzRelativePath {
 
     /**
      * Try to extract a curl scoped path.
-     *
+     * @param path Path to match against
      * @return The npm scoped path if found.
      */
-    private Optional<Matched> curlWithScope() {
+    private Optional<Matched> curlWithScope(final String path) {
         return this.matches(
+            path,
             Pattern.compile(
                 String.format(
                     "(@%s/%s/(?<name>(@?(?<!-/@)[\\w._-]+/)*%s.tgz)$)",
@@ -158,11 +190,12 @@ public final class TgzRelativePath {
      * http://10.40.149.70:8080/artifactory/echo-test-npmrepo-Oze0nuvAiD/ssh2//-/ssh2-0.8.9.tgz
      *
      * should also be processed exactly as they are with this regex.
-     *
+     * @param path Path to match against
      * @return The npm scoped path if found.
      */
-    private Optional<Matched> curlWithoutScope() {
+    private Optional<Matched> curlWithoutScope(final String path) {
         return this.matches(
+            path,
             Pattern.compile(
                 "([\\w._-]+(/\\d+.\\d+.\\d+[\\w.-]*)?/(?<name>[\\w._-]+\\.tgz)$)"
             )
@@ -171,12 +204,12 @@ public final class TgzRelativePath {
 
     /**
      * Find fist group match if found.
-     *
+     * @param path Path to match against
      * @param pattern The pattern to match against.
      * @return The group from matcher and name if found.
      */
-    private Optional<Matched> matches(final Pattern pattern) {
-        final Matcher matcher = pattern.matcher(this.full);
+    private Optional<Matched> matches(final String path, final Pattern pattern) {
+        final Matcher matcher = pattern.matcher(path);
         final boolean found = matcher.find();
         final Optional<Matched> result;
         if (found) {

@@ -5,7 +5,7 @@ curl -XPUT http://localhost:8081/artifactory/api/helm/helm/cert-manager-v1.15.4.
 curl -XPUT http://localhost:8081/artifactory/api/helm/helm/cert-manager-v1.17.4.tgz --data-binary @cert-manager-v1.17.4.tgz -u ayd:ayd
 curl -XPUT http://localhost:8081/artifactory/api/helm/helm/ingress-nginx-4.13.3.tgz --data-binary @ingress-nginx-4.13.3.tgz -u ayd:ayd
 
-helm repo add artipie-test http://localhost:8081/artifactory/helm --username ayd --password ayd
+helm repo add local http://localhost:8081/artifactory/helm --username ayd --password ayd
 helm repo update
 OUTPUT=$(helm search repo local | grep -E 'cert|nginx')
 if [[ $OUTPUT != *"cert-manager"* ]] || [[ $OUTPUT != *"ingress-nginx"* ]]; then

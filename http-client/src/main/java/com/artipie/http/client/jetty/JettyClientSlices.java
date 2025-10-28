@@ -48,6 +48,11 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     private final HttpClient clnt;
 
     /**
+     * Max time to wait for connection acquisition in milliseconds.
+     */
+    private final long acquireTimeoutMillis;
+
+    /**
      * Started flag.
      */
     private final AtomicBoolean started = new AtomicBoolean(false);
@@ -71,6 +76,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      */
     public JettyClientSlices(final HttpClientSettings settings) {
         this.clnt = create(settings);
+        this.acquireTimeoutMillis = settings.connectionAcquireTimeout();
     }
 
     /**
@@ -126,6 +132,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         stop();
     }
 
+    /**
+     * Expose underlying Jetty client for instrumentation.
+     * @return Jetty HttpClient instance.
+     */
+    public HttpClient httpClient() {
+        return this.clnt;
+    }
+
     @Override
     public Slice http(final String host) {
         return this.slice(false, host, JettyClientSlices.HTTP_PORT);
@@ -155,7 +169,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
      * @return Client slice.
      */
     private Slice slice(final boolean secure, final String host, final int port) {
-        return new JettyClientSlice(this.clnt, secure, host, port);
+        return new JettyClientSlice(this.clnt, secure, host, port, this.acquireTimeoutMillis);
     }
 
     /**
@@ -196,6 +210,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         result.setFollowRedirects(settings.followRedirects());
         result.setConnectTimeout(settings.connectTimeout());
         result.setIdleTimeout(settings.idleTimeout());
+        result.setAddressResolutionTimeout(5_000L);
         
         // Connection pool limits to prevent resource exhaustion
         // These prevent unlimited connection accumulation to upstream repositories

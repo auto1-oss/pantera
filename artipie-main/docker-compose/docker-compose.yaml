@@ -6,7 +6,7 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
-    image: auto1-artipie:1.18.13
+    image: auto1-artipie:1.18.15
     container_name: artipie
     restart: unless-stopped
     environment:
@@ -20,7 +20,7 @@ services:
       - AWS_PROFILE=shared-services-qa-devops
       - AWS_REGION=eu-west-1
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.18.13
+      - ARTIPIE_VERSION=1.18.15
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
     volumes:

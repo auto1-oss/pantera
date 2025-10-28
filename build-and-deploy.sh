@@ -53,28 +53,23 @@ else
     TEST_FLAG="-DskipTests"
 fi
 
-echo ""
-echo -e "${YELLOW}Step 1: Clean all build artifacts${NC}"
-echo "Removing all target directories..."
-echo "Running Maven clean..."
-mvn clean -q
-
-echo -e "${YELLOW}Step 2: Build all modules with dependencies${NC}"
+echo -e "${YELLOW}Build all modules with dependencies${NC}"
 # -U forces update of snapshots and releases
 if [ "$RUN_TESTS" = true ]; then
     echo "Running tests (this will take longer)..."
-    mvn install -U
+    mvn clean install -U -Dmaven.test.skip=true -Dpmd.skip=true
+    mvn install
 else
     echo "Skipping tests and test compilation (use --with-tests to run them)..."
     mvn install -U -Dmaven.test.skip=true -Dpmd.skip=true
 fi
 
 echo ""
-echo -e "${YELLOW}Step 3: Verify image was created${NC}"
+echo -e "${YELLOW}Verify image was created${NC}"
 docker images ${IMAGE_NAME} --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}\t{{.Size}}"
 
 echo ""
-echo -e "${YELLOW}Step 4: Restart Docker Compose${NC}"
+echo -e "${YELLOW}Restart Docker Compose${NC}"
 cd ${COMPOSE_DIR}
 
 echo "Stopping containers..."

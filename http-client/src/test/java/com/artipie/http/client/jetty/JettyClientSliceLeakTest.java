@@ -45,7 +45,7 @@ final class JettyClientSliceLeakTest {
         );
         final int port = this.server.start();
         this.client.start();
-        this.slice = new JettyClientSlice(this.client, false, "localhost", port);
+        this.slice = new JettyClientSlice(this.client, false, "localhost", port, 0L);
     }
 
     @AfterEach
