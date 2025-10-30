@@ -28,6 +28,7 @@ import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -43,7 +44,9 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * Test for {@link Http3Server}.
+ * Disabled: Requires native QUIC (quiche) libraries not available on all platforms.
  */
+@Disabled("Requires native QUIC libraries - ExceptionInInitializerError: no quiche binding implementation found")
 class Http3ServerTest {
 
     /**

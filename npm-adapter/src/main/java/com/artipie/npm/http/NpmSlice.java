@@ -243,6 +243,44 @@ public final class NpmSlice implements Slice {
             ),
             new RtRulePath(
                 new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_SCOPE_PATTERN)
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                        base,
+                        basicAuth,
+                        this.tokens,
+                        npmTokenAuth
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_PATTERN)
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                        base,
+                        basicAuth,
+                        this.tokens,
+                        npmTokenAuth
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
                     MethodRule.PUT,
                     new RtRule.ByPath(AddDistTagsSlice.PTRN)
                 ),
@@ -327,6 +365,22 @@ public final class NpmSlice implements Slice {
                 ),
                 NpmSlice.createAuthSlice(
                     new UploadSlice(new CurlPublish(storage), storage, events, name),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                    )
+                )
+            ),
+            // Catch-all PUT route for package publish (lerna, pnpm, etc. that don't send headers)
+            // Matches: /@scope/package or /package (but not .tgz files - already handled above)
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath("^/(@[^/]+/)?[^/]+$")  // Matches package names, not paths with /
+                ),
+                NpmSlice.createAuthSlice(
+                    new UploadSlice(new CliPublish(storage), storage, events, name),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

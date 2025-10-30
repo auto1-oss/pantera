@@ -83,7 +83,7 @@ final class SecurityAuditProxySlice implements Slice {
             clean.add("Content-Type", "application/json");
         }
         
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Forwarding with {0} clean headers", clean.toString());
+        LOGGER.log(Level.INFO, "NPM Audit Proxy - Forwarding request");
         
         // UriClientSlice will add the correct Host header automatically
         return this.remote.response(upstreamLine, clean, body);

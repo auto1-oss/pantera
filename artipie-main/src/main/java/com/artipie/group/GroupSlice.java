@@ -137,6 +137,13 @@ public final class GroupSlice implements Slice {
         if (this.members.isEmpty()) {
             return ResponseBuilder.notFound().completedFuture();
         }
+        
+        // Record request metrics
+        final com.artipie.metrics.GroupSliceMetrics metrics = com.artipie.metrics.GroupSliceMetrics.instance();
+        if (metrics != null) {
+            metrics.recordRequest(this.group);
+        }
+        
         final CompletableFuture<Response> result = new CompletableFuture<>();
         final AtomicBoolean terminal = new AtomicBoolean(false);
         this.tryBatch(
@@ -172,6 +179,14 @@ public final class GroupSlice implements Slice {
         final AtomicInteger failures = new AtomicInteger(0);
         final Headers sanitized = dropFullPathHeader(headers);
         final CopyOnWriteArrayList<CompletableFuture<Response>> futures = new CopyOnWriteArrayList<>();
+        
+        // Record batch metrics
+        final long batchStartTime = System.currentTimeMillis();
+        final com.artipie.metrics.GroupSliceMetrics metrics = com.artipie.metrics.GroupSliceMetrics.instance();
+        if (metrics != null) {
+            metrics.recordBatch(this.group, expected, 0); // Duration will be recorded later
+        }
+        
         for (int idx = start; idx < end; idx++) {
             final String member = this.members.get(idx);
             final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
@@ -246,6 +261,14 @@ public final class GroupSlice implements Slice {
                             this.group,
                             member
                         );
+                        
+                        // Record success metrics
+                        if (metrics != null) {
+                            metrics.recordSuccess(this.group, member);
+                            final long duration = System.currentTimeMillis() - batchStartTime;
+                            metrics.recordBatch(this.group, expected, duration);
+                        }
+                        
                         result.complete(resp);
                         cancelPending(futures, memberFuture, String.format("member %s success", member));
                     } else {
@@ -288,6 +311,11 @@ public final class GroupSlice implements Slice {
         final String reason
     ) {
         if (terminal.compareAndSet(false, true)) {
+            // Record not found metrics
+            final com.artipie.metrics.GroupSliceMetrics metrics = com.artipie.metrics.GroupSliceMetrics.instance();
+            if (metrics != null) {
+                metrics.recordNotFound(this.group);
+            }
             result.complete(ResponseBuilder.notFound().build());
         } else {
             Logger.debug(

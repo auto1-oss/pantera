@@ -4,10 +4,12 @@
  */
 package com.artipie.npm.events;
 
+import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.streams.ContentAsStream;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.npm.Publish;
 import com.artipie.npm.TgzArchive;
 import com.artipie.npm.http.UploadSlice;
@@ -96,7 +98,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .join();
             Logger.info(this, "NPM batch processing complete");
         } catch (Exception err) {
-            Logger.error(this, "NPM batch processing failed: %s", err.getMessage());
+            Logger.error(this, "NPM batch processing failed: %s", LogSanitizer.sanitizeMessage(err.getMessage()));
         }
     }
 
@@ -130,7 +132,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     });
             })
             .exceptionally(err -> {
-                Logger.error(this, "Failed to process NPM package: %s", err.getMessage());
+                Logger.error(this, "Failed to process NPM package: %s", LogSanitizer.sanitizeMessage(err.getMessage()));
                 return null;
             });
     }

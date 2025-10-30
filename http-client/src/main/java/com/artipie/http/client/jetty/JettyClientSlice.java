@@ -9,6 +9,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -106,9 +107,11 @@ final class JettyClientSlice implements Slice {
                 }
         );
         if (LOGGER.isDebugEnabled()) {
+            final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
             LOGGER.debug("Send {} {}:{}{} {} \n{}",
-                request.getMethod(), request.getHost(), request.getPort(), request.getPath(), request.getVersion(),
-                request.getHeaders().asString()
+                request.getMethod(), request.getHost(), request.getPort(), 
+                LogSanitizer.sanitizeUrl(request.getPath()), request.getVersion(),
+                sanitizedHeaders
             );
         }
         request.send(
@@ -123,8 +126,13 @@ final class JettyClientSlice implements Slice {
                                 }
                             );
                         if (LOGGER.isDebugEnabled()) {
-                            LOGGER.debug("Got {}\n{}",
-                                    result.getResponse(), result.getResponse().getHeaders().asString());
+                            final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
+                                toHeaders(result.getResponse().getHeaders())
+                            );
+                            LOGGER.debug("Got {} {}\n{}",
+                                result.getResponse().getStatus(), 
+                                result.getResponse().getReason(),
+                                sanitizedRespHeaders);
                         }
                         res.complete(
                             ResponseBuilder.from(status)
@@ -133,7 +141,7 @@ final class JettyClientSlice implements Slice {
                                 .build()
                         );
                     } else {
-                        LOGGER.error("Got failure", result.getFailure());
+                        LOGGER.error("Got failure: {}", LogSanitizer.sanitizeMessage(result.getFailure().getMessage()), result.getFailure());
                         res.completeExceptionally(result.getFailure());
                     }
                 }

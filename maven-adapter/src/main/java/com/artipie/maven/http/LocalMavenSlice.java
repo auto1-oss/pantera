@@ -74,6 +74,10 @@ final class LocalMavenSlice implements Slice {
                 .thenApply(
                     exists -> {
                         if (exists) {
+                            // Track download metric
+                            this.recordMetric(() -> 
+                                com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                            );
                             return storage.value(artifact)
                                 .thenCombine(
                                     new RepositoryChecksums(storage).checksums(artifact),
@@ -141,5 +145,20 @@ final class LocalMavenSlice implements Slice {
                     : CompletableFuture.completedFuture(ResponseBuilder.notFound().build())
             ).thenCompose(Function.identity());
 
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     * @param metric Metric recording action
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

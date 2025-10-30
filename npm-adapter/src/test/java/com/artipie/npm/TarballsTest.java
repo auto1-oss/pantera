@@ -66,8 +66,8 @@ public class TarballsTest {
      */
     @ParameterizedTest
     @CsvSource({
-        "http://localhost:8081/npm, http://localhost:8081/artifactory/api/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz, http://localhost:8081/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz",
-        "http://localhost:8081/npm, /artifactory/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz, http://localhost:8081/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz"
+        "http://localhost:8081/npm, http://localhost:8081/test_prefix/api/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz, http://localhost:8081/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz",
+        "http://localhost:8081/npm, /test_prefix/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz, http://localhost:8081/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz"
     })
     public void fixesMalformedAbsoluteUrls(
         final String prefix,

@@ -125,7 +125,7 @@ public final class ComposerGroupSlice implements Slice {
      * @param line Request line
      * @param headers Headers
      * @param body Body
-     * @param basePath Base path for metadata-url (e.g., "/artifactory/api/composer/php_group" or "/php_group")
+     * @param basePath Base path for metadata-url (e.g., "/test_prefix/api/composer/php_group" or "/php_group")
      * @return Merged response
      */
     private CompletableFuture<Response> mergePackagesJson(
@@ -398,7 +398,7 @@ public final class ComposerGroupSlice implements Slice {
      * Examples:
      * - "/packages.json" -> ""
      * - "/php_group/packages.json" -> "/php_group"
-     * - "/artifactory/api/composer/php_group/packages.json" -> "/artifactory/api/composer/php_group"
+     * - "/test_prefix/api/composer/php_group/packages.json" -> "/test_prefix/api/composer/php_group"
      *
      * @param path Full request path
      * @return Base path (without /packages.json suffix)

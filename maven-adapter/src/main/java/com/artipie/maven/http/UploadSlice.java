@@ -99,6 +99,18 @@ public final class UploadSlice implements Slice {
             .map(h -> Long.parseLong(h.getValue()))
             .orElse(0L);
         
+        // Track upload metric
+        this.recordMetric(() -> 
+            com.artipie.metrics.ArtipieMetrics.instance().upload("maven")
+        );
+        
+        // Track bandwidth (upload)
+        if (size > 0) {
+            this.recordMetric(() -> 
+                com.artipie.metrics.ArtipieMetrics.instance().bandwidth("maven", "upload", size)
+            );
+        }
+        
         final String keyPath = key.string();
         
         // Special handling for maven-metadata.xml - fix it BEFORE saving
@@ -336,5 +348,20 @@ public final class UploadSlice implements Slice {
             "Added artifact event: %s:%s (size=%d)",
             artifactName, version, size
         );
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     * @param metric Metric recording action
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

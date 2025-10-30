@@ -9,7 +9,7 @@ version = '1.0.3'
 repositories {
     // Use Artipie gradle_group repository for downloading dependencies
     maven {
-        url = 'http://localhost:8081/artifactory/api/gradle_group'
+        url = 'http://localhost:8081/test_prefix/api/gradle_group'
         allowInsecureProtocol = true
         credentials {
             username = 'ayd'
@@ -66,7 +66,7 @@ publishing {
         // Publish to Artipie gradle repository
         maven {
             name = 'artipie'
-            url = 'http://localhost:8081/artifactory/gradle'
+            url = 'http://localhost:8081/test_prefix/gradle'
             allowInsecureProtocol = true
             credentials {
                 username = 'ayd'

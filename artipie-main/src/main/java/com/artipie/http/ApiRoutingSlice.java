@@ -90,7 +90,7 @@ public final class ApiRoutingSlice implements Slice {
         final Matcher matcher = PTN_API.matcher(path);
         
         if (matcher.matches()) {
-            final String prefix = matcher.group(1);    // e.g., "/artifactory" or null
+            final String prefix = matcher.group(1);    // e.g., "/test_prefix" or null
             final String apiPath = matcher.group(2);   // Everything after /api/
             
             // Split the path into segments

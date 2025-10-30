@@ -256,56 +256,71 @@ public class RepositorySlices {
             switch (cfg.type()) {
             case "file":
                 slice = trimPathSlice(
-                    new FilesSlice(
-                        cfg.storage(),
-                        securityPolicy(),
-                        authentication(),
-                        tokens.auth(),
-                        cfg.name(),
-                        artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new FilesSlice(
+                            cfg.storage(),
+                            securityPolicy(),
+                            authentication(),
+                            tokens.auth(),
+                            cfg.name(),
+                            artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "file-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
-                slice = trimPathSlice(
-                    new TimeoutSlice(
-                        new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
-                        settings.httpClientSettings().proxyTimeout()
-                    )
+                final Slice fileProxySlice = new TimeoutSlice(
+                    new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
+                    settings.httpClientSettings().proxyTimeout()
                 );
+                // Browsing disabled for proxy repos - files are fetched on-demand from upstream
+                slice = trimPathSlice(fileProxySlice);
                 break;
             case "npm":
                 slice = trimPathSlice(
-                    new NpmSlice(
-                        cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new NpmSlice(
+                            cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "gem":
                 slice = trimPathSlice(
-                    new GemSlice(
-                        cfg.storage(),
-                        securityPolicy(),
-                        authentication(),
-                        tokens.auth(),
-                        cfg.name(),
-                        artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new GemSlice(
+                            cfg.storage(),
+                            securityPolicy(),
+                            authentication(),
+                            tokens.auth(),
+                            cfg.name(),
+                            artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "helm":
                 slice = trimPathSlice(
-                    new HelmSlice(
-                        cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new HelmSlice(
+                            cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "rpm":
                 slice = trimPathSlice(
-                    new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty())
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
+                            tokens.auth(), new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty()),
+                        cfg.storage()
+                    )
                 );
                 break;
             case "php":
@@ -326,16 +341,19 @@ public class RepositorySlices {
                 }
                 
                 slice = trimPathSlice(
-                    new PathPrefixStripSlice(
-                        new PhpComposer(
-                            new AstoRepository(
-                                cfg.storage(),
-                                Optional.of(baseUrl),
-                                Optional.of(cfg.name())
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new PathPrefixStripSlice(
+                            new PhpComposer(
+                                new AstoRepository(
+                                    cfg.storage(),
+                                    Optional.of(baseUrl),
+                                    Optional.of(cfg.name())
+                                ),
+                                securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                             ),
-                            securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                            "direct-dists"
                         ),
-                        "direct-dists"
+                        cfg.storage()
                     )
                 );
                 break;
@@ -359,79 +377,92 @@ public class RepositorySlices {
                 break;
             case "nuget":
                 slice = trimPathSlice(
-                    new NuGet(
-                        cfg.url(), new com.artipie.nuget.AstoRepository(cfg.storage()),
-                        securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new NuGet(
+                            cfg.url(), new com.artipie.nuget.AstoRepository(cfg.storage()),
+                            securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "gradle":
                 slice = trimPathSlice(
-                    new GradleSlice(cfg.storage(), securityPolicy(),
-                        authentication(), cfg.name(), artifactEvents())
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new GradleSlice(cfg.storage(), securityPolicy(),
+                            authentication(), cfg.name(), artifactEvents()),
+                        cfg.storage()
+                    )
                 );
                 break;
             case "gradle-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
-                slice = trimPathSlice(
-                    new CombinedAuthzSliceWrap(
-                        new TimeoutSlice(
-                            new GradleProxy(
-                                clientSlices,
-                                cfg,
-                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                this.cooldown
-                            ).slice(),
-                            settings.httpClientSettings().proxyTimeout()
-                        ),
-                        authentication(),
-                        tokens.auth(),
-                        new OperationControl(
-                            securityPolicy(),
-                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
-                        )
+                final Slice gradleProxySlice = new CombinedAuthzSliceWrap(
+                    new TimeoutSlice(
+                        new GradleProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
+                        ).slice(),
+                        settings.httpClientSettings().proxyTimeout()
+                    ),
+                    authentication(),
+                    tokens.auth(),
+                    new OperationControl(
+                        securityPolicy(),
+                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
                     )
                 );
+                // Browsing disabled for proxy repos - files are fetched on-demand from upstream
+                slice = trimPathSlice(gradleProxySlice);
                 break;
             case "maven":
                 slice = trimPathSlice(
-                    new MavenSlice(cfg.storage(), securityPolicy(),
-                        authentication(), tokens.auth(), cfg.name(), artifactEvents())
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new MavenSlice(cfg.storage(), securityPolicy(),
+                            authentication(), tokens.auth(), cfg.name(), artifactEvents()),
+                        cfg.storage()
+                    )
                 );
                 break;
             case "maven-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
-                slice = trimPathSlice(
-                    new CombinedAuthzSliceWrap(
-                        new TimeoutSlice(
-                            new MavenProxy(
-                                clientSlices,
-                                cfg,
-                                settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                                this.cooldown
-                            ),
-                            settings.httpClientSettings().proxyTimeout()
+                final Slice mavenProxySlice = new CombinedAuthzSliceWrap(
+                    new TimeoutSlice(
+                        new MavenProxy(
+                            clientSlices,
+                            cfg,
+                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
+                            this.cooldown
                         ),
-                        authentication(),
-                        tokens.auth(),
-                        new OperationControl(
-                            securityPolicy(),
-                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
-                        )
+                        settings.httpClientSettings().proxyTimeout()
+                    ),
+                    authentication(),
+                    tokens.auth(),
+                    new OperationControl(
+                        securityPolicy(),
+                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
                     )
                 );
+                // Browsing disabled for proxy repos - files are fetched on-demand from upstream
+                // Directory structure is not meaningful for proxies
+                slice = trimPathSlice(mavenProxySlice);
                 break;
             case "go":
                 slice = trimPathSlice(
-                    new GoSlice(
-                        cfg.storage(),
-                        securityPolicy(),
-                        authentication(),
-                        tokens.auth(),
-                        cfg.name(),
-                        artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new GoSlice(
+                            cfg.storage(),
+                            securityPolicy(),
+                            authentication(),
+                            tokens.auth(),
+                            cfg.name(),
+                            artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
@@ -490,12 +521,13 @@ public class RepositorySlices {
                         ),
                         npmProxySlice
                     ),
-                    // Block login/adduser/whoami - proxy is read-only
+                    // Block login/adduser/whoami/auth - proxy is read-only
                     new com.artipie.http.rt.RtRulePath(
                         new com.artipie.http.rt.RtRule.Any(
                             new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
                             new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*"),
+                            new com.artipie.http.rt.RtRule.ByPath(".*/auth(/.*)?")
                         ),
                         new com.artipie.http.slice.SliceSimple(
                             com.artipie.http.ResponseBuilder.forbidden()
@@ -520,7 +552,7 @@ public class RepositorySlices {
                 break;
             case "npm-group":
                 final Slice npmGroupSlice = new GroupSlice(this::slice, cfg.name(), cfg.members(), port);
-                // npm-group: audit anonymous, all other operations require auth
+                // npm-group: audit anonymous, user management blocked, all other operations require auth
                 slice = trimPathSlice(
                     new com.artipie.http.rt.SliceRoute(
                         // Audit - anonymous
@@ -530,6 +562,20 @@ public class RepositorySlices {
                                 new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
                             ),
                             npmGroupSlice
+                        ),
+                        // Block login/adduser/whoami/auth - group is read-only
+                        new com.artipie.http.rt.RtRulePath(
+                            new com.artipie.http.rt.RtRule.Any(
+                                new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                                new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                                new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*"),
+                                new com.artipie.http.rt.RtRule.ByPath(".*/auth(/.*)?")
+                            ),
+                            new com.artipie.http.slice.SliceSimple(
+                                com.artipie.http.ResponseBuilder.forbidden()
+                                    .textBody("User management not supported on group. Use local npm repository.")
+                                    .build()
+                            )
                         ),
                         // All other operations - require JWT
                         new com.artipie.http.rt.RtRulePath(
@@ -640,29 +686,41 @@ public class RepositorySlices {
                 break;
             case "deb":
                 slice = trimPathSlice(
-                    new DebianSlice(
-                        cfg.storage(), securityPolicy(), authentication(),
-                        new Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
-                        artifactEvents()
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new DebianSlice(
+                            cfg.storage(), securityPolicy(), authentication(),
+                            new com.artipie.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
+                            artifactEvents()
+                        ),
+                        cfg.storage()
                     )
                 );
                 break;
             case "conda":
-                slice = new CondaSlice(
-                    cfg.storage(), securityPolicy(), authentication(),
-                    tokens, cfg.url().toString(), cfg.name(), artifactEvents()
+                slice = new com.artipie.http.slice.BrowsableSlice(
+                    new CondaSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        cfg.url().toString(), cfg.name(), artifactEvents()
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "conan":
-                slice = new ConanSlice(
-                    cfg.storage(), securityPolicy(), authentication(), tokens,
-                    new ItemTokenizer(Vertx.vertx()), cfg.name()
+                slice = new com.artipie.http.slice.BrowsableSlice(
+                    new ConanSlice(
+                        cfg.storage(), securityPolicy(), authentication(), tokens,
+                        new ItemTokenizer(Vertx.vertx()), cfg.name()
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "hexpm":
                 slice = trimPathSlice(
-                    new HexSlice(cfg.storage(), securityPolicy(), authentication(),
-                        artifactEvents(), cfg.name())
+                    new com.artipie.http.slice.BrowsableSlice(
+                        new HexSlice(cfg.storage(), securityPolicy(), authentication(),
+                            artifactEvents(), cfg.name()),
+                        cfg.storage()
+                    )
                 );
                 break;
             case "pypi":

@@ -74,6 +74,14 @@ public final class MicrometerStorage implements Storage {
     }
 
     @Override
+    public CompletableFuture<com.artipie.asto.ListResult> list(final Key prefix, final String delimiter) {
+        final Timer.Sample timer = Timer.start(this.registry);
+        return this.origin.list(prefix, delimiter).handle(
+            (res, err) -> this.handleCompletion("list.hierarchical", timer, res, err)
+        ).thenCompose(Function.identity());
+    }
+
+    @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
         final Timer.Sample timer = Timer.start(this.registry);
         final String method = "save";

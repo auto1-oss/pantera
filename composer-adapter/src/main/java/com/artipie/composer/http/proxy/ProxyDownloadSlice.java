@@ -211,7 +211,8 @@ public final class ProxyDownloadSlice implements Slice {
             final Headers out = buildUpstreamHeaders(headers);
 
             // Fetch from original URL using chosen slice
-            Logger.debug(this, "Proxying to %s%s with headers: %s", baseOf(ouri), pathWithQuery, out.asString());
+            // Note: Headers are already cleaned by buildUpstreamHeaders
+            Logger.debug(this, "Proxying to %s%s", baseOf(ouri), pathWithQuery);
             return target.response(newLine, out, Content.EMPTY).thenApply(response -> {
                 if (response.status().success()) {
                     Logger.info(this, "Successfully downloaded %s:%s", packageName, version);

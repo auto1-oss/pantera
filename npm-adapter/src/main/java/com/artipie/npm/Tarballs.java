@@ -98,7 +98,7 @@ public final class Tarballs {
             }
             
             // Extract package-relative path using TgzRelativePath
-            // This handles paths like /artifactory/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz
+            // This handles paths like /test_prefix/api/npm/@scope/pkg/-/@scope/pkg-1.0.0.tgz
             // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
             try {
                 tarballPath = new TgzRelativePath(tarballPath).relative();

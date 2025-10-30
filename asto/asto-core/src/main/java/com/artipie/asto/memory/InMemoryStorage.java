@@ -8,6 +8,7 @@ import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Concatenation;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.Meta;
 import com.artipie.asto.OneTimePublisher;
 import com.artipie.asto.Remaining;
@@ -17,9 +18,11 @@ import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -94,6 +97,61 @@ public final class InMemoryStorage implements Storage {
                     }
                 }
                 return keys;
+            }
+        );
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key root, final String delimiter) {
+        return CompletableFuture.supplyAsync(
+            () -> {
+                String prefix = root.string();
+                // Ensure prefix ends with delimiter if not empty and not root
+                if (!prefix.isEmpty() && !prefix.endsWith(delimiter)) {
+                    prefix = prefix + delimiter;
+                }
+                
+                final Collection<Key> files = new ArrayList<>();
+                final Collection<Key> directories = new LinkedHashSet<>();
+                
+                // Thread-safe iteration over concurrent map
+                for (final String keyStr : this.data.navigableKeySet().tailSet(prefix)) {
+                    if (!keyStr.startsWith(prefix)) {
+                        break; // No more keys with this prefix
+                    }
+                    
+                    // Skip the prefix itself if it's an exact match
+                    if (keyStr.equals(prefix)) {
+                        continue;
+                    }
+                    
+                    // Get the part after the prefix
+                    final String relative;
+                    if (prefix.isEmpty()) {
+                        relative = keyStr;
+                    } else {
+                        relative = keyStr.substring(prefix.length());
+                    }
+                    
+                    // Find delimiter in the relative path
+                    final int delimIdx = relative.indexOf(delimiter);
+                    
+                    if (delimIdx < 0) {
+                        // No delimiter found - this is a file at this level
+                        files.add(new Key.From(keyStr));
+                    } else {
+                        // Delimiter found - extract directory prefix
+                        final String dirName = relative.substring(0, delimIdx);
+                        // Ensure directory key ends with delimiter
+                        String dirPrefix = prefix + dirName;
+                        if (!dirPrefix.endsWith(delimiter)) {
+                            dirPrefix = dirPrefix + delimiter;
+                        }
+                        directories.add(new Key.From(dirPrefix));
+                    }
+                }
+                
+                return new ListResult.Simple(files, new ArrayList<>(directories));
             }
         );
     }

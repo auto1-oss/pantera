@@ -44,8 +44,8 @@ make install
 ### Basic Usage (Bearer Token)
 ```bash
 ./target/release/artipie-import-cli \
-  --url https://artipie.prod.services.auto1.team \
-  --export-dir /mnt/artifactory_migration/ \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export/ \
   --token YOUR_TOKEN \
   --concurrency 200 \
   --batch-size 1000 \
@@ -55,8 +55,8 @@ make install
 ### Basic Usage (Username/Password)
 ```bash
 ./target/release/artipie-import-cli \
-  --url https://artipie.prod.services.auto1.team \
-  --export-dir /mnt/artifactory_migration/ \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export/ \
   --username admin \
   --password YOUR_PASSWORD \
   --concurrency 200 \
@@ -190,8 +190,8 @@ Debian/apt-repo/pool/main/n/nginx/nginx_1.18.0-1_amd64.deb
 ```bash
 screen -S artipie-import
 ./target/release/artipie-import-cli \
-  --url https://artipie.prod.services.auto1.team \
-  --export-dir /mnt/artifactory_migration/ \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export/ \
   --token YOUR_TOKEN \
   --concurrency 200 \
   --batch-size 1000 \
@@ -204,8 +204,8 @@ screen -S artipie-import
 ### Run in Background (nohup)
 ```bash
 nohup ./target/release/artipie-import-cli \
-  --url https://artipie.prod.services.auto1.team \
-  --export-dir /mnt/artifactory_migration/ \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export/ \
   --token YOUR_TOKEN \
   --concurrency 200 \
   --batch-size 1000 \
@@ -223,8 +223,8 @@ If some uploads failed, you can retry only the failed ones:
 ```bash
 # After initial run completes with failures
 ./target/release/artipie-import-cli \
-  --url https://artipie.prod.services.auto1.team \
-  --export-dir /mnt/artifactory_migration/ \
+  --url https://artipie.example.com \
+  --export-dir /mnt/export/ \
   --username admin \
   --password password \
   --retry \

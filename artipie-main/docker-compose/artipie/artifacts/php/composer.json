@@ -16,7 +16,7 @@
     "repositories": [
         {
             "type": "composer",
-            "url": "http://localhost:8081/artifactory/php_group"
+            "url": "http://localhost:8081/test_prefix/php_group"
         },
       {
         "pakagist":  false

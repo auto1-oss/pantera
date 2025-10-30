@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import com.artipie.asto.ListResult;
 
 /**
  * Storage that logs performed operations with INFO level.
@@ -63,6 +64,20 @@ public class LoggingStorage implements Storage {
             );
         }
         return this.original.list(prefix);
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
+        if (LOGGER.isInfoEnabled()) {
+            return this.original.list(prefix, delimiter).thenApply(
+                result -> {
+                    LOGGER.info("List (hierarchical) '{}', delimiter='{}': files={}, dirs={}",
+                        prefix.string(), delimiter, result.files().size(), result.directories().size());
+                    return result;
+                }
+            );
+        }
+        return this.original.list(prefix, delimiter);
     }
 
     @Override

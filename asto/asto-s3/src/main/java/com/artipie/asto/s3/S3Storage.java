@@ -8,6 +8,7 @@ import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Content;
 import com.artipie.asto.FailedCompletionStage;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.ManagedStorage;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
@@ -34,7 +35,9 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.model.ListObjectsRequest;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -296,6 +299,35 @@ public final class S3Storage implements ManagedStorage {
                 .map(S3Object::key)
                 .map(Key.From::new)
                 .collect(Collectors.toList())
+        );
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
+        return this.client.listObjectsV2(
+            ListObjectsV2Request.builder()
+                .bucket(this.bucket)
+                .prefix(prefix.string())
+                .delimiter(delimiter)
+                .build()
+        ).thenApply(
+            response -> {
+                // Files at this level (objects without further delimiters)
+                final Collection<Key> files = response.contents()
+                    .stream()
+                    .map(S3Object::key)
+                    .map(Key.From::new)
+                    .collect(Collectors.toList());
+                
+                // Directories at this level (common prefixes)
+                final Collection<Key> directories = response.commonPrefixes()
+                    .stream()
+                    .map(CommonPrefix::prefix)
+                    .map(Key.From::new)
+                    .collect(Collectors.toList());
+                
+                return new ListResult.Simple(files, directories);
+            }
         );
     }
 

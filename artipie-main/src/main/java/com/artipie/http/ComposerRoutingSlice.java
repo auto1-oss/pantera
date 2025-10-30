@@ -20,7 +20,7 @@ public final class ComposerRoutingSlice implements Slice {
 
     /**
      * Composer API path pattern - matches /api/composer/{repo}/... or /composer/{repo}/...
-     * Also handles prefixes like /artifactory/api/composer/{repo}/...
+     * Also handles prefixes like /test_prefix/api/composer/{repo}/...
      */
     private static final Pattern PTN_API_COMPOSER = Pattern.compile(
         "^(/[^/]+)?/(?:api/)?composer/([^/]+)(/.*)?$"
@@ -47,7 +47,7 @@ public final class ComposerRoutingSlice implements Slice {
         final Matcher matcher = PTN_API_COMPOSER.matcher(path);
         
         if (matcher.matches()) {
-            final String prefix = matcher.group(1);  // e.g., "/artifactory" or null
+            final String prefix = matcher.group(1);  // e.g., "/test_prefix" or null
             final String repo = matcher.group(2);     // e.g., "php_group"
             final String rest = matcher.group(3);     // e.g., "/packages.json" or null
             final String newPath = (prefix != null ? prefix : "") + "/" + repo + (rest != null ? rest : "");
