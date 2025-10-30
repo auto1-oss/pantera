@@ -9,7 +9,6 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.DigestVerification;
 import com.artipie.asto.cache.Remote;
 import com.artipie.asto.ext.Digests;
 import com.artipie.cooldown.CooldownRequest;
@@ -21,50 +20,38 @@ import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.cache.CachedArtifactMetadataStore;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.scheduling.ProxyArtifactEvent;
-import com.jcabi.log.Logger;
 import io.reactivex.Flowable;
-import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 
+import java.net.ConnectException;
+import java.util.concurrent.TimeoutException;
+
 import java.nio.ByteBuffer;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Queue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.StreamSupport;
+import java.util.regex.Matcher;
 
 /**
  * Maven proxy slice with cache support.
  */
 final class CachedProxySlice implements Slice {
-
-    /**
-     * Checksum header pattern.
-     */
-    private static final Pattern CHECKSUM_PATTERN =
-        Pattern.compile("x-checksum-(sha1|sha256|sha512|md5)", Pattern.CASE_INSENSITIVE);
-
-    /**
-     * Translation of checksum headers to digest algorithms.
-     */
-    private static final Map<String, String> DIGEST_NAMES = Map.of(
-        "sha1", "SHA-1",
-        "sha256", "SHA-256",
-        "sha512", "SHA-512",
-        "md5", "MD5"
-    );
 
     /**
      * Origin slice.
@@ -102,9 +89,19 @@ final class CachedProxySlice implements Slice {
     private final String rtype;
 
     /**
-     * Storage for persisting checksums.
+     * Metadata store for cached responses.
      */
-    private final Optional<Storage> storage;
+    private final Optional<CachedArtifactMetadataStore> metadata;
+
+    /**
+     * True when cache is backed by persistent storage.
+     */
+    private final boolean storageBacked;
+
+    /**
+     * In-flight requests map for deduplication (prevents thundering herd).
+     */
+    private final Map<Key, CompletableFuture<Response>> inFlight = new ConcurrentHashMap<>();
 
     /**
      * Wraps origin slice with caching layer.
@@ -128,7 +125,8 @@ final class CachedProxySlice implements Slice {
         this.rtype = rtype;
         this.cooldown = cooldown;
         this.inspector = inspector;
-        this.storage = storage;
+        this.metadata = storage.map(CachedArtifactMetadataStore::new);
+        this.storageBacked = this.metadata.isPresent() && !Objects.equals(this.cache, Cache.NOP);
     }
 
     /**
@@ -181,86 +179,207 @@ final class CachedProxySlice implements Slice {
         return this.fetchThroughCache(line, key, headers);
     }
 
+    private CompletableFuture<Response> fetchDirect(
+        final RequestLine line,
+        final Key key,
+        final String owner
+    ) {
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .handle((resp, error) -> {
+                // Track upstream health
+                if (error != null) {
+                    this.trackUpstreamFailure(error);
+                    throw new java.util.concurrent.CompletionException(error);
+                }
+                if (!resp.status().success()) {
+                    if (resp.status().code() >= 500) {
+                        this.trackUpstreamFailure(new RuntimeException("HTTP " + resp.status().code()));
+                    } else {
+                        this.recordMetric(() -> 
+                            com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
+                        );
+                    }
+                    return ResponseBuilder.notFound().build();
+                }
+                this.recordMetric(() -> 
+                    com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
+                );
+                this.enqueueFromHeaders(resp.headers(), key, owner);
+                // Track download
+                this.recordMetric(() -> 
+                    com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                );
+                return ResponseBuilder.ok()
+                    .headers(resp.headers())
+                    .body(resp.body())
+                    .build();
+            });
+    }
+
+    private CompletableFuture<Response> fetchAndCache(
+        final RequestLine line,
+        final Key key,
+        final String owner,
+        final CachedArtifactMetadataStore store
+    ) {
+        // Request deduplication: if same key is already being fetched, reuse that future
+        return this.inFlight.computeIfAbsent(key, k ->
+            this.client.response(line, Headers.EMPTY, Content.EMPTY)
+                .handle((resp, error) -> {
+                    // Track upstream health
+                    if (error != null) {
+                        this.trackUpstreamFailure(error);
+                        throw new java.util.concurrent.CompletionException(error);
+                    }
+                    if (!resp.status().success()) {
+                        if (resp.status().code() >= 500) {
+                            this.trackUpstreamFailure(new RuntimeException("HTTP " + resp.status().code()));
+                        } else {
+                            this.recordMetric(() -> 
+                                com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
+                            );
+                        }
+                        return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                    }
+                    this.recordMetric(() -> 
+                        com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
+                    );
+                    final DigestingContent digesting = new DigestingContent(resp.body());
+                    this.enqueueFromHeaders(resp.headers(), key, owner);
+                    // Track cache miss (fetching from upstream)
+                    this.recordMetric(() -> 
+                        com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven")
+                    );
+                    // Track download
+                    this.recordMetric(() -> 
+                        com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                    );
+                    return this.cache.load(
+                        key,
+                        () -> CompletableFuture.completedFuture(Optional.of(digesting.content())),
+                        CacheControl.Standard.ALWAYS
+                    ).thenCompose(
+                        loaded -> {
+                            if (loaded.isEmpty()) {
+                                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                            }
+                            return digesting.result()
+                                .thenCompose(digests -> {
+                                    // Track bandwidth (download from upstream)
+                                    final long size = digests.size();
+                                    this.recordMetric(() -> 
+                                        com.artipie.metrics.ArtipieMetrics.instance().bandwidth("maven", "download", size)
+                                    );
+                                    return store.save(key, resp.headers(), digests);
+                                })
+                                .thenApply(headers -> ResponseBuilder.ok()
+                                    .headers(headers)
+                                    .body(loaded.get())
+                                    .build()
+                                );
+                        }
+                    );
+                })
+                .thenCompose(java.util.function.Function.identity())
+                .whenComplete((result, error) -> this.inFlight.remove(k))
+        );
+    }
+
+    private static boolean isDirectory(final String path) {
+        if (path.endsWith("/")) {
+            return true;
+        }
+        final int slash = path.lastIndexOf('/');
+        final String segment = slash >= 0 ? path.substring(slash + 1) : path;
+        return !segment.contains(".");
+    }
+
+    /**
+     * Check if path is a checksum file (generated as sidecar, not fetched from upstream).
+     * @param path Request path
+     * @return True if checksum file
+     */
+    private static boolean isChecksumFile(final String path) {
+        return path.endsWith(".md5") || path.endsWith(".sha256")
+            || path.endsWith(".asc") || path.endsWith(".sig");
+    }
+
+    /**
+     * Serve checksum file from cache if present, otherwise fetch from upstream.
+     * Checksums are generated as sidecars when caching artifacts, so we check cache first.
+     * @param line Request line
+     * @param key Checksum file key
+     * @param owner Owner
+     * @return Response future
+     */
+    private CompletableFuture<Response> serveChecksumFromStorage(
+        final RequestLine line,
+        final Key key,
+        final String owner
+    ) {
+        // Try loading from cache first (checksums are stored as sidecars)
+        return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    // Checksum exists in cache - serve it directly (fast path)
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "text/plain")
+                            .body(cached.get())
+                            .build()
+                    );
+                } else {
+                    // Checksum not in cache - try fetching from upstream
+                    return this.fetchDirect(line, key, owner);
+                }
+            }).toCompletableFuture();
+    }
+
     private CompletableFuture<Response> fetchThroughCache(
         final RequestLine line,
         final Key key,
         final Headers request
     ) {
-        // Check if this is a maven-metadata.xml request
         final String path = key.string();
-        final boolean isMetadata = path.contains("maven-metadata.xml");
+        final String owner = new Login(request).getValue();
         
-        // For metadata files, bypass cache and fetch directly from upstream
-        if (isMetadata) {
-            final String owner = new Login(request).getValue();
-            Logger.info(this, "Bypassing cache for maven-metadata.xml: %s", path);
-            return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-                .thenApply(resp -> {
-                    if (resp.status().success()) {
-                        this.enqueueFromHeaders(resp.headers(), key, owner);
-                        return ResponseBuilder.ok()
-                            .headers(resp.headers())
-                            .body(resp.body())
-                            .build();
-                    }
-                    return ResponseBuilder.notFound().build();
-                });
+        // Checksum files are generated as sidecars - serve from storage if present, else try upstream
+        if (isChecksumFile(path) && this.storageBacked) {
+            return this.serveChecksumFromStorage(line, key, owner);
         }
         
-        final AtomicReference<Headers> rshdr = new AtomicReference<>(Headers.EMPTY);
-        final String owner = new Login(request).getValue();
-        return new RepoHead(this.client)
-            .head(line.uri().getPath()).thenCompose(
-                head -> this.cache.load(
-                    key,
-                    new Remote.WithErrorHandling(
-                        () -> {
-                            final CompletableFuture<Optional<? extends Content>> promise =
-                                new CompletableFuture<>();
-                            this.client.response(line, Headers.EMPTY, Content.EMPTY)
-                                .thenApply(resp -> {
-                                    final CompletableFuture<Void> term = new CompletableFuture<>();
-                                    if (resp.status().success()) {
-                                        final Flowable<ByteBuffer> res =
-                                            Flowable.fromPublisher(resp.body())
-                                                .doOnError(term::completeExceptionally)
-                                                .doOnTerminate(() -> term.complete(null));
-                                        this.enqueueFromHeaders(resp.headers(), key, owner);
-                                        promise.complete(Optional.of(new Content.From(res)));
-                                        // Download and cache checksum files asynchronously
-                                        this.cacheChecksumFiles(line, key);
-                                    } else {
-                                        promise.complete(Optional.empty());
-                                    }
-                                    rshdr.set(resp.headers());
-                                    return term;
-                                });
-                            return promise;
+        // Skip caching for metadata and directories
+        if (path.contains("maven-metadata.xml") || !this.storageBacked || isDirectory(path)) {
+            return this.fetchDirect(line, key, owner);
+        }
+        final CachedArtifactMetadataStore store = this.metadata.orElseThrow();
+        return this.cache.load(
+            key,
+            Remote.EMPTY,
+            CacheControl.Standard.ALWAYS
+        ).thenCompose(
+            cached -> {
+                if (cached.isPresent()) {
+                    // Cache hit - track metrics
+                    this.recordMetric(() -> 
+                        com.artipie.metrics.ArtipieMetrics.instance().cacheHit("maven")
+                    );
+                    this.recordMetric(() -> 
+                        com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                    );
+                    // Fast path: serve cached content immediately with async metadata loading
+                    return store.load(key).thenApply(
+                        meta -> {
+                            final ResponseBuilder builder = ResponseBuilder.ok().body(cached.get());
+                            meta.ifPresent(metadata -> builder.headers(metadata.headers()));
+                            return builder.build();
                         }
-                    ),
-                    new CacheControl.All(
-                        StreamSupport.stream(
-                                head.orElse(Headers.EMPTY).spliterator(),
-                                false
-                            ).map(Header::new)
-                            .map(CachedProxySlice::checksumControl)
-                            .toList()
-                    )
-                ).handle(
-                    (content, throwable) -> {
-                        if (throwable == null && content.isPresent()) {
-                            return ResponseBuilder.ok()
-                                .headers(rshdr.get())
-                                .body(content.get())
-                                .build();
-                        }
-                        if (throwable != null) {
-                            Logger.error(this, throwable.getMessage());
-                        }
-                        return ResponseBuilder.notFound().build();
-                    }
-                )
-            ).toCompletableFuture();
+                    );
+                }
+                // Cache miss: fetch from upstream
+                return this.fetchAndCache(line, key, owner, store);
+            }
+        ).toCompletableFuture();
     }
 
     private Optional<CooldownRequest> cooldownRequest(final Headers headers, final Key key) {
@@ -320,30 +439,63 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Checksum cache control verification.
-     * @param header Checksum header
-     * @return Cache control with digest
+     * Content wrapper that calculates digests while streaming data.
      */
-    private static CacheControl checksumControl(final Header header) {
-        final Matcher matcher = CachedProxySlice.CHECKSUM_PATTERN.matcher(header.getKey());
-        final CacheControl res;
-        if (matcher.matches()) {
-            try {
-                res = new DigestVerification(
-                    new Digests.FromString(
-                        CachedProxySlice.DIGEST_NAMES.get(
-                            matcher.group(1).toLowerCase(Locale.US)
-                        )
-                    ).get(),
-                    Hex.decodeHex(header.getValue().toCharArray())
-                );
-            } catch (final DecoderException err) {
-                throw new IllegalStateException("Invalid digest hex", err);
-            }
-        } else {
-            res = CacheControl.Standard.ALWAYS;
+    private static final class DigestingContent {
+
+        /**
+         * Digests promise.
+         */
+        private final CompletableFuture<CachedArtifactMetadataStore.ComputedDigests> done;
+
+        /**
+         * Wrapped content.
+         */
+        private final Content content;
+
+        DigestingContent(final org.reactivestreams.Publisher<ByteBuffer> origin) {
+            this.done = new CompletableFuture<>();
+            this.content = new Content.From(digestingFlow(origin, this.done));
         }
-        return res;
+
+        Content content() {
+            return this.content;
+        }
+
+        CompletableFuture<CachedArtifactMetadataStore.ComputedDigests> result() {
+            return this.done;
+        }
+
+        private static Flowable<ByteBuffer> digestingFlow(
+            final org.reactivestreams.Publisher<ByteBuffer> origin,
+            final CompletableFuture<CachedArtifactMetadataStore.ComputedDigests> done
+        ) {
+            final MessageDigest sha256 = Digests.SHA256.get();
+            final MessageDigest md5 = Digests.MD5.get();
+            final AtomicLong size = new AtomicLong(0L);
+            return Flowable.fromPublisher(origin)
+                .doOnNext(buffer -> {
+                    // Update digests directly from ByteBuffer to avoid allocation
+                    final ByteBuffer sha256Buf = buffer.asReadOnlyBuffer();
+                    final ByteBuffer md5Buf = buffer.asReadOnlyBuffer();
+                    sha256.update(sha256Buf);
+                    md5.update(md5Buf);
+                    size.addAndGet(buffer.remaining());
+                })
+                .doOnError(done::completeExceptionally)
+                .doOnComplete(() -> done.complete(buildDigests(size.get(), sha256, md5)));
+        }
+
+        private static CachedArtifactMetadataStore.ComputedDigests buildDigests(
+            final long size,
+            final MessageDigest sha256,
+            final MessageDigest md5
+        ) {
+            final Map<String, String> map = new HashMap<>(2);
+            map.put("sha256", Hex.encodeHexString(sha256.digest()));
+            map.put("md5", Hex.encodeHexString(md5.digest()));
+            return new CachedArtifactMetadataStore.ComputedDigests(size, map);
+        }
     }
 
     /**
@@ -367,66 +519,38 @@ final class CachedProxySlice implements Slice {
     }
 
     /**
-     * Download and save checksum files (.md5, .sha1, .sha256, .sha512) for an artifact.
-     * Saves to storage for persistence, and also to cache if available for fast access.
-     * This runs asynchronously and doesn't block the main response.
-     * @param line Original request line
-     * @param artifactKey Key of the main artifact
+     * Track upstream failure with error classification.
+     * @param error The error that occurred
      */
-    private void cacheChecksumFiles(final RequestLine line, final Key artifactKey) {
-        // Only download checksums if storage is available
-        if (this.storage.isEmpty()) {
-            return;
+    private void trackUpstreamFailure(final Throwable error) {
+        final String errorType;
+        if (error instanceof TimeoutException) {
+            errorType = "timeout";
+        } else if (error instanceof ConnectException) {
+            errorType = "connection_refused";
+        } else if (error.getMessage() != null && error.getMessage().contains("HTTP 5")) {
+            errorType = "server_error";
+        } else {
+            errorType = "unknown";
         }
-        
-        final String artifactPath = line.uri().getPath();
-        final String[] checksumExtensions = {".md5", ".sha1", ".sha256", ".sha512"};
-        
-        for (final String ext : checksumExtensions) {
-            final String checksumPath = artifactPath + ext;
-            final Key checksumKey = new Key.From(artifactKey.string() + ext);
-            final RequestLine checksumLine = new RequestLine(
-                line.method().value(),
-                checksumPath,
-                line.version()
-            );
-            
-            // Download checksum from upstream
-            this.client.response(checksumLine, Headers.EMPTY, Content.EMPTY)
-                .thenCompose(resp -> {
-                    if (resp.status().success()) {
-                        // Use cache.load() to save to BOTH storage and cache in one operation
-                        // This is more efficient than saving separately
-                        return this.cache.load(
-                            checksumKey,
-                            () -> CompletableFuture.completedFuture(Optional.of(resp.body())),
-                            CacheControl.Standard.ALWAYS
-                        ).thenApply(content -> {
-                            Logger.debug(
-                                this,
-                                "Saved checksum to storage and cache: %s",
-                                checksumPath
-                            );
-                            return null;
-                        });
-                    } else {
-                        Logger.debug(
-                            this,
-                            "Checksum file not available upstream: %s",
-                            checksumPath
-                        );
-                        return CompletableFuture.completedFuture(null);
-                    }
-                })
-                .exceptionally(err -> {
-                    Logger.debug(
-                        this,
-                        "Failed to save checksum %s: %s",
-                        checksumPath,
-                        err.getMessage()
-                    );
-                    return null;
-                });
+        this.recordMetric(() -> 
+            com.artipie.metrics.ArtipieMetrics.instance().upstreamFailure(this.rname, errorType)
+        );
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     * @param metric Metric recording action
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
         }
     }
+
 }

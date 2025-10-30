@@ -26,21 +26,21 @@ class ApiRoutingSliceTest {
         // Composer (php) API routes
         "/api/composer/php_repo,/php_repo",
         "/api/composer/php_repo/packages.json,/php_repo/packages.json",
-        "/artifactory/api/composer/php_repo,/artifactory/php_repo",
-        "/artifactory/api/composer/php_repo/p2/vendor/pkg.json,/artifactory/php_repo/p2/vendor/pkg.json",
+        "/test_prefix/api/composer/php_repo,/test_prefix/php_repo",
+        "/test_prefix/api/composer/php_repo/p2/vendor/pkg.json,/test_prefix/php_repo/p2/vendor/pkg.json",
         // Generic API routes with repo_type
         "/api/npm/npm_repo,/npm_repo",
         "/api/pypi/pypi_repo/simple,/pypi_repo/simple",
-        "/artifactory/api/docker/docker_repo,/artifactory/docker_repo",
+        "/test_prefix/api/docker/docker_repo,/test_prefix/docker_repo",
         "/prefix/api/helm/helm_repo/index.yaml,/prefix/helm_repo/index.yaml",
         // Generic API routes without repo_type
         "/api/my_repo/some/path,/my_repo/some/path",
-        "/artifactory/api/maven/path/to/artifact,/artifactory/maven/path/to/artifact",
+        "/test_prefix/api/maven/path/to/artifact,/test_prefix/maven/path/to/artifact",
         // Direct routes (should pass through unchanged)
         "/my_repo,/my_repo",
         "/my_repo/path,/my_repo/path",
-        "/artifactory/my_repo,/artifactory/my_repo",
-        "/artifactory/my_repo/path,/artifactory/my_repo/path"
+        "/test_prefix/my_repo,/test_prefix/my_repo",
+        "/test_prefix/my_repo/path,/test_prefix/my_repo/path"
     })
     void shouldRewriteApiPaths(final String input, final String expected) {
         final AtomicReference<String> captured = new AtomicReference<>();

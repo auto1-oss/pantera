@@ -25,7 +25,7 @@ final class RelativePathTest {
      * URL.
      */
     private static final String URL =
-        "http://localhost:8080/artifactory/api/npm/npm-test-local-1/%s";
+        "http://localhost:8080/test_prefix/api/npm/npm-test-local-1/%s";
 
     @ParameterizedTest
     @ValueSource(strings = {
@@ -125,7 +125,7 @@ final class RelativePathTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-        "http://localhost:8081/artifactory/api/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz",
+        "http://localhost:8081/test_prefix/api/npm/@wkda/npm-proxy/-/@wkda/npm-proxy-1.4.0.tgz",
         "http://localhost:8081/npm/@scope/package/-/@scope/package-1.0.0.tgz",
         "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
         "http://example.com:8080/npm/test/-/test-1.0.0.tgz"

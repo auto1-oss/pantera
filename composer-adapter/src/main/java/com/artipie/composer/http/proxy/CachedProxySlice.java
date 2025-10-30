@@ -6,6 +6,7 @@ package com.artipie.composer.http.proxy;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.Remote;
 import com.artipie.composer.JsonPackages;
@@ -306,7 +307,7 @@ final class CachedProxySlice implements Slice {
             );
             return this.cooldown.evaluate(req, this.inspector);
         } catch (Exception e) {
-            Logger.warn(this, "Failed to parse metadata for cooldown check: %s", e.getMessage());
+            Logger.warn(this, "Failed to parse metadata for cooldown check: %s", LogSanitizer.sanitizeMessage(e.getMessage()));
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
     }

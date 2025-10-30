@@ -187,7 +187,7 @@ public final class TgzRelativePath {
     /**
      * Try to extract a curl path without scope. Curl like
      *
-     * http://10.40.149.70:8080/artifactory/echo-test-npmrepo-Oze0nuvAiD/ssh2//-/ssh2-0.8.9.tgz
+     * http://10.40.149.70:8080/test_prefix/echo-test-npmrepo-Oze0nuvAiD/ssh2//-/ssh2-0.8.9.tgz
      *
      * should also be processed exactly as they are with this regex.
      * @param path Path to match against

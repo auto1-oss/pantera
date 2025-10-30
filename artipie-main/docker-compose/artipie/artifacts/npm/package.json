@@ -13,6 +13,6 @@
     "moment": "^2.29.4"
   },
   "publishConfig": {
-    "registry": "http://localhost:8081/artifactory/api/npm/npm"
+    "registry": "http://localhost:8081/test_prefix/api/npm/npm"
   }
 }

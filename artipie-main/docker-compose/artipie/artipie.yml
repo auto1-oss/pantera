@@ -48,4 +48,4 @@ meta:
       - storage # enables storage-related metrics
       - http # enables http requests/responses related metrics
   global_prefixes:
-    - artifactory
+    - test_prefix

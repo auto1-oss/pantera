@@ -1,6 +1,6 @@
 # API Routing Support
 
-Artipie now supports multiple URL patterns for accessing repositories, similar to Artifactory's API structure.
+Artipie now supports multiple URL patterns for accessing repositories.
 
 ## Supported URL Patterns
 
@@ -8,7 +8,7 @@ Artipie now supports multiple URL patterns for accessing repositories, similar t
 (Applies to: conan, conda, deb, docker, file, gem, go, helm, hexpm, npm, nuget, php, pypi)
 
 1. `/<repo_name>` - Direct access
-2. `/<global_prefix>/<repo_name>` - With global prefix (e.g., `/artifactory/my_repo`)
+2. `/<global_prefix>/<repo_name>` - With global prefix (e.g., `/test_prefix/my_repo`)
 3. `/api/<repo_name>` - API format
 4. `/<global_prefix>/api/<repo_name>` - API with prefix
 5. `/api/<repo_type>/<repo_name>` - API with repository type
@@ -49,11 +49,11 @@ All of these URLs access the same repository `my_php_repo`:
 
 ```
 GET /my_php_repo/packages.json
-GET /artifactory/my_php_repo/packages.json
+GET /test_prefix/my_php_repo/packages.json
 GET /api/my_php_repo/packages.json
-GET /artifactory/api/my_php_repo/packages.json
+GET /test_prefix/api/my_php_repo/packages.json
 GET /api/composer/my_php_repo/packages.json
-GET /artifactory/api/composer/my_php_repo/packages.json
+GET /test_prefix/api/composer/my_php_repo/packages.json
 ```
 
 ### NPM Repository
@@ -61,7 +61,7 @@ GET /artifactory/api/composer/my_php_repo/packages.json
 ```
 GET /my_npm_repo/express
 GET /api/npm/my_npm_repo/express
-GET /artifactory/api/npm/my_npm_repo/express
+GET /test_prefix/api/npm/my_npm_repo/express
 ```
 
 ### Maven Repository (Limited Support)

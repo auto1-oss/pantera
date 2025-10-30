@@ -6,7 +6,7 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
-    image: auto1-artipie:1.18.15
+    image: auto1-artipie:1.18.21
     container_name: artipie
     restart: unless-stopped
     environment:
@@ -17,12 +17,17 @@ services:
       - AWS_CONFIG_FILE=/home/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/.aws/credentials
       - AWS_SDK_LOAD_CONFIG=1
-      - AWS_PROFILE=shared-services-qa-devops
+      - AWS_PROFILE=profile_name
       - AWS_REGION=eu-west-1
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.18.15
+      - ARTIPIE_VERSION=1.18.21
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
+      - ELASTIC_APM_ENABLED=true
+      - ELASTIC_APM_ENVIRONMENT=dev-local
+      - ELASTIC_APM_SERVER_URL=https://apm.example.com:8200
+      - ELASTIC_APM_SERVICE_NAME=artipie-dev-local
+      - ELASTIC_APM_LOG_LEVEL=INFO
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml

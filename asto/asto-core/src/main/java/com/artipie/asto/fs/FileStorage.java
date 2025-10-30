@@ -8,6 +8,7 @@ import com.artipie.ArtipieException;
 import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.Meta;
 import com.artipie.asto.OneTimePublisher;
 import com.artipie.asto.Storage;
@@ -17,6 +18,7 @@ import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
 import com.jcabi.log.Logger;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -25,9 +27,11 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -120,6 +124,74 @@ public final class FileStorage implements Storage {
                     keys.size(), prefix.string(), this.dir, path, keys
                 );
                 return keys;
+            }
+        );
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
+        return this.keyPath(prefix).thenApplyAsync(
+            path -> {
+                if (!Files.exists(path)) {
+                    Logger.debug(
+                        this,
+                        "Path does not exist for prefix \"%s\": %s",
+                        prefix.string(), path
+                    );
+                    return ListResult.EMPTY;
+                }
+                
+                if (!Files.isDirectory(path)) {
+                    Logger.debug(
+                        this,
+                        "Path is not a directory for prefix \"%s\": %s",
+                        prefix.string(), path
+                    );
+                    return ListResult.EMPTY;
+                }
+                
+                final Collection<Key> files = new ArrayList<>();
+                final Collection<Key> directories = new LinkedHashSet<>();
+                final String separator = FileSystems.getDefault().getSeparator();
+                
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
+                    for (final Path entry : stream) {
+                        final String fileName = entry.getFileName().toString();
+                        
+                        // Build the key relative to storage root
+                        final Key entryKey;
+                        if (Key.ROOT.equals(prefix) || prefix.string().isEmpty()) {
+                            entryKey = new Key.From(fileName.split(separator.replace("\\", "\\\\")));
+                        } else {
+                            final String[] prefixParts = prefix.string().split("/");
+                            final String[] nameParts = fileName.split(separator.replace("\\", "\\\\"));
+                            final String[] combined = new String[prefixParts.length + nameParts.length];
+                            System.arraycopy(prefixParts, 0, combined, 0, prefixParts.length);
+                            System.arraycopy(nameParts, 0, combined, prefixParts.length, nameParts.length);
+                            entryKey = new Key.From(combined);
+                        }
+                        
+                        if (Files.isDirectory(entry)) {
+                            // Add trailing delimiter to indicate directory
+                            final String dirKeyStr = entryKey.string().endsWith("/") 
+                                ? entryKey.string() 
+                                : entryKey.string() + "/";
+                            directories.add(new Key.From(dirKeyStr));
+                        } else if (Files.isRegularFile(entry)) {
+                            files.add(entryKey);
+                        }
+                    }
+                } catch (final IOException iex) {
+                    throw new ArtipieIOException(iex);
+                }
+                
+                Logger.debug(
+                    this,
+                    "Hierarchical list for prefix \"%s\": %d files, %d directories",
+                    prefix.string(), files.size(), directories.size()
+                );
+                
+                return new ListResult.Simple(files, new ArrayList<>(directories));
             }
         );
     }

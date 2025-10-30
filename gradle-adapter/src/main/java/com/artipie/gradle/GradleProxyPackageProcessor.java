@@ -5,6 +5,7 @@
 package com.artipie.gradle;
 
 import com.artipie.asto.Key;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.ext.KeyLastPart;
@@ -113,7 +114,7 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
                 .join();
             Logger.info(this, "Gradle batch processing complete");
         } catch (final RuntimeException err) {
-            Logger.error(this, "Gradle batch processing failed: %s", err.getMessage());
+            Logger.error(this, "Gradle batch processing failed: %s", LogSanitizer.sanitizeMessage(err.getMessage()));
         }
     }
 

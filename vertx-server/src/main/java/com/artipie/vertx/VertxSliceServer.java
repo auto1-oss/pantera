@@ -11,6 +11,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
@@ -241,8 +242,14 @@ public final class VertxSliceServer implements Closeable {
      * @return Completion of request serving.
      */
     private CompletionStage<Void> serve(final HttpServerRequest req) {
-        LOGGER.debug("Serving request: {} {}", req.method().name(), req.uri());
         final Headers requestHeaders = Headers.from(req.headers());
+        
+        // Extract or generate trace ID for request correlation
+        final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
+        com.artipie.http.trace.TraceContext.set(traceId);
+        
+        LOGGER.info("Serving request: {} {}", req.method().name(), LogSanitizer.sanitizeUrl(req.uri()));
+        
         final boolean isHead = "HEAD".equals(req.method().name());
         final CompletionStage<Response> response = withRequestTimeout(
             this.served.response(
@@ -258,19 +265,26 @@ public final class VertxSliceServer implements Closeable {
         return response.thenCombine(continueFuture, (resp, ignored) -> resp)
             .thenCompose(
                 resp -> {
+                    // Ensure trace context is set for response handling
+                    com.artipie.http.trace.TraceContext.set(traceId);
                     LOGGER.debug("Accepting response for: {} {}, status: {}", 
-                        req.method().name(), req.uri(), resp.status());
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), resp.status());
                     return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
                 }
             )
             .whenComplete((result, error) -> {
+                // Ensure trace context is set for completion logging
+                com.artipie.http.trace.TraceContext.set(traceId);
                 if (error != null) {
                     LOGGER.error("Request failed: {} {}, error: {}", 
-                        req.method().name(), req.uri(), error.getMessage());
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), 
+                        LogSanitizer.sanitizeMessage(error.getMessage()));
                 } else {
                     LOGGER.debug("Request completed successfully: {} {}", 
-                        req.method().name(), req.uri());
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()));
                 }
+                // Clean up trace context after request completes
+                com.artipie.http.trace.TraceContext.clear();
             });
     }
 

@@ -9,6 +9,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.http.rq.RequestLine;
 import com.jcabi.log.Logger;
 
@@ -51,12 +52,14 @@ public final class LoggingSlice implements Slice {
         RequestLine line, Headers headers, Content body
     ) {
         final StringBuilder msg = new StringBuilder(">> ").append(line);
-        LoggingSlice.append(msg, headers);
+        // Sanitize headers to prevent credential leakage in logs
+        LoggingSlice.append(msg, LogSanitizer.sanitizeHeaders(headers));
         Logger.log(this.level, this.slice, msg.toString());
         return slice.response(line, headers, body)
             .thenApply(res -> {
                 final StringBuilder sb = new StringBuilder("<< ").append(res.status());
-                LoggingSlice.append(sb, res.headers());
+                // Sanitize response headers as well
+                LoggingSlice.append(sb, LogSanitizer.sanitizeHeaders(res.headers()));
                 Logger.log(LoggingSlice.this.level, LoggingSlice.this.slice, sb.toString());
                 return res;
             });

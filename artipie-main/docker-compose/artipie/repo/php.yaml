@@ -4,4 +4,4 @@ repo:
     type: fs
     path: /var/artipie/data
   settings:
-    url: http://localhost:8081/artifactory/api/composer/php
+    url: http://localhost:8081/test_prefix/api/composer/php

@@ -38,6 +38,7 @@ import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.micrometer.MicrometerMetricsOptions;
+import com.artipie.vertx.ApmInstrumentation;
 import io.vertx.micrometer.VertxPrometheusOptions;
 import io.vertx.micrometer.backends.BackendRegistries;
 import io.vertx.reactivex.core.Vertx;
@@ -259,6 +260,18 @@ public final class VertxMain {
      * @throws Exception If fails
      */
     public static void main(final String... args) throws Exception {
+        // Initialize Elastic APM FIRST (before any other code)
+        try {
+            final Object apm = Class.forName("com.artipie.vertx.ApmInstrumentation")
+                .getDeclaredConstructor()
+                .newInstance();
+            apm.getClass().getMethod("attach").invoke(apm);
+        } catch (ClassNotFoundException e) {
+            LOGGER.debug("APM instrumentation not available (optional dependency)");
+        } catch (Exception e) {
+            LOGGER.warn("Failed to initialize APM", e);
+        }
+        
         final Path config;
         final int port;
         final int defp = 80;
@@ -384,31 +397,36 @@ public final class VertxMain {
     private static Vertx vertx(final MetricsContext mctx) {
         final Vertx res;
         final Optional<Pair<String, Integer>> endpoint = mctx.endpointAndPort();
-        if (endpoint.isPresent()) {
-            res = Vertx.vertx(
-                new VertxOptions().setMetricsOptions(
-                    new MicrometerMetricsOptions()
-                        .setPrometheusOptions(
-                            new VertxPrometheusOptions().setEnabled(true)
-                                .setStartEmbeddedServer(true)
-                                .setEmbeddedServerOptions(
-                                    new HttpServerOptions().setPort(endpoint.get().getValue())
-                                ).setEmbeddedServerEndpoint(endpoint.get().getKey())
-                        ).setEnabled(true)
-                )
-            );
+        final MeterRegistry apm = ApmInstrumentation.registry();
+        if (apm != null || endpoint.isPresent()) {
+            final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions().setEnabled(true);
+            if (apm != null) {
+                micrometer.setMicrometerRegistry(apm).setJvmMetricsEnabled(true);
+            }
+            if (endpoint.isPresent()) {
+                micrometer.setPrometheusOptions(
+                    new VertxPrometheusOptions().setEnabled(true)
+                        .setStartEmbeddedServer(true)
+                        .setEmbeddedServerOptions(
+                            new HttpServerOptions().setPort(endpoint.get().getValue())
+                        ).setEmbeddedServerEndpoint(endpoint.get().getKey())
+                );
+            }
+            res = Vertx.vertx(new VertxOptions().setMetricsOptions(micrometer));
+            final MeterRegistry registry = apm != null ? apm : BackendRegistries.getDefaultNow();
             if (mctx.jvm()) {
-                final MeterRegistry registry = BackendRegistries.getDefaultNow();
                 new ClassLoaderMetrics().bindTo(registry);
                 new JvmMemoryMetrics().bindTo(registry);
                 new JvmGcMetrics().bindTo(registry);
                 new ProcessorMetrics().bindTo(registry);
                 new JvmThreadMetrics().bindTo(registry);
             }
-            LOGGER.info(
+            if (endpoint.isPresent()) {
+                LOGGER.info(
                     "Monitoring is enabled, prometheus metrics are available on localhost:{}{}",
                     endpoint.get().getValue(), endpoint.get().getKey()
-            );
+                );
+            }
         } else {
             res = Vertx.vertx();
         }

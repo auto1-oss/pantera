@@ -6,11 +6,11 @@
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.18.15</version>
+    <version>1.18.21</version>
   </parent>
 
   <artifactId>artipie-core</artifactId>
-  <version>1.18.15</version>
+  <version>1.18.21</version>
   <packaging>jar</packaging>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
@@ -19,7 +19,7 @@
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.18.15</version>
+      <version>1.18.21</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -44,6 +44,13 @@
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-lang3</artifactId>
       <version>3.14.0</version>
+    </dependency>
+    <!-- Micrometer for custom metrics -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <version>1.12.0</version>
+      <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>javax.json</groupId>

@@ -50,7 +50,7 @@
       <releases />
       <snapshots />
       <id>artipie-proxy</id>
-      <url>http://localhost:8081/artifactory/maven_group</url>
+      <url>http://localhost:8081/test_prefix/maven_group</url>
     </repository>
   </repositories>
   <pluginRepositories>
@@ -58,18 +58,18 @@
       <releases />
       <snapshots />
       <id>artipie-proxy</id>
-      <url>http://localhost:8081/artifactory/maven_group</url>
+      <url>http://localhost:8081/test_prefix/maven_group</url>
     </pluginRepository>
   </pluginRepositories>
   <distributionManagement>
     <repository>
       <uniqueVersion>false</uniqueVersion>
       <id>mvn-local</id>
-      <url>http://localhost:8081/artifactory/maven</url>
+      <url>http://localhost:8081/test_prefix/maven</url>
     </repository>
     <snapshotRepository>
       <id>mvn-local</id>
-      <url>http://localhost:8081/artifactory/maven</url>
+      <url>http://localhost:8081/test_prefix/maven</url>
     </snapshotRepository>
   </distributionManagement>
   <properties>
