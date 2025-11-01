@@ -81,8 +81,11 @@ public final class ProxyBlob implements Blob {
                         .orElseGet(response::body);
                     return CompletableFuture.completedFuture(res);
                 }
-                return CompletableFuture.failedFuture(
-                    new ArtipieHttpException(response.status(), "Unexpected status: " + response.status())
+                // CRITICAL: Consume body even on error to prevent request leak
+                return response.body().asBytesFuture().thenCompose(
+                    ignored -> CompletableFuture.failedFuture(
+                        new ArtipieHttpException(response.status(), "Unexpected status: " + response.status())
+                    )
                 );
             });
     }

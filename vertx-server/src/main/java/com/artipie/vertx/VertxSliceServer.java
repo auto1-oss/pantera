@@ -223,25 +223,49 @@ public final class VertxSliceServer implements Closeable {
     private Handler<HttpServerRequest> proxyHandler() {
         return (HttpServerRequest req) -> {
             try {
-                this.serve(req).exceptionally(
-                    throwable -> {
-                        VertxSliceServer.sendError(req.response(), throwable);
-                        return null;
-                    }
-                );
+                // CRITICAL FIX: For requests with body (PUT/POST), consume body FIRST
+                // This ensures Vert.x sees body consumption even if slice returns error
+                if (req.headers().contains("Content-Length") && !"0".equals(req.getHeader("Content-Length"))) {
+                    // Buffer the entire body first, then serve
+                    req.bodyHandler(body -> {
+                        LOGGER.debug("Request body buffered: {} bytes", body.length());
+                        this.serveWithBody(req, body).whenComplete((result, throwable) -> {
+                            if (throwable != null) {
+                                LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
+                                if (!req.response().ended()) {
+                                    VertxSliceServer.sendError(req.response(), throwable);
+                                }
+                            }
+                        });
+                    });
+                } else {
+                    // No body, serve immediately
+                    this.serve(req, null).whenComplete((result, throwable) -> {
+                        if (throwable != null) {
+                            LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
+                            if (!req.response().ended()) {
+                                VertxSliceServer.sendError(req.response(), throwable);
+                            }
+                        }
+                    });
+                }
             } catch (final Exception ex) {
-                VertxSliceServer.sendError(req.response(), ex);
+                LOGGER.error("Exception in proxy handler: {}", ex.getMessage(), ex);
+                if (!req.response().ended()) {
+                    VertxSliceServer.sendError(req.response(), ex);
+                }
             }
         };
     }
 
     /**
-     * Server HTTP request.
+     * Server HTTP request with buffered body.
      *
      * @param req HTTP request.
+     * @param body Buffered request body (null if no body).
      * @return Completion of request serving.
      */
-    private CompletionStage<Void> serve(final HttpServerRequest req) {
+    private CompletionStage<Void> serveWithBody(final HttpServerRequest req, final Buffer body) {
         final Headers requestHeaders = Headers.from(req.headers());
         
         // Extract or generate trace ID for request correlation
@@ -251,13 +275,73 @@ public final class VertxSliceServer implements Closeable {
         LOGGER.info("Serving request: {} {}", req.method().name(), LogSanitizer.sanitizeUrl(req.uri()));
         
         final boolean isHead = "HEAD".equals(req.method().name());
+        
+        // Body already buffered, convert to Content
+        final Content requestBody = new Content.From(
+            Flowable.just(ByteBuffer.wrap(body.getBytes()))
+        );
+        
         final CompletionStage<Response> response = withRequestTimeout(
             this.served.response(
                 new RequestLine(req.method().name(), req.uri(), req.version().toString()),
                 requestHeaders,
-                new Content.From(
-                    req.toFlowable().map(buffer -> ByteBuffer.wrap(buffer.getBytes()))
-                )
+                requestBody
+            ),
+            req
+        );
+        final CompletionStage<Void> continueFuture = continueResponseFut(requestHeaders, req.response());
+        return response.thenCombine(continueFuture, (resp, ignored) -> resp)
+            .thenCompose(
+                resp -> {
+                    // Ensure trace context is set for response handling
+                    com.artipie.http.trace.TraceContext.set(traceId);
+                    LOGGER.debug("Accepting response for: {} {}, status: {}", 
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), resp.status());
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
+                }
+            )
+            .whenComplete((result, error) -> {
+                // Ensure trace context is set for completion logging
+                com.artipie.http.trace.TraceContext.set(traceId);
+                if (error != null) {
+                    LOGGER.error("Request failed: {} {}, error: {}", 
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), 
+                        LogSanitizer.sanitizeMessage(error.getMessage()));
+                } else {
+                    LOGGER.debug("Request completed successfully: {} {}", 
+                        req.method().name(), LogSanitizer.sanitizeUrl(req.uri()));
+                }
+                // Clean up trace context after request completes
+                com.artipie.http.trace.TraceContext.clear();
+            });
+    }
+
+    /**
+     * Server HTTP request without body.
+     *
+     * @param req HTTP request.
+     * @param unused Unused parameter for signature compatibility.
+     * @return Completion of request serving.
+     */
+    private CompletionStage<Void> serve(final HttpServerRequest req, final Buffer unused) {
+        final Headers requestHeaders = Headers.from(req.headers());
+        
+        // Extract or generate trace ID for request correlation
+        final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
+        com.artipie.http.trace.TraceContext.set(traceId);
+        
+        LOGGER.info("Serving request: {} {}", req.method().name(), LogSanitizer.sanitizeUrl(req.uri()));
+        
+        final boolean isHead = "HEAD".equals(req.method().name());
+        
+        // No body for this request
+        final Content requestBody = Content.EMPTY;
+        
+        final CompletionStage<Response> response = withRequestTimeout(
+            this.served.response(
+                new RequestLine(req.method().name(), req.uri(), req.version().toString()),
+                requestHeaders,
+                requestBody
             ),
             req
         );
@@ -379,17 +463,33 @@ public final class VertxSliceServer implements Closeable {
         if (response.headers().contains("Content-Length")) {
             response.setChunked(false);
             if (isHead) {
-                vpb.subscribe(
-                    buffer -> { },
-                    terminator::fail,
-                    terminator::end
-                );
+                vpb.observeOn(io.reactivex.schedulers.Schedulers.io())
+                    .subscribe(
+                        buffer -> { },
+                        error -> {
+                            LOGGER.error("Error in HEAD response body: {}", error.getMessage());
+                            terminator.fail(error);
+                        },
+                        () -> {
+                            LOGGER.debug("HEAD response body fully written (Content-Length)");
+                            terminator.end();
+                        }
+                    );
             } else {
-                vpb.subscribe(
-                    response::write,
-                    terminator::fail,
-                    terminator::end
-                );
+                vpb.observeOn(io.reactivex.schedulers.Schedulers.io())
+                    .subscribe(
+                        buffer -> {
+                            response.write(buffer);
+                        },
+                        error -> {
+                            LOGGER.error("Error writing response body: {}", error.getMessage());
+                            terminator.fail(error);
+                        },
+                        () -> {
+                            LOGGER.debug("Response body fully written (Content-Length)");
+                            terminator.end();
+                        }
+                    );
             }
         } else {
             response.setChunked(true);
@@ -401,6 +501,7 @@ public final class VertxSliceServer implements Closeable {
                     terminator.completeWithoutEnding();
                 });
                 vpb.doOnSubscribe(subscription -> LOGGER.debug("Subscribed to chunked response body"))
+                    .observeOn(io.reactivex.schedulers.Schedulers.io())
                     .doOnError(terminator::fail)
                     .subscribe(response.toSubscriber());
             }
@@ -462,6 +563,24 @@ public final class VertxSliceServer implements Closeable {
         void fail(final Throwable error) {
             if (this.finished.compareAndSet(false, true)) {
                 LOGGER.error("Error streaming response: {}", error.getMessage(), error);
+                // CRITICAL: Must end response even on error to decrement counter
+                try {
+                    // Only set error status if headers haven't been sent yet
+                    if (!this.response.headWritten()) {
+                        this.response.setStatusCode(500);
+                        final String errorMsg = String.format(
+                            "Internal Server Error: %s: %s",
+                            error.getClass().getSimpleName(),
+                            error.getMessage()
+                        );
+                        this.response.end(errorMsg);
+                    } else {
+                        // Headers already sent, just end the response
+                        this.response.end();
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to end error response: {}", e.getMessage());
+                }
                 this.promise.completeExceptionally(error);
             } else {
                 LOGGER.debug("Late failure after response completion: {}", error.getMessage());

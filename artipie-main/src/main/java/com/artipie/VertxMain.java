@@ -32,6 +32,7 @@ import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
 import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics;
 import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
+import io.vertx.core.DeploymentOptions;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.ext.auth.PubSecKeyOptions;
@@ -212,7 +213,24 @@ public final class VertxMain {
         );
         LOGGER.info("Artipie was started on port {}", main);
         this.startRepos(vertx, settings, repos, this.port, slices);
-        vertx.deployVerticle(new RestApi(settings, apiPort, jwt));
+        
+        // Deploy RestApi verticle with multiple instances for CPU scaling
+        // Use 2x CPU cores to handle concurrent API requests efficiently
+        final int apiInstances = Runtime.getRuntime().availableProcessors() * 2;
+        final DeploymentOptions deployOpts = new DeploymentOptions()
+            .setInstances(apiInstances);
+        vertx.deployVerticle(
+            () -> new RestApi(settings, apiPort, jwt),
+            deployOpts,
+            result -> {
+                if (result.succeeded()) {
+                    LOGGER.info("RestApi deployed with {} instances", apiInstances);
+                } else {
+                    LOGGER.error("Failed to deploy RestApi", result.cause());
+                }
+            }
+        );
+        
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
         
@@ -398,6 +416,21 @@ public final class VertxMain {
         final Vertx res;
         final Optional<Pair<String, Integer>> endpoint = mctx.endpointAndPort();
         final MeterRegistry apm = ApmInstrumentation.registry();
+        
+        // Configure Vert.x options for optimal event loop performance
+        final int cpuCores = Runtime.getRuntime().availableProcessors();
+        final VertxOptions options = new VertxOptions()
+            // Event loop pool size: 2x CPU cores for optimal throughput
+            .setEventLoopPoolSize(cpuCores * 2)
+            // Worker pool size: for blocking operations (BlockingStorage, etc.)
+            .setWorkerPoolSize(Math.max(20, cpuCores * 4))
+            // Increase blocked thread check interval to reduce false positives
+            .setBlockedThreadCheckInterval(5000)
+            // Warn if event loop blocked for more than 2 seconds
+            .setMaxEventLoopExecuteTime(2000L * 1000000L) // 2 seconds in nanoseconds
+            // Warn if worker thread blocked for more than 60 seconds
+            .setMaxWorkerExecuteTime(60000L * 1000000L); // 60 seconds in nanoseconds
+        
         if (apm != null || endpoint.isPresent()) {
             final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions().setEnabled(true);
             if (apm != null) {
@@ -412,7 +445,8 @@ public final class VertxMain {
                         ).setEmbeddedServerEndpoint(endpoint.get().getKey())
                 );
             }
-            res = Vertx.vertx(new VertxOptions().setMetricsOptions(micrometer));
+            options.setMetricsOptions(micrometer);
+            res = Vertx.vertx(options);
             final MeterRegistry registry = apm != null ? apm : BackendRegistries.getDefaultNow();
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);
@@ -428,8 +462,14 @@ public final class VertxMain {
                 );
             }
         } else {
-            res = Vertx.vertx();
+            res = Vertx.vertx(options);
         }
+        
+        LOGGER.info(
+            "Vert.x configured: {} event loop threads, {} worker threads",
+            options.getEventLoopPoolSize(), options.getWorkerPoolSize()
+        );
+        
         return res;
     }
 

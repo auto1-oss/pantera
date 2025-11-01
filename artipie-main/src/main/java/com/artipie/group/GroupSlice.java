@@ -12,11 +12,8 @@ import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.jcabi.log.Logger;
-import org.reactivestreams.Subscriber;
-import org.reactivestreams.Subscription;
 
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
@@ -401,34 +398,42 @@ public final class GroupSlice implements Slice {
     /**
      * Drains a content body by consuming all bytes without processing them.
      * This ensures the underlying HTTP connection is properly released.
+     * 
+     * CRITICAL: Must use Flowable.fromPublisher() to force actual data flow.
+     * Simply subscribing to the Publisher doesn't consume the data - it's lazy.
+     * Vert.x keeps requests "active" until the body Publisher is fully consumed.
      */
     private static void drainResponseBody(final Content body) {
         if (body != null) {
-            body.subscribe(new Subscriber<ByteBuffer>() {
-                private Subscription subscription;
-                
-                @Override
-                public void onSubscribe(final Subscription s) {
-                    this.subscription = s;
-                    // Request all data to force consumption
-                    s.request(Long.MAX_VALUE);
-                }
-                
-                @Override
-                public void onNext(final ByteBuffer buffer) {
-                    // Discard the buffer - just consuming to drain
-                }
-                
-                @Override
-                public void onError(final Throwable t) {
-                    Logger.debug(GroupSlice.class, "Error draining response body: %s", t.getMessage());
-                }
-                
-                @Override
-                public void onComplete() {
-                    Logger.debug(GroupSlice.class, "Successfully drained response body");
-                }
-            });
+            try {
+                // Use RxJava Flowable to force consumption on I/O scheduler
+                io.reactivex.Flowable.fromPublisher(body)
+                    .observeOn(io.reactivex.schedulers.Schedulers.io())
+                    .subscribe(
+                        buffer -> {
+                            // Discard buffer - just consuming to drain
+                        },
+                        error -> {
+                            Logger.debug(
+                                GroupSlice.class, 
+                                "Error draining response body: %s", 
+                                error.getMessage()
+                            );
+                        },
+                        () -> {
+                            Logger.debug(
+                                GroupSlice.class, 
+                                "Successfully drained unused response body"
+                            );
+                        }
+                    );
+            } catch (final Exception ex) {
+                Logger.warn(
+                    GroupSlice.class,
+                    "Failed to drain response body: %s",
+                    ex.getMessage()
+                );
+            }
         }
     }
 }

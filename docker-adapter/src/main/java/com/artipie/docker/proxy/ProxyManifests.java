@@ -89,9 +89,13 @@ public final class ProxyManifests implements Manifests {
                         bytes -> Optional.of(new Manifest(digest, bytes))
                     );
                 } else if (response.status() == RsStatus.NOT_FOUND) {
-                    result = CompletableFuture.completedFuture(Optional.empty());
+                    // CRITICAL: Consume body even on 404 to prevent request leak
+                    result = response.body().asBytesFuture().thenApply(ignored -> Optional.empty());
                 } else {
-                    result = unexpected(response.status());
+                    // CRITICAL: Consume body even on error to prevent request leak
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> unexpected(response.status())
+                    );
                 }
                 return result;
             }
@@ -113,7 +117,10 @@ public final class ProxyManifests implements Manifests {
                 if (response.status() == RsStatus.OK) {
                     result = CompletableFuture.completedFuture(response::body);
                 } else {
-                    result = unexpected(response.status());
+                    // CRITICAL: Consume body even on error to prevent request leak
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> unexpected(response.status())
+                    );
                 }
                 return result;
             }
