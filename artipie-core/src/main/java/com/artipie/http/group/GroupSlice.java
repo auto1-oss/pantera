@@ -57,7 +57,10 @@ public final class GroupSlice implements Slice {
         // This is 3-10× faster than sequential when artifact is in last repo
         
         if (this.targets.isEmpty()) {
-            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            // Consume request body to prevent Vert.x request leak
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.notFound().build()
+            );
         }
 
         // Create a result future

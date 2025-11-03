@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.18.21</version>
+    <version>1.18.22</version>
   </parent>
   <artifactId>conan-adapter</artifactId>
-  <version>1.18.21</version>
+  <version>1.18.22</version>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
   </properties>
@@ -38,12 +38,12 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>1.18.21</version>
+      <version>1.18.22</version>
     </dependency>
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.18.21</version>
+      <version>1.18.22</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -83,7 +83,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-s3</artifactId>
-      <version>1.18.21</version>
+      <version>1.18.22</version>
       <scope>test</scope>
     </dependency>
 

@@ -67,7 +67,10 @@ public final class AuthzSlice implements Slice {
                                 body
                             );
                         }
-                        return CompletableFuture.completedFuture(ResponseBuilder.forbidden().build());
+                        // Consume request body to prevent Vert.x request leak
+                        return body.asBytesFuture().thenApply(ignored ->
+                            ResponseBuilder.forbidden().build()
+                        );
                     }
                     if (result.status() == AuthScheme.AuthStatus.NO_CREDENTIALS) {
                         try {
@@ -87,7 +90,10 @@ public final class AuthzSlice implements Slice {
                                 body
                             );
                         }
-                        return CompletableFuture.completedFuture(ResponseBuilder.forbidden().build());
+                        // Consume request body to prevent Vert.x request leak
+                        return body.asBytesFuture().thenApply(ignored2 ->
+                            ResponseBuilder.forbidden().build()
+                        );
                     }
                     return ResponseBuilder.unauthorized()
                         .header(new WwwAuthenticate(result.challenge()))

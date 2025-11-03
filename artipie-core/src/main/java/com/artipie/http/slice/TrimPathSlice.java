@@ -94,9 +94,12 @@ public final class TrimPathSlice implements Slice {
                 body
             );
         }
-        return CompletableFuture.completedFuture(ResponseBuilder.internalError()
-            .textBody(String.format("Request path %s was not matched to %s", full, this.ptn))
-            .build());
+        // Consume request body to prevent Vert.x request leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.internalError()
+                .textBody(String.format("Request path %s was not matched to %s", full, this.ptn))
+                .build()
+        );
     }
 
     /**

@@ -255,8 +255,10 @@ public class RepositorySlices {
         try {
             switch (cfg.type()) {
             case "file":
+                // Use indexed browsing for better performance with large repositories
+                // Falls back to original BrowseSlice if indexed approach fails
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new FilesSlice(
                             cfg.storage(),
                             securityPolicy(),
@@ -265,7 +267,8 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -281,17 +284,18 @@ public class RepositorySlices {
                 break;
             case "npm":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new NpmSlice(
                             cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true  // JWT-only, no npm tokens
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "gem":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new GemSlice(
                             cfg.storage(),
                             securityPolicy(),
@@ -300,26 +304,29 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "helm":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new HelmSlice(
                             cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "rpm":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
                             tokens.auth(), new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty()),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -341,7 +348,7 @@ public class RepositorySlices {
                 }
                 
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new PathPrefixStripSlice(
                             new PhpComposer(
                                 new AstoRepository(
@@ -349,11 +356,16 @@ public class RepositorySlices {
                                     Optional.of(baseUrl),
                                     Optional.of(cfg.name())
                                 ),
-                                securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
+                                securityPolicy(),
+                                authentication(),
+                                tokens.auth(),
+                                cfg.name(),
+                                artifactEvents()
                             ),
-                            "direct-dists"
+                            "/packages.json"
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -377,21 +389,25 @@ public class RepositorySlices {
                 break;
             case "nuget":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new NuGet(
                             cfg.url(), new com.artipie.nuget.AstoRepository(cfg.storage()),
                             securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "gradle":
+                // Use indexed browsing for better performance with large Gradle repositories
+                // Falls back to original BrowseSlice if indexed approach fails
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new GradleSlice(cfg.storage(), securityPolicy(),
                             authentication(), cfg.name(), artifactEvents()),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -419,11 +435,14 @@ public class RepositorySlices {
                 slice = trimPathSlice(gradleProxySlice);
                 break;
             case "maven":
+                // Use indexed browsing for better performance with large Maven repositories
+                // Falls back to original BrowseSlice if indexed approach fails
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new MavenSlice(cfg.storage(), securityPolicy(),
                             authentication(), tokens.auth(), cfg.name(), artifactEvents()),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -453,7 +472,7 @@ public class RepositorySlices {
                 break;
             case "go":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new GoSlice(
                             cfg.storage(),
                             securityPolicy(),
@@ -462,7 +481,8 @@ public class RepositorySlices {
                             cfg.name(),
                             artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
@@ -686,51 +706,59 @@ public class RepositorySlices {
                 break;
             case "deb":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new DebianSlice(
                             cfg.storage(), securityPolicy(), authentication(),
                             new com.artipie.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
                             artifactEvents()
                         ),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "conda":
-                slice = new com.artipie.http.slice.BrowsableSlice(
+                slice = new com.artipie.http.slice.IndexedBrowsableSlice(
                     new CondaSlice(
                         cfg.storage(), securityPolicy(), authentication(), tokens,
                         cfg.url().toString(), cfg.name(), artifactEvents()
                     ),
-                    cfg.storage()
+                    cfg.storage(),
+                    cfg.name()  // Repository name for cache isolation
                 );
                 break;
             case "conan":
-                slice = new com.artipie.http.slice.BrowsableSlice(
+                slice = new com.artipie.http.slice.IndexedBrowsableSlice(
                     new ConanSlice(
                         cfg.storage(), securityPolicy(), authentication(), tokens,
                         new ItemTokenizer(Vertx.vertx()), cfg.name()
                     ),
-                    cfg.storage()
+                    cfg.storage(),
+                    cfg.name()  // Repository name for cache isolation
                 );
                 break;
             case "hexpm":
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
                         new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                             artifactEvents(), cfg.name()),
-                        cfg.storage()
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;
             case "pypi":
                 slice = trimPathSlice(
-                    new PathPrefixStripSlice(
-                        new com.artipie.pypi.http.PySlice(
-                            cfg.storage(), securityPolicy(), authentication(),
-                            tokens.auth(), cfg.name(), artifactEvents()
+                    new com.artipie.http.slice.IndexedBrowsableSlice(
+                        new PathPrefixStripSlice(
+                            new com.artipie.pypi.http.PySlice(
+                                cfg.storage(), securityPolicy(), authentication(),
+                                tokens.auth(), cfg.name(), artifactEvents()
+                            ),
+                            "simple"
                         ),
-                        "simple"
+                        cfg.storage(),
+                        cfg.name()  // Repository name for cache isolation
                     )
                 );
                 break;

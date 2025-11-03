@@ -242,7 +242,10 @@ final class ProxySlice implements Slice {
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
-                    return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                    // Consume request body to prevent Vert.x request leak
+                    return body.asBytesFuture().thenApply(ignored ->
+                        ResponseBuilder.notFound().build()
+                    );
                 }
                 return this.afterHit(
                     line, rqheaders, key, content.get(), remote.get(), remoteSuccess.get()
