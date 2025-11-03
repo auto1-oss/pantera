@@ -43,6 +43,32 @@ public final class DownloadPackageSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final String pkg = new PackageNameFromUrl(line).value();
+        
+        // Guard: If this is a browser request (Accept: text/html) for directory browsing,
+        // return 404 to let IndexedBrowsableSlice handle it
+        // NPM CLI always sends Accept: application/json or application/vnd.npm.install-v1+json
+        // BUT: Only reject if it looks like a directory (no file extension)
+        final boolean isHtmlRequest = headers.stream()
+            .anyMatch(h -> "Accept".equalsIgnoreCase(h.getKey()) 
+                && h.getValue().contains("text/html"));
+        
+        if (isHtmlRequest && !this.hasFileExtension(line.uri().getPath())) {
+            // This is a directory browsing request, let IndexedBrowsableSlice handle it
+            // Consume request body to prevent Vert.x request leak, then return 404
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.notFound().build()
+            );
+        }
+        
+        // Additional guard: If package name is empty, return 404
+        // This prevents "Empty parts are not allowed" error
+        if (pkg == null || pkg.isEmpty() || pkg.equals("/") || pkg.trim().isEmpty()) {
+            // Consume request body to prevent Vert.x request leak, then return 404
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.notFound().build()
+            );
+        }
+        
         final Key packageKey = new Key.From(pkg);
         final PerVersionLayout layout = new PerVersionLayout(this.storage);
         
@@ -83,5 +109,20 @@ public final class DownloadPackageSlice implements Slice {
                 });
             }
         }).toCompletableFuture();
+    }
+    
+    /**
+     * Check if path has a file extension (contains a dot in the last segment).
+     * @param path Request path
+     * @return True if has file extension
+     */
+    private boolean hasFileExtension(final String path) {
+        // Get last segment after final slash
+        final int lastSlash = path.lastIndexOf('/');
+        final String lastSegment = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+        
+        // Check if it has a dot (extension)
+        final int lastDot = lastSegment.lastIndexOf('.');
+        return lastDot > 0 && lastDot < lastSegment.length() - 1;
     }
 }

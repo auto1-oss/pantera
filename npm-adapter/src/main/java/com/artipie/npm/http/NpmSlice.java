@@ -471,6 +471,20 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
+                    new RtRule.ByPath(".*\\.json$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new SliceDownload(storage),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
                     new RtRule.ByPath(".*(?<!\\.tgz)$")
                 ),
                 NpmSlice.createAuthSlice(
