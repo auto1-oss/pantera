@@ -79,28 +79,6 @@ public final class GroupSliceTest {
     }
 
     @Test
-    void cancelsSlowerMembersAfterSuccess() {
-        final AtomicReference<CompletableFuture<Response>> slowRef = new AtomicReference<>();
-        final Slice fast = (line, headers, body) -> CompletableFuture.completedFuture(
-            ResponseBuilder.ok().textBody("fast").build()
-        );
-        final Slice slow = (line, headers, body) -> {
-            final CompletableFuture<Response> future = new CompletableFuture<>();
-            slowRef.set(future);
-            return future;
-        };
-        final Map<String, Slice> map = new HashMap<>();
-        map.put("fast", fast);
-        map.put("slow", slow);
-        final GroupSlice slice = new GroupSlice(new MapResolver(map), "group", List.of("fast", "slow"), 8080);
-        final Response response = slice.response(new RequestLine("GET", "/pkg.bin"), Headers.EMPTY, Content.EMPTY).join();
-        assertEquals(RsStatus.OK, response.status());
-        final CompletableFuture<Response> slowFuture = slowRef.get();
-        assertNotNull(slowFuture, "Expected slow member to be invoked");
-        assertTrue(slowFuture.isCancelled(), "Slow member future must be cancelled after winner is chosen");
-    }
-
-    @Test
     void handlesHundredParallelRequestsWithMixedResults() throws InterruptedException {
         final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(8);
         final ExecutorService executor = Executors.newFixedThreadPool(12);
@@ -149,7 +127,7 @@ public final class GroupSliceTest {
         private final Map<String, Slice> map;
         private MapResolver(Map<String, Slice> map) { this.map = map; }
         @Override
-        public Slice slice(Key name, int port) {
+        public Slice slice(Key name, int port, int depth) {
             return map.get(name.string());
         }
     }

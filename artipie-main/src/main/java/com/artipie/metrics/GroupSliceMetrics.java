@@ -4,171 +4,67 @@
  */
 package com.artipie.metrics;
 
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
 /**
- * Metrics for GroupSlice operations.
- * Provides observability into group repository performance and behavior.
+ * GroupSlice metrics - Compatibility wrapper for OpenTelemetry.
+ * Delegates to OtelMetrics for backward compatibility.
  * 
+ * @deprecated Use {@link com.artipie.metrics.otel.OtelMetrics} directly
  * @since 1.18.21
  */
+@Deprecated
 public final class GroupSliceMetrics {
 
-    /**
-     * Shared metrics instance.
-     */
     private static volatile GroupSliceMetrics INSTANCE;
-
-    /**
-     * Meter registry.
-     */
-    private final MeterRegistry registry;
-
-    /**
-     * Request counters by group name.
-     */
-    private final ConcurrentMap<String, Counter> requestCounters = new ConcurrentHashMap<>();
-
-    /**
-     * Success counters by group name.
-     */
-    private final ConcurrentMap<String, Counter> successCounters = new ConcurrentHashMap<>();
-
-    /**
-     * Member hit counters by group and member name.
-     */
-    private final ConcurrentMap<String, Counter> memberHitCounters = new ConcurrentHashMap<>();
-
-    /**
-     * Response time timers by group name.
-     */
-    private final ConcurrentMap<String, Timer> responseTimers = new ConcurrentHashMap<>();
-
-    /**
-     * Batch size counters.
-     */
-    private final ConcurrentMap<String, Counter> batchSizeCounters = new ConcurrentHashMap<>();
-
-    /**
-     * Ctor.
-     * @param registry Meter registry
-     */
-    private GroupSliceMetrics(final MeterRegistry registry) {
-        this.registry = registry;
+    
+    private GroupSliceMetrics() {
+        // Private constructor
     }
-
-    /**
-     * Initialize metrics with registry.
-     * @param registry Meter registry
-     */
-    public static void initialize(final MeterRegistry registry) {
+    
+    public static void initialize(final Object registry) {
         if (INSTANCE == null) {
             synchronized (GroupSliceMetrics.class) {
                 if (INSTANCE == null) {
-                    INSTANCE = new GroupSliceMetrics(registry);
+                    INSTANCE = new GroupSliceMetrics();
                 }
             }
         }
     }
-
-    /**
-     * Get metrics instance.
-     * @return Metrics instance or null if not initialized
-     */
+    
     public static GroupSliceMetrics instance() {
         return INSTANCE;
     }
-
-    /**
-     * Record a request to a group repository.
-     * @param groupName Group repository name
-     */
+    
+    // Delegate to OtelMetrics
+    
     public void recordRequest(final String groupName) {
-        this.requestCounters.computeIfAbsent(
-            groupName,
-            name -> Counter.builder("artipie.group.requests")
-                .description("Total requests to group repository")
-                .tag("group", name)
-                .register(this.registry)
-        ).increment();
+        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+            com.artipie.metrics.otel.OtelMetrics.get().recordGroupRequest(groupName);
+        }
     }
-
-    /**
-     * Record a successful response from a group repository.
-     * @param groupName Group repository name
-     * @param memberName Member that provided the response
-     */
+    
     public void recordSuccess(final String groupName, final String memberName) {
-        this.successCounters.computeIfAbsent(
-            groupName,
-            name -> Counter.builder("artipie.group.successes")
-                .description("Successful responses from group repository")
-                .tag("group", name)
-                .register(this.registry)
-        ).increment();
-
-        this.memberHitCounters.computeIfAbsent(
-            groupName + ":" + memberName,
-            key -> Counter.builder("artipie.group.member.hits")
-                .description("Successful responses by member repository")
-                .tag("group", groupName)
-                .tag("member", memberName)
-                .register(this.registry)
-        ).increment();
+        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+            com.artipie.metrics.otel.OtelMetrics.get().recordGroupMemberRequest(
+                groupName, memberName, "success"
+            );
+        }
     }
-
-    /**
-     * Record batch processing metrics.
-     * @param groupName Group repository name
-     * @param batchSize Number of members in batch
-     * @param duration Processing duration in milliseconds
-     */
+    
     public void recordBatch(final String groupName, final int batchSize, final long duration) {
-        this.responseTimers.computeIfAbsent(
-            groupName,
-            name -> Timer.builder("artipie.group.response.time")
-                .description("Group repository response time")
-                .tag("group", name)
-                .register(this.registry)
-        ).record(duration, java.util.concurrent.TimeUnit.MILLISECONDS);
-
-        this.batchSizeCounters.computeIfAbsent(
-            groupName + ":" + batchSize,
-            key -> Counter.builder("artipie.group.batch.size")
-                .description("Batch sizes processed by group repository")
-                .tag("group", groupName)
-                .tag("size", String.valueOf(batchSize))
-                .register(this.registry)
-        ).increment();
+        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+            com.artipie.metrics.otel.OtelMetrics.get().recordGroupResolution(groupName, duration);
+        }
     }
-
-    /**
-     * Record a 404 (not found) response.
-     * @param groupName Group repository name
-     */
+    
     public void recordNotFound(final String groupName) {
-        Counter.builder("artipie.group.not_found")
-            .description("404 responses from group repository")
-            .tag("group", groupName)
-            .register(this.registry)
-            .increment();
+        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+            com.artipie.metrics.otel.OtelMetrics.get().recordGroupMemberRequest(
+                groupName, "none", "not_found"
+            );
+        }
     }
-
-    /**
-     * Record an error during group processing.
-     * @param groupName Group repository name
-     * @param errorType Type of error (e.g., "timeout", "connection", "unknown")
-     */
+    
     public void recordError(final String groupName, final String errorType) {
-        Counter.builder("artipie.group.errors")
-            .description("Errors during group repository processing")
-            .tag("group", groupName)
-            .tag("error_type", errorType)
-            .register(this.registry)
-            .increment();
+        // Errors tracked separately in OpenTelemetry
     }
 }

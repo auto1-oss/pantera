@@ -8,7 +8,6 @@ import com.artipie.asto.Key;
 import com.artipie.asto.ext.KeyLastPart;
 import com.artipie.http.Headers;
 import com.artipie.http.headers.Header;
-import com.google.common.base.Strings;
 
 import java.net.URLConnection;
 import java.util.ArrayList;
@@ -64,7 +63,7 @@ final class ArtifactHeaders {
                 .toList()
         );
         String sha1 = checksums.get("sha1");
-        if (!Strings.isNullOrEmpty(sha1)) {
+        if (sha1 != null && !sha1.isEmpty()) {
             res.add(new Header("ETag", sha1));
         }
         return res;

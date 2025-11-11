@@ -5,8 +5,11 @@
 package com.artipie.cooldown;
 
 import com.amihaiemil.eoyaml.YamlMapping;
+import com.artipie.cooldown.CooldownSettings.RepoTypeConfig;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Parses {@link CooldownSettings} from Artipie YAML configuration.
@@ -20,6 +23,8 @@ public final class YamlCooldownSettings {
     // Legacy keys kept for backward compatibility
     private static final String KEY_NEWER_BY = "newer_than_cache_by";
     private static final String KEY_FRESH_AGE = "fresh_release_age";
+    // Per-repo-type configuration
+    private static final String KEY_REPO_TYPES = "repo_types";
 
 
     private YamlCooldownSettings() {
@@ -48,13 +53,34 @@ public final class YamlCooldownSettings {
         final String freshStr = node.string(KEY_FRESH_AGE);
         final String newerStr = node.string(KEY_NEWER_BY);
 
-        Duration minAge = parseDurationOrDefault(minAgeStr,
+        final Duration minAge = parseDurationOrDefault(minAgeStr,
             parseDurationOrDefault(freshStr,
                 parseDurationOrDefault(newerStr, defaults.minimumAllowedAge())
             )
         );
 
-        return new CooldownSettings(enabled, minAge);
+        // Parse per-repo-type overrides
+        final Map<String, RepoTypeConfig> repoTypeOverrides = new HashMap<>();
+        final YamlMapping repoTypes = node.yamlMapping(KEY_REPO_TYPES);
+        if (repoTypes != null) {
+            for (final var entry : repoTypes.keys()) {
+                final String repoType = entry.asScalar().value().toLowerCase();
+                final YamlMapping repoConfig = repoTypes.yamlMapping(entry.asScalar().value());
+                if (repoConfig != null) {
+                    final boolean repoEnabled = parseBool(
+                        repoConfig.string(KEY_ENABLED),
+                        enabled  // Inherit global if not specified
+                    );
+                    final Duration repoMinAge = parseDurationOrDefault(
+                        repoConfig.string(KEY_MIN_AGE),
+                        minAge  // Inherit global if not specified
+                    );
+                    repoTypeOverrides.put(repoType, new RepoTypeConfig(repoEnabled, repoMinAge));
+                }
+            }
+        }
+
+        return new CooldownSettings(enabled, minAge, repoTypeOverrides);
     }
 
     private static boolean parseBool(final String value, final boolean fallback) {
@@ -105,4 +131,28 @@ public final class YamlCooldownSettings {
             return fallback;
         }
     }
+
+    /**
+     * Example YAML configuration with per-repo-type overrides:
+     * <pre>
+     * meta:
+     *   cooldown:
+     *     # Global defaults
+     *     enabled: true
+     *     minimum_allowed_age: 24h
+     *     
+     *     # Per-repo-type overrides
+     *     repo_types:
+     *       maven:
+     *         enabled: true
+     *         minimum_allowed_age: 48h  # Maven needs 48 hours
+     *       npm:
+     *         enabled: true
+     *         minimum_allowed_age: 12h  # NPM needs only 12 hours
+     *       docker:
+     *         enabled: false            # Docker cooldown disabled
+     *       pypi:
+     *         minimum_allowed_age: 72h  # PyPI 72 hours, inherits global enabled
+     * </pre>
+     */
 }

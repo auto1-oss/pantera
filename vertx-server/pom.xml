@@ -8,10 +8,10 @@ https://github.com/artipie/artipie/blob/master/LICENSE.txt
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.18.22</version>
+    <version>1.19.1</version>
   </parent>
   <artifactId>vertx-server</artifactId>
-  <version>1.18.22</version>
+  <version>1.19.1</version>
   <packaging>jar</packaging>
   <name>The Vert.x server</name>
   <description>A Vert.x which can serve artipie slices</description>
@@ -29,28 +29,18 @@ https://github.com/artipie/artipie/blob/master/LICENSE.txt
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>artipie-core</artifactId>
-      <version>1.18.22</version>
+      <version>1.19.1</version>
     </dependency>
-    <!-- Elastic APM -->
-    <dependency>
-      <groupId>co.elastic.apm</groupId>
-      <artifactId>apm-agent-api</artifactId>
-      <version>1.50.0</version>
-    </dependency>
-    <dependency>
-      <groupId>co.elastic.apm</groupId>
-      <artifactId>apm-agent-attach</artifactId>
-      <version>1.50.0</version>
-    </dependency>
-    <!-- Micrometer for Vert.x metrics -->
+    <!-- Micrometer for Vert.x metrics (legacy - will be replaced in Phase 4) -->
     <dependency>
       <groupId>io.vertx</groupId>
       <artifactId>vertx-micrometer-metrics</artifactId>
     </dependency>
+    <!-- Elastic APM API for manual instrumentation -->
     <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-registry-otlp</artifactId>
-      <version>1.12.0</version>
+      <groupId>co.elastic.apm</groupId>
+      <artifactId>apm-agent-api</artifactId>
+      <version>1.55.1</version>
     </dependency>
     <!-- Test only dependencies -->
     <dependency>

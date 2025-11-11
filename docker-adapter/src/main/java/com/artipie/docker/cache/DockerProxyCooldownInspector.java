@@ -15,7 +15,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-public final class DockerProxyCooldownInspector implements CooldownInspector {
+public final class DockerProxyCooldownInspector implements CooldownInspector,
+    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
 
     private final ConcurrentMap<String, Instant> releases;
 
@@ -69,6 +70,29 @@ public final class DockerProxyCooldownInspector implements CooldownInspector {
 
     public boolean isBlocked(final String artifact, final String digest) {
         return false;
+    }
+
+    /**
+     * Invalidate cached release date for specific artifact.
+     * Called when artifact is manually unblocked.
+     * 
+     * @param artifact Artifact name
+     * @param version Version
+     */
+    public void invalidate(final String artifact, final String version) {
+        final String k = key(artifact, version);
+        this.releases.remove(k);
+        this.seen.remove(k);
+    }
+
+    /**
+     * Clear all cached data.
+     * Called when all artifacts for a repository are unblocked.
+     */
+    public void clearAll() {
+        this.releases.clear();
+        this.digestOwners.clear();
+        this.seen.clear();
     }
 
     private static String key(final String artifact, final String version) {

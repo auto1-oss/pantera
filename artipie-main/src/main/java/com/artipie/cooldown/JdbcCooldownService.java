@@ -14,17 +14,20 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
+import com.jcabi.log.Logger;
 
 final class JdbcCooldownService implements CooldownService {
 
     private final CooldownSettings settings;
     private final CooldownRepository repository;
     private final Executor executor;
+    private final CooldownCache cache;
+    private final CooldownCircuitBreaker circuitBreaker;
 
     private static final String SYSTEM_ACTOR = "system";
 
     JdbcCooldownService(final CooldownSettings settings, final CooldownRepository repository) {
-        this(settings, repository, ForkJoinPool.commonPool());
+        this(settings, repository, ForkJoinPool.commonPool(), new CooldownCache(), new CooldownCircuitBreaker());
     }
 
     JdbcCooldownService(
@@ -32,9 +35,30 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRepository repository,
         final Executor executor
     ) {
+        this(settings, repository, executor, new CooldownCache(), new CooldownCircuitBreaker());
+    }
+
+    JdbcCooldownService(
+        final CooldownSettings settings,
+        final CooldownRepository repository,
+        final Executor executor,
+        final CooldownCache cache
+    ) {
+        this(settings, repository, executor, cache, new CooldownCircuitBreaker());
+    }
+
+    JdbcCooldownService(
+        final CooldownSettings settings,
+        final CooldownRepository repository,
+        final Executor executor,
+        final CooldownCache cache,
+        final CooldownCircuitBreaker circuitBreaker
+    ) {
         this.settings = Objects.requireNonNull(settings);
         this.repository = Objects.requireNonNull(repository);
         this.executor = Objects.requireNonNull(executor);
+        this.cache = Objects.requireNonNull(cache);
+        this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
     }
 
     @Override
@@ -42,11 +66,38 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
-        if (!this.settings.enabled()) {
+        // Check if cooldown is enabled for this repository type
+        if (!this.settings.enabledFor(request.repoType())) {
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
-        // Fully async evaluation - no blocking
-        return this.evaluateAsync(request, inspector);
+        
+        // Circuit breaker: Auto-allow if service is degraded
+        if (!this.circuitBreaker.shouldEvaluate()) {
+            Logger.warn(this, "Circuit breaker OPEN - auto-allowing %s:%s",
+                request.artifact(), request.version());
+            return CompletableFuture.completedFuture(CooldownResult.allowed());
+        }
+        
+        // Use cache (3-tier: L1 -> L2 -> Database)
+        return this.cache.isBlocked(
+            request.repoName(),
+            request.artifact(),
+            request.version(),
+            () -> this.evaluateFromDatabase(request, inspector)
+        ).thenCompose(blocked -> {
+            if (blocked) {
+                // Blocked: Fetch full block details from database (async)
+                return this.getBlockResult(request);
+            } else {
+                return CompletableFuture.completedFuture(CooldownResult.allowed());
+            }
+        }).whenComplete((result, error) -> {
+            if (error != null) {
+                this.circuitBreaker.recordFailure();
+            } else {
+                this.circuitBreaker.recordSuccess();
+            }
+        });
     }
 
     @Override
@@ -57,6 +108,9 @@ final class JdbcCooldownService implements CooldownService {
         final String version,
         final String actor
     ) {
+        // Update cache to false first (immediate effect)
+        this.cache.unblock(repoName, artifact, version);
+        // Then update database
         return CompletableFuture.runAsync(
             () -> this.unblockSingle(repoType, repoName, artifact, version, actor),
             this.executor
@@ -69,6 +123,9 @@ final class JdbcCooldownService implements CooldownService {
         final String repoName,
         final String actor
     ) {
+        // Update all cache entries to false (immediate effect)
+        this.cache.unblockAll(repoName);
+        // Then update database
         return CompletableFuture.runAsync(
             () -> this.unblockAllBlocking(repoType, repoName, actor),
             this.executor
@@ -90,32 +147,80 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     /**
-     * Async cooldown evaluation - never blocks threads.
+     * Query database and evaluate if artifact should be blocked.
+     * Returns true if blocked, false if allowed.
      * @param request Cooldown request
      * @param inspector Inspector for artifact metadata
-     * @return CompletableFuture with evaluation result
+     * @return CompletableFuture with boolean result
      */
-    private CompletableFuture<CooldownResult> evaluateAsync(
+    private CompletableFuture<Boolean> evaluateFromDatabase(
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
+        // Step 1: Check database for existing block (async)
         return CompletableFuture.supplyAsync(() -> {
-            return this.checkExistingBlock(request);
+            return this.checkExistingBlockWithTimestamp(request);
         }, this.executor).thenCompose(result -> {
             if (result.isPresent()) {
-                return CompletableFuture.completedFuture(result.get());
+                final BlockCacheEntry entry = result.get();
+                Logger.debug(this, "Database %s for %s:%s", 
+                    entry.blocked ? "block found" : "no block",
+                    request.artifact(), request.version());
+                // Cache the result with appropriate TTL
+                if (entry.blocked && entry.blockedUntil != null) {
+                    this.cache.putBlocked(request.repoName(), request.artifact(), 
+                        request.version(), entry.blockedUntil);
+                } else {
+                    this.cache.put(request.repoName(), request.artifact(), 
+                        request.version(), entry.blocked);
+                }
+                return CompletableFuture.completedFuture(entry.blocked);
             }
-            // No existing block - check if artifact should be blocked
-            return this.checkNewArtifact(request, inspector);
+            // Step 2: No existing block - check if artifact should be blocked
+            return this.checkNewArtifactAndCache(request, inspector);
         });
+    }
+    
+    /**
+     * Get full block result with details from database.
+     * Only called when cache says artifact is blocked.
+     */
+    private CompletableFuture<CooldownResult> getBlockResult(final CooldownRequest request) {
+        return CompletableFuture.supplyAsync(() -> {
+            final Optional<DbBlockRecord> record = this.repository.find(
+                request.repoType(),
+                request.repoName(),
+                request.artifact(),
+                request.version()
+            );
+            if (record.isPresent() && record.get().status() == BlockStatus.ACTIVE) {
+                final List<DbBlockRecord> deps = this.repository.dependenciesOf(record.get().id());
+                return CooldownResult.blocked(this.toCooldownBlock(record.get(), deps));
+            }
+            return CooldownResult.allowed();
+        }, this.executor);
     }
 
     /**
-     * Check if artifact has existing block in database.
-     * @param request Cooldown request
-     * @return Optional with result if block exists
+     * Simple tuple for cache entry with timestamp.
      */
-    private Optional<CooldownResult> checkExistingBlock(final CooldownRequest request) {
+    private static class BlockCacheEntry {
+        final boolean blocked;
+        final Instant blockedUntil;
+        
+        BlockCacheEntry(boolean blocked, Instant blockedUntil) {
+            this.blocked = blocked;
+            this.blockedUntil = blockedUntil;
+        }
+    }
+    
+    /**
+     * Check if artifact has existing block in database.
+     * Returns cache entry with block status and expiration.
+     * @param request Cooldown request
+     * @return Optional with cache entry if block exists
+     */
+    private Optional<BlockCacheEntry> checkExistingBlockWithTimestamp(final CooldownRequest request) {
         final Instant now = request.requestedAt();
         final Optional<DbBlockRecord> existing = this.repository.find(
             request.repoType(),
@@ -128,81 +233,112 @@ final class JdbcCooldownService implements CooldownService {
             if (record.status() == BlockStatus.ACTIVE) {
                 if (record.blockedUntil().isAfter(now)) {
                     this.repository.recordAttempt(record.id(), request.requestedBy(), now);
-                    final List<DbBlockRecord> deps = this.repository.dependenciesOf(record.id());
-                    return Optional.of(CooldownResult.blocked(
-                        this.toCooldownBlock(record, deps)
-                    ));
+                    // Blocked with expiration timestamp
+                    return Optional.of(new BlockCacheEntry(true, record.blockedUntil()));
                 }
                 this.expire(record, now);
-                return Optional.of(CooldownResult.allowed());
+                // Expired block = allowed
+                return Optional.of(new BlockCacheEntry(false, null));
             }
-            return Optional.of(CooldownResult.allowed());
+            // Inactive block = allowed
+            return Optional.of(new BlockCacheEntry(false, null));
         }
         return Optional.empty();
     }
 
     /**
-     * Check if new artifact should be blocked based on release date.
+     * Check if new artifact should be blocked and cache result.
      * @param request Cooldown request
      * @param inspector Inspector for artifact metadata
-     * @return CompletableFuture with evaluation result
+     * @return CompletableFuture with boolean (true=blocked, false=allowed)
      */
-    private CompletableFuture<CooldownResult> checkNewArtifact(
+    private CompletableFuture<Boolean> checkNewArtifactAndCache(
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
-        final Instant now = request.requestedAt();
-        
-        // Async fetch release date
+        // Async fetch release date with timeout to prevent hanging
         return inspector.releaseDate(request.artifact(), request.version())
+            .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .exceptionally(error -> {
+                Logger.warn(this, "Failed to fetch release date for %s:%s - %s (allowing)",
+                    request.artifact(), request.version(), error.getMessage());
+                return Optional.empty();
+            })
             .thenCompose(release -> {
-                if (release.isEmpty()) {
-                    com.jcabi.log.Logger.warn(
-                        this,
-                        "No release date found for %s:%s:%s:%s - allowing",
-                        request.repoType(), request.repoName(), request.artifact(), request.version()
-                    );
-                    return CompletableFuture.completedFuture(CooldownResult.allowed());
-                }
-                
-                final Duration fresh = this.settings.minimumAllowedAge();
-                final Instant date = release.get();
-                com.jcabi.log.Logger.debug(
-                    this,
-                    "Evaluating cooldown for %s:%s (released=%s, now=%s, minAge=%s)",
-                    request.artifact(), request.version(), date, now, fresh
-                );
-                
-                if (date.plus(fresh).isAfter(now)
-                    && !fresh.isZero() && !fresh.isNegative()) {
-                    final Instant until = date.plus(fresh);
-                    com.jcabi.log.Logger.info(
-                        this,
-                        "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
-                        request.artifact(), request.version(), date, until
-                    );
-                    // Async block creation
-                    return this.createBlockAsync(request, inspector, CooldownReason.FRESH_RELEASE, until);
-                }
-                
-                com.jcabi.log.Logger.debug(
-                    this,
-                    "ALLOWING %s:%s - old enough (released=%s, age=%s)",
-                    request.artifact(), request.version(), date, Duration.between(date, now)
-                );
-                return CompletableFuture.completedFuture(CooldownResult.allowed());
+                return this.shouldBlockNewArtifact(request, inspector, release);
             });
     }
 
     /**
-     * Create block record asynchronously with dependency checking.
+     * Check if new artifact should be blocked given a known release date.
+     * Returns boolean and creates database record if blocking.
+     * @param request Cooldown request
+     * @param inspector Inspector for dependencies
+     * @param release Release date (may be empty)
+     * @return CompletableFuture with boolean (true=blocked, false=allowed)
+     */
+    private CompletableFuture<Boolean> shouldBlockNewArtifact(
+        final CooldownRequest request,
+        final CooldownInspector inspector,
+        final Optional<Instant> release
+    ) {
+        final Instant now = request.requestedAt();
+        
+        if (release.isEmpty()) {
+            Logger.debug(this,
+                "No release date found for %s:%s:%s:%s - allowing",
+                request.repoType(), request.repoName(), request.artifact(), request.version()
+            );
+            this.cache.put(request.repoName(), request.artifact(), request.version(), false);
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        // Use per-repo-type minimum allowed age
+        final Duration fresh = this.settings.minimumAllowedAgeFor(request.repoType());
+        final Instant date = release.get();
+        
+        if (date.plus(fresh).isAfter(now)
+            && !fresh.isZero() && !fresh.isNegative()) {
+            final Instant until = date.plus(fresh);
+            Logger.info(this,
+                "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
+                request.artifact(), request.version(), date, until
+            );
+            // Create block in database (async)
+            return this.createBlockInDatabase(request, inspector, CooldownReason.FRESH_RELEASE, until)
+                .thenApply(success -> {
+                    // Cache as blocked with dynamic TTL (until block expires)
+                    this.cache.putBlocked(request.repoName(), request.artifact(), 
+                        request.version(), until);
+                    return true;
+                })
+                .exceptionally(error -> {
+                    Logger.error(this, "Failed to create block for %s:%s - %s (blocking anyway)",
+                        request.artifact(), request.version(), error.getMessage());
+                    // Still cache as blocked with dynamic TTL
+                    this.cache.putBlocked(request.repoName(), request.artifact(), 
+                        request.version(), until);
+                    return true;
+                });
+        }
+        
+        Logger.debug(this,
+            "ALLOWING %s:%s - old enough (released=%s, age=%s)",
+            request.artifact(), request.version(), date, Duration.between(date, now)
+        );
+        this.cache.put(request.repoName(), request.artifact(), request.version(), false);
+        return CompletableFuture.completedFuture(false);
+    }
+
+    /**
+     * Create block record in database with dependency checking.
      * @param request Cooldown request
      * @param inspector Inspector for dependencies
      * @param reason Block reason
      * @param blockedUntil Block expiration time
-     * @return CompletableFuture with block result
+     * @return CompletableFuture<Boolean> (always returns true)
      */
-    private CompletableFuture<CooldownResult> createBlockAsync(
+    private CompletableFuture<Boolean> createBlockInDatabase(
         final CooldownRequest request,
         final CooldownInspector inspector,
         final CooldownReason reason,
@@ -221,31 +357,31 @@ final class JdbcCooldownService implements CooldownService {
                 SYSTEM_ACTOR,
                 Optional.empty()
             );
+            this.repository.recordAttempt(main.id(), request.requestedBy(), now);
             return main;
         }, this.executor).thenCompose(main -> {
-            // Async fetch dependencies
-            return inspector.dependencies(request.artifact(), request.version())
-                .thenCompose(rawDeps -> {
+            // Async fetch and insert dependencies (background)
+            inspector.dependencies(request.artifact(), request.version())
+                .thenAccept(rawDeps -> {
                     final List<CooldownDependency> deps = deduplicateDependencies(
                         rawDeps,
                         request.artifact(),
                         request.version()
                     );
-                    
-                    if (deps.isEmpty()) {
-                        return CompletableFuture.completedFuture(main);
+                    if (!deps.isEmpty()) {
+                        this.repository.insertDependencies(
+                            request.repoType(),
+                            request.repoName(),
+                            deps,
+                            reason,
+                            request.requestedAt(),
+                            blockedUntil,
+                            SYSTEM_ACTOR,
+                            main.id()
+                        );
                     }
-                    
-                    // Async check dependency freshness
-                    return this.processDependencies(request, main, deps, blockedUntil);
                 });
-        }).thenApply(main -> {
-            final Instant now = request.requestedAt();
-            this.repository.recordAttempt(main.id(), request.requestedBy(), now);
-            final List<DbBlockRecord> storedDeps = this.repository.dependenciesOf(main.id());
-            return CooldownResult.blocked(
-                this.toCooldownBlock(main, storedDeps)
-            );
+            return CompletableFuture.completedFuture(true);
         });
     }
 
@@ -266,23 +402,33 @@ final class JdbcCooldownService implements CooldownService {
         final Instant now = request.requestedAt();
         final Duration minAge = this.settings.minimumAllowedAge();
         
-        if (minAge.isZero() || minAge.isNegative()) {
+        if (minAge.isZero() || minAge.isNegative() || deps.isEmpty()) {
             return CompletableFuture.completedFuture(main);
         }
         
-        // Process dependencies: insert fresh ones before returning
-        // This ensures dependencies are available when the result is returned
-        this.repository.insertDependencies(
-            request.repoType(),
-            request.repoName(),
-            deps,
-            main.reason(),
-            now,
-            blockedUntil,
-            SYSTEM_ACTOR,
-            main.id()
-        );
+        // Background processing: Insert dependencies asynchronously
+        // Don't block the main result - user should not wait for dependency metadata
+        CompletableFuture.runAsync(() -> {
+            try {
+                this.repository.insertDependencies(
+                    request.repoType(),
+                    request.repoName(),
+                    deps,
+                    main.reason(),
+                    now,
+                    blockedUntil,
+                    SYSTEM_ACTOR,
+                    main.id()
+                );
+                Logger.debug(this, "Inserted %d dependencies for %s:%s",
+                    deps.size(), request.artifact(), request.version());
+            } catch (Exception ex) {
+                Logger.warn(this, "Failed to insert dependencies for %s:%s - %s",
+                    request.artifact(), request.version(), ex.getMessage());
+            }
+        }, this.executor);
         
+        // Return immediately - don't wait for dependency insertion
         return CompletableFuture.completedFuture(main);
     }
 
@@ -302,6 +448,10 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         final Optional<DbBlockRecord> record = this.repository.find(repoType, repoName, artifact, version);
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
+        
+        // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .invalidate(repoType, repoName, artifact, version);
     }
 
     private void unblockAllBlocking(
@@ -312,16 +462,12 @@ final class JdbcCooldownService implements CooldownService {
         final Instant now = Instant.now();
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         blocks.stream()
-            .filter(block -> block.parentId().isEmpty())
-            .forEach(block -> this.release(block, actor, now));
-        blocks.stream()
-            .filter(block -> block.parentId().isPresent())
-            .forEach(block -> this.repository.updateStatus(
-                block.id(),
-                BlockStatus.INACTIVE,
-                Optional.of(now),
-                Optional.of(actor)
-            ));
+            .filter(record -> record.status() == BlockStatus.ACTIVE)
+            .forEach(record -> this.release(record, actor, now));
+        
+        // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .clearAll(repoType, repoName);
     }
 
     private void release(final DbBlockRecord record, final String actor, final Instant when) {

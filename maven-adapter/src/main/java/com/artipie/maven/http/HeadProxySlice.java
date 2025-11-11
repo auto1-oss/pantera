@@ -37,6 +37,12 @@ final class HeadProxySlice implements Slice {
         RequestLine line, Headers headers, Content body
     ) {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp-> ResponseBuilder.from(resp.status()).headers(resp.headers()).build());
+            .thenCompose(resp -> 
+                // CRITICAL: Must consume body even for HEAD requests to prevent Vert.x request leak
+                // This is the same pattern as Docker ProxyLayers fix
+                resp.body().asBytesFuture().thenApply(ignored ->
+                    ResponseBuilder.from(resp.status()).headers(resp.headers()).build()
+                )
+            );
     }
 }

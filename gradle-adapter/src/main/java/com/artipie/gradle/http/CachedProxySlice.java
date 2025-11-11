@@ -21,6 +21,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.cache.CachedArtifactMetadataStore;
+import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
@@ -99,6 +100,11 @@ final class CachedProxySlice implements Slice {
     private final boolean storageBacked;
 
     /**
+     * Negative cache for 404 responses.
+     */
+    private final NegativeCache negativeCache;
+
+    /**
      * In-flight requests map for deduplication (prevents thundering herd).
      */
     private final Map<Key, CompletableFuture<Response>> inFlight = new ConcurrentHashMap<>();
@@ -125,6 +131,37 @@ final class CachedProxySlice implements Slice {
         final CooldownInspector inspector,
         final Optional<Storage> storage
     ) {
+        this(client, cache, events, rname, rtype, cooldown, inspector, storage,
+            java.time.Duration.ofHours(24), true);
+    }
+
+    /**
+     * Wraps origin slice with caching layer including negative cache.
+     *
+     * @param client Client slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param storage Storage for persisting checksums (optional)
+     * @param negativeCacheTtl TTL for negative cache
+     * @param negativeCacheEnabled Whether negative caching is enabled
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    CachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final Optional<Storage> storage,
+        final java.time.Duration negativeCacheTtl,
+        final boolean negativeCacheEnabled
+    ) {
         this.client = client;
         this.cache = cache;
         this.events = events;
@@ -134,6 +171,13 @@ final class CachedProxySlice implements Slice {
         this.inspector = inspector;
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadata.isPresent() && !Objects.equals(this.cache, Cache.NOP);
+        this.negativeCache = new NegativeCache(
+            negativeCacheTtl, 
+            negativeCacheEnabled, 
+            50_000,  // default max size
+            null,    // use global Valkey config
+            rname    // CRITICAL: Include repo name for cache isolation
+        );
     }
 
     @Override
@@ -148,6 +192,15 @@ final class CachedProxySlice implements Slice {
             return this.handleRootPath(line);
         }
         final Key key = new KeyFromPath(path);
+        
+        // Check negative cache first (404s)
+        if (this.negativeCache.isNotFound(key)) {
+            Logger.info(this, "Gradle artifact %s cached as 404 (negative cache hit)", key.string());
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        }
+        
         final Optional<CooldownRequest> request = this.cooldownRequest(headers, path);
         if (request.isEmpty()) {
             Logger.info(this, "No cooldown check for path: %s (doesn't match artifact pattern)", path);
@@ -185,16 +238,23 @@ final class CachedProxySlice implements Slice {
         final String owner
     ) {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp -> {
+            .thenCompose(resp -> {
                 if (!resp.status().success()) {
-                    Logger.debug(this, "Gradle proxy upstream miss for %s", key.string());
-                    return ResponseBuilder.notFound().build();
+                    Logger.debug(this, "Gradle proxy upstream miss for %s - caching 404", key.string());
+                    // CRITICAL: Consume body to prevent Vert.x request leak
+                    return resp.body().asBytesFuture().thenApply(ignored -> {
+                        // Cache 404 to avoid repeated upstream requests
+                        this.negativeCache.cacheNotFound(key);
+                        return ResponseBuilder.notFound().build();
+                    });
                 }
                 this.enqueueFromHeaders(resp.headers(), key, owner);
-                return ResponseBuilder.ok()
-                    .headers(resp.headers())
-                    .body(resp.body())
-                    .build();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .headers(resp.headers())
+                        .body(resp.body())
+                        .build()
+                );
         });
     }
 
@@ -260,7 +320,9 @@ final class CachedProxySlice implements Slice {
             this.client.response(line, Headers.EMPTY, Content.EMPTY)
                 .thenCompose(resp -> {
                     if (!resp.status().success()) {
-                        Logger.warn(this, "Gradle upstream returned %s for %s", resp.status(), key.string());
+                        Logger.warn(this, "Gradle upstream returned %s for %s - caching 404", resp.status(), key.string());
+                        // Cache 404 to avoid repeated upstream requests
+                        this.negativeCache.cacheNotFound(key);
                         return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
                     }
                     final DigestingContent digesting = new DigestingContent(resp.body());

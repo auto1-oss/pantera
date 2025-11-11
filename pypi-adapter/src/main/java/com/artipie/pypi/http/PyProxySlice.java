@@ -109,7 +109,7 @@ public final class PyProxySlice extends Slice.Wrap {
                         rname,
                         rtype,
                         cooldown,
-                        inspector
+                        registerInspector(rtype, rname, inspector)
                     )
                 ),
                 new RtRulePath(
@@ -118,6 +118,19 @@ public final class PyProxySlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Register inspector and return it (helper for constructor).
+     */
+    private static PyProxyCooldownInspector registerInspector(
+        final String rtype,
+        final String rname,
+        final PyProxyCooldownInspector inspector
+    ) {
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .register(rtype, rname, inspector);
+        return inspector;
     }
 
 }

@@ -5,7 +5,6 @@
 package com.artipie.docker.cache;
 
 import com.artipie.asto.Content;
-import com.artipie.asto.LoggingStorage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.docker.Blob;
 import com.artipie.docker.Digest;
@@ -83,7 +82,7 @@ final class CacheManifestsTest {
     void shouldCacheManifest() throws Exception {
         final ManifestReference ref = ManifestReference.from("1");
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
-        final Repo cache = new AstoDocker("registry", new LoggingStorage(new InMemoryStorage()))
+        final Repo cache = new AstoDocker("registry", new InMemoryStorage())
             .repo("my-cache");
         new CacheManifests("cache-alpine",
             new AstoDocker("registry", new ExampleStorage()).repo("my-alpine"),

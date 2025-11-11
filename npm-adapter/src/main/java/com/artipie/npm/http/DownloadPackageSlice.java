@@ -17,9 +17,14 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.npm.PackageNameFromUrl;
 import com.artipie.npm.PerVersionLayout;
 import com.artipie.npm.Tarballs;
+import com.artipie.npm.misc.AbbreviatedMetadata;
+import com.artipie.npm.misc.MetadataETag;
+import com.artipie.npm.misc.MetadataEnhancer;
+import javax.json.JsonObject;
 
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -69,6 +74,12 @@ public final class DownloadPackageSlice implements Slice {
             );
         }
         
+        // P0.1: Check if client requests abbreviated format
+        final boolean abbreviated = this.isAbbreviatedRequest(headers);
+        
+        // P0.2: Check for conditional request (If-None-Match)
+        final Optional<String> clientETag = this.extractClientETag(headers);
+        
         final Key packageKey = new Key.From(pkg);
         final PerVersionLayout layout = new PerVersionLayout(this.storage);
         
@@ -77,30 +88,19 @@ public final class DownloadPackageSlice implements Slice {
             if (hasVersions) {
                 // Use per-version layout - generate meta.json dynamically
                 return layout.generateMetaJson(packageKey)
-                    .thenApply(metaJson -> {
-                        final byte[] bytes = metaJson.toString().getBytes(StandardCharsets.UTF_8);
-                        final Content content = new Content.From(bytes);
-                        return new Tarballs(content, this.base).value();
-                    })
-                    .thenApply(content -> 
-                        ResponseBuilder.ok()
-                            .header(new Header("Content-Type", "application/json"))
-                            .body(content)
-                            .build()
-                    );
+                    .thenCompose(metaJson -> this.processMetadata(
+                        metaJson, abbreviated, clientETag
+                    ));
             } else {
                 // Fall back to old layout - read existing meta.json
                 final Key metaKey = new Key.From(pkg, "meta.json");
                 return this.storage.exists(metaKey).thenCompose(exists -> {
                     if (exists) {
                         return this.storage.value(metaKey)
-                            .thenApply(content -> new Tarballs(content, this.base).value())
-                            .thenApply(content -> 
-                                ResponseBuilder.ok()
-                                    .header(new Header("Content-Type", "application/json"))
-                                    .body(content)
-                                    .build()
-                            );
+                            .thenCompose(Content::asJsonObjectFuture)
+                            .thenCompose(metaJson -> this.processMetadata(
+                                metaJson, abbreviated, clientETag
+                            ));
                     } else {
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.notFound().build()
@@ -109,6 +109,87 @@ public final class DownloadPackageSlice implements Slice {
                 });
             }
         }).toCompletableFuture();
+    }
+    
+    /**
+     * Process metadata: enhance, abbreviate if needed, calculate ETag, handle 304.
+     * 
+     * @param metaJson Original metadata
+     * @param abbreviated Whether to return abbreviated format
+     * @param clientETag Client's ETag from If-None-Match header
+     * @return Response with metadata or 304 Not Modified
+     */
+    private CompletableFuture<Response> processMetadata(
+        final JsonObject metaJson,
+        final boolean abbreviated,
+        final Optional<String> clientETag
+    ) {
+        // P1.1: Enhance metadata with time and users objects
+        final JsonObject enhanced = new MetadataEnhancer(metaJson).enhance();
+        
+        // P0.1: Generate abbreviated or full format
+        final JsonObject response = abbreviated
+            ? new AbbreviatedMetadata(enhanced).generate()
+            : enhanced;
+        
+        // Apply tarball URL rewriting
+        final String responseStr = response.toString();
+        final byte[] bytes = responseStr.getBytes(StandardCharsets.UTF_8);
+        final Content content = new Content.From(bytes);
+        final Content rewritten = new Tarballs(content, this.base).value();
+        
+        return rewritten.asBytesFuture().thenApply(rewrittenBytes -> {
+            final String finalContent = new String(rewrittenBytes, StandardCharsets.UTF_8);
+            
+            // P0.2: Calculate ETag
+            final String etag = new MetadataETag(finalContent).calculate();
+            
+            // P0.2: Check if client has matching ETag (304 Not Modified)
+            if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+                return ResponseBuilder.from(com.artipie.http.RsStatus.NOT_MODIFIED)
+                    .header("ETag", etag)
+                    .header("Cache-Control", "public, max-age=300")
+                    .build();
+            }
+            
+            // Return full response with ETag and cache headers
+            return ResponseBuilder.ok()
+                .header("Content-Type", abbreviated 
+                    ? "application/vnd.npm.install-v1+json; charset=utf-8"
+                    : "application/json; charset=utf-8")
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .header("CDN-Cache-Control", "public, max-age=600")
+                .body(finalContent.getBytes(StandardCharsets.UTF_8))
+                .build();
+        });
+    }
+    
+    /**
+     * Check if client requests abbreviated manifest.
+     * 
+     * @param headers Request headers
+     * @return True if Accept header contains abbreviated format
+     */
+    private boolean isAbbreviatedRequest(final Headers headers) {
+        return headers.stream()
+            .anyMatch(h -> "Accept".equalsIgnoreCase(h.getKey())
+                && h.getValue().contains("application/vnd.npm.install-v1+json"));
+    }
+    
+    /**
+     * Extract client ETag from If-None-Match header.
+     * 
+     * @param headers Request headers
+     * @return Optional ETag value
+     */
+    private Optional<String> extractClientETag(final Headers headers) {
+        return headers.stream()
+            .filter(h -> "If-None-Match".equalsIgnoreCase(h.getKey()))
+            .map(Header::getValue)
+            .map(etag -> etag.startsWith("W/") ? etag.substring(2) : etag)
+            .map(etag -> etag.replaceAll("\"", "")) // Remove quotes
+            .findFirst();
     }
     
     /**

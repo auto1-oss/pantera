@@ -6,8 +6,8 @@ package com.artipie.settings.cache;
 
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
@@ -40,7 +40,7 @@ final class CachedUsersTest {
 
     @BeforeEach
     void init() {
-        this.cache = CacheBuilder.newBuilder().build();
+        this.cache = Caffeine.newBuilder().build();
         this.auth = new FakeAuth();
         this.users = new CachedUsers(this.auth, this.cache);
     }
@@ -53,7 +53,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 1",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
@@ -62,7 +62,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 1",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
@@ -84,7 +84,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 2",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(2L)
         );
         MatcherAssert.assertThat(
@@ -97,7 +97,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 2",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(2L)
         );
         MatcherAssert.assertThat(

@@ -21,7 +21,8 @@ import java.util.concurrent.ConcurrentMap;
  * PyPI proxy cooldown inspector that tracks artifact versions and their release times.
  * This is used to enforce cooldown periods for artifacts in PyPI proxy repositories.
  */
-final class PyProxyCooldownInspector implements CooldownInspector {
+final class PyProxyCooldownInspector implements CooldownInspector,
+    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
     /**
      * Cache of artifact versions and their release times.
      * Key format: "artifact:version"
@@ -33,6 +34,16 @@ final class PyProxyCooldownInspector implements CooldownInspector {
      */
     PyProxyCooldownInspector() {
         this.releases = new ConcurrentHashMap<>(0);
+    }
+
+    @Override
+    public void invalidate(final String artifact, final String version) {
+        this.releases.remove(key(artifact, version));
+    }
+
+    @Override
+    public void clearAll() {
+        this.releases.clear();
     }
 
     @Override

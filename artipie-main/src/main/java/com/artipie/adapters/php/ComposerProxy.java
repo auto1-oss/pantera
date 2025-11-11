@@ -13,17 +13,19 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.RemoteConfig;
 import com.artipie.http.client.auth.GenericAuthenticator;
+import com.artipie.http.group.GroupSlice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.settings.repo.RepoConfig;
 
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
- * Php Composer proxy slice.
+ * Composer/PHP proxy adapter with maven-proxy feature parity.
+ * Supports multiple remotes, authentication, priority ordering, and failover.
  */
 public final class ComposerProxy implements Slice {
 
@@ -50,43 +52,52 @@ public final class ComposerProxy implements Slice {
         Optional<Queue<com.artipie.scheduling.ProxyArtifactEvent>> events,
         com.artipie.cooldown.CooldownService cooldown
     ) {
-        final RemoteConfig remote = cfg.remoteConfig();
         final Optional<Storage> asto = cfg.storageOpt();
         final String baseUrl = cfg.url().toString();
-        final com.artipie.http.client.auth.Authenticator auth = 
-            GenericAuthenticator.create(client, remote.username(), remote.pwd());
-        final Slice remoteSlice = new com.artipie.http.client.auth.AuthClientSlice(
-            new com.artipie.http.client.UriClientSlice(client, remote.uri()),
-            auth
-        );
-        slice = asto.map(
-            cache -> new ComposerProxySlice(
-                client,
-                remote.uri(),
-                new AstoRepository(cfg.storage()),
-                auth,
-                new ComposerStorageCache(new AstoRepository(cache)),
-                events,
-                cfg.name(),
-                cfg.type(),
-                cooldown,
-                new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
-                baseUrl
-            )
-        ).orElseGet(
-            () -> new ComposerProxySlice(
-                client,
-                remote.uri(),
-                new AstoRepository(cfg.storage()),
-                auth,
-                new ComposerStorageCache(new AstoRepository(asto.orElse(cfg.storage()))),
-                events,
-                cfg.name(),
-                cfg.type(),
-                cooldown,
-                new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
-                baseUrl
-            )
+        
+        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Each remote gets its own ComposerProxySlice, evaluated in priority order
+        this.slice = new GroupSlice(
+            cfg.remotes().stream().map(
+                remote -> {
+                    final com.artipie.http.client.auth.Authenticator auth = 
+                        GenericAuthenticator.create(client, remote.username(), remote.pwd());
+                    final Slice remoteSlice = new com.artipie.http.client.auth.AuthClientSlice(
+                        new com.artipie.http.client.UriClientSlice(client, remote.uri()),
+                        auth
+                    );
+                    
+                    return asto.map(
+                        cache -> new ComposerProxySlice(
+                            client,
+                            remote.uri(),
+                            new AstoRepository(cfg.storage()),
+                            auth,
+                            new ComposerStorageCache(new AstoRepository(cache)),
+                            events,
+                            cfg.name(),
+                            cfg.type(),
+                            cooldown,
+                            new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            baseUrl
+                        )
+                    ).orElseGet(
+                        () -> new ComposerProxySlice(
+                            client,
+                            remote.uri(),
+                            new AstoRepository(cfg.storage()),
+                            auth,
+                            new ComposerStorageCache(new AstoRepository(asto.orElse(cfg.storage()))),
+                            events,
+                            cfg.name(),
+                            cfg.type(),
+                            cooldown,
+                            new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            baseUrl
+                        )
+                    );
+                }
+            ).collect(Collectors.toList())
         );
     }
 

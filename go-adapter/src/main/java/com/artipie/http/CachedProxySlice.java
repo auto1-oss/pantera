@@ -231,7 +231,11 @@ final class CachedProxySlice implements Slice {
                                                 .doOnTerminate(() -> term.complete(null));
                                         promise.complete(Optional.of(new Content.From(res)));
                                     } else {
-                                        promise.complete(Optional.empty());
+                                        // CRITICAL: Consume body to prevent Vert.x request leak
+                                        resp.body().asBytesFuture().whenComplete((ignored, error) -> {
+                                            promise.complete(Optional.empty());
+                                            term.complete(null);
+                                        });
                                     }
                                     rshdr.set(resp.headers());
                                     return term;

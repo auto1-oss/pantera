@@ -100,74 +100,173 @@ public final class DockerProxyCooldownSlice implements Slice {
                 final String version = request.reference().digest();
                 final String user = new Login(headers).getValue();
                 final Optional<String> digest = this.digest(response.headers());
+                
+                // Read body once, then evaluate cooldown + extract metadata in parallel
                 final CompletableFuture<byte[]> bytesFuture = response.body().asBytesFuture();
-                return bytesFuture.thenCompose(bytes ->
-                    this.determineRelease(request, response.headers(), bytes)
-                        .exceptionally(ex -> {
-                            LOGGER.warn("Failed to determine release for {}@{}: {}", artifact, version, ex.getMessage());
-                            return Optional.empty();
-                        })
+                return bytesFuture.thenCompose(bytes -> {
+                    // Rebuild response immediately with buffered bytes
+                    final Response rebuilt = new Response(
+                        response.status(),
+                        response.headers(),
+                        new Content.From(bytes)
+                    );
+                    
+                    // Extract release date from headers first (fast path)
+                    final Optional<Instant> headerRelease = this.release(response.headers());
+                    
+                    // If we have release date from headers, use it immediately
+                    if (headerRelease.isPresent()) {
+                        this.inspector.recordRelease(artifact, version, headerRelease.get());
+                        digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, headerRelease.get()));
+                        this.inspector.register(
+                            artifact, version, headerRelease,
+                            user, this.repoName, digest
+                        );
+                        
+                        // Evaluate cooldown with known release date
+                        final CooldownRequest cooldownRequest = new CooldownRequest(
+                            this.repoType, this.repoName,
+                            artifact, version, user, Instant.now()
+                        );
+                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
+                            .thenApply(result -> result.blocked()
+                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                : rebuilt
+                            );
+                    }
+                    
+                    // No release date in headers - extract from manifest config
+                    // Check if we've seen this artifact before (cached from previous request)
+                    if (this.inspector.known(artifact, version)) {
+                        // Already cached - evaluate immediately
+                        final CooldownRequest cooldownRequest = new CooldownRequest(
+                            this.repoType, this.repoName,
+                            artifact, version, user, Instant.now()
+                        );
+                        return this.cooldown.evaluate(cooldownRequest, this.inspector)
+                            .thenApply(result -> result.blocked()
+                                ? CooldownResponses.forbidden(result.block().orElseThrow())
+                                : rebuilt
+                            );
+                    }
+                    
+                    // First time seeing this artifact - WAIT for extraction then evaluate
+                    return this.determineReleaseSync(request, response.headers(), bytes, artifact, version, digest, user)
                         .thenCompose(release -> {
-                            release.ifPresent(inst -> {
-                                this.inspector.recordRelease(artifact, version, inst);
-                                digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, inst));
-                            });
                             this.inspector.register(
-                                artifact,
-                                version,
-                                release,
-                                user,
-                                this.repoName,
-                                digest
+                                artifact, version, release,
+                                user, this.repoName, digest
                             );
                             final CooldownRequest cooldownRequest = new CooldownRequest(
-                                this.repoType,
-                                this.repoName,
-                                artifact,
-                                version,
-                                user,
-                                Instant.now()
-                            );
-                            final Response rebuilt = new Response(
-                                response.status(),
-                                response.headers(),
-                                new Content.From(bytes)
+                                this.repoType, this.repoName,
+                                artifact, version, user, Instant.now()
                             );
                             return this.cooldown.evaluate(cooldownRequest, this.inspector)
                                 .thenApply(result -> result.blocked()
                                     ? CooldownResponses.forbidden(result.block().orElseThrow())
                                     : rebuilt
                                 );
-                        })
-                ).exceptionally(ex -> {
-                    LOGGER.warn("Failed to read manifest payload for {}@{}: {}", artifact, version, ex.getMessage());
+                        });
+                }).exceptionally(ex -> {
+                    LOGGER.warn("Failed to process manifest for {}@{}: {}", artifact, version, ex.getMessage());
+                    // Register with empty release date on error
                     this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
                     return response;
                 });
             });
     }
 
-    private CompletableFuture<Optional<Instant>> determineRelease(
+    /**
+     * Extract release date from manifest config synchronously.
+     * Waits for extraction to complete before returning.
+     * Used on first request to properly evaluate cooldown.
+     * 
+     * @param request Manifest request
+     * @param headers Response headers
+     * @param manifestBytes Manifest body bytes
+     * @param artifact Artifact name
+     * @param version Version/digest
+     * @param digest Optional digest
+     * @param user Requesting user
+     * @return CompletableFuture with optional release date
+     */
+    private CompletableFuture<Optional<Instant>> determineReleaseSync(
         final ManifestRequest request,
         final Headers headers,
-        final byte[] manifestBytes
+        final byte[] manifestBytes,
+        final String artifact,
+        final String version,
+        final Optional<String> digest,
+        final String user
     ) {
-        final Optional<Instant> headerRelease = this.release(headers);
-        if (headerRelease.isPresent()) {
-            return CompletableFuture.completedFuture(headerRelease);
-        }
         final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
         if (manifest.isEmpty() || manifest.get().isManifestList()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         final Manifest doc = manifest.get();
+        
+        // Fetch config blob and extract created timestamp
         return this.docker.repo(request.name()).layers().get(doc.config()).thenCompose(blob -> {
             if (blob.isEmpty()) {
-                return CompletableFuture.completedFuture(Optional.empty());
+                return CompletableFuture.completedFuture(Optional.<Instant>empty());
             }
             return blob.get().content()
                 .thenCompose(Content::asBytesFuture)
                 .thenApply(this::extractCreatedInstant);
+        }).whenComplete((release, error) -> {
+            if (error != null) {
+                LOGGER.warn("Failed to extract release date from config for {}@{}: {}",
+                    artifact, version, error.getMessage());
+            } else if (release.isPresent()) {
+                LOGGER.debug("Extracted release date from config for {}@{}: {}", 
+                    artifact, version, release.get());
+                // Also record by digest
+                digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
+            }
+        }).exceptionally(ex -> {
+            LOGGER.warn("Exception extracting release date for {}@{}: {}",
+                artifact, version, ex.getMessage());
+            return Optional.empty();
+        });
+    }
+
+    /**
+     * Extract release date from manifest config in background.
+     * This is async and doesn't block the response - it updates the inspector when done.
+     */
+    private void determineReleaseBackground(
+        final ManifestRequest request,
+        final Headers headers,
+        final byte[] manifestBytes,
+        final String artifact,
+        final String version,
+        final Optional<String> digest
+    ) {
+        final Optional<Manifest> manifest = this.manifestFrom(headers, manifestBytes);
+        if (manifest.isEmpty() || manifest.get().isManifestList()) {
+            return;
+        }
+        final Manifest doc = manifest.get();
+        
+        // Async extraction - runs in background, doesn't block response
+        this.docker.repo(request.name()).layers().get(doc.config()).thenCompose(blob -> {
+            if (blob.isEmpty()) {
+                return CompletableFuture.completedFuture(Optional.<Instant>empty());
+            }
+            return blob.get().content()
+                .thenCompose(Content::asBytesFuture)
+                .thenApply(this::extractCreatedInstant);
+        }).thenAccept(release -> {
+            if (release.isPresent()) {
+                LOGGER.debug("Extracted release date from config for {}@{}: {}", 
+                    artifact, version, release.get());
+                this.inspector.recordRelease(artifact, version, release.get());
+                digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
+            }
+        }).exceptionally(ex -> {
+            LOGGER.debug("Failed to extract release date from config for {}@{}: {}",
+                artifact, version, ex.getMessage());
+            return null;
         });
     }
 

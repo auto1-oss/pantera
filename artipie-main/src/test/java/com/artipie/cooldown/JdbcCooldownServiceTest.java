@@ -89,7 +89,7 @@ final class JdbcCooldownServiceTest {
     }
 
     @Test
-    void blocksFreshReleaseWithinWindow() {
+    void blocksFreshReleaseWithinWindow() throws Exception {
         final CooldownRequest request =
             new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
@@ -106,7 +106,17 @@ final class JdbcCooldownServiceTest {
         final CooldownResult result = this.service.evaluate(request, inspector).join();
         MatcherAssert.assertThat(result.blocked(), Matchers.is(true));
         MatcherAssert.assertThat(result.block().get().reason(), Matchers.is(CooldownReason.FRESH_RELEASE));
-        MatcherAssert.assertThat(result.block().get().dependencies(), Matchers.hasSize(1));
+        
+        // Dependencies are inserted asynchronously - wait for background processing
+        Thread.sleep(500);
+        
+        // Verify dependencies were saved in DB by querying for this specific artifact
+        final List<CooldownBlock> blocks = this.service.activeBlocks(request.repoType(), request.repoName()).join();
+        final List<CooldownBlock> leftPadBlocks = blocks.stream()
+            .filter(b -> "left-pad".equals(b.artifact()))
+            .collect(java.util.stream.Collectors.toList());
+        MatcherAssert.assertThat("Block for left-pad should exist", leftPadBlocks, Matchers.hasSize(1));
+        MatcherAssert.assertThat("Dependencies should be saved", leftPadBlocks.get(0).dependencies(), Matchers.hasSize(1));
     }
 
     @Test

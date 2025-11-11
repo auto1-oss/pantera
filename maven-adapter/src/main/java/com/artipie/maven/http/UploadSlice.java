@@ -115,14 +115,14 @@ public final class UploadSlice implements Slice {
         
         // Special handling for maven-metadata.xml - fix it BEFORE saving
         if (keyPath.contains("maven-metadata.xml") && !keyPath.endsWith(".sha1") && !keyPath.endsWith(".md5")) {
-            Logger.info(this, "Intercepting maven-metadata.xml upload at %s", keyPath);
+            Logger.debug(this, "Intercepting maven-metadata.xml upload at %s", keyPath);
             return new ContentWithSize(body, headers).asBytesFuture().thenCompose(
                 bytes -> this.fixMetadataBytes(bytes).thenCompose(
                     fixedBytes -> {
                         // Save the FIXED metadata
                         return this.storage.save(key, new Content.From(fixedBytes)).thenCompose(
                             nothing -> {
-                                Logger.info(this, "Saved fixed maven-metadata.xml, generating checksums");
+                                Logger.debug(this, "Saved fixed maven-metadata.xml, generating checksums");
                                 // Generate checksums for the fixed content
                                 return this.generateChecksums(key);
                             }
@@ -144,7 +144,7 @@ public final class UploadSlice implements Slice {
         
         // For maven-metadata.xml checksums, SKIP them - we generated our own
         if (keyPath.contains("maven-metadata.xml") && (keyPath.endsWith(".sha1") || keyPath.endsWith(".md5") || keyPath.endsWith(".sha256") || keyPath.endsWith(".sha512"))) {
-            Logger.info(this, "Skipping Maven-uploaded checksum for metadata: %s", keyPath);
+            Logger.debug(this, "Skipping Maven-uploaded checksum for metadata: %s", keyPath);
             // Don't save Maven's checksums - we already generated correct ones
             return CompletableFuture.completedFuture(ResponseBuilder.created().build());
         }
@@ -184,11 +184,11 @@ public final class UploadSlice implements Slice {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 final String xml = new String(bytes, StandardCharsets.UTF_8);
-                Logger.info(this, "Fixing maven-metadata.xml, length: %d", xml.length());
+                Logger.debug(this, "Fixing maven-metadata.xml, length: %d", xml.length());
                 
                 final XMLDocument doc = new XMLDocument(xml);
                 final List<String> versions = doc.xpath("//version/text()");
-                Logger.info(this, "Found %d versions in metadata", versions.size());
+                Logger.debug(this, "Found %d versions in metadata", versions.size());
                 
                 if (versions.isEmpty()) {
                     return bytes; // No versions, return unchanged
@@ -216,7 +216,7 @@ public final class UploadSlice implements Slice {
                 
                 // Check if we need to update
                 if (newLatest.equals(existingLatest)) {
-                    Logger.info(this, "Latest version %s is already correct, no update needed", existingLatest);
+                    Logger.debug(this, "Latest version %s is already correct, no update needed", existingLatest);
                     return bytes;
                 }
                 
@@ -226,7 +226,7 @@ public final class UploadSlice implements Slice {
                     "<latest>" + newLatest + "</latest>"
                 );
                 
-                Logger.info(this, "Fixed maven-metadata.xml: <latest> updated from %s to %s", existingLatest, newLatest);
+                Logger.debug(this, "Fixed maven-metadata.xml: <latest> updated from %s to %s", existingLatest, newLatest);
                 return updated.getBytes(StandardCharsets.UTF_8);
             } catch (IllegalArgumentException ex) {
                 Logger.warn(this, "Failed to parse metadata XML: %s", ex.getMessage());
@@ -343,7 +343,7 @@ public final class UploadSlice implements Slice {
                 (Long) null  // No release date for uploads
             )
         );
-        Logger.info(
+        Logger.debug(
             this,
             "Added artifact event: %s:%s (size=%d)",
             artifactName, version, size
