@@ -85,7 +85,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             .stream()
             .collect(Collectors.toList());
 
-        Logger.info(
+        Logger.debug(
             this,
             "Processing Maven batch of %d packages (%d unique, %d duplicates removed)",
             batch.size(), uniquePackages.size(), batch.size() - uniquePackages.size()
@@ -101,7 +101,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.info(this, "Maven batch processing complete");
+            Logger.debug(this, "Maven batch processing complete");
         } catch (final RuntimeException err) {
             Logger.error(this, "Maven batch processing failed: %s", err.getMessage());
         }
@@ -117,7 +117,22 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
         return this.asto.list(event.artifactKey())
             .thenCompose(keys -> {
                 try {
-                    final Key archive = MavenSlice.EVENT_INFO.artifactPackage(keys);
+                    // Filter out temporary files created during atomic saves
+                    // Temp files have pattern: {filename}.{UUID}.tmp
+                    final List<Key> filtered = keys.stream()
+                        .filter(key -> !key.string().endsWith(".tmp"))
+                        .collect(Collectors.toList());
+                    
+                    if (filtered.isEmpty()) {
+                        Logger.debug(
+                            this,
+                            "Maven package %s has only temporary files, skipping (will retry later)",
+                            event.artifactKey()
+                        );
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    
+                    final Key archive = MavenSlice.EVENT_INFO.artifactPackage(filtered);
                     return this.asto.metadata(archive)
                         .thenApply(meta -> meta.read(Meta.OP_SIZE).get())
                         .thenAccept(size -> {
@@ -144,11 +159,31 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                 )
                             );
                             
-                            Logger.info(
+                            Logger.debug(
                                 this,
                                 "Recorded Maven proxy artifact %s:%s (size=%d)",
                                 artifactName, version, size
                             );
+                        })
+                        .exceptionally(err -> {
+                            // If ValueNotFoundException, the file might still be in transit
+                            // This can happen if file was just moved after listing
+                            if (err.getCause() instanceof com.artipie.asto.ValueNotFoundException) {
+                                Logger.debug(
+                                    this,
+                                    "Maven package %s not found (likely still being written), will retry: %s",
+                                    event.artifactKey(), err.getMessage()
+                                );
+                                // Re-queue event for retry on next batch
+                                this.packages.add(event);
+                            } else {
+                                Logger.error(
+                                    this,
+                                    "Failed to read Maven artifact metadata %s: %s",
+                                    event.artifactKey(), err.getMessage()
+                                );
+                            }
+                            return null;
                         });
                 } catch (final RuntimeException err) {
                     Logger.error(

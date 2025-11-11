@@ -208,7 +208,16 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             }
         );
         result.setFollowRedirects(settings.followRedirects());
-        result.setConnectTimeout(settings.connectTimeout());
+        
+        // CRITICAL FIX: Jetty 12 has a NPE bug when connectTimeout is 0
+        // When timeout is 0 (infinite), don't set it - let Jetty use its default behavior
+        // This prevents: "Cannot invoke Scheduler$Task.cancel() because connect.timeout is null"
+        final long connectTimeout = settings.connectTimeout();
+        if (connectTimeout > 0) {
+            result.setConnectTimeout(connectTimeout);
+        }
+        
+        // Idle timeout can safely be 0 (infinite)
         result.setIdleTimeout(settings.idleTimeout());
         result.setAddressResolutionTimeout(5_000L);
         

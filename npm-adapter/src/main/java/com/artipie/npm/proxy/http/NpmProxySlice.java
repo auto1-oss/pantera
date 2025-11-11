@@ -71,6 +71,9 @@ public final class NpmProxySlice implements Slice {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
         final NpmCooldownInspector inspector = new NpmCooldownInspector(npm.remoteClient());
+        // Register inspector globally so unblock can invalidate its cache
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .register(repoType, repoName, inspector);
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(

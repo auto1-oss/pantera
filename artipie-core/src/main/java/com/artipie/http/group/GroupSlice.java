@@ -63,51 +63,67 @@ public final class GroupSlice implements Slice {
             );
         }
 
-        // Create a result future
-        final CompletableFuture<Response> result = new CompletableFuture<>();
-        
-        // Track how many repos have responded with 404/error
-        final java.util.concurrent.atomic.AtomicInteger failedCount = 
-            new java.util.concurrent.atomic.AtomicInteger(0);
-        
-        // Start all repository requests in parallel
-        for (int i = 0; i < this.targets.size(); i++) {
-            final int index = i;
-            final Slice target = this.targets.get(i);
+        // CRITICAL: Consume the original request body to prevent memory leak
+        // Then use Content.EMPTY for all parallel member requests to avoid OneTimePublisher errors
+        // For GET/HEAD requests, body is typically empty anyway
+        // For POST requests (e.g., npm audit), the body can only be consumed once, so we consume it
+        // here and pass empty to members (they don't need the request body for search/audit)
+        return body.asBytesFuture().thenCompose(requestBytes -> {
+            // Create a result future
+            final CompletableFuture<Response> result = new CompletableFuture<>();
             
-            target.response(line, headers, body)
-                .handle((res, err) -> {
-                    // If result already completed (someone else won), ignore
+            // Track how many repos have responded with 404/error
+            final java.util.concurrent.atomic.AtomicInteger failedCount = 
+                new java.util.concurrent.atomic.AtomicInteger(0);
+            
+            // Start all repository requests in parallel
+            for (int i = 0; i < this.targets.size(); i++) {
+                final int index = i;
+                final Slice target = this.targets.get(i);
+                
+                // Use Content.EMPTY to avoid OneTimePublisher double-consumption
+                target.response(line, headers, Content.EMPTY)
+                .thenCompose(res -> {
+                    // If result already completed (someone else won), consume and discard
                     if (result.isDone()) {
-                        return null;
-                    }
-                    
-                    if (err != null) {
-                        LOGGER.warn("Failed to get response from repository at index {}", index, err);
-                        // Count this as a failure
-                        if (failedCount.incrementAndGet() == this.targets.size()) {
-                            // All repos failed, return 404
-                            result.complete(ResponseBuilder.notFound().build());
-                        }
-                        return null;
+                        LOGGER.debug("Repository {} response arrived after race completed, consuming body", index);
+                        // CRITICAL: Must consume body even if race lost to prevent Vert.x request leak
+                        return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
                     
                     if (res.status() == RsStatus.NOT_FOUND) {
-                        // This repo doesn't have it, keep waiting for others
-                        if (failedCount.incrementAndGet() == this.targets.size()) {
-                            // All repos returned 404, return 404
-                            result.complete(ResponseBuilder.notFound().build());
-                        }
-                        return null;
+                        LOGGER.debug("Repository {} returned 404, consuming body", index);
+                        // CRITICAL: Must consume 404 body to prevent Vert.x request leak
+                        return res.body().asBytesFuture().thenApply(ignored -> {
+                            if (failedCount.incrementAndGet() == this.targets.size()) {
+                                // All repos returned 404, return 404
+                                result.complete(ResponseBuilder.notFound().build());
+                            }
+                            return null;
+                        });
                     }
                     
                     // SUCCESS! This repo has the artifact
-                    // Complete the result (first success wins)
+                    // Complete the result (first success wins) - don't consume body, it will be served
+                    LOGGER.debug("Repository {} found artifact (status: {})", index, res.status());
                     result.complete(res);
+                    return CompletableFuture.completedFuture(null);
+                })
+                .exceptionally(err -> {
+                    if (result.isDone()) {
+                        return null;
+                    }
+                    LOGGER.warn("Failed to get response from repository at index {}", index, err);
+                    // Count this as a failure
+                    if (failedCount.incrementAndGet() == this.targets.size()) {
+                        // All repos failed, return 404
+                        result.complete(ResponseBuilder.notFound().build());
+                    }
                     return null;
                 });
-        }
-        
-        return result;
+            }
+            
+            return result;
+        });
     }
 }

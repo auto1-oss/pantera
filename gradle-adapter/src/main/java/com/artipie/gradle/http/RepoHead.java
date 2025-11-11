@@ -45,12 +45,15 @@ final class RepoHead {
             new RequestLine(RqMethod.HEAD, path),
             Headers.EMPTY,
             Content.EMPTY
-        ).thenApply(
+        ).thenCompose(
             resp -> {
-                if (resp.status().success()) {
-                    return Optional.of(resp.headers());
-                }
-                return Optional.empty();
+                // CRITICAL: Consume body to prevent Vert.x request leak
+                return resp.body().asBytesFuture().thenApply(ignored -> {
+                    if (resp.status().success()) {
+                        return Optional.of(resp.headers());
+                    }
+                    return Optional.empty();
+                });
             }
         );
     }

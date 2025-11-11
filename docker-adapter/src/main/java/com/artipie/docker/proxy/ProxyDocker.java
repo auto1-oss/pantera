@@ -108,8 +108,11 @@ public final class ProxyDocker implements Docker {
                     Catalog res = response::body;
                     return CompletableFuture.completedFuture(res);
                 }
-                return CompletableFuture.failedFuture(
-                    new IllegalArgumentException("Unexpected status: " + response.status())
+                // CRITICAL: Consume body to prevent Vert.x request leak
+                return response.body().asBytesFuture().thenCompose(
+                    ignored -> CompletableFuture.failedFuture(
+                        new IllegalArgumentException("Unexpected status: " + response.status())
+                    )
                 );
             }
         ).result();

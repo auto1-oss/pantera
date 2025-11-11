@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.18.22</version>
+  <version>1.19.1</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -92,6 +92,7 @@ SOFTWARE.
     <httpcore5-h2.version>5.2.4</httpcore5-h2.version>
     <fasterxml.jackson.version>2.16.2</fasterxml.jackson.version>
     <micrometer.version>1.12.1</micrometer.version>
+    <opentelemetry.version>1.56.0</opentelemetry.version>
   </properties>
   <developers>
     <!-- Required for publishing to central -->
@@ -139,6 +140,13 @@ SOFTWARE.
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
         <version>${junit-platform.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-bom</artifactId>
+        <version>${opentelemetry.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

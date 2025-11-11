@@ -12,6 +12,8 @@ import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
 import com.artipie.http.log.LogSanitizer;
+import co.elastic.apm.api.ElasticApm;
+import co.elastic.apm.api.Transaction;
 import com.artipie.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
@@ -222,7 +224,21 @@ public final class VertxSliceServer implements Closeable {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Handler<HttpServerRequest> proxyHandler() {
         return (HttpServerRequest req) -> {
+            // Create APM transaction for this HTTP request
+            final Transaction transaction = ElasticApm.startTransaction();
             try {
+                // Set transaction metadata
+                transaction.setType(Transaction.TYPE_REQUEST);
+                transaction.setName(req.method().name() + " " + extractRouteName(req.uri()));
+                transaction.addLabel("http.method", req.method().name());
+                transaction.addLabel("http.url", req.uri());
+                transaction.addLabel("http.version", req.version().toString());
+                
+                // Add remote address if available
+                if (req.remoteAddress() != null) {
+                    transaction.addLabel("client.ip", req.remoteAddress().host());
+                }
+                
                 // CRITICAL FIX: For requests with body (PUT/POST), consume body FIRST
                 // This ensures Vert.x sees body consumption even if slice returns error
                 if (req.headers().contains("Content-Length") && !"0".equals(req.getHeader("Content-Length"))) {
@@ -230,32 +246,68 @@ public final class VertxSliceServer implements Closeable {
                     req.bodyHandler(body -> {
                         LOGGER.debug("Request body buffered: {} bytes", body.length());
                         this.serveWithBody(req, body).whenComplete((result, throwable) -> {
-                            if (throwable != null) {
-                                LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
-                                if (!req.response().ended()) {
-                                    VertxSliceServer.sendError(req.response(), throwable);
+                            try {
+                                if (throwable != null) {
+                                    LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
+                                    transaction.captureException(throwable);
+                                    transaction.setResult("error");
+                                    if (!req.response().ended()) {
+                                        VertxSliceServer.sendError(req.response(), throwable);
+                                    }
+                                } else {
+                                    transaction.setResult("success");
                                 }
+                            } finally {
+                                transaction.end();
                             }
                         });
                     });
                 } else {
                     // No body, serve immediately
                     this.serve(req, null).whenComplete((result, throwable) -> {
-                        if (throwable != null) {
-                            LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
-                            if (!req.response().ended()) {
-                                VertxSliceServer.sendError(req.response(), throwable);
+                        try {
+                            if (throwable != null) {
+                                LOGGER.error("Request serving failed: {}", throwable.getMessage(), throwable);
+                                transaction.captureException(throwable);
+                                transaction.setResult("error");
+                                if (!req.response().ended()) {
+                                    VertxSliceServer.sendError(req.response(), throwable);
+                                }
+                            } else {
+                                transaction.setResult("success");
                             }
+                        } finally {
+                            transaction.end();
                         }
                     });
                 }
             } catch (final Exception ex) {
                 LOGGER.error("Exception in proxy handler: {}", ex.getMessage(), ex);
+                transaction.captureException(ex);
+                transaction.setResult("error");
+                transaction.end();
                 if (!req.response().ended()) {
                     VertxSliceServer.sendError(req.response(), ex);
                 }
             }
         };
+    }
+
+    /**
+     * Extract route name from URI for transaction naming.
+     * Simplifies paths like /maven-central/com/foo/bar/1.0/artifact.jar to /maven-central/*
+     */
+    private static String extractRouteName(String uri) {
+        if (uri == null || uri.isEmpty()) {
+            return "/";
+        }
+        // Split by '/' and keep first 2 segments (e.g., /maven-central/com/... -> /maven-central/*)
+        String[] parts = uri.split("/");
+        if (parts.length <= 2) {
+            return uri;
+        }
+        // Return repo name pattern: /repo-name/*
+        return "/" + parts[1] + "/*";
     }
 
     /**
@@ -297,6 +349,13 @@ public final class VertxSliceServer implements Closeable {
                     com.artipie.http.trace.TraceContext.set(traceId);
                     LOGGER.debug("Accepting response for: {} {}, status: {}", 
                         req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), resp.status());
+                    
+                    // Add HTTP status to current APM transaction
+                    final Transaction transaction = ElasticApm.currentTransaction();
+                    if (transaction != null) {
+                        transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
+                    }
+                    
                     return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
                 }
             )
@@ -353,6 +412,13 @@ public final class VertxSliceServer implements Closeable {
                     com.artipie.http.trace.TraceContext.set(traceId);
                     LOGGER.debug("Accepting response for: {} {}, status: {}", 
                         req.method().name(), LogSanitizer.sanitizeUrl(req.uri()), resp.status());
+                    
+                    // Add HTTP status to current APM transaction
+                    final Transaction transaction = ElasticApm.currentTransaction();
+                    if (transaction != null) {
+                        transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
+                    }
+                    
                     return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
                 }
             )

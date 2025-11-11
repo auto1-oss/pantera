@@ -41,14 +41,17 @@ final class HeadProxySlice implements Slice {
         final Content body
     ) {
         return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(
+            .thenCompose(
                 resp -> {
-                    if (resp.status().success()) {
-                        return ResponseBuilder.ok()
-                            .headers(resp.headers())
-                            .build();
-                    }
-                    return ResponseBuilder.notFound().build();
+                    // CRITICAL: Consume body to prevent Vert.x request leak
+                    return resp.body().asBytesFuture().thenApply(ignored -> {
+                        if (resp.status().success()) {
+                            return ResponseBuilder.ok()
+                                .headers(resp.headers())
+                                .build();
+                        }
+                        return ResponseBuilder.notFound().build();
+                    });
                 }
             );
     }

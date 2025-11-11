@@ -116,7 +116,10 @@ public final class ComposerGroupSlice implements Slice {
 
         // For other requests (individual packages), try members sequentially
         Logger.debug(this, "Composer group %s: trying members for %s", this.group, path);
-        return tryMembersSequentially(0, line, headers, body);
+        // CRITICAL: Consume body once before sequential member queries
+        return body.asBytesFuture().thenCompose(requestBytes ->
+            tryMembersSequentially(0, line, headers)
+        );
     }
 
     /**
@@ -134,16 +137,19 @@ public final class ComposerGroupSlice implements Slice {
         final Content body,
         final String basePath
     ) {
-        // Fetch packages.json from all members in parallel
-        final List<CompletableFuture<JsonObject>> futures = this.members.stream()
-            .map(member -> {
-                final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
-                final RequestLine rewritten = rewritePath(line, member);
-                final Headers sanitized = dropFullPathHeader(headers);
-                
-                Logger.debug(this, "Fetching packages.json from member %s", member);
-                
-                return memberSlice.response(rewritten, sanitized, body)
+        // CRITICAL: Consume original body to prevent OneTimePublisher errors
+        // GET requests have empty bodies, but Content is still reference-counted
+        return body.asBytesFuture().thenCompose(requestBytes -> {
+            // Fetch packages.json from all members in parallel with Content.EMPTY
+            final List<CompletableFuture<JsonObject>> futures = this.members.stream()
+                .map(member -> {
+                    final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
+                    final RequestLine rewritten = rewritePath(line, member);
+                    final Headers sanitized = dropFullPathHeader(headers);
+                    
+                    Logger.debug(this, "Fetching packages.json from member %s", member);
+                    
+                    return memberSlice.response(rewritten, sanitized, Content.EMPTY)
                     .thenCompose(resp -> {
                         if (resp.status() == RsStatus.OK) {
                             return resp.body().asBytesFuture()
@@ -305,22 +311,22 @@ public final class ComposerGroupSlice implements Slice {
                     .body(bytes)
                     .build();
             });
+        }); // Close thenCompose lambda for body consumption
     }
 
     /**
      * Try members sequentially until one returns a non-404 response.
+     * Body has already been consumed by caller.
      *
      * @param index Current member index
      * @param line Request line
      * @param headers Headers
-     * @param body Body
      * @return Response from first successful member or 404
      */
     private CompletableFuture<Response> tryMembersSequentially(
         final int index,
         final RequestLine line,
-        final Headers headers,
-        final Content body
+        final Headers headers
     ) {
         if (index >= this.members.size()) {
             Logger.debug(this, "No member in group %s could serve %s", this.group, line.uri().getPath());
@@ -328,13 +334,13 @@ public final class ComposerGroupSlice implements Slice {
         }
 
         final String member = this.members.get(index);
-        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port);
+        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
         final RequestLine rewritten = rewritePath(line, member);
         final Headers sanitized = dropFullPathHeader(headers);
 
         Logger.debug(this, "Group %s trying member %s for %s", this.group, member, line.uri().getPath());
 
-        return memberSlice.response(rewritten, sanitized, body)
+        return memberSlice.response(rewritten, sanitized, Content.EMPTY)
             .thenCompose(resp -> {
                 Logger.debug(
                     this,
@@ -346,7 +352,7 @@ public final class ComposerGroupSlice implements Slice {
                 
                 if (resp.status() == RsStatus.NOT_FOUND) {
                     // Try next member
-                    return tryMembersSequentially(index + 1, line, sanitized, body);
+                    return tryMembersSequentially(index + 1, line, sanitized);
                 }
                 
                 // Return this response (success or error)

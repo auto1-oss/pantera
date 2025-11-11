@@ -16,7 +16,9 @@ import com.artipie.asto.SubStorage;
 import com.artipie.asto.factory.Config;
 import com.artipie.asto.factory.StoragesLoader;
 import com.artipie.auth.AuthFromEnv;
+import com.artipie.cache.GlobalCacheConfig;
 import com.artipie.cache.StoragesCache;
+import com.artipie.cache.ValkeyConnection;
 import com.artipie.cooldown.CooldownSettings;
 import com.artipie.cooldown.YamlCooldownSettings;
 import com.artipie.db.ArtifactDbFactory;
@@ -172,7 +174,10 @@ public final class YamlSettings implements Settings {
             throw new IllegalStateException("Invalid settings: not empty `meta` section is expected");
         }
         this.httpClientSettings = HttpClientSettings.from(this.meta.yamlMapping("http_client"));
-        final CachedUsers auth = YamlSettings.initAuth(this.meta());
+        final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
+        // Initialize global cache config for all adapters
+        GlobalCacheConfig.initialize(valkey);
+        final CachedUsers auth = YamlSettings.initAuth(this.meta(), valkey);
         this.security = new ArtipieSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse()
         );
@@ -373,12 +378,73 @@ public final class YamlSettings implements Settings {
     }
 
     /**
+     * Initialize Valkey connection from configuration.
+     * @param settings Yaml settings
+     * @return Optional Valkey connection
+     */
+    private static Optional<ValkeyConnection> initValkey(final YamlMapping settings) {
+        final YamlMapping caches = settings.yamlMapping("caches");
+        if (caches == null) {
+            Logger.debug(YamlSettings.class, "No caches configuration found");
+            return Optional.empty();
+        }
+        final YamlMapping valkeyConfig = caches.yamlMapping("valkey");
+        if (valkeyConfig == null) {
+            Logger.debug(YamlSettings.class, "No valkey configuration found in caches");
+            return Optional.empty();
+        }
+        final boolean enabled = Optional.ofNullable(valkeyConfig.string("enabled"))
+            .map(Boolean::parseBoolean)
+            .orElse(false);
+        if (!enabled) {
+            Logger.info(YamlSettings.class, "Valkey is disabled in configuration");
+            return Optional.empty();
+        }
+        final String host = Optional.ofNullable(valkeyConfig.string("host"))
+            .orElse("localhost");
+        final int port = Optional.ofNullable(valkeyConfig.string("port"))
+            .map(Integer::parseInt)
+            .orElse(6379);
+        final Duration timeout = Optional.ofNullable(valkeyConfig.string("timeout"))
+            .map(str -> {
+                // Parse simple duration formats like "100ms" or ISO-8601 "PT0.1S"
+                if (str.endsWith("ms")) {
+                    return Duration.ofMillis(Long.parseLong(str.substring(0, str.length() - 2)));
+                } else if (str.endsWith("s")) {
+                    return Duration.ofSeconds(Long.parseLong(str.substring(0, str.length() - 1)));
+                } else {
+                    return Duration.parse(str);
+                }
+            })
+            .orElse(Duration.ofMillis(100));
+        
+        Logger.info(
+            YamlSettings.class,
+            "Initializing Valkey connection: %s:%d (timeout=%s)",
+            host, port, timeout
+        );
+        try {
+            return Optional.of(new ValkeyConnection(host, port, timeout));
+        } catch (final Exception ex) {
+            Logger.error(
+                YamlSettings.class,
+                "Failed to initialize Valkey connection: %s", ex.getMessage()
+            );
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Initialise authentication. If `credentials` section is absent or empty,
      * {@link AuthFromEnv} is used.
      * @param settings Yaml settings
+     * @param valkey Optional Valkey connection for L2 cache
      * @return Authentication
      */
-    private static CachedUsers initAuth(final YamlMapping settings) {
+    private static CachedUsers initAuth(
+        final YamlMapping settings,
+        final Optional<ValkeyConnection> valkey
+    ) {
         Authentication res;
         final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
         if (creds == null || creds.isEmpty()) {
@@ -397,7 +463,13 @@ public final class YamlSettings implements Settings {
                 res = new Authentication.Joined(res, auth);
             }
         }
-        return new CachedUsers(res);
+        // Create CachedUsers with Valkey connection if available
+        if (valkey.isPresent()) {
+            Logger.info(YamlSettings.class, "Initializing auth cache with Valkey L2 cache");
+            return new CachedUsers(res, valkey.get());
+        } else {
+            return new CachedUsers(res);
+        }
     }
 
     /**

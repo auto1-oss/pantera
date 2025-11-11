@@ -464,7 +464,7 @@ final class CachedProxySlice implements Slice {
     ) {
         return new Remote.WithErrorHandling(
             () -> this.remote.response(line, Headers.EMPTY, Content.EMPTY)
-                .thenApply(response -> {
+                .thenCompose(response -> {
                     Logger.debug(
                         this,
                         "Remote response for %s: status=%s",
@@ -472,15 +472,18 @@ final class CachedProxySlice implements Slice {
                         response.status()
                     );
                     if (response.status().success()) {
-                        return Optional.of(response.body());
+                        return CompletableFuture.completedFuture(Optional.of(response.body()));
                     }
-                    Logger.warn(
-                        this,
-                        "Remote returned non-success status for %s: %s",
-                        line.uri().getPath(),
-                        response.status()
-                    );
-                    return Optional.empty();
+                    // CRITICAL: Consume body to prevent Vert.x request leak
+                    return response.body().asBytesFuture().thenApply(ignored -> {
+                        Logger.warn(
+                            this,
+                            "Remote returned non-success status for %s: %s",
+                            line.uri().getPath(),
+                            response.status()
+                        );
+                        return Optional.empty();
+                    });
                 })
         ).get();
     }

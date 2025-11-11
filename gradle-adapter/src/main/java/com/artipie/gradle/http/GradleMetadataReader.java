@@ -42,7 +42,10 @@ final class GradleMetadataReader {
             Content.EMPTY
         ).thenCompose(response -> {
             if (!response.status().success()) {
-                return CompletableFuture.completedFuture(Optional.empty());
+                // CRITICAL: Consume body before returning empty to prevent memory leak
+                return response.body().asBytesFuture().thenApply(ignored ->
+                    Optional.empty()
+                );
             }
             return bodyBytes(response.body())
                 .thenApply(bytes -> Optional.of(new String(bytes, StandardCharsets.UTF_8)));
@@ -58,7 +61,10 @@ final class GradleMetadataReader {
         ).thenCompose(response -> {
             if (!response.status().success()) {
                 Logger.warn(this, "Failed to fetch POM %s: %s", path, response.status());
-                return CompletableFuture.completedFuture(Optional.empty());
+                // CRITICAL: Consume body before returning empty to prevent memory leak
+                return response.body().asBytesFuture().thenApply(ignored ->
+                    Optional.empty()
+                );
             }
             return bodyBytes(response.body())
                 .thenApply(bytes -> Optional.of(new String(bytes, StandardCharsets.UTF_8)));

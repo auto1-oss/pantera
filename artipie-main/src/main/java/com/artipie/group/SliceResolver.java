@@ -12,6 +12,13 @@ import com.artipie.http.Slice;
  */
 @FunctionalInterface
 public interface SliceResolver {
-    Slice slice(Key name, int port);
+    /**
+     * Resolve slice by repository name, port, and nesting depth.
+     * @param name Repository name
+     * @param port Server port
+     * @param depth Nesting depth (0 for top-level, incremented for nested groups)
+     * @return Resolved slice
+     */
+    Slice slice(Key name, int port, int depth);
 }
 

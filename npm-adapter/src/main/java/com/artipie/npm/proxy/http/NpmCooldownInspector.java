@@ -26,7 +26,8 @@ import java.util.stream.Collectors;
 import javax.json.Json;
 import javax.json.JsonObject;
 
-final class NpmCooldownInspector implements CooldownInspector {
+final class NpmCooldownInspector implements CooldownInspector,
+    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
 
     private final NpmRemote remote;
     private final ConcurrentMap<String, CompletableFuture<Optional<JsonObject>>> metadata;
@@ -34,6 +35,16 @@ final class NpmCooldownInspector implements CooldownInspector {
     NpmCooldownInspector(final NpmRemote remote) {
         this.remote = remote;
         this.metadata = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    public void invalidate(final String artifact, final String version) {
+        this.metadata.remove(artifact);
+    }
+
+    @Override
+    public void clearAll() {
+        this.metadata.clear();
     }
 
     @Override

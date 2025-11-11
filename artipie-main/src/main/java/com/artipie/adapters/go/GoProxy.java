@@ -4,45 +4,39 @@
  */
 package com.artipie.adapters.go;
 
+import com.artipie.asto.Content;
+import com.artipie.asto.Storage;
+import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.http.GoProxySlice;
+import com.artipie.http.Headers;
+import com.artipie.http.Response;
 import com.artipie.http.Slice;
-import com.artipie.http.client.RemoteConfig;
 import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.client.auth.Authenticator;
+import com.artipie.http.client.auth.GenericAuthenticator;
+import com.artipie.http.group.GroupSlice;
+import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.settings.repo.RepoConfig;
 
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
- * Go proxy adapter.
+ * Go proxy adapter with maven-proxy feature parity.
+ * Supports multiple remotes, authentication, priority ordering, and failover.
  *
  * @since 1.0
  */
-public final class GoProxy {
+public final class GoProxy implements Slice {
 
     /**
-     * HTTP client.
+     * Underlying slice implementation.
      */
-    private final JettyClientSlices client;
-
-    /**
-     * Repository configuration.
-     */
-    private final RepoConfig cfg;
-
-    /**
-     * Proxy artifact events.
-     */
-    private final Optional<Queue<ProxyArtifactEvent>> events;
-
-    /**
-     * Cooldown service.
-     */
-    private final CooldownService cooldown;
+    private final Slice slice;
 
     /**
      * Ctor.
@@ -58,29 +52,33 @@ public final class GoProxy {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final CooldownService cooldown
     ) {
-        this.client = client;
-        this.cfg = cfg;
-        this.events = events;
-        this.cooldown = cooldown;
+        final Optional<Storage> asto = cfg.storageOpt();
+        
+        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Each remote gets its own GoProxySlice, evaluated in priority order
+        this.slice = new GroupSlice(
+            cfg.remotes().stream().map(
+                remote -> new GoProxySlice(
+                    client,
+                    remote.uri(),
+                    // Support per-remote authentication (like maven-proxy)
+                    GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                    asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
+                    events,
+                    cfg.name(),
+                    cfg.type(),
+                    cooldown
+                )
+            ).collect(Collectors.toList())
+        );
     }
 
-    /**
-     * Create slice.
-     *
-     * @return Go proxy slice
-     */
-    public Slice slice() {
-        final RemoteConfig remote = this.cfg.remoteConfig();
-        
-        return new GoProxySlice(
-            this.client,
-            remote.uri(),
-            Authenticator.ANONYMOUS,
-            new FromStorageCache(this.cfg.storage()),
-            this.events,
-            this.cfg.name(),
-            this.cfg.type(),
-            this.cooldown
-        );
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        return this.slice.response(line, headers, body);
     }
 }

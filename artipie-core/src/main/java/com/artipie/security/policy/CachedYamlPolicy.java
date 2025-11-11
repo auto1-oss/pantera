@@ -22,8 +22,9 @@ import com.artipie.security.perms.PermissionConfig;
 import com.artipie.security.perms.PermissionsLoader;
 import com.artipie.security.perms.User;
 import com.artipie.security.perms.UserPermissions;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
+import com.artipie.cache.CacheConfig;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jcabi.log.Logger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,13 +34,24 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.time.Duration;
 
 /**
  * Cached yaml policy implementation obtains permissions from yaml files and uses
- * {@link Cache} cache to avoid reading yamls from storage on each request.
+ * Caffeine cache to avoid reading yamls from storage on each request.
+ * 
+ * <p>Configuration in _server.yaml:
+ * <pre>
+ * caches:
+ *   policy-perms:
+ *     profile: default  # Or direct: maxSize: 10000, ttl: 24h
+ *   policy-users:
+ *     profile: default
+ *   policy-roles:
+ *     maxSize: 1000
+ *     ttl: 5m
+ * </pre>
  * <p/>
  * The storage itself is expected to have yaml files with permissions in the following structure:
  * <pre>
@@ -128,7 +140,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
      * @param roles Cache for role name and role permissions
      * @param asto Storage to read users and roles yaml files from
      */
-    CachedYamlPolicy(
+    public CachedYamlPolicy(
         final Cache<String, UserPermissions> cache,
         final Cache<String, User> users,
         final Cache<String, PermissionCollection> roles,
@@ -141,35 +153,80 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
     }
 
     /**
-     * Ctor.
+     * Ctor with legacy eviction time (for backward compatibility).
      * @param asto Storage to read users and roles yaml files from
-     * @param eviction Eviction time in seconds
+     * @param eviction Eviction time in milliseconds
      */
     public CachedYamlPolicy(final BlockingStorage asto, final long eviction) {
         this(
-            CacheBuilder.newBuilder().expireAfterAccess(eviction, TimeUnit.MILLISECONDS).build(),
-            CacheBuilder.newBuilder().expireAfterAccess(eviction, TimeUnit.MILLISECONDS).build(),
-            CacheBuilder.newBuilder().expireAfterAccess(eviction, TimeUnit.MILLISECONDS).build(),
+            Caffeine.newBuilder()
+                .maximumSize(10_000)
+                .expireAfterAccess(Duration.ofMillis(eviction))
+                .recordStats()
+                .build(),
+            Caffeine.newBuilder()
+                .maximumSize(10_000)
+                .expireAfterAccess(Duration.ofMillis(eviction))
+                .recordStats()
+                .build(),
+            Caffeine.newBuilder()
+                .maximumSize(1_000)
+                .expireAfterAccess(Duration.ofMillis(eviction))
+                .recordStats()
+                .build(),
             asto
         );
+    }
+    
+    /**
+     * Ctor with configuration support.
+     * @param asto Storage to read users and roles yaml files from
+     * @param serverYaml Server configuration YAML
+     */
+    public CachedYamlPolicy(final BlockingStorage asto, final YamlMapping serverYaml) {
+        this(
+            createCache(CacheConfig.from(serverYaml, "policy-perms")),
+            createCache(CacheConfig.from(serverYaml, "policy-users")),
+            createCache(CacheConfig.from(serverYaml, "policy-roles")),
+            asto
+        );
+    }
+    
+    /**
+     * Create Caffeine cache from configuration.
+     * @param config Cache configuration
+     * @param <K> Key type
+     * @param <V> Value type
+     * @return Configured cache
+     */
+    private static <K, V> Cache<K, V> createCache(final CacheConfig config) {
+        return Caffeine.newBuilder()
+            .maximumSize(config.maxSize())
+            .expireAfterAccess(config.ttl())
+            .recordStats()
+            .build();
     }
 
     @Override
     public UserPermissions getPermissions(final AuthUser user) {
-        try {
-            return this.cache.get(user.name(), this.createUserPermissions(user));
-        } catch (final ExecutionException err) {
-            Logger.error("security", err.getMessage());
-            throw new ArtipieException(err);
-        }
+        return this.cache.get(user.name(), key -> {
+            try {
+                return this.createUserPermissions(user).call();
+            } catch (Exception err) {
+                Logger.error("security", err.getMessage());
+                throw new ArtipieException(err);
+            }
+        });
     }
 
     @Override
     public void invalidate(final String key) {
-        if (this.cache.asMap().containsKey(key)) {
+        // Check if it's a user or role and invalidate accordingly
+        if (this.cache.getIfPresent(key) != null || this.users.getIfPresent(key) != null) {
             this.cache.invalidate(key);
             this.users.invalidate(key);
-        } else if (this.roles.asMap().containsKey(key)) {
+        } else {
+            // Assume it's a role
             this.roles.invalidate(key);
         }
     }
@@ -216,11 +273,11 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
     private Callable<UserPermissions> createUserPermissions(final AuthUser user) {
         return () -> new UserPermissions(
             new UncheckedSupplier<>(
-                () -> this.users.get(user.name(), () -> new AstoUser(this.asto, user))
+                () -> this.users.get(user.name(), key -> new AstoUser(this.asto, user))
             ),
             new UncheckedFunc<>(
                 role -> this.roles.get(
-                    role, () -> CachedYamlPolicy.rolePermissions(this.asto, role)
+                    role, key -> CachedYamlPolicy.rolePermissions(this.asto, key)
                 )
             )
         );

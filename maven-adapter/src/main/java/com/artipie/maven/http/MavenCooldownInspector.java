@@ -108,12 +108,14 @@ final class MavenCooldownInspector implements CooldownInspector {
             Headers.EMPTY,
             Content.EMPTY
         ).thenCompose(response -> {
-            if (!response.status().success()) {
-                Logger.warn(this, "Failed to fetch POM %s: %s", path, response.status());
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            return bodyBytes(response.body())
-                .thenApply(bytes -> Optional.of(new String(bytes, StandardCharsets.UTF_8)));
+            // CRITICAL: Always consume body to prevent Vert.x request leak
+            return bodyBytes(response.body()).thenApply(bytes -> {
+                if (!response.status().success()) {
+                    Logger.warn(this, "Failed to fetch POM %s: %s", path, response.status());
+                    return Optional.empty();
+                }
+                return Optional.of(new String(bytes, StandardCharsets.UTF_8));
+            });
         });
     }
 

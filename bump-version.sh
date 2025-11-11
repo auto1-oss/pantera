@@ -63,6 +63,15 @@ fi
 
 echo "   ✅ Updated docker-compose.yaml"
 
+# 4. Update Dockerfile ARTIPIE_VERSION
+echo "4. Updating Dockerfile (ARTIPIE_VERSION)..."
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "s|ENV ARTIPIE_VERSION=$OLD_VERSION|ENV ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/Dockerfile
+else
+    sed -i "s|ENV ARTIPIE_VERSION=$OLD_VERSION|ENV ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/Dockerfile
+fi
+echo "   ✅ Updated Dockerfile"
+
 echo ""
 echo "✅ Version bumped successfully!"
 echo ""
@@ -70,6 +79,7 @@ echo "Changes made:"
 echo "  - All 33 Maven modules: $OLD_VERSION → $NEW_VERSION"
 echo "  - docker-compose.yaml: image tag updated"
 echo "  - docker-compose.yaml: ARTIPIE_VERSION updated"
+echo "  - Dockerfile: ARTIPIE_VERSION updated"
 echo ""
 echo "Verification:"
 echo "  - Parent version:  $(grep -m 1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
@@ -87,5 +97,5 @@ echo "  7. Tag:             git tag v$NEW_VERSION"
 echo "  8. Push:            git push && git push --tags"
 echo ""
 echo "To revert changes:"
-echo "  git checkout pom.xml */pom.xml artipie-main/docker-compose/docker-compose.yaml"
+echo "  git checkout pom.xml */pom.xml artipie-main/docker-compose/docker-compose.yaml artipie-main/Dockerfile"
 echo ""

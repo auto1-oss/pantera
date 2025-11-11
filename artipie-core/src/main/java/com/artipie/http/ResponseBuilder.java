@@ -92,6 +92,23 @@ public class ResponseBuilder {
             .body(errorBody(error));
     }
 
+    public static ResponseBuilder partialContent() {
+        return new ResponseBuilder(RsStatus.PARTIAL_CONTENT);
+    }
+
+    public static ResponseBuilder rangeNotSatisfiable() {
+        return new ResponseBuilder(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+    }
+
+    public static ResponseBuilder gatewayTimeout() {
+        return new ResponseBuilder(RsStatus.GATEWAY_TIMEOUT);
+    }
+
+    public static ResponseBuilder serviceUnavailable(String message) {
+        return new ResponseBuilder(RsStatus.SERVICE_UNAVAILABLE)
+            .textBody(message);
+    }
+
     private static byte[] errorBody(Throwable error) {
         StringBuilder res = new StringBuilder();
         res.append(error.getMessage()).append('\n');
@@ -229,6 +246,8 @@ public class ResponseBuilder {
                 case INTERNAL_ERROR -> RSP_INTERNAL_ERROR;
                 case NOT_IMPLEMENTED -> RSP_NOT_IMPLEMENTED;
                 case SERVICE_UNAVAILABLE -> RSP_SERVICE_UNAVAILABLE;
+                case PARTIAL_CONTENT -> RSP_PARTIAL_CONTENT;
+                case GATEWAY_TIMEOUT -> RSP_GATEWAY_TIMEOUT;
             };
         }
         return new Response(status, new UnmodifiableHeaders(headers.asList()), body);
@@ -266,4 +285,6 @@ public class ResponseBuilder {
     private final static Response RSP_INTERNAL_ERROR = new Response(RsStatus.INTERNAL_ERROR, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_NOT_IMPLEMENTED = new Response(RsStatus.NOT_IMPLEMENTED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_SERVICE_UNAVAILABLE = new Response(RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PARTIAL_CONTENT = new Response(RsStatus.PARTIAL_CONTENT, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_GATEWAY_TIMEOUT = new Response(RsStatus.GATEWAY_TIMEOUT, Headers.EMPTY, Content.EMPTY);
 }

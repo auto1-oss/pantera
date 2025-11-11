@@ -5,7 +5,6 @@
 package com.artipie.http;
 
 import com.artipie.http.slice.LoggingSlice;
-import com.artipie.jfr.JfrSlice;
 import com.artipie.micrometer.MicrometerSlice;
 import com.artipie.settings.MetricsContext;
 import java.util.logging.Level;
@@ -29,10 +28,9 @@ public final class BaseSlice extends Slice.Wrap {
     public BaseSlice(final MetricsContext mctx, final Slice origin) {
         super(
             BaseSlice.wrapToBaseMetricsSlices(
-                mctx, new JfrSlice(
-                    new SafeSlice(
-                        new LoggingSlice(Level.INFO, origin)
-                    )
+                mctx,
+                new SafeSlice(
+                    new LoggingSlice(Level.INFO, origin)
                 )
             )
         );

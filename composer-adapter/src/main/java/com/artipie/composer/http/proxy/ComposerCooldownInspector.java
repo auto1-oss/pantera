@@ -170,16 +170,17 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             Headers.EMPTY,
             Content.EMPTY
         ).thenCompose(response -> {
-            if (!response.status().success()) {
-                Logger.warn(
-                    this,
-                    "Failed to fetch metadata for %s (status: %s)",
-                    packageName,
-                    response.status()
-                );
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
+            // CRITICAL: Always consume body to prevent Vert.x request leak
             return new Content.From(response.body()).asStringFuture().thenApply(content -> {
+                if (!response.status().success()) {
+                    Logger.warn(
+                        this,
+                        "Failed to fetch metadata for %s (status: %s)",
+                        packageName,
+                        response.status()
+                    );
+                    return Optional.empty();
+                }
                 try {
                     final JsonObject json = Json.createReader(new StringReader(content)).readObject();
                     return Optional.of(json);

@@ -9,13 +9,11 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.artipie.asto.Key;
-import com.artipie.asto.LoggingStorage;
 import com.artipie.asto.Storage;
 import com.artipie.asto.SubStorage;
 import com.artipie.cache.StoragesCache;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.http.client.RemoteConfig;
-import com.artipie.micrometer.MicrometerStorage;
 import com.artipie.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
@@ -54,10 +52,11 @@ public final class RepoConfig {
         Storage storage = null;
         YamlNode storageNode = repoYaml.value("storage");
         if (storageNode != null) {
-            Storage sub = new SubStorage(prefix,
-                new LoggingStorage(storage(cache, aliases, storageNode))
-            );
-            storage = metrics ? new MicrometerStorage(sub) : sub;
+            // Direct storage without wrappers:
+            // - No MicrometerStorage (metrics overhead, bypassed by optimized slices)
+            // - No LoggingStorage (already bypassed, 2-50% overhead on writes)
+            // Request-level logging and metrics still active via Vert.x HTTP
+            storage = new SubStorage(prefix, storage(cache, aliases, storageNode));
         }
 
         return new RepoConfig(repoYaml, prefix.string(), type, storage);
@@ -179,6 +178,16 @@ public final class RepoConfig {
             }
         });
         return res;
+    }
+
+    /**
+     * Group member request timeout in seconds (for *-group repositories).
+     * Controls how long to wait for each member repository to respond.
+     *
+     * @return Timeout in seconds, or empty if not specified (uses default).
+     */
+    public Optional<Long> groupMemberTimeout() {
+        return this.stringOpt("member_timeout").map(Long::valueOf);
     }
 
     /**

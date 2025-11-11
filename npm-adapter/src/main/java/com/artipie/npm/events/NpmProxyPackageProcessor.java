@@ -86,7 +86,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        Logger.info(this, "Processing NPM batch of %d packages", batch.size());
+        Logger.debug(this, "Processing NPM batch of %d packages", batch.size());
 
         List<CompletableFuture<Void>> futures = batch.stream()
             .map(this::processPackageAsync)
@@ -96,7 +96,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.info(this, "NPM batch processing complete");
+            Logger.debug(this, "NPM batch processing complete");
         } catch (Exception err) {
             Logger.error(this, "NPM batch processing failed: %s", LogSanitizer.sanitizeMessage(err.getMessage()));
         }
@@ -111,7 +111,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
         return this.infoAsync(item.artifactKey())
             .thenCompose(info -> {
                 if (info.isEmpty()) {
-                    Logger.info(this, "Package %s has no info", item.artifactKey().string());
+                    Logger.debug(this, "Package %s has no info", item.artifactKey().string());
                     return CompletableFuture.completedFuture(null);
                 }
                 return this.checkMetadataAsync(info.get(), item)
@@ -127,7 +127,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                                 )
                             );
                         } else {
-                            Logger.info(this, "Package %s is not valid", item.artifactKey().string());
+                            Logger.debug(this, "Package %s is not valid", item.artifactKey().string());
                         }
                     });
             })

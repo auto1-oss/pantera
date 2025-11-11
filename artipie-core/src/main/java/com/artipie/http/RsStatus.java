@@ -35,6 +35,10 @@ public enum RsStatus {
      */
     NO_CONTENT(HttpStatus.SC_NO_CONTENT),
     /**
+     * Partial Content (206) - Range request.
+     */
+    PARTIAL_CONTENT(HttpStatus.SC_PARTIAL_CONTENT),
+    /**
      * Moved Permanently.
      */
     MOVED_PERMANENTLY(HttpStatus.SC_MOVED_PERMANENTLY),
@@ -119,7 +123,11 @@ public enum RsStatus {
     /**
      * Service Unavailable.
      */
-    SERVICE_UNAVAILABLE(HttpStatus.SC_SERVICE_UNAVAILABLE);
+    SERVICE_UNAVAILABLE(HttpStatus.SC_SERVICE_UNAVAILABLE),
+    /**
+     * Gateway Timeout (504).
+     */
+    GATEWAY_TIMEOUT(HttpStatus.SC_GATEWAY_TIMEOUT);
 
     /**
      * Code value.

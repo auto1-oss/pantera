@@ -91,6 +91,9 @@ public final class DockerProxy implements Slice {
             final CooldownService cooldown
     ) {
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        // Register inspector globally so unblock can invalidate its cache
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .register("docker", cfg.name(), inspector);
         final Docker proxies = new MultiReadDocker(
             cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))
                 .toList()

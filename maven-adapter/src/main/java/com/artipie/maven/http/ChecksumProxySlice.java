@@ -5,20 +5,13 @@
 package com.artipie.maven.http;
 
 import com.artipie.asto.Content;
-import com.artipie.asto.ext.Digests;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.jcabi.log.Logger;
-import hu.akarnokd.rxjava2.interop.CompletableInterop;
-import io.reactivex.Flowable;
-import org.apache.commons.codec.binary.Hex;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -113,98 +106,38 @@ final class ChecksumProxySlice implements Slice {
                             );
                         }
                         
-                        // Artifact found - compute checksum using streaming to avoid memory exhaustion
+                        // CRITICAL: Consume artifact body to trigger caching (with digest computation)
+                        // CachedProxySlice will compute and save checksums during this consumption
+                        // DO NOT try to read body again - it's a OneTimePublisher!
                         Logger.debug(
                             this,
-                            "Computing %s checksum for %s (streaming mode)",
-                            algorithm, artifactPath
+                            "Triggering artifact caching for %s (will compute %s checksum)",
+                            artifactPath, algorithm
                         );
-                        return computeChecksumStreaming(artifactResp.body(), algorithm, artifactPath);
+                        return artifactResp.body().asBytesFuture().thenCompose(ignored -> {
+                            // Artifact now cached with checksums - retry fetching checksum file
+                            return this.upstream.response(line, headers, Content.EMPTY)
+                                .thenApply(checksumRetry -> {
+                                    if (checksumRetry.status().success()) {
+                                        Logger.debug(
+                                            this,
+                                            "Successfully retrieved %s checksum for %s after caching",
+                                            algorithm, artifactPath
+                                        );
+                                        return checksumRetry;
+                                    } else {
+                                        // Checksum still not available (shouldn't happen if caching works)
+                                        Logger.warn(
+                                            this,
+                                            "Checksum %s not found for %s even after caching artifact",
+                                            algorithm, artifactPath
+                                        );
+                                        return ResponseBuilder.notFound().build();
+                                    }
+                                });
+                        });
                     });
             });
     }
 
-    /**
-     * Compute checksum using streaming to avoid loading entire artifact into memory.
-     * Uses reactive streams to process artifact in chunks, dramatically reducing heap usage.
-     * 
-     * @param body Artifact content as reactive publisher
-     * @param algorithm Hash algorithm (SHA-1, MD5, SHA-256, SHA-512)
-     * @param artifactPath Artifact path for logging
-     * @return Response future with computed checksum
-     */
-    private CompletableFuture<Response> computeChecksumStreaming(
-        final org.reactivestreams.Publisher<ByteBuffer> body,
-        final String algorithm,
-        final String artifactPath
-    ) {
-        final MessageDigest digest = getDigestForAlgorithm(algorithm);
-        final CompletableFuture<String> hashFuture = new CompletableFuture<>();
-        
-        return Flowable.fromPublisher(body)
-            .doOnNext(buffer -> {
-                // Update digest incrementally as chunks arrive (no memory accumulation)
-                digest.update(buffer.asReadOnlyBuffer());
-            })
-            .ignoreElements()  // Don't collect data, just process for side effects
-            .doOnComplete(() -> {
-                // Finalize digest and encode as hex
-                final String hash = Hex.encodeHexString(digest.digest());
-                Logger.debug(
-                    this,
-                    "Computed %s checksum for %s: %s",
-                    algorithm, artifactPath, hash.substring(0, Math.min(16, hash.length())) + "..."
-                );
-                hashFuture.complete(hash);
-            })
-            .doOnError(err -> {
-                Logger.warn(
-                    this,
-                    "Failed to compute %s checksum for %s: %s",
-                    algorithm, artifactPath, err.getMessage()
-                );
-                hashFuture.completeExceptionally(err);
-            })
-            .to(CompletableInterop.await())
-            .thenCompose(ignored -> hashFuture)
-            .thenApply(hash -> {
-                final byte[] checksumBytes = hash.getBytes(StandardCharsets.UTF_8);
-                return ResponseBuilder.ok()
-                    .header("Content-Type", "text/plain")
-                    .header("Content-Length", String.valueOf(checksumBytes.length))
-                    .body(checksumBytes)
-                    .build();
-            })
-            .exceptionally(err -> {
-                // Graceful fallback on streaming failure
-                Logger.error(
-                    this,
-                    "Checksum computation failed for %s: %s",
-                    artifactPath, err.getMessage()
-                );
-                return ResponseBuilder.internalError().build();
-            })
-            .toCompletableFuture();
-    }
-
-    /**
-     * Get MessageDigest instance for the specified algorithm.
-     * 
-     * @param algorithm Hash algorithm name
-     * @return MessageDigest instance
-     */
-    private static MessageDigest getDigestForAlgorithm(final String algorithm) {
-        switch (algorithm) {
-            case "SHA-1":
-                return Digests.SHA1.get();
-            case "MD5":
-                return Digests.MD5.get();
-            case "SHA-256":
-                return Digests.SHA256.get();
-            case "SHA-512":
-                return Digests.SHA512.get();
-            default:
-                throw new IllegalArgumentException("Unsupported algorithm: " + algorithm);
-        }
-    }
 }

@@ -80,9 +80,10 @@ final class ProxySlice implements Slice {
 
     /**
      * Pattern to rewrite HTML links pointing to upstream packages.
+     * Captures href and all other attributes (like data-yanked) to preserve them.
      */
     private static final Pattern HREF_PACKAGES =
-        Pattern.compile("href\\s*=\\s*\"(https?://[^\\\"#]+)(/packages/[^\\\"#]*)(#[^\\\"]*)?\"");
+        Pattern.compile("<a\\s+([^>]*?href\\s*=\\s*\")(https?://[^\\\"#]+)(/packages/[^\\\"#]*)(#[^\\\"]*)?\"([^>]*)>");
 
     /**
      * Pattern to rewrite JSON urls pointing to upstream packages.
@@ -457,15 +458,18 @@ final class ProxySlice implements Slice {
         final Matcher matcher = HREF_PACKAGES.matcher(body);
         final StringBuffer buffer = new StringBuffer(body.length());
         while (matcher.find()) {
-            final String upstreamHost = matcher.group(1);
-            final String upstreamPath = matcher.group(2);
-            final String fragment = Optional.ofNullable(matcher.group(3)).orElse("");
+            final String prefix = matcher.group(1);          // "<a " + attributes before href
+            final String upstreamHost = matcher.group(2);    // upstream host
+            final String upstreamPath = matcher.group(3);    // /packages/...
+            final String fragment = Optional.ofNullable(matcher.group(4)).orElse(""); // #sha256=...
+            final String suffix = matcher.group(5);          // attributes after href (including data-yanked)
             final URI upstream = URI.create(upstreamHost + upstreamPath);
             this.registerMirror(String.format("%s%s", base, upstreamPath), upstream);
+            // CRITICAL: Preserve all attributes (especially data-yanked for PEP 592)
             matcher.appendReplacement(
                 buffer,
                 Matcher.quoteReplacement(
-                    String.format("href=\"%s%s%s\"", base, upstreamPath, fragment)
+                    String.format("<a %s%s%s%s\"%s>", prefix, base, upstreamPath, fragment, suffix)
                 )
             );
         }

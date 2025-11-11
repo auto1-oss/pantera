@@ -15,6 +15,9 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.auth.AuthClientSlice;
+import com.artipie.http.client.auth.GenericAuthenticator;
+import com.artipie.http.client.UriClientSlice;
+import com.artipie.http.group.GroupSlice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.settings.repo.RepoConfig;
@@ -22,18 +25,15 @@ import com.artipie.settings.repo.RepoConfig;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
- * File proxy slice created from config.
+ * File proxy adapter with maven-proxy feature parity.
+ * Supports multiple remotes, authentication, priority ordering, and failover.
  */
 public final class FileProxy implements Slice {
 
     private final Slice slice;
-    
-    /**
-     * Cooldown service.
-     */
-    private final CooldownService cooldown;
 
     /**
      * @param client HTTP client.
@@ -45,14 +45,23 @@ public final class FileProxy implements Slice {
         ClientSlices client, RepoConfig cfg, Optional<Queue<ArtifactEvent>> events,
         CooldownService cooldown
     ) {
-        this.cooldown = cooldown;
         final Optional<Storage> asto = cfg.storageOpt();
-        this.slice = new FileProxySlice(
-            AuthClientSlice.withUriClientSlice(client, cfg.remoteConfig()),
-            asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
-            asto.flatMap(ignored -> events),
-            cfg.name(),
-            this.cooldown
+        
+        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Each remote gets its own FileProxySlice, evaluated in priority order
+        this.slice = new GroupSlice(
+            cfg.remotes().stream().map(
+                remote -> new FileProxySlice(
+                    new AuthClientSlice(
+                        new UriClientSlice(client, remote.uri()),
+                        GenericAuthenticator.create(client, remote.username(), remote.pwd())
+                    ),
+                    asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
+                    asto.flatMap(ignored -> events),
+                    cfg.name(),
+                    cooldown
+                )
+            ).collect(Collectors.toList())
         );
     }
 

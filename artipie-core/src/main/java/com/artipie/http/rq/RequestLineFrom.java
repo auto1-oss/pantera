@@ -44,7 +44,7 @@ final class RequestLineFrom {
      * @return Method name
      */
     public RqMethod method() {
-        return RqMethod.valueOf(this.part(0));
+        return RqMethod.valueOf(this.part(0).toUpperCase());
     }
 
     /**

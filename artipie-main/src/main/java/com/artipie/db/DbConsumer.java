@@ -105,11 +105,12 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             boolean error = false;
             try (
                 Connection conn = DbConsumer.this.source.getConnection();
-                PreparedStatement insert = conn.prepareStatement(
-                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner) VALUES (?,?,?,?,?,?,?,?)"
-                );
-                PreparedStatement update = conn.prepareStatement(
-                    "UPDATE artifacts SET repo_type = ?, size = ?, created_date = ?, release_date = ?, owner = ? WHERE repo_name = ? AND name = ? AND version = ?"
+                PreparedStatement upsert = conn.prepareStatement(
+                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner) " +
+                    "VALUES (?,?,?,?,?,?,?,?) " +
+                    "ON CONFLICT (repo_name, name, version) " +
+                    "DO UPDATE SET repo_type = EXCLUDED.repo_type, size = EXCLUDED.size, " +
+                    "created_date = EXCLUDED.created_date, release_date = EXCLUDED.release_date, owner = EXCLUDED.owner"
                 );
                 PreparedStatement deletev = conn.prepareStatement(
                     "DELETE FROM artifacts WHERE repo_name = ? AND name = ? AND version = ?;"
@@ -122,30 +123,17 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 for (final ArtifactEvent record : events) {
                     try {
                         if (record.eventType() == ArtifactEvent.Type.INSERT) {
-                            // Try to update first
+                            // Use atomic UPSERT to prevent deadlocks
                             final long release = record.releaseDate().orElse(record.createdDate());
-                            update.setString(1, record.repoType());
-                            update.setDouble(2, record.size());
-                            update.setLong(3, record.createdDate());
-                            update.setLong(4, release);
-                            update.setString(5, record.owner());
-                            update.setString(6, normalizeRepoName(record.repoName()));
-                            update.setString(7, record.artifactName());
-                            update.setString(8, record.artifactVersion());
-                            final int updated = update.executeUpdate();
-                            
-                            // If no rows were updated, insert new record
-                            if (updated == 0) {
-                                insert.setString(1, record.repoType());
-                                insert.setString(2, normalizeRepoName(record.repoName()));
-                                insert.setString(3, record.artifactName());
-                                insert.setString(4, record.artifactVersion());
-                                insert.setDouble(5, record.size());
-                                insert.setLong(6, record.createdDate());
-                                insert.setLong(7, release);
-                                insert.setString(8, record.owner());
-                                insert.execute();
-                            }
+                            upsert.setString(1, record.repoType());
+                            upsert.setString(2, normalizeRepoName(record.repoName()));
+                            upsert.setString(3, record.artifactName());
+                            upsert.setString(4, record.artifactVersion());
+                            upsert.setDouble(5, record.size());
+                            upsert.setLong(6, record.createdDate());
+                            upsert.setLong(7, release);
+                            upsert.setString(8, record.owner());
+                            upsert.execute();
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());

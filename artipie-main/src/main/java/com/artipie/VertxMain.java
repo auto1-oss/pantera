@@ -39,7 +39,6 @@ import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.micrometer.MicrometerMetricsOptions;
-import com.artipie.vertx.ApmInstrumentation;
 import io.vertx.micrometer.VertxPrometheusOptions;
 import io.vertx.micrometer.backends.BackendRegistries;
 import io.vertx.reactivex.core.Vertx;
@@ -133,6 +132,11 @@ public final class VertxMain {
             settings.logging().apply();
             LOGGER.info("Applied logging configuration from YAML settings");
         }
+        
+        // Initialize OpenTelemetry metrics (works with Elastic APM Java Agent)
+        com.artipie.metrics.otel.OtelMetrics.initialize();
+        LOGGER.info("OpenTelemetry metrics initialized");
+        
         final Vertx vertx = VertxMain.vertx(settings.metrics());
         final JWTAuth jwt = JWTAuth.create(
             vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
@@ -278,17 +282,6 @@ public final class VertxMain {
      * @throws Exception If fails
      */
     public static void main(final String... args) throws Exception {
-        // Initialize Elastic APM FIRST (before any other code)
-        try {
-            final Object apm = Class.forName("com.artipie.vertx.ApmInstrumentation")
-                .getDeclaredConstructor()
-                .newInstance();
-            apm.getClass().getMethod("attach").invoke(apm);
-        } catch (ClassNotFoundException e) {
-            LOGGER.debug("APM instrumentation not available (optional dependency)");
-        } catch (Exception e) {
-            LOGGER.warn("Failed to initialize APM", e);
-        }
         
         final Path config;
         final int port;
@@ -415,7 +408,9 @@ public final class VertxMain {
     private static Vertx vertx(final MetricsContext mctx) {
         final Vertx res;
         final Optional<Pair<String, Integer>> endpoint = mctx.endpointAndPort();
-        final MeterRegistry apm = ApmInstrumentation.registry();
+        // NOTE: APM registry removed - using Elastic APM Java Agent via -javaagent (safe mode)
+        // Micrometer still used for Prometheus metrics
+        final MeterRegistry apm = null;
         
         // Configure Vert.x options for optimal event loop performance
         final int cpuCores = Runtime.getRuntime().availableProcessors();
@@ -447,7 +442,7 @@ public final class VertxMain {
             }
             options.setMetricsOptions(micrometer);
             res = Vertx.vertx(options);
-            final MeterRegistry registry = apm != null ? apm : BackendRegistries.getDefaultNow();
+            final MeterRegistry registry = BackendRegistries.getDefaultNow();
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);
                 new JvmMemoryMetrics().bindTo(registry);

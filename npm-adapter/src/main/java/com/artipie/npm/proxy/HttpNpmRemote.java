@@ -24,7 +24,6 @@ import org.apache.commons.lang3.tuple.Pair;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 
 /**
  * Base NPM Remote client implementation. It calls remote NPM repository
@@ -107,14 +106,17 @@ public final class HttpNpmRemote implements NpmRemote {
         return this.origin.response(
             new RequestLine(RqMethod.GET, String.format("/%s", name)),
             Headers.EMPTY, Content.EMPTY
-        ).<CompletableFuture<Pair<Content, Headers>>>thenApply(response -> {
+        ).thenCompose(response -> {
             if (response.status().success()) {
                 return CompletableFuture.completedFuture(
                     new ImmutablePair<>(response.body(), response.headers())
                 );
             }
-            return CompletableFuture.failedFuture(new ArtipieHttpException(response.status()));
-        }).thenCompose(Function.identity());
+            // CRITICAL: Must consume error response body to prevent Vert.x request leak
+            return response.body().asBytesFuture().thenCompose(ignored ->
+                CompletableFuture.failedFuture(new ArtipieHttpException(response.status()))
+            );
+        });
     }
 
     /**

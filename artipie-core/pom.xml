@@ -6,11 +6,11 @@
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.18.22</version>
+    <version>1.19.1</version>
   </parent>
 
   <artifactId>artipie-core</artifactId>
-  <version>1.18.22</version>
+  <version>1.19.1</version>
   <packaging>jar</packaging>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
@@ -19,7 +19,7 @@
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.18.22</version>
+      <version>1.19.1</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -45,12 +45,31 @@
       <artifactId>commons-lang3</artifactId>
       <version>3.14.0</version>
     </dependency>
-    <!-- Micrometer for custom metrics -->
+    <!-- OpenTelemetry for custom metrics (replaces Micrometer) -->
     <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-core</artifactId>
-      <version>1.12.0</version>
-      <optional>true</optional>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk-metrics</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk-extension-autoconfigure</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry.semconv</groupId>
+      <artifactId>opentelemetry-semconv</artifactId>
+      <version>1.25.0-alpha</version>
     </dependency>
     <dependency>
       <groupId>javax.json</groupId>
@@ -76,6 +95,19 @@
       <groupId>org.quartz-scheduler</groupId>
       <artifactId>quartz</artifactId>
       <version>2.3.2</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+      <version>3.1.8</version>
+      <scope>compile</scope>
+    </dependency>
+    <!-- Lettuce: Redis/Valkey client for L2 cache -->
+    <dependency>
+      <groupId>io.lettuce</groupId>
+      <artifactId>lettuce-core</artifactId>
+      <version>6.4.0.RELEASE</version>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.servlet</groupId>
