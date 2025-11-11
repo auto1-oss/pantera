@@ -567,7 +567,6 @@ public final class VertxSliceServer implements Closeable {
                     terminator.completeWithoutEnding();
                 });
                 vpb.doOnSubscribe(subscription -> LOGGER.debug("Subscribed to chunked response body"))
-                    .observeOn(io.reactivex.schedulers.Schedulers.io())
                     .doOnError(terminator::fail)
                     .subscribe(response.toSubscriber());
             }

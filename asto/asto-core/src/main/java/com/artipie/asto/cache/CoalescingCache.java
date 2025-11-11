@@ -15,7 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Cache decorator that coalesces concurrent requests for the same key.
  * When multiple requests come in for the same uncached item, only the first
  * request fetches from remote while others wait for that result.
- * This prevents cache stampede where N concurrent requests cause N upstream fetches.
+ * This prevents cache stampede where N concurrent requests cause N upstream
+ * fetches.
  *
  * @since 1.18.14
  */
@@ -44,37 +45,19 @@ public final class CoalescingCache implements Cache {
 
     @Override
     public CompletionStage<Optional<? extends Content>> load(
-        final Key key,
-        final Remote remote,
-        final CacheControl control
-    ) {
-        // Try to get existing in-flight request for this key
-        final CompletableFuture<Optional<? extends Content>> existing = this.inflight.get(key);
-        if (existing != null) {
-            // Another request is already fetching this key - wait for it
-            return existing;
-        }
+            final Key key,
+            final Remote remote,
+            final CacheControl control) {
+        // Use computeIfAbsent to atomically check and create in-flight request
+        return this.inflight.computeIfAbsent(key, k -> {
+            // We won the race - start the fetch and convert to CompletableFuture
+            final CompletableFuture<Optional<? extends Content>> future = this.cache.load(key, remote, control)
+                    .toCompletableFuture();
 
-        // Start new fetch - but use computeIfAbsent to handle race conditions
-        final CompletableFuture<Optional<? extends Content>> future = new CompletableFuture<>();
-        final CompletableFuture<Optional<? extends Content>> winner = 
-            this.inflight.computeIfAbsent(key, k -> {
-                // We won the race - actually perform the fetch
-                this.cache.load(key, remote, control)
-                    .whenComplete((result, error) -> {
-                        // Always remove from in-flight map when done
-                        this.inflight.remove(key);
-                        
-                        if (error != null) {
-                            future.completeExceptionally(error);
-                        } else {
-                            future.complete(result);
-                        }
-                    });
-                return future;
-            });
+            // Clean up when complete - always remove from inflight map
+            future.whenComplete((result, error) -> this.inflight.remove(key));
 
-        // If winner != future, we lost the race and should return the winner
-        return winner;
+            return future;
+        });
     }
 }
