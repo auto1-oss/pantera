@@ -30,6 +30,9 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.ServerSocket;
+import java.nio.ByteBuffer;
+import java.security.MessageDigest;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -88,6 +91,81 @@ public final class VertxSliceServerTest {
         MatcherAssert.assertThat(response.statusCode(), Matchers.equalTo(200));
         MatcherAssert.assertThat(response.getHeader(header), Matchers.equalTo(Long.toString(length)));
         MatcherAssert.assertThat(response.body(), Matchers.nullValue());
+    }
+
+    /**
+     * Test that large file downloads (>200MB) work correctly without corruption.
+     * This is a regression test for the observeOn() bug that caused file corruption.
+     *
+     * The bug was: adding .observeOn(Schedulers.io()) to the response streaming pipeline
+     * broke Vert.x's threading model, causing race conditions and data corruption for large files.
+     */
+    @Test
+    public void largeFileDownloadWithoutCorruption() throws Exception {
+        final String path = "/large-file.jar";
+
+        // Create a 300MB test file (larger than the reported 291MB corruption case)
+        final int fileSize = 300 * 1024 * 1024; // 300 MB
+        final int chunkSize = 8192; // 8KB chunks
+        final byte[] pattern = new byte[chunkSize];
+        new Random(42).nextBytes(pattern); // Deterministic pattern for verification
+
+        // Calculate expected SHA-256 checksum
+        final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        for (int i = 0; i < fileSize / chunkSize; i++) {
+            digest.update(pattern);
+        }
+        final byte[] expectedChecksum = digest.digest();
+
+        // Start server with large file response
+        this.start(
+            (line, headers, body) -> {
+                // Stream the file in chunks using reactive streams
+                final Flowable<ByteBuffer> chunks = Flowable.range(0, fileSize / chunkSize)
+                    .map(i -> ByteBuffer.wrap(pattern));
+
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Content-Length", String.valueOf(fileSize))
+                        .header("Content-Type", "application/java-archive")
+                        .body(new Content.From(chunks))
+                        .build()
+                );
+            }
+        );
+
+        // Download the file
+        final HttpResponse<Buffer> response = this.client
+            .get(this.port, VertxSliceServerTest.HOST, path)
+            .rxSend()
+            .blockingGet();
+
+        // Verify response
+        MatcherAssert.assertThat("Status should be 200", response.statusCode(), Matchers.equalTo(200));
+        MatcherAssert.assertThat(
+            "Content-Length header should match",
+            response.getHeader("Content-Length"),
+            Matchers.equalTo(String.valueOf(fileSize))
+        );
+
+        // Verify downloaded file size
+        final Buffer downloadedBody = response.body();
+        MatcherAssert.assertThat(
+            "Downloaded file size should match expected size",
+            downloadedBody.length(),
+            Matchers.equalTo(fileSize)
+        );
+
+        // Verify file integrity using checksum
+        final MessageDigest actualDigest = MessageDigest.getInstance("SHA-256");
+        actualDigest.update(downloadedBody.getBytes());
+        final byte[] actualChecksum = actualDigest.digest();
+
+        MatcherAssert.assertThat(
+            "File checksum should match (no corruption)",
+            actualChecksum,
+            Matchers.equalTo(expectedChecksum)
+        );
     }
 
     @AfterEach

@@ -529,33 +529,36 @@ public final class VertxSliceServer implements Closeable {
         if (response.headers().contains("Content-Length")) {
             response.setChunked(false);
             if (isHead) {
-                vpb.observeOn(io.reactivex.schedulers.Schedulers.io())
-                    .subscribe(
-                        buffer -> { },
-                        error -> {
-                            LOGGER.error("Error in HEAD response body: {}", error.getMessage());
-                            terminator.fail(error);
-                        },
-                        () -> {
-                            LOGGER.debug("HEAD response body fully written (Content-Length)");
-                            terminator.end();
-                        }
-                    );
+                // CRITICAL: Must execute on Vert.x event loop thread for thread safety
+                // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
+                vpb.subscribe(
+                    buffer -> { },
+                    error -> {
+                        LOGGER.error("Error in HEAD response body: {}", error.getMessage());
+                        terminator.fail(error);
+                    },
+                    () -> {
+                        LOGGER.debug("HEAD response body fully written (Content-Length)");
+                        terminator.end();
+                    }
+                );
             } else {
-                vpb.observeOn(io.reactivex.schedulers.Schedulers.io())
-                    .subscribe(
-                        buffer -> {
-                            response.write(buffer);
-                        },
-                        error -> {
-                            LOGGER.error("Error writing response body: {}", error.getMessage());
-                            terminator.fail(error);
-                        },
-                        () -> {
-                            LOGGER.debug("Response body fully written (Content-Length)");
-                            terminator.end();
-                        }
-                    );
+                // CRITICAL: Must execute on Vert.x event loop thread for thread safety
+                // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
+                // This is especially critical for large file downloads (>200MB)
+                vpb.subscribe(
+                    buffer -> {
+                        response.write(buffer);
+                    },
+                    error -> {
+                        LOGGER.error("Error writing response body: {}", error.getMessage());
+                        terminator.fail(error);
+                    },
+                    () -> {
+                        LOGGER.debug("Response body fully written (Content-Length)");
+                        terminator.end();
+                    }
+                );
             }
         } else {
             response.setChunked(true);
@@ -566,8 +569,9 @@ public final class VertxSliceServer implements Closeable {
                     LOGGER.debug("Completing chunked response");
                     terminator.completeWithoutEnding();
                 });
+                // CRITICAL: Must execute on Vert.x event loop thread for thread safety
+                // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
                 vpb.doOnSubscribe(subscription -> LOGGER.debug("Subscribed to chunked response body"))
-                    .observeOn(io.reactivex.schedulers.Schedulers.io())
                     .doOnError(terminator::fail)
                     .subscribe(response.toSubscriber());
             }

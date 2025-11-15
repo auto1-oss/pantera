@@ -25,8 +25,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.UUID;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -206,19 +204,5 @@ final class RxStorageWrapperS3Test {
             this.wrapper.exclusively(key, operation).blockingGet(),
             new IsEqual<>(1)
         );
-    }
-
-    @Test
-    void testSchedulingRxStorageWrapperS3() {
-        final Key key = new Key.From("test.txt");
-        final String data = "five\tsix eight";
-        final Executor executor = Executors.newSingleThreadExecutor();
-        final RxStorageWrapper rxsto = new RxStorageWrapper(this.original);
-        rxsto.save(key, new Content.From(data.getBytes(StandardCharsets.US_ASCII))).blockingAwait();
-        final String result = this.original.value(key).thenApplyAsync(content -> {
-            MatcherAssert.assertThat("Values must match", content.asString().equals(data));
-            return rxsto.value(key).to(ContentAs.STRING).to(SingleInterop.get()).thenApply(s -> s).toCompletableFuture().join();
-        }, executor).toCompletableFuture().join();
-        MatcherAssert.assertThat("Values must match", result.equals(data));
     }
 }

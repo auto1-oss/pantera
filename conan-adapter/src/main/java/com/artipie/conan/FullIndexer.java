@@ -87,7 +87,10 @@ public class FullIndexer {
                 )
             )
             .parallel().runOn(Schedulers.io())
-            .sequential().observeOn(Schedulers.io());
+            // CRITICAL: Do NOT use observeOn() after sequential() - causes backpressure violations
+            // The parallel().runOn() already handles threading, sequential() just merges results
+            // Adding observeOn() here creates unnecessary thread switching and buffer overflow
+            .sequential();
         return flowable.toList().to(SingleInterop.get()).thenCompose(
             unused -> CompletableFuture.completedFuture(null)
         );

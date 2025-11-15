@@ -143,7 +143,10 @@ public final class AstoRepoAdd {
                             .andThen(Flowable.empty());
                     }
                 )
-            ).sequential().observeOn(Schedulers.io()).toList().to(SingleInterop.get());
+            // CRITICAL: Do NOT use observeOn() after sequential() - causes backpressure violations
+            // The parallel().runOn() already handles threading, sequential() just merges results
+            // Adding observeOn() here creates unnecessary thread switching and buffer overflow
+            ).sequential().toList().to(SingleInterop.get());
     }
 
     /**
