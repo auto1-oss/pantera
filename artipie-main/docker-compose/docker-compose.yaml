@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   artipie:
     depends_on:
@@ -6,7 +5,11 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
-    image: auto1-artipie:1.18.21
+      valkey:
+        condition: service_healthy
+    image: auto1-artipie:1.19.1
+    cpus: 2
+    mem_reservation: 4gb
     container_name: artipie
     restart: unless-stopped
     environment:
@@ -20,14 +23,22 @@ services:
       - AWS_PROFILE=profile_name
       - AWS_REGION=eu-west-1
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.18.21
+      - ARTIPIE_VERSION=1.19.1
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
       - ELASTIC_APM_ENABLED=true
-      - ELASTIC_APM_ENVIRONMENT=dev-local
-      - ELASTIC_APM_SERVER_URL=https://apm.example.com:8200
-      - ELASTIC_APM_SERVICE_NAME=artipie-dev-local
+      - ELASTIC_APM_ENVIRONMENT=development
+      - ELASTIC_APM_SERVER_URL=http://apm:8200
+      - ELASTIC_APM_SERVICE_NAME=artipie
+      - ELASTIC_APM_SERVICE_VERSION=1.19.1
       - ELASTIC_APM_LOG_LEVEL=INFO
+      - ELASTIC_APM_LOG_FORMAT_SOUT=JSON
+      - ELASTIC_APM_TRANSACTION_MAX_SPANS=1000
+      - ELASTIC_APM_ENABLE_EXPERIMENTAL_INSTRUMENTATIONS=true
+      - ELASTIC_APM_CAPTURE_BODY=errors
+      - ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME=false
+      - ELASTIC_APM_SPAN_COMPRESSION_ENABLED=true
+      - ELASTIC_APM_CAPTURE_JMX_METRICS=object_name[*:type=*,name=*] attribute[*]
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml
@@ -38,6 +49,7 @@ services:
       - ~/.aws:/home/.aws
     networks:
       - artipie-net
+      - es
     ports:
       - "8086:8086"
       - "8087:8087"
@@ -84,19 +96,6 @@ services:
     networks:
       - artipie-net
 
-  front:
-    depends_on:
-      - artipie
-    image: artipie/front:latest
-    container_name: front
-    restart: unless-stopped
-    networks:
-      - artipie-net
-    environment:
-      - ARTIPIE_REST=http://artipie:8086
-    ports:
-      - "8082:8080"
-
   artipie-db:
     image: postgres:15-alpine
     container_name: artipie-db
@@ -116,6 +115,38 @@ services:
       timeout: 60s
       retries: 6
 
+  valkey:
+    image: valkey/valkey:8.1.4
+    container_name: valkey
+    restart: unless-stopped
+    networks:
+      - artipie-net
+    ports:
+      - "6379:6379"
+    command:
+      - valkey-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: [ "CMD", "valkey-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - valkey-data:/data
+
 networks:
   artipie-net:
     driver: bridge
+  es:
+    external: true
+    name: 92_es
+
+volumes:
+  valkey-data:

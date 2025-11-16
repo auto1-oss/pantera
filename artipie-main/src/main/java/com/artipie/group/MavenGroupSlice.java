@@ -17,6 +17,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jcabi.log.Logger;
 
 import java.io.ByteArrayOutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -122,8 +124,72 @@ public final class MavenGroupSlice implements Slice {
             return mergeMetadata(line, headers, body, path);
         }
 
+        // Handle checksum requests for merged metadata
+        if ("GET".equals(method) && (path.endsWith("maven-metadata.xml.sha1") || path.endsWith("maven-metadata.xml.md5"))) {
+            return handleChecksumRequest(line, headers, body, path);
+        }
+
         // All other requests use standard group behavior
         return delegate.response(line, headers, body);
+    }
+
+    /**
+     * Handle checksum requests for merged metadata.
+     * Computes checksum of the merged metadata and returns it.
+     */
+    private CompletableFuture<Response> handleChecksumRequest(
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final String path
+    ) {
+        // Determine checksum type
+        final boolean isSha1 = path.endsWith(".sha1");
+        final String metadataPath = path.substring(0, path.lastIndexOf('.'));
+
+        // Get merged metadata from cache or merge it
+        final RequestLine metadataLine = new RequestLine(
+            line.method(),
+            URI.create(metadataPath),
+            line.version()
+        );
+
+        return mergeMetadata(metadataLine, headers, body, metadataPath)
+            .thenApply(metadataResponse -> {
+                // Extract body from metadata response
+                return metadataResponse.body().asBytesFuture()
+                    .thenApply(metadataBytes -> {
+                        try {
+                            // Compute checksum
+                            final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
+                                isSha1 ? "SHA-1" : "MD5"
+                            );
+                            final byte[] checksumBytes = digest.digest(metadataBytes);
+
+                            // Convert to hex string
+                            final StringBuilder hexString = new StringBuilder();
+                            for (byte b : checksumBytes) {
+                                hexString.append(String.format("%02x", b));
+                            }
+
+                            return ResponseBuilder.ok()
+                                .header("Content-Type", "text/plain")
+                                .body(hexString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                                .build();
+                        } catch (java.security.NoSuchAlgorithmException e) {
+                            Logger.error(
+                                this,
+                                "Failed to compute checksum for %s: %s",
+                                path,
+                                e.getMessage()
+                            );
+                            return ResponseBuilder.internalError()
+                                .textBody("Failed to compute checksum")
+                                .build();
+                        }
+                    });
+            })
+            .thenCompose(future -> future);
     }
 
     /**
@@ -169,12 +235,14 @@ public final class MavenGroupSlice implements Slice {
                 this.port,
                 this.depth + 1
             );
-            
-            // Rewrite request to include member name in path
-            final RequestLine rewritten = rewritePath(line, member);
-            
+
+            // CRITICAL: Member slices are wrapped in TrimPathSlice which expects paths with member prefix
+            // Example: /member/org/apache/maven/plugins/maven-metadata.xml
+            // We must add the member prefix to the path before calling the member slice
+            final RequestLine memberLine = rewritePath(line, member);
+
             final CompletableFuture<byte[]> memberFuture = memberSlice
-                .response(rewritten, dropFullPathHeader(headers), Content.EMPTY)
+                .response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
                 .thenCompose(resp -> {
                     if (resp.status() == RsStatus.OK) {
                         return readResponseBody(resp.body());
@@ -252,15 +320,26 @@ public final class MavenGroupSlice implements Slice {
                     });
             })
             .exceptionally(err -> {
+                // Unwrap CompletionException to get the real cause
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
                 Logger.error(
                     this,
-                    "Maven group %s: failed to merge metadata for %s: %s",
+                    "Maven group %s: failed to merge metadata for %s: %s\n%s",
                     this.group,
                     path,
-                    err.getMessage()
+                    cause.getMessage(),
+                    java.util.Arrays.toString(cause.getStackTrace())
                 );
+                if (cause.getCause() != null) {
+                    Logger.error(
+                        this,
+                        "Caused by: %s\n%s",
+                        cause.getCause().getMessage(),
+                        java.util.Arrays.toString(cause.getCause().getStackTrace())
+                    );
+                }
                 return ResponseBuilder.internalError()
-                    .textBody("Failed to merge metadata: " + err.getMessage())
+                    .textBody("Failed to merge metadata: " + cause.getMessage())
                     .build();
             });
         }); // Close thenCompose lambda for body consumption
@@ -293,9 +372,18 @@ public final class MavenGroupSlice implements Slice {
         } catch (Exception e) {
             Logger.error(
                 this,
-                "Failed to merge metadata using reflection: %s",
-                e.getMessage()
+                "Failed to merge metadata using reflection: %s\n%s",
+                e.getMessage(),
+                java.util.Arrays.toString(e.getStackTrace())
             );
+            if (e.getCause() != null) {
+                Logger.error(
+                    this,
+                    "Caused by: %s\n%s",
+                    e.getCause().getMessage(),
+                    java.util.Arrays.toString(e.getCause().getStackTrace())
+                );
+            }
             return CompletableFuture.failedFuture(
                 new IllegalStateException("Maven metadata merging not available", e)
             );
@@ -345,19 +433,6 @@ public final class MavenGroupSlice implements Slice {
     }
 
     /**
-     * Rewrite request path to include member repository name.
-     */
-    private static RequestLine rewritePath(final RequestLine original, final String member) {
-        final String path = original.uri().getPath();
-        final String newPath = "/" + member + (path.startsWith("/") ? path : "/" + path);
-        return new RequestLine(
-            original.method().value(),
-            newPath,
-            original.version()
-        );
-    }
-
-    /**
      * Drop X-FullPath header to avoid recursion detection issues.
      */
     private static Headers dropFullPathHeader(final Headers headers) {
@@ -366,5 +441,45 @@ public final class MavenGroupSlice implements Slice {
                 .filter(h -> !h.getKey().equalsIgnoreCase("X-FullPath"))
                 .toList()
         );
+    }
+
+    /**
+     * Rewrite request path to include member repository name.
+     *
+     * <p>Member slices are wrapped in TrimPathSlice which expects paths with member prefix.
+     * This method adds the member prefix to the path.
+     *
+     * <p>Example: /org/apache/maven/plugins/maven-metadata.xml → /member/org/apache/maven/plugins/maven-metadata.xml
+     *
+     * @param original Original request line
+     * @param member Member repository name to prefix
+     * @return Rewritten request line with member prefix
+     */
+    private static RequestLine rewritePath(final RequestLine original, final String member) {
+        final URI uri = original.uri();
+        final String raw = uri.getRawPath();
+        final String base = raw.startsWith("/") ? raw : "/" + raw;
+        final String prefix = "/" + member + "/";
+
+        // Avoid double-prefixing
+        final String path = base.startsWith(prefix) ? base : ("/" + member + base);
+
+        final StringBuilder full = new StringBuilder(path);
+        if (uri.getRawQuery() != null) {
+            full.append('?').append(uri.getRawQuery());
+        }
+        if (uri.getRawFragment() != null) {
+            full.append('#').append(uri.getRawFragment());
+        }
+
+        try {
+            return new RequestLine(
+                original.method(),
+                new URI(full.toString()),
+                original.version()
+            );
+        } catch (URISyntaxException ex) {
+            throw new IllegalArgumentException("Failed to rewrite path", ex);
+        }
     }
 }

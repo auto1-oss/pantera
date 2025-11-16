@@ -11,7 +11,6 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import io.lettuce.core.api.async.RedisAsyncCommands;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -161,9 +160,11 @@ public class MetadataCache {
         // L1: Check in-memory cache
         final CachedMetadata l1Cached = this.cache.getIfPresent(key);
         if (l1Cached != null) {
-            return CompletableFuture.completedFuture(Optional.of(l1Cached.content));
+            // CRITICAL: Create fresh Content instance from bytes
+            // This prevents "already consumed" Publisher errors
+            return CompletableFuture.completedFuture(Optional.of(l1Cached.content()));
         }
-        
+
         // L2: Check Valkey (if enabled)
         if (this.twoTier) {
             final String redisKey = "maven:metadata:" + this.repoName + ":" + key.string();
@@ -174,34 +175,34 @@ public class MetadataCache {
                 .thenCompose(l2Bytes -> {
                     if (l2Bytes != null) {
                         // L2 HIT: Deserialize and promote to L1
-                        final String contentStr = new String(l2Bytes, StandardCharsets.UTF_8);
-                        final Content content = new Content.From(contentStr.getBytes(StandardCharsets.UTF_8));
-                        final CachedMetadata metadata = new CachedMetadata(content, Instant.now());
+                        // Store bytes in L1, not Content Publisher
+                        final CachedMetadata metadata = new CachedMetadata(l2Bytes, Instant.now());
                         this.cache.put(key, metadata);
-                        return CompletableFuture.completedFuture(Optional.of(content));
+                        // Return fresh Content instance
+                        return CompletableFuture.completedFuture(Optional.of(metadata.content()));
                     }
                     // L2 MISS: Fetch from remote
                     return this.fetchAndCache(key, remote);
                 });
         }
-        
+
         // Single-tier: Fetch from remote
         return this.fetchAndCache(key, remote);
     }
     
     /**
      * Fetch from remote and cache in both tiers.
-     * 
+     *
      * CRITICAL FIX: Content Publisher can only be consumed once.
-     * Previously, we consumed it for L2 write, then returned the consumed content → error!
-     * 
+     * We consume it once to get bytes, then store bytes (not Publisher) in cache.
+     *
      * New approach:
      * 1. Consume the original content Publisher to get bytes
-     * 2. Cache bytes to L2 (Valkey)
-     * 3. Create NEW Content from bytes for L1 cache
+     * 2. Store bytes in L1 cache (not Content Publisher)
+     * 3. Cache bytes to L2 (Valkey) if enabled
      * 4. Return NEW Content from bytes to caller
-     * 
-     * This ensures the content can be read by the caller without errors.
+     *
+     * This ensures the content can be read by the caller and from cache without errors.
      */
     private CompletableFuture<Optional<Content>> fetchAndCache(
         final Key key,
@@ -214,18 +215,16 @@ public class MetadataCache {
                     this.cache.invalidate(key);
                     return CompletableFuture.completedFuture(opt);
                 }
-                
+
                 final Content content = opt.get();
-                
+
                 // CRITICAL: Consume the content Publisher ONCE to get bytes
                 // This is the ONLY read of the original Publisher
                 return content.asBytesFuture().thenApply(bytes -> {
-                    // Now we have bytes - can create multiple Content instances
-                    
-                    // Create Content for L1 cache (in-memory)
-                    final Content l1Content = new Content.From(bytes);
-                    this.cache.put(key, new CachedMetadata(l1Content, Instant.now()));
-                    
+                    // Now we have bytes - store in L1 cache
+                    // CRITICAL: Store bytes, not Content Publisher
+                    this.cache.put(key, new CachedMetadata(bytes, Instant.now()));
+
                     // Cache bytes in L2 (Valkey) if enabled
                     if (this.twoTier) {
                         final String redisKey = "maven:metadata:" + this.repoName + ":" + key.string();
@@ -233,7 +232,7 @@ public class MetadataCache {
                         // Fire-and-forget write to Valkey (don't block on it)
                         this.l2.setex(redisKey, seconds, bytes);
                     }
-                    
+
                     // Return NEW Content from bytes to caller
                     // This ensures caller can read the content without "already consumed" errors
                     return Optional.of(new Content.From(bytes));
@@ -325,28 +324,42 @@ public class MetadataCache {
     
     /**
      * Cached metadata entry with timestamp.
-     * Simple wrapper to hold content with its cache time.
+     *
+     * CRITICAL: Stores bytes instead of Content Publisher.
+     * Content is a Publisher that can only be consumed once.
+     * By storing bytes, we can create fresh Content instances on each cache hit.
      */
     protected static final class CachedMetadata {
-        
+
         /**
-         * Cached content.
+         * Cached content as bytes (not Publisher).
+         * This allows creating fresh Content instances on each cache hit.
          */
-        private final Content content;
-        
+        private final byte[] bytes;
+
         /**
          * Timestamp when cached (for tracking purposes).
          */
         private final Instant timestamp;
-        
+
         /**
          * Create cached metadata entry.
-         * @param content Metadata content
+         * @param bytes Metadata content as bytes
          * @param timestamp Timestamp when cached
          */
-        CachedMetadata(final Content content, final Instant timestamp) {
-            this.content = content;
+        CachedMetadata(final byte[] bytes, final Instant timestamp) {
+            // Clone array to prevent external modification (PMD: ArrayIsStoredDirectly)
+            this.bytes = bytes.clone();
             this.timestamp = timestamp;
+        }
+
+        /**
+         * Get content as fresh Publisher.
+         * Creates a new Content instance each time to avoid "already consumed" errors.
+         * @return Fresh Content instance
+         */
+        Content content() {
+            return new Content.From(this.bytes);
         }
     }
 }

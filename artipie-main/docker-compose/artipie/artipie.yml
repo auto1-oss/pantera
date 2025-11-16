@@ -17,9 +17,12 @@ meta:
       type: fs
       path: /var/artipie/security
   cooldown:
-    enabled: false
+    enabled: true
+    repo_types:
+      maven-proxy:
+        enabled: false
     # Use duration strings: m = minutes, h = hours, d = days
-    minimum_allowed_age: 12h
+    minimum_allowed_age: 7d
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432
@@ -49,3 +52,64 @@ meta:
       - http # enables http requests/responses related metrics
   global_prefixes:
     - test_prefix
+
+  caches:
+    valkey:
+      enabled: true
+      host: valkey
+      port: 6379
+      timeout: 100ms
+    cooldown:
+      ttl: 24h
+      maxSize: 100000
+      valkey:
+        enabled: true
+        l1MaxSize: 100000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+    negative:
+      ttl: 24h
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+    auth:
+      ttl: 5m
+      maxSize: 10000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 5m
+        l2MaxSize: 100000
+        l2Ttl: 5m
+    maven-metadata:
+      ttl: 24h
+      maxSize: 10000
+      valkey:
+        enabled: true
+        l1MaxSize: 10000
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
+    maven-negative:
+      ttl: 24h
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 72h
+    npm-search:
+      ttl: 24h
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
