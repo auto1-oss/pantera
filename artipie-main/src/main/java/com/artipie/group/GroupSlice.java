@@ -146,20 +146,25 @@ public final class GroupSlice implements Slice {
         final Content body
     ) {
         final String method = line.method().value();
-        
-        // Only allow read operations
-        if (!"GET".equals(method) && !"HEAD".equals(method)) {
+        final String path = line.uri().getPath();
+
+        // Allow read operations (GET, HEAD)
+        // Allow POST for npm audit endpoints (/-/npm/v1/security/*)
+        final boolean isReadOperation = "GET".equals(method) || "HEAD".equals(method);
+        final boolean isNpmAudit = "POST".equals(method) && path.contains("/-/npm/v1/security/");
+
+        if (!isReadOperation && !isNpmAudit) {
             return body.asBytesFuture().thenApply(ignored ->
                 ResponseBuilder.methodNotAllowed().build()
             );
         }
-        
+
         if (this.members.isEmpty()) {
             return body.asBytesFuture().thenApply(ignored ->
                 ResponseBuilder.notFound().build()
             );
         }
-        
+
         recordRequestStart();
         return queryAllMembersInParallel(line, headers, body);
     }
@@ -173,16 +178,18 @@ public final class GroupSlice implements Slice {
         final Content body
     ) {
         final long startTime = System.currentTimeMillis();
-        
+
         // CRITICAL: Consume incoming body ONCE before parallel queries
+        // For POST requests (npm audit), we need to preserve the body bytes
+        // and create new Content instances for each member
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
             final AtomicInteger pending = new AtomicInteger(this.members.size());
-            
+
             // Start ALL members in parallel
             for (MemberSlice member : this.members) {
-                queryMember(member, line, headers)
+                queryMember(member, line, headers, requestBytes)
                     .orTimeout(this.timeout.getSeconds(), java.util.concurrent.TimeUnit.SECONDS)
                     .whenComplete((resp, err) -> {
                         if (err != null) {
@@ -192,29 +199,42 @@ public final class GroupSlice implements Slice {
                         }
                     });
             }
-            
+
             return result;
         });
     }
 
     /**
      * Query a single member.
+     *
+     * @param member Member to query
+     * @param line Request line
+     * @param headers Request headers
+     * @param requestBytes Request body bytes (may be empty for GET/HEAD)
+     * @return Response future
      */
     private CompletableFuture<Response> queryMember(
         final MemberSlice member,
         final RequestLine line,
-        final Headers headers
+        final Headers headers,
+        final byte[] requestBytes
     ) {
         if (member.isCircuitOpen()) {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.unavailable().build()
             );
         }
-        
+
+        // Create new Content instance from buffered bytes for each member
+        // This allows parallel requests with POST body (e.g., npm audit)
+        final Content memberBody = requestBytes.length > 0
+            ? new Content.From(requestBytes)
+            : Content.EMPTY;
+
         return member.slice().response(
             member.rewritePath(line),
             dropFullPathHeader(headers),
-            Content.EMPTY
+            memberBody
         );
     }
 
