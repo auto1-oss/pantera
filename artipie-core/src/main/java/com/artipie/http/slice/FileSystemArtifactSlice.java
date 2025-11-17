@@ -13,6 +13,7 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.jcabi.log.Logger;
 import org.reactivestreams.Publisher;
 
@@ -24,6 +25,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Ultra-fast filesystem artifact serving using direct Java NIO.
@@ -55,6 +58,36 @@ public final class FileSystemArtifactSlice implements Slice {
     private static final int CHUNK_SIZE = 1024 * 1024;
 
     /**
+     * Dedicated executor for blocking file I/O operations.
+     * Prevents blocking Vert.x event loop threads by running all blocking
+     * filesystem operations (Files.exists, Files.size, FileChannel.read) on
+     * a separate thread pool.
+     *
+     * <p>Thread pool sizing is configurable via system property or environment
+     * variable (see {@link FileSystemIoConfig}). Default: 2x CPU cores (minimum 8).
+     * Named threads for better observability in thread dumps and monitoring.
+     *
+     * <p>CRITICAL: Without this dedicated executor, blocking I/O operations
+     * would run on ForkJoinPool.commonPool() which can block Vert.x event
+     * loop threads, causing "Thread blocked" warnings and system hangs.
+     *
+     * <p>Configuration examples:
+     * <ul>
+     *   <li>c6in.4xlarge with EBS gp3 (16K IOPS, 1,000 MB/s): 14 threads</li>
+     *   <li>c6in.8xlarge with EBS gp3 (37K IOPS, 2,000 MB/s): 32 threads</li>
+     * </ul>
+     *
+     * @since 1.19.2
+     */
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
+        FileSystemIoConfig.instance().threads(),
+        new ThreadFactoryBuilder()
+            .setNameFormat("filesystem-io-%d")
+            .setDaemon(true)
+            .build()
+    );
+
+    /**
      * Ctor.
      *
      * @param storage Storage to serve artifacts from (SubStorage or FileStorage)
@@ -72,7 +105,8 @@ public final class FileSystemArtifactSlice implements Slice {
         final String artifactPath = line.uri().getPath();
         final Key key = new Key.From(artifactPath.replaceAll("^/+", ""));
 
-        // Run on async thread to avoid blocking event loop
+        // Run on dedicated blocking executor to avoid blocking event loop
+        // CRITICAL: Must use BLOCKING_EXECUTOR instead of default ForkJoinPool.commonPool()
         return CompletableFuture.supplyAsync(() -> {
             final long startTime = System.currentTimeMillis();
 
@@ -115,7 +149,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .textBody("Failed to serve artifact: " + e.getMessage())
                     .build();
             }
-        });
+        }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor
     }
 
     /**
@@ -135,7 +169,8 @@ public final class FileSystemArtifactSlice implements Slice {
                     if (cancelled || n <= 0) {
                         return;
                     }
-                    
+
+                    // Use dedicated blocking executor for file I/O
                     CompletableFuture.runAsync(() -> {
                         try (FileChannel channel = FileChannel.open(filePath, StandardOpenOption.READ)) {
                             final ByteBuffer buffer = ByteBuffer.allocateDirect(CHUNK_SIZE);
@@ -169,7 +204,7 @@ public final class FileSystemArtifactSlice implements Slice {
                                 subscriber.onError(e);
                             }
                         }
-                    });
+                    }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor
                 }
                 
                 @Override

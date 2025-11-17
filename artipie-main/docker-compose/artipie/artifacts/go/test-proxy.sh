@@ -41,7 +41,7 @@ echo "✓ Successfully downloaded through proxy"
 
 echo ""
 echo "4. Downloading fresh package through proxy..."
-OUTPUT=$(go get -v github.com/tmc/langchaingo/llms/googleai@v0.1.14 2>&1 || true )
+OUTPUT=$(go get -v github.com/go-ap/processing@v0.0.0-20251113155015-1d7cda16040f 2>&1 || true )
 if [[ $OUTPUT == *"403"* ]]; then
   echo "✓ Successfully downloaded fresh package through proxy"
 else

@@ -19,6 +19,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Headers;
 import com.artipie.http.Slice;
 import com.artipie.scheduling.ArtifactEvent;
+import com.jcabi.log.Logger;
 
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
@@ -89,9 +90,27 @@ final class GoUploadSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        // Strip semicolon-separated metadata properties from the path to avoid exceeding
+        // filesystem filename length limits (typically 255 bytes). These properties are
+        // added by build tools (e.g., vcs.revision, build.timestamp)
+        // but are not part of the actual module filename.
         final String path = line.uri().getPath();
-        final Key key = new KeyFromPath(path);
-        final Matcher matcher = ARTIFACT.matcher(normalise(path));
+        final String sanitizedPath;
+        final int semicolonIndex = path.indexOf(';');
+        if (semicolonIndex > 0) {
+            sanitizedPath = path.substring(0, semicolonIndex);
+            Logger.debug(
+                this,
+                "Stripped metadata properties from path: %s -> %s",
+                path,
+                sanitizedPath
+            );
+        } else {
+            sanitizedPath = path;
+        }
+
+        final Key key = new KeyFromPath(sanitizedPath);
+        final Matcher matcher = ARTIFACT.matcher(normalise(sanitizedPath));
         final CompletableFuture<Void> stored = this.storage.save(
             key,
             new ContentWithSize(body, headers)

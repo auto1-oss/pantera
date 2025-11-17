@@ -91,7 +91,7 @@ public final class FileStorage implements Storage {
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
         return this.keyPath(prefix).thenApplyAsync(
             path -> {
-                final Collection<Key> keys;
+                Collection<Key> keys;
                 if (Files.exists(path)) {
                     final int dirnamelen;
                     if (Key.ROOT.equals(prefix)) {
@@ -112,6 +112,15 @@ public final class FileStorage implements Storage {
                             .map(Key.From::new)
                             .sorted(Comparator.comparing(Key.From::string))
                             .collect(Collectors.toList());
+                    } catch (final NoSuchFileException nsfe) {
+                        // Handle race condition: directory was deleted between exists() check and walk()
+                        // Treat as empty directory to avoid breaking callers
+                        Logger.debug(
+                            this,
+                            "Directory disappeared during list operation: %s",
+                            path
+                        );
+                        keys = Collections.emptyList();
                     } catch (final IOException iex) {
                         throw new ArtipieIOException(iex);
                     }
@@ -198,13 +207,27 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
+        // Validate root key is not supported
+        if (Key.ROOT.string().equals(key.string())) {
+            return new CompletableFutureSupport.Failed<Void>(
+                new ArtipieIOException("Unable to save to root")
+            ).get();
+        }
+
         return this.keyPath(key).thenApplyAsync(
             path ->  {
-                final Path tmp = Paths.get(
-                    this.dir.toString(),
-                    String.format("%s.%s.tmp", key.string(), UUID.randomUUID())
-                );
-                tmp.getParent().toFile().mkdirs();
+                // Create temp file in .tmp directory at storage root to avoid filename length issues
+                // Using parent directory could still exceed 255-byte limit if parent path is long
+                final Path tmpDir = this.dir.resolve(".tmp");
+                tmpDir.toFile().mkdirs();
+                final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
+
+                // Ensure target directory exists
+                final Path parent = path.getParent();
+                if (parent != null) {
+                    parent.toFile().mkdirs();
+                }
+
                 return ImmutablePair.of(path, tmp);
             }
         ).thenCompose(
@@ -315,12 +338,15 @@ public final class FileStorage implements Storage {
 
     /**
      * Removes empty key parts (directories).
+     * Also cleans up the .tmp directory if it's empty.
      * @param target Directory path
      */
     private void deleteEmptyParts(final Path target) {
         final Path dirabs = this.dir.normalize().toAbsolutePath();
         final Path path = target.normalize().toAbsolutePath();
         if (!path.toString().startsWith(dirabs.toString()) || dirabs.equals(path)) {
+            // Clean up .tmp directory if it's empty
+            this.cleanupTmpDir();
             return;
         }
         if (Files.isDirectory(path)) {
@@ -340,6 +366,22 @@ public final class FileStorage implements Storage {
             }
             catch (final IOException err) {
                 throw new ArtipieIOException(err);
+            }
+        }
+    }
+
+    /**
+     * Cleans up the .tmp directory if it exists and is empty.
+     */
+    private void cleanupTmpDir() {
+        final Path tmpDir = this.dir.resolve(".tmp");
+        if (Files.exists(tmpDir) && Files.isDirectory(tmpDir)) {
+            try (Stream<Path> files = Files.list(tmpDir)) {
+                if (!files.findFirst().isPresent()) {
+                    Files.deleteIfExists(tmpDir);
+                }
+            } catch (final IOException ignore) {
+                // Ignore cleanup errors
             }
         }
     }

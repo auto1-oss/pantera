@@ -127,13 +127,28 @@ public final class VertxFileStorage implements Storage {
 
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
+        // Validate root key is not supported
+        if (Key.ROOT.string().equals(key.string())) {
+            return CompletableFuture.failedFuture(
+                new ArtipieIOException("Unable to save to root")
+            );
+        }
+
         return Single.fromCallable(
             () -> {
-                final Path tmp = Paths.get(
-                    this.dir.toString(),
-                    String.format("%s.%s.tmp", key.string(), UUID.randomUUID())
-                );
-                tmp.getParent().toFile().mkdirs();
+                // Create temp file in .tmp directory at storage root to avoid filename length issues
+                // Using parent directory could still exceed 255-byte limit if parent path is long
+                final Path tmpDir = this.dir.resolve(".tmp");
+                tmpDir.toFile().mkdirs();
+                final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
+
+                // Ensure target directory exists
+                final Path target = this.path(key);
+                final Path parent = target.getParent();
+                if (parent != null) {
+                    parent.toFile().mkdirs();
+                }
+
                 return tmp;
             })
             .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))

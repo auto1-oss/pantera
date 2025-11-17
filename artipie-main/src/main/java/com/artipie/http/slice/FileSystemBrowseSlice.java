@@ -15,6 +15,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.jcabi.log.Logger;
 import io.reactivex.rxjava3.core.Flowable;
 
@@ -32,6 +33,8 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -56,9 +59,39 @@ public final class FileSystemBrowseSlice implements Slice {
     /**
      * Date formatter for modification times (e.g., "2024-11-07 14:30").
      */
-    private static final DateTimeFormatter DATE_FORMATTER = 
+    private static final DateTimeFormatter DATE_FORMATTER =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
             .withZone(ZoneId.systemDefault());
+
+    /**
+     * Dedicated executor for blocking file I/O operations.
+     * Prevents blocking Vert.x event loop threads by running all blocking
+     * filesystem operations (Files.exists, Files.isDirectory, DirectoryStream,
+     * Files.readAttributes) on a separate thread pool.
+     *
+     * <p>Thread pool sizing is configurable via system property or environment
+     * variable (see {@link com.artipie.http.slice.FileSystemIoConfig}). Default: 2x CPU cores (minimum 8).
+     * Named threads for better observability in thread dumps and monitoring.
+     *
+     * <p>CRITICAL: Without this dedicated executor, blocking I/O operations
+     * would run on ForkJoinPool.commonPool() which can block Vert.x event
+     * loop threads, causing "Thread blocked" warnings and system hangs.
+     *
+     * <p>Configuration examples:
+     * <ul>
+     *   <li>c6in.4xlarge with EBS gp3 (16K IOPS, 1,000 MB/s): 14 threads</li>
+     *   <li>c6in.8xlarge with EBS gp3 (37K IOPS, 2,000 MB/s): 32 threads</li>
+     * </ul>
+     *
+     * @since 1.19.2
+     */
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
+        com.artipie.http.slice.FileSystemIoConfig.instance().threads(),
+        new ThreadFactoryBuilder()
+            .setNameFormat("filesystem-browse-%d")
+            .setDaemon(true)
+            .build()
+    );
 
     /**
      * Storage instance (can be SubStorage wrapping FileStorage).
@@ -89,7 +122,8 @@ public final class FileSystemBrowseSlice implements Slice {
         final String artifactPath = line.uri().getPath();
         final Key key = new Key.From(artifactPath.replaceAll("^/+", ""));
 
-        // Run on async thread to avoid blocking
+        // Run on dedicated blocking executor to avoid blocking event loop
+        // CRITICAL: Must use BLOCKING_EXECUTOR instead of default ForkJoinPool.commonPool()
         return CompletableFuture.supplyAsync(() -> {
             final long startTime = System.currentTimeMillis();
             
@@ -134,7 +168,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .textBody("Failed to browse directory: " + e.getMessage())
                     .build();
             }
-        });
+        }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor
     }
 
     /**

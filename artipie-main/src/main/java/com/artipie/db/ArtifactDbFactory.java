@@ -6,6 +6,7 @@ package com.artipie.db;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.ArtipieException;
+import com.jcabi.log.Logger;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
@@ -101,13 +102,20 @@ public final class ArtifactDbFactory {
 
     /**
      * Default connection pool maximum size.
+     * Increased from 20 to 50 to prevent thread starvation under high load.
+     * Production monitoring showed thread starvation with 20 connections.
+     *
+     * @since 1.19.2
      */
-    static final int DEFAULT_POOL_MAX_SIZE = 20;
+    static final int DEFAULT_POOL_MAX_SIZE = 50;
 
     /**
      * Default connection pool minimum idle.
+     * Increased from 5 to 10 to maintain better connection availability.
+     *
+     * @since 1.19.2
      */
-    static final int DEFAULT_POOL_MIN_IDLE = 5;
+    static final int DEFAULT_POOL_MIN_IDLE = 10;
 
     /**
      * Default buffer time in seconds.
@@ -185,7 +193,7 @@ public final class ArtifactDbFactory {
             ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE))
             : ArtifactDbFactory.DEFAULT_POOL_MIN_IDLE;
         
-        // Configure HikariCP connection pool for better performance
+        // Configure HikariCP connection pool for better performance and leak detection
         final HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(String.format("jdbc:postgresql://%s:%d/%s", host, port, database));
         hikariConfig.setUsername(user);
@@ -196,8 +204,24 @@ public final class ArtifactDbFactory {
         hikariConfig.setIdleTimeout(600000); // 10 minutes
         hikariConfig.setMaxLifetime(1800000); // 30 minutes
         hikariConfig.setPoolName("ArtipieDB-Pool");
-        
+
+        // Enable connection leak detection (60 seconds threshold)
+        // Logs a warning if a connection is not returned to the pool within 60 seconds
+        // Helps identify connection leaks in application code
+        hikariConfig.setLeakDetectionThreshold(60000); // 60 seconds
+
+        // Enable metrics and logging for connection pool monitoring
+        hikariConfig.setRegisterMbeans(true); // Enable JMX metrics
+
         final HikariDataSource source = new HikariDataSource(hikariConfig);
+
+        // Log connection pool configuration for monitoring
+        Logger.info(
+            ArtifactDbFactory.class,
+            "HikariCP connection pool initialized: maxPoolSize=%d, minIdle=%d, leakDetectionThreshold=60s",
+            poolMaxSize,
+            poolMinIdle
+        );
         
         ArtifactDbFactory.createStructure(source);
         return source;

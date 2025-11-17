@@ -135,7 +135,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
     }
     
     /**
-     * Clean up orphaned .part- files and .meta files from previous runs.
+     * Clean up orphaned .part- files, .meta files, and temp files from previous runs.
      * Called on startup to recover from crashes.
      */
     private void cleanupOrphanedFiles() {
@@ -146,7 +146,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         final String name = p.getFileName().toString();
                         // Delete .part- files older than 1 hour (failed writes)
                         if (name.contains(".part-")) {
-                            final long age = System.currentTimeMillis() - 
+                            final long age = System.currentTimeMillis() -
                                 Files.getLastModifiedTime(p).toMillis();
                             if (age > 3600_000) { // 1 hour
                                 Files.deleteIfExists(p);
@@ -156,6 +156,16 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         if (name.endsWith(".meta")) {
                             final Path dataFile = Path.of(p.toString().replace(".meta", ""));
                             if (!Files.exists(dataFile)) {
+                                Files.deleteIfExists(p);
+                            }
+                        }
+                        // Delete temp files in .tmp directory older than 1 hour
+                        if (p.getParent() != null &&
+                            p.getParent().getFileName() != null &&
+                            ".tmp".equals(p.getParent().getFileName().toString())) {
+                            final long age = System.currentTimeMillis() -
+                                Files.getLastModifiedTime(p).toMillis();
+                            if (age > 3600_000) { // 1 hour
                                 Files.deleteIfExists(p);
                             }
                         }
@@ -249,7 +259,15 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         }
         // Preload remote metadata (ETag/size) to store alongside
         final CompletableFuture<? extends Meta> remoteMeta = super.metadata(key);
-        final Path tmp = file.getParent().resolve(file.getFileName().toString() + ".part-" + UUID.randomUUID());
+        // Create temp file in .tmp directory at namespace root to avoid exceeding filesystem limits
+        // Using parent directory could still exceed 255-byte limit if parent path is long
+        final Path tmpDir = this.nsRoot().resolve(".tmp");
+        try {
+            Files.createDirectories(tmpDir);
+        } catch (final IOException err) {
+            return CompletableFuture.failedFuture(new ArtipieIOException(err));
+        }
+        final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
         final CompletableFuture<Content> result = new CompletableFuture<>();
         final CompletableFuture<Content> delegate = super.value(key);
         delegate.whenComplete((cnt, err) -> {

@@ -10,6 +10,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.Remaining;
+import com.artipie.asto.test.ContentIs;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.headers.Authorization;
@@ -202,6 +203,53 @@ class GoSliceTest {
         org.junit.jupiter.api.Assertions.assertTrue(
             versions.contains("v1.2.3"),
             "List file should contain uploaded version"
+        );
+    }
+
+    @Test
+    void stripsMetadataPropertiesFromFilename() throws Exception {
+        // Test that semicolon-separated metadata properties are stripped from the filename
+        // to avoid exceeding filesystem filename length limits (typically 255 bytes)
+        final Storage storage = new InMemoryStorage();
+        final GoSlice slice = new GoSlice(
+            storage,
+            new PolicyByUsername(USER.getKey()),
+            new Authentication.Single(USER.getKey(), USER.getValue()),
+            "go-repo",
+            Optional.empty()
+        );
+        final byte[] data = "go module content".getBytes(StandardCharsets.UTF_8);
+        final String pathWithMetadata =
+            "example.com/mymodule/@v/v1.0.0-395-202511111100.zip;" +
+            "vcs.revision=6177d00b21602d4a23f004ce5bd1dc56e5154ed4;" +
+            "build.timestamp=1762855225704;" +
+            "build.name=go-build+::+mymodule-build-deploy+::+master;" +
+            "build.number=395;" +
+            "vcs.branch=master;" +
+            "vcs.url=git@github.com:example/mymodule.git";
+
+        final Response response = slice.response(
+            new RequestLine("PUT", pathWithMetadata),
+            Headers.from(
+                new Authorization.Basic(USER.getKey(), USER.getValue())
+            ),
+            new Content.From(data)
+        ).toCompletableFuture().get();
+
+        MatcherAssert.assertThat(
+            "Wrong response status, CREATED is expected",
+            response,
+            new RsHasStatus(RsStatus.CREATED)
+        );
+
+        // Verify the file was saved WITHOUT the metadata properties
+        final Key expectedKey = new Key.From(
+            "example.com/mymodule/@v/v1.0.0-395-202511111100.zip"
+        );
+        MatcherAssert.assertThat(
+            "Uploaded data should be saved without metadata properties",
+            storage.value(expectedKey).join(),
+            new ContentIs(data)
         );
     }
 

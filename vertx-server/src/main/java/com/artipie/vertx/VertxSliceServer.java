@@ -18,6 +18,7 @@ import com.artipie.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.core.http.HttpServer;
@@ -30,6 +31,10 @@ import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -51,6 +56,18 @@ public final class VertxSliceServer implements Closeable {
      * Default maximum time to wait for slice response.
      */
     private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(2);
+
+    /**
+     * HTTP/2 forbidden headers per RFC 7540 Section 8.1.2.
+     * These connection-specific headers MUST NOT be included in HTTP/2 messages.
+     */
+    private static final Set<String> HTTP2_FORBIDDEN_HEADERS = Set.of(
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "transfer-encoding",
+        "upgrade"
+    );
 
     /**
      * The Vert.x.
@@ -127,7 +144,9 @@ public final class VertxSliceServer implements Closeable {
             .setPort(port)
             .setIdleTimeout(60)  // Close idle connections after 60 seconds
             .setTcpKeepAlive(true)
-            .setTcpNoDelay(true), 
+            .setTcpNoDelay(true)
+            .setUseAlpn(true)  // Enable ALPN for HTTP/2 negotiation
+            .setHttp2ClearTextEnabled(true),  // Enable HTTP/2 over cleartext (h2c) for AWS NLB
             requestTimeout);
     }
 
@@ -355,8 +374,8 @@ public final class VertxSliceServer implements Closeable {
                     if (transaction != null) {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
-                    
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
+
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version());
                 }
             )
             .whenComplete((result, error) -> {
@@ -418,8 +437,8 @@ public final class VertxSliceServer implements Closeable {
                     if (transaction != null) {
                         transaction.addLabel("http.status_code", String.valueOf(resp.status().code()));
                     }
-                    
-                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead);
+
+                    return VertxSliceServer.accept(req.response(), resp.status(), resp.headers(), resp.body(), isHead, req.version());
                 }
             )
             .whenComplete((result, error) -> {
@@ -496,11 +515,11 @@ public final class VertxSliceServer implements Closeable {
     private static CompletionStage<Void> accept(
         HttpServerResponse response, RsStatus status, Headers headers, Content body
     ) {
-        return accept(response, status, headers, body, false);
+        return accept(response, status, headers, body, false, HttpVersion.HTTP_1_1);
     }
 
     private static CompletionStage<Void> accept(
-        HttpServerResponse response, RsStatus status, Headers headers, Content body, boolean isHead
+        HttpServerResponse response, RsStatus status, Headers headers, Content body, boolean isHead, io.vertx.core.http.HttpVersion version
     ) {
         final CompletableFuture<Void> promise = new CompletableFuture<>();
         if (status == RsStatus.CONTINUE) {
@@ -508,7 +527,14 @@ public final class VertxSliceServer implements Closeable {
             return CompletableFuture.completedFuture(null);
         }
         response.setStatusCode(status.code());
-        headers.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
+
+        // Filter HTTP/2 forbidden headers per RFC 7540 Section 8.1.2
+        // Connection-specific headers MUST NOT be included in HTTP/2 messages
+        final Headers filteredHeaders = version == HttpVersion.HTTP_2
+            ? filterHttp2ForbiddenHeaders(headers)
+            : headers;
+
+        filteredHeaders.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
 
         if (isHead && LOGGER.isTraceEnabled()) {
             LOGGER.trace("HEAD request: Content-Length present={}, value={}", 
@@ -680,6 +706,26 @@ public final class VertxSliceServer implements Closeable {
             }
         }
         return false;
+    }
+
+    /**
+     * Filter out HTTP/2 forbidden headers per RFC 7540 Section 8.1.2.
+     * Connection-specific headers MUST NOT be included in HTTP/2 messages.
+     *
+     * @param headers Original headers
+     * @return Filtered headers safe for HTTP/2
+     */
+    private static Headers filterHttp2ForbiddenHeaders(final Headers headers) {
+        final List<Header> filtered = new ArrayList<>();
+        for (final Header header : headers) {
+            final String name = header.getKey().toLowerCase(Locale.US);
+            if (!HTTP2_FORBIDDEN_HEADERS.contains(name)) {
+                filtered.add(header);
+            } else {
+                LOGGER.debug("Filtering HTTP/2 forbidden header: {}", header.getKey());
+            }
+        }
+        return new Headers(filtered);
     }
 
     /**

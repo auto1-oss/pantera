@@ -89,7 +89,26 @@ public final class UploadSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        final Key key = new KeyFromPath(line.uri().getPath());
+        // Strip semicolon-separated metadata properties from the path to avoid exceeding
+        // filesystem filename length limits (typically 255 bytes). These properties are
+        // added by JFrog Artifactory and Maven build tools (e.g., vcs.revision, build.timestamp)
+        // but are not part of the actual artifact filename.
+        final String path = line.uri().getPath();
+        final String sanitizedPath;
+        final int semicolonIndex = path.indexOf(';');
+        if (semicolonIndex > 0) {
+            sanitizedPath = path.substring(0, semicolonIndex);
+            Logger.debug(
+                this,
+                "Stripped metadata properties from path: %s -> %s",
+                path,
+                sanitizedPath
+            );
+        } else {
+            sanitizedPath = path;
+        }
+
+        final Key key = new KeyFromPath(sanitizedPath);
         final String owner = new Login(headers).getValue();
         
         // Get content length from headers for event record

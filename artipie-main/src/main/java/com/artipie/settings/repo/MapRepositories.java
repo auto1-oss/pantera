@@ -63,7 +63,7 @@ public class MapRepositories implements Repositories {
      */
     public CompletableFuture<Void> refreshAsync() {
         this.map.clear();
-        
+
         return settings.repoConfigsStorage()
             .list(Key.ROOT)
             .thenCompose(keys -> {
@@ -72,28 +72,33 @@ public class MapRepositories implements Repositories {
                     .map(key -> loadRepoConfigAsync(key))
                     .filter(Objects::nonNull)
                     .collect(Collectors.toList());
-                
+
                 if (futures.isEmpty()) {
                     return CompletableFuture.completedFuture(null);
                 }
-                
-                // Wait for all to complete
+
+                // Wait for all to complete - use thenCompose to avoid blocking
                 return CompletableFuture.allOf(
                     futures.toArray(new CompletableFuture[0])
-                ).thenApply(v -> {
-                    // Collect results and update map
-                    futures.forEach(f -> {
-                        try {
-                            RepoConfig config = f.join();
+                ).thenCompose(v -> {
+                    // Collect results non-blockingly using thenApply on each future
+                    List<CompletableFuture<Void>> updates = futures.stream()
+                        .map(f -> f.thenAccept(config -> {
                             if (config != null) {
                                 this.map.put(config.name(), config);
                             }
-                        } catch (Exception e) {
+                        }).exceptionally(e -> {
                             LOGGER.error("Failed to load repository config", e);
-                        }
+                            return null;
+                        }))
+                        .collect(Collectors.toList());
+
+                    return CompletableFuture.allOf(
+                        updates.toArray(new CompletableFuture[0])
+                    ).thenApply(ignored -> {
+                        LOGGER.info("Loaded {} repository configurations", this.map.size());
+                        return null;
                     });
-                    LOGGER.info("Loaded {} repository configurations", this.map.size());
-                    return null;
                 });
             });
     }
@@ -106,19 +111,20 @@ public class MapRepositories implements Repositories {
      */
     private CompletableFuture<RepoConfig> loadRepoConfigAsync(final Key key) {
         final ConfigFile file = new ConfigFile(key);
-        
+
         if (!file.isSystem() && file.isYamlOrYml()) {
             final Storage storage = this.settings.repoConfigsStorage();
-            
+
             // Load alias and content in parallel
-            CompletableFuture<StorageByAlias> aliasFuture = 
+            CompletableFuture<StorageByAlias> aliasFuture =
                 new AliasSettings(storage).find(key);
-            
-            CompletableFuture<String> contentFuture = 
+
+            // Use asStringFuture() instead of asString() to avoid blocking
+            CompletableFuture<String> contentFuture =
                 file.valueFrom(storage)
-                    .thenApply(content -> content.asString())
+                    .thenCompose(content -> content.asStringFuture())
                     .toCompletableFuture();
-            
+
             // Combine results
             return aliasFuture.thenCombine(
                 contentFuture,
@@ -141,7 +147,7 @@ public class MapRepositories implements Repositories {
                 return null;
             });
         }
-        
+
         return null;
     }
 }

@@ -2,6 +2,7 @@ meta:
   storage:
     type: fs
     path: /var/artipie/repo
+  
   credentials:
     - type: env
     - type: artipie
@@ -10,12 +11,14 @@ meta:
       realm: artipie
       "client-id": artipie
       "client-password": T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ
+  
   policy:
     type: artipie
     eviction_millis: 180000 # optional, default 3 min
     storage:
       type: fs
       path: /var/artipie/security
+  
   cooldown:
     enabled: true
     repo_types:
@@ -23,19 +26,22 @@ meta:
         enabled: false
     # Use duration strings: m = minutes, h = hours, d = days
     minimum_allowed_age: 7d
+  
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432
     postgres_database: artifacts
     postgres_user: artipie
     postgres_password: artipie
+    pool_max_size: 50
+    pool_min_idle: 10
   
   http_client:
     proxy_timeout: 60
     max_connections_per_destination: 512
     max_requests_queued_per_destination: 2048
     idle_timeout: 30000
-    connect_timeout: 10000
+    connection_timeout: 15000
     follow_redirects: true
     connection_acquire_timeout: 120000  # ms to wait for pooled connection before failing
 

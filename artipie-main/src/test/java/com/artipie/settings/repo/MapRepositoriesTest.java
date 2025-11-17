@@ -190,4 +190,28 @@ final class MapRepositoriesTest {
             )
         ).join();
     }
+
+    @Test
+    void refreshAsyncDoesNotBlockThreadPool() throws Exception {
+        // Create multiple repository configs to test parallel loading
+        final int repoCount = 10;
+        for (int i = 0; i < repoCount; i++) {
+            new RepoConfigYaml(MapRepositoriesTest.TYPE)
+                .withFileStorage(Path.of("test", "path" + i))
+                .saveTo(this.storage, "repo" + i);
+        }
+
+        final MapRepositories repos = new MapRepositories(this.settings);
+
+        // Verify refreshAsync completes without blocking
+        // If it blocks the ForkJoinPool, this will timeout
+        repos.refreshAsync().get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+        // Verify all repos were loaded
+        Assertions.assertEquals(
+            repoCount,
+            repos.configs().size(),
+            "All repositories should be loaded"
+        );
+    }
 }

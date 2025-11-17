@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.quartz.JobExecutionContext;
@@ -31,6 +32,23 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      * Repository type.
      */
     private static final String REPO_TYPE = "maven-proxy";
+
+    /**
+     * Maximum number of retry attempts for failed package processing.
+     * After this many retries, the package will be dropped with a warning.
+     *
+     * @since 1.19.2
+     */
+    private static final int MAX_RETRIES = 3;
+
+    /**
+     * Retry count tracker for each artifact key.
+     * Maps artifact key to number of retry attempts.
+     * Used to prevent infinite retry loops for permanently failing packages.
+     *
+     * @since 1.19.2
+     */
+    private final ConcurrentHashMap<String, Integer> retryCount = new ConcurrentHashMap<>();
 
     /**
      * Artifact events queue.
@@ -158,7 +176,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                                     release
                                 )
                             );
-                            
+
+                            // Clear retry count on successful processing
+                            this.retryCount.remove(event.artifactKey().string());
+
                             Logger.debug(
                                 this,
                                 "Recorded Maven proxy artifact %s:%s (size=%d)",
@@ -166,23 +187,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             );
                         })
                         .exceptionally(err -> {
-                            // If ValueNotFoundException, the file might still be in transit
-                            // This can happen if file was just moved after listing
-                            if (err.getCause() instanceof com.artipie.asto.ValueNotFoundException) {
-                                Logger.debug(
-                                    this,
-                                    "Maven package %s not found (likely still being written), will retry: %s",
-                                    event.artifactKey(), err.getMessage()
-                                );
-                                // Re-queue event for retry on next batch
-                                this.packages.add(event);
-                            } else {
-                                Logger.error(
-                                    this,
-                                    "Failed to read Maven artifact metadata %s: %s",
-                                    event.artifactKey(), err.getMessage()
-                                );
-                            }
+                            this.handleProcessingError(event, err);
                             return null;
                         });
                 } catch (final RuntimeException err) {
@@ -226,5 +231,54 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      */
     public void setStorage(final Storage storage) {
         this.asto = storage;
+    }
+
+    /**
+     * Handle processing error with retry logic.
+     * Implements retry limits to prevent infinite retry loops for permanently failing packages.
+     *
+     * @param event Package event that failed
+     * @param err Error that occurred
+     * @since 1.19.2
+     */
+    private void handleProcessingError(final ProxyArtifactEvent event, final Throwable err) {
+        // If ValueNotFoundException, the file might still be in transit
+        // This can happen if file was just moved after listing
+        if (err.getCause() instanceof com.artipie.asto.ValueNotFoundException) {
+            final String key = event.artifactKey().string();
+            final int currentRetries = this.retryCount.getOrDefault(key, 0);
+
+            if (currentRetries < MavenProxyPackageProcessor.MAX_RETRIES) {
+                // Increment retry count and re-queue
+                this.retryCount.put(key, currentRetries + 1);
+                this.packages.add(event);
+
+                Logger.debug(
+                    this,
+                    "Maven package %s not found (likely still being written), retry %d/%d: %s",
+                    event.artifactKey(),
+                    currentRetries + 1,
+                    MavenProxyPackageProcessor.MAX_RETRIES,
+                    err.getMessage()
+                );
+            } else {
+                // Max retries reached, give up and clean up retry count
+                this.retryCount.remove(key);
+
+                Logger.warn(
+                    this,
+                    "Maven package %s not found after %d retries, giving up: %s",
+                    event.artifactKey(),
+                    MavenProxyPackageProcessor.MAX_RETRIES,
+                    err.getMessage()
+                );
+            }
+        } else {
+            Logger.error(
+                this,
+                "Failed to read Maven artifact metadata %s: %s",
+                event.artifactKey(), err.getMessage()
+            );
+        }
     }
 }
