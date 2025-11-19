@@ -57,7 +57,7 @@ public final class PerVersionLayout {
     /**
      * Add single version metadata to per-version file.
      * No locking needed - each version writes to its own file.
-     * 
+     *
      * @param packageKey Package key (e.g., "@scope/package")
      * @param version Version string
      * @param versionJson JSON metadata for this version
@@ -69,10 +69,22 @@ public final class PerVersionLayout {
         final JsonObject versionJson
     ) {
         final Key versionFile = this.versionFileKey(packageKey, version);
-        
+
+        // Add publish timestamp to version metadata if not present
+        // This allows us to reconstruct the "time" object later
+        final JsonObject versionWithTime;
+        if (!versionJson.containsKey("_publishTime")) {
+            final String now = java.time.Instant.now().toString();
+            versionWithTime = Json.createObjectBuilder(versionJson)
+                .add("_publishTime", now)
+                .build();
+        } else {
+            versionWithTime = versionJson;
+        }
+
         // Write directly - no locking needed!
         // Each version has its own file, so no contention
-        final byte[] bytes = versionJson.toString().getBytes(StandardCharsets.UTF_8);
+        final byte[] bytes = versionWithTime.toString().getBytes(StandardCharsets.UTF_8);
         return this.storage.save(versionFile, new Content.From(bytes))
             .toCompletableFuture();
     }

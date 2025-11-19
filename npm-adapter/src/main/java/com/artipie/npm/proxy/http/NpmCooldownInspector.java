@@ -17,34 +17,47 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import javax.json.Json;
 import javax.json.JsonObject;
 
+/**
+ * NPM cooldown inspector with bounded cache to prevent memory leaks.
+ * Uses Caffeine cache with automatic eviction to limit Old Gen growth.
+ */
 final class NpmCooldownInspector implements CooldownInspector,
     com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
 
     private final NpmRemote remote;
-    private final ConcurrentMap<String, CompletableFuture<Optional<JsonObject>>> metadata;
+    
+    /**
+     * Bounded cache of package metadata.
+     * Max 10,000 packages, expire after 24 hours.
+     * Each entry is ~10-50KB, so max ~500MB memory usage.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, CompletableFuture<Optional<JsonObject>>> metadata;
 
     NpmCooldownInspector(final NpmRemote remote) {
         this.remote = remote;
-        this.metadata = new ConcurrentHashMap<>();
+        this.metadata = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .maximumSize(10_000)  // Limit memory usage
+            .expireAfterWrite(Duration.ofHours(24))  // Auto-evict old entries
+            .recordStats()  // Enable metrics
+            .build();
     }
 
     @Override
     public void invalidate(final String artifact, final String version) {
-        this.metadata.remove(artifact);
+        this.metadata.invalidate(artifact);
     }
 
     @Override
     public void clearAll() {
-        this.metadata.clear();
+        this.metadata.invalidateAll();
     }
 
     @Override
@@ -154,12 +167,31 @@ final class NpmCooldownInspector implements CooldownInspector,
         );
     }
 
-    private CompletableFuture<Optional<JsonObject>> metadata(final String name) {
-        return this.metadata.computeIfAbsent(name, key ->
-            this.loadPackage(key).thenApply(optional -> optional.map(pkg ->
+    private synchronized CompletableFuture<Optional<JsonObject>> metadata(final String name) {
+        // Check cache first (inside synchronized to prevent race)
+        final CompletableFuture<Optional<JsonObject>> cached = this.metadata.getIfPresent(name);
+        if (cached != null) {
+            return cached;
+        }
+        
+        // Create future and cache it immediately to prevent duplicate loads
+        final CompletableFuture<Optional<JsonObject>> future = this.loadPackage(name)
+            .thenApply(optional -> optional.map(pkg ->
                 Json.createReader(new StringReader(pkg.content())).readObject()
-            ))
-        );
+            ));
+        
+        // Cache the future immediately (even if it might fail)
+        // This prevents duplicate concurrent loads for the same package
+        this.metadata.put(name, future);
+        
+        // Remove from cache if load fails or returns empty
+        future.thenAccept(result -> {
+            if (result.isEmpty()) {
+                this.metadata.invalidate(name);
+            }
+        });
+        
+        return future;
     }
 
     private CompletableFuture<Optional<NpmPackage>> loadPackage(final String name) {

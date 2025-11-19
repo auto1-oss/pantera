@@ -285,7 +285,9 @@ class ProxySliceTest {
                     new RsHasStatus(RsStatus.OK),
                     new RsHasBody(data)
                 ),
-                new RequestLine(RqMethod.GET, String.format("/packages/example/%s", filename)),
+                // Use a generic artifact path that does not rely on /packages/ routing,
+                // since /packages/ is now reserved for CDN mirrors (files.pythonhosted.org).
+                new RequestLine(RqMethod.GET, String.format("/%s", filename)),
                 headers,
                 Content.EMPTY
             )

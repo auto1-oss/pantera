@@ -81,7 +81,23 @@ public final class PyProxySlice extends Slice.Wrap {
         final String rtype,
         final CooldownService cooldown
     ) {
-        this(clients, remote, auth, cache, events, rname, rtype, cooldown, new PyProxyCooldownInspector());
+        this(
+            clients,
+            remote,
+            auth,
+            cache,
+            events,
+            rname,
+            rtype,
+            cooldown,
+            new PyProxyCooldownInspector(
+                // Always use pypi.org for JSON API, regardless of Simple API upstream
+                new UriClientSlice(
+                    clients,
+                    jsonApiUri(remote)
+                )
+            )
+        );
     }
 
     private PyProxySlice(
@@ -118,6 +134,28 @@ public final class PyProxySlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    private static URI baseUri(final URI remote) {
+        final String scheme = remote.getScheme();
+        final String authority = remote.getRawAuthority();
+        if (scheme == null || authority == null) {
+            return remote;
+        }
+        return URI.create(String.format("%s://%s", scheme, authority));
+    }
+
+    /**
+     * Extract JSON API base URI from remote URI.
+     * For pypi.org/simple → pypi.org
+     * For custom-pypi.com/simple → custom-pypi.com
+     * For pypi.org → pypi.org (unchanged)
+     *
+     * @param remote Remote URI
+     * @return Base URI for JSON API calls
+     */
+    private static URI jsonApiUri(final URI remote) {
+        return baseUri(remote);
     }
 
     /**

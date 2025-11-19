@@ -220,6 +220,12 @@ public final class GroupSlice implements Slice {
         final byte[] requestBytes
     ) {
         if (member.isCircuitOpen()) {
+            Logger.warn(
+                this,
+                "Group %s: member %s circuit OPEN, skipping",
+                this.group,
+                member.name()
+            );
             return CompletableFuture.completedFuture(
                 ResponseBuilder.unavailable().build()
             );
@@ -231,8 +237,9 @@ public final class GroupSlice implements Slice {
             ? new Content.From(requestBytes)
             : Content.EMPTY;
 
+        final RequestLine rewritten = member.rewritePath(line);
         return member.slice().response(
-            member.rewritePath(line),
+            rewritten,
             dropFullPathHeader(headers),
             memberBody
         );
@@ -250,9 +257,9 @@ public final class GroupSlice implements Slice {
         final long startTime
     ) {
         final RsStatus status = resp.status();
-        
-        // Success: 200 OK or 206 Partial Content
-        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT) {
+
+        // Success: 200 OK, 206 Partial Content, or 304 Not Modified
+        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT || status == RsStatus.NOT_MODIFIED) {
             if (completed.compareAndSet(false, true)) {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
@@ -269,6 +276,13 @@ public final class GroupSlice implements Slice {
                 recordSuccess(member.name(), latency);
                 result.complete(resp);
             } else {
+                Logger.debug(
+                    this,
+                    "Group %s: member %s returned %s but another member already won",
+                    this.group,
+                    member.name(),
+                    status
+                );
                 drainBody(member.name(), resp.body());
             }
         } else if (status == RsStatus.FORBIDDEN) {
@@ -287,8 +301,21 @@ public final class GroupSlice implements Slice {
             }
         } else {
             // Other errors (404, 500, etc.): try next member
+            Logger.warn(
+                this,
+                "Group %s: member %s returned %s (pending=%d)",
+                this.group,
+                member.name(),
+                status,
+                pending.get() - 1
+            );
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
+                Logger.warn(
+                    this,
+                    "Group %s: all members exhausted, returning 404",
+                    this.group
+                );
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
             }

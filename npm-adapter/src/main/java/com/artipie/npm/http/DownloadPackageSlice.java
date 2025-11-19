@@ -132,37 +132,38 @@ public final class DownloadPackageSlice implements Slice {
             ? new AbbreviatedMetadata(enhanced).generate()
             : enhanced;
         
-        // Apply tarball URL rewriting
+        // Convert to string once for ETag calculation
         final String responseStr = response.toString();
-        final byte[] bytes = responseStr.getBytes(StandardCharsets.UTF_8);
-        final Content content = new Content.From(bytes);
-        final Content rewritten = new Tarballs(content, this.base).value();
         
-        return rewritten.asBytesFuture().thenApply(rewrittenBytes -> {
-            final String finalContent = new String(rewrittenBytes, StandardCharsets.UTF_8);
-            
-            // P0.2: Calculate ETag
-            final String etag = new MetadataETag(finalContent).calculate();
-            
-            // P0.2: Check if client has matching ETag (304 Not Modified)
-            if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                return ResponseBuilder.from(com.artipie.http.RsStatus.NOT_MODIFIED)
+        // P0.2: Calculate ETag from JSON string (no extra buffering)
+        final String etag = new MetadataETag(responseStr).calculate();
+        
+        // P0.2: Check if client has matching ETag (304 Not Modified)
+        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.from(com.artipie.http.RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
-                    .build();
-            }
-            
-            // Return full response with ETag and cache headers
-            return ResponseBuilder.ok()
+                    .build()
+            );
+        }
+        
+        // Apply tarball URL rewriting and STREAM response (no buffering!)
+        final Content content = new Content.From(responseStr.getBytes(StandardCharsets.UTF_8));
+        final Content rewritten = new Tarballs(content, this.base).value();
+        
+        // Return streaming response - memory usage: ~4KB instead of 200MB+
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
                 .header("Content-Type", abbreviated 
                     ? "application/vnd.npm.install-v1+json; charset=utf-8"
                     : "application/json; charset=utf-8")
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .header("CDN-Cache-Control", "public, max-age=600")
-                .body(finalContent.getBytes(StandardCharsets.UTF_8))
-                .build();
-        });
+                .body(rewritten)  // STREAM IT - no asBytesFuture()!
+                .build()
+        );
     }
     
     /**

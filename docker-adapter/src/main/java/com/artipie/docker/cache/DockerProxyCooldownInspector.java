@@ -7,32 +7,59 @@ package com.artipie.docker.cache;
 import com.artipie.cooldown.CooldownDependency;
 import com.artipie.cooldown.CooldownInspector;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
+/**
+ * Docker cooldown inspector with bounded caches to prevent memory leaks.
+ * Uses Caffeine cache with automatic eviction to limit Old Gen growth.
+ */
 public final class DockerProxyCooldownInspector implements CooldownInspector,
     com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
 
-    private final ConcurrentMap<String, Instant> releases;
+    /**
+     * Bounded cache of image release dates.
+     * Max 10,000 entries, expire after 24 hours.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Instant> releases;
 
-    private final ConcurrentMap<String, String> digestOwners;
+    /**
+     * Bounded cache of digest to image name mappings.
+     * Max 50,000 entries (digests are more numerous), expire after 24 hours.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, String> digestOwners;
 
-    private final ConcurrentMap<String, Boolean> seen;
+    /**
+     * Bounded cache of seen digests (for deduplication).
+     * Max 50,000 entries, expire after 1 hour.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> seen;
 
     public DockerProxyCooldownInspector() {
-        this.releases = new ConcurrentHashMap<>();
-        this.digestOwners = new ConcurrentHashMap<>();
-        this.seen = new ConcurrentHashMap<>();
+        this.releases = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofHours(24))
+            .recordStats()
+            .build();
+        this.digestOwners = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .maximumSize(50_000)  // More digests than images
+            .expireAfterWrite(Duration.ofHours(24))
+            .recordStats()
+            .build();
+        this.seen = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .maximumSize(50_000)
+            .expireAfterWrite(Duration.ofHours(1))  // Shorter TTL for seen cache
+            .recordStats()
+            .build();
     }
 
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
-        return CompletableFuture.completedFuture(Optional.ofNullable(this.releases.get(key(artifact, version))));
+        return CompletableFuture.completedFuture(Optional.ofNullable(this.releases.getIfPresent(key(artifact, version))));
     }
 
     @Override
@@ -49,23 +76,28 @@ public final class DockerProxyCooldownInspector implements CooldownInspector,
         final Optional<String> digest
     ) {
         final String key = key(artifact, version);
-        this.seen.putIfAbsent(key, Boolean.TRUE);
+        if (this.seen.getIfPresent(key) == null) {
+            this.seen.put(key, Boolean.TRUE);
+        }
         release.ifPresent(value -> this.releases.put(key, value));
         this.digestOwners.put(digestKey(repoName, version), owner);
         digest.ifPresent(value -> this.digestOwners.put(digestKey(repoName, value), owner));
     }
 
     public void recordRelease(final String artifact, final String version, final Instant release) {
-        this.seen.putIfAbsent(key(artifact, version), Boolean.TRUE);
-        this.releases.put(key(artifact, version), release);
+        final String key = key(artifact, version);
+        if (this.seen.getIfPresent(key) == null) {
+            this.seen.put(key, Boolean.TRUE);
+        }
+        this.releases.put(key, release);
     }
 
     public Optional<String> ownerFor(final String repoName, final String digest) {
-        return Optional.ofNullable(this.digestOwners.get(digestKey(repoName, digest)));
+        return Optional.ofNullable(this.digestOwners.getIfPresent(digestKey(repoName, digest)));
     }
 
     public boolean known(final String artifact, final String version) {
-        return this.seen.containsKey(key(artifact, version));
+        return this.seen.getIfPresent(key(artifact, version)) != null;
     }
 
     public boolean isBlocked(final String artifact, final String digest) {
@@ -81,8 +113,8 @@ public final class DockerProxyCooldownInspector implements CooldownInspector,
      */
     public void invalidate(final String artifact, final String version) {
         final String k = key(artifact, version);
-        this.releases.remove(k);
-        this.seen.remove(k);
+        this.releases.invalidate(k);
+        this.seen.invalidate(k);
     }
 
     /**
@@ -90,9 +122,9 @@ public final class DockerProxyCooldownInspector implements CooldownInspector,
      * Called when all artifacts for a repository are unblocked.
      */
     public void clearAll() {
-        this.releases.clear();
-        this.digestOwners.clear();
-        this.seen.clear();
+        this.releases.invalidateAll();
+        this.digestOwners.invalidateAll();
+        this.seen.invalidateAll();
     }
 
     private static String key(final String artifact, final String version) {

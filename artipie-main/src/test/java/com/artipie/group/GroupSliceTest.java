@@ -79,6 +79,34 @@ public final class GroupSliceTest {
     }
 
     @Test
+    void returnsNotModifiedWhenMemberReturnsNotModified() {
+        // Test that 304 NOT_MODIFIED is treated as success, not failure
+        // This is critical for NPM proxy caching with If-None-Match/If-Modified-Since headers
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("local", new StaticSlice(RsStatus.NOT_FOUND));
+        map.put("proxy", new StaticSlice(RsStatus.NOT_MODIFIED));
+        final GroupSlice slice = new GroupSlice(new MapResolver(map), "group", List.of("local", "proxy"), 8080);
+        final Response rsp = slice.response(new RequestLine("GET", "/pkg.json"), Headers.EMPTY, Content.EMPTY).join();
+        assertEquals(RsStatus.NOT_MODIFIED, rsp.status(), "304 NOT_MODIFIED should be returned to client");
+    }
+
+    @Test
+    void returnsNotModifiedFromFirstMemberThatReturnsIt() {
+        // Test that first NOT_MODIFIED wins in parallel race
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("local", new StaticSlice(RsStatus.NOT_FOUND));
+        map.put("proxy1", new StaticSlice(RsStatus.NOT_MODIFIED));
+        map.put("proxy2", new StaticSlice(RsStatus.OK));
+        final GroupSlice slice = new GroupSlice(new MapResolver(map), "group", List.of("local", "proxy1", "proxy2"), 8080);
+        final Response rsp = slice.response(new RequestLine("GET", "/pkg.json"), Headers.EMPTY, Content.EMPTY).join();
+        // Either NOT_MODIFIED or OK is acceptable (parallel race), but NOT 404
+        assertTrue(
+            rsp.status() == RsStatus.NOT_MODIFIED || rsp.status() == RsStatus.OK,
+            "Should return NOT_MODIFIED or OK, not 404"
+        );
+    }
+
+    @Test
     void handlesHundredParallelRequestsWithMixedResults() throws InterruptedException {
         final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(8);
         final ExecutorService executor = Executors.newFixedThreadPool(12);

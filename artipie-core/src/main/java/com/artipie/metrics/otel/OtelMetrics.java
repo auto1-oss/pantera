@@ -24,6 +24,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 
 /**
  * OpenTelemetry metrics for Artipie.
@@ -57,30 +59,34 @@ public final class OtelMetrics {
     
     // === Cache Metrics ===
     private final LongCounter cacheRequests;
-    private final Map<String, AtomicLong> cacheHits = new ConcurrentHashMap<>();
-    private final Map<String, AtomicLong> cacheMisses = new ConcurrentHashMap<>();
-    private final Map<String, AtomicLong> cacheSizes = new ConcurrentHashMap<>();
     private final LongCounter cacheEvictions;
     private final LongCounter cacheErrors;
     private final DoubleHistogram cacheDuration;
     private final LongCounter cacheDeduplications;
-    
+
     // === Proxy & Upstream Metrics ===
     private final LongCounter proxyRequests;
     private final DoubleHistogram proxyDuration;
-    private final Map<String, AtomicLong> upstreamAvailability = new ConcurrentHashMap<>();
+    // MEMORY LEAK FIX: Use bounded Guava Cache instead of unbounded ConcurrentHashMap
+    // Maximum 1000 upstream entries, evicted after 1 hour of inactivity
+    private final Cache<String, AtomicLong> upstreamAvailability = CacheBuilder.newBuilder()
+        .maximumSize(1000)
+        .expireAfterAccess(Duration.ofHours(1))
+        .build();
     private final LongCounter upstreamErrors;
-    private final Map<String, AtomicLong> consecutiveFailures = new ConcurrentHashMap<>();
-    
+    private final Cache<String, AtomicLong> consecutiveFailures = CacheBuilder.newBuilder()
+        .maximumSize(1000)
+        .expireAfterAccess(Duration.ofHours(1))
+        .build();
+
     // === Group Metrics ===
     private final LongCounter groupRequests;
     private final LongCounter groupMemberRequests;
     private final DoubleHistogram groupResolutionDuration;
-    
+
     // === Storage Metrics ===
     private final LongCounter storageOperations;
     private final DoubleHistogram storageDuration;
-    private final Map<String, AtomicLong> storageSizes = new ConcurrentHashMap<>();
     
     // Common attribute keys
     private static final AttributeKey<String> REPO_NAME = AttributeKey.stringKey("repo_name");
@@ -293,11 +299,10 @@ public final class OtelMetrics {
             RESULT, "hit"
         );
         cacheRequests.add(1, attrs);
-        
-        final String key = repoName + ":" + cacheType;
-        cacheHits.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
-    
+
     public void recordCacheMiss(String repoName, String repoType, String cacheType) {
         final Attributes attrs = Attributes.of(
             REPO_NAME, repoName,
@@ -306,9 +311,8 @@ public final class OtelMetrics {
             RESULT, "miss"
         );
         cacheRequests.add(1, attrs);
-        
-        final String key = repoName + ":" + cacheType;
-        cacheMisses.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
     
     public void recordCacheEviction(String repoName, String cacheType, String reason) {
@@ -339,38 +343,65 @@ public final class OtelMetrics {
             ERROR_TYPE, errorType
         );
         upstreamErrors.add(1, attrs);
-        
+
         final String key = repoName + ":" + upstream;
-        consecutiveFailures.computeIfAbsent(key, k -> {
-            final AtomicLong value = new AtomicLong(0);
-            meter.gaugeBuilder("artipie.upstream.consecutive.failures")
-                .setDescription("Consecutive upstream failures")
-                .buildWithCallback(m -> m.record(value.get(), attrs));
-            return value;
-        }).incrementAndGet();
-        
+        try {
+            AtomicLong failures = consecutiveFailures.getIfPresent(key);
+            if (failures == null) {
+                failures = new AtomicLong(0);
+                consecutiveFailures.put(key, failures);
+                // Register gauge for this upstream (only once)
+                final AtomicLong finalFailures = failures;
+                meter.gaugeBuilder("artipie.upstream.consecutive.failures")
+                    .setDescription("Consecutive upstream failures")
+                    .buildWithCallback(m -> {
+                        final AtomicLong current = consecutiveFailures.getIfPresent(key);
+                        if (current != null) {
+                            m.record(current.get(), attrs);
+                        }
+                    });
+            }
+            failures.incrementAndGet();
+        } catch (Exception e) {
+            LOGGER.warn("Failed to update consecutive failures for {}:{}", repoName, upstream, e);
+        }
+
         setUpstreamAvailability(repoName, upstream, false);
     }
-    
+
     public void recordUpstreamSuccess(String repoName, String upstream) {
         final String key = repoName + ":" + upstream;
-        final AtomicLong failures = consecutiveFailures.get(key);
+        final AtomicLong failures = consecutiveFailures.getIfPresent(key);
         if (failures != null) {
             failures.set(0);
         }
         setUpstreamAvailability(repoName, upstream, true);
     }
-    
+
     private void setUpstreamAvailability(String repoName, String upstream, boolean available) {
         final String key = repoName + ":" + upstream;
-        upstreamAvailability.computeIfAbsent(key, k -> {
-            final AtomicLong value = new AtomicLong(available ? 1 : 0);
-            final Attributes attrs = Attributes.of(REPO_NAME, repoName, UPSTREAM, upstream);
-            meter.gaugeBuilder("artipie.upstream.availability")
-                .setDescription("Upstream availability (1=up, 0=down)")
-                .buildWithCallback(m -> m.record(value.get(), attrs));
-            return value;
-        }).set(available ? 1 : 0);
+        try {
+            AtomicLong value = upstreamAvailability.getIfPresent(key);
+            if (value == null) {
+                value = new AtomicLong(available ? 1 : 0);
+                upstreamAvailability.put(key, value);
+                // Register gauge for this upstream (only once)
+                final AtomicLong finalValue = value;
+                final Attributes attrs = Attributes.of(REPO_NAME, repoName, UPSTREAM, upstream);
+                meter.gaugeBuilder("artipie.upstream.availability")
+                    .setDescription("Upstream availability (1=up, 0=down)")
+                    .buildWithCallback(m -> {
+                        final AtomicLong current = upstreamAvailability.getIfPresent(key);
+                        if (current != null) {
+                            m.record(current.get(), attrs);
+                        }
+                    });
+            } else {
+                value.set(available ? 1 : 0);
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Failed to update upstream availability for {}:{}", repoName, upstream, e);
+        }
     }
     
     // === Group Metrics Methods ===
@@ -434,11 +465,10 @@ public final class OtelMetrics {
         );
         cacheRequests.add(1, attrs);
         cacheDuration.record(durationMs, attrs);
-        
-        final String key = cacheName + ":l1";
-        cacheHits.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
-    
+
     /**
      * Record L1 cache miss.
      * @param cacheName Cache name
@@ -452,11 +482,10 @@ public final class OtelMetrics {
         );
         cacheRequests.add(1, attrs);
         cacheDuration.record(durationMs, attrs);
-        
-        final String key = cacheName + ":l1";
-        cacheMisses.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
-    
+
     /**
      * Record L2 cache hit.
      * @param cacheName Cache name
@@ -470,11 +499,10 @@ public final class OtelMetrics {
         );
         cacheRequests.add(1, attrs);
         cacheDuration.record(durationMs, attrs);
-        
-        final String key = cacheName + ":l2";
-        cacheHits.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
-    
+
     /**
      * Record L2 cache miss.
      * @param cacheName Cache name
@@ -488,9 +516,8 @@ public final class OtelMetrics {
         );
         cacheRequests.add(1, attrs);
         cacheDuration.record(durationMs, attrs);
-        
-        final String key = cacheName + ":l2";
-        cacheMisses.computeIfAbsent(key, k -> new AtomicLong(0)).incrementAndGet();
+        // MEMORY LEAK FIX: Removed unbounded map update
+        // OpenTelemetry SDK aggregates metrics automatically via cacheRequests counter
     }
     
     /**
