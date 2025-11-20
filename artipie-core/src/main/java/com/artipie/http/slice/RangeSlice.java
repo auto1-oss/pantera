@@ -11,7 +11,7 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
@@ -253,11 +253,13 @@ public final class RangeSlice implements Slice {
             if (!this.completed.getAndSet(true)) {
                 this.downstream.onError(error);
             } else {
-                Logger.warn(
-                    this,
-                    "Error after completion (already consumed): %s",
-                    error.getMessage()
-                );
+                EcsLogger.warn("com.artipie.http")
+                    .message("Error after range stream completion (state: completed)")
+                    .eventCategory("http")
+                    .eventAction("range_stream_error")
+                    .eventOutcome("failure")
+                    .field("error.message", error.getMessage())
+                    .log();
             }
         }
 

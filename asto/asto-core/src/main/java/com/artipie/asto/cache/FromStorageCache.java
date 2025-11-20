@@ -8,7 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.rx.RxStorageWrapper;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Single;
 import java.util.Optional;
@@ -54,7 +54,15 @@ public final class FromStorageCache implements Cache {
                     OptimizedStorageCache.optimizedValue(this.storage, key)
                 ).map(Optional::of)
             )
-            .doOnError(err -> Logger.warn(this, "Failed to read cached item: %[exception]s", err))
+            .doOnError(err ->
+                EcsLogger.warn("com.artipie.asto")
+                    .message("Failed to read cached item: " + key.string())
+                    .eventCategory("cache")
+                    .eventAction("cache_read")
+                    .eventOutcome("failure")
+                    .error(err)
+                    .log()
+            )
             .onErrorComplete()
             .switchIfEmpty(
                 SingleInterop.fromFuture(remote.get()).flatMap(

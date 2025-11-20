@@ -12,7 +12,7 @@ import com.artipie.security.policy.Policy;
 import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.settings.users.CrudUsers;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
 import java.io.StringReader;
@@ -149,7 +149,14 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.remove(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to remove user")
+                .eventCategory("api")
+                .eventAction("user_remove")
+                .eventOutcome("failure")
+                .field("user.name", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }
@@ -167,7 +174,14 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.enable(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to enable user")
+                .eventCategory("api")
+                .eventAction("user_enable")
+                .eventOutcome("failure")
+                .field("user.name", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }
@@ -185,7 +199,14 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.disable(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to disable user")
+                .eventCategory("api")
+                .eventAction("user_disable")
+                .eventOutcome("failure")
+                .field("user.name", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }
@@ -258,7 +279,14 @@ public final class UsersRest extends BaseRest {
                 context.response().setStatusCode(HttpStatus.OK_200).end();
                 this.ucache.invalidate(uname);
             } catch (final IllegalStateException err) {
-                Logger.error(this, err.getMessage());
+                EcsLogger.error("com.artipie.api")
+                    .message("Failed to alter user password")
+                    .eventCategory("api")
+                    .eventAction("user_password_change")
+                    .eventOutcome("failure")
+                    .field("user.name", uname)
+                    .error(err)
+                    .log();
                 context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             }
         } else {

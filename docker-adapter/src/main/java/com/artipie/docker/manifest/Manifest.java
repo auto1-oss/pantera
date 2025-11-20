@@ -7,9 +7,8 @@ package com.artipie.docker.manifest;
 import com.artipie.asto.Content;
 import com.artipie.docker.Digest;
 import com.artipie.docker.error.InvalidManifestException;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.base.Strings;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.json.Json;
 import javax.json.JsonArray;
@@ -27,8 +26,6 @@ import java.util.stream.Collectors;
  * Image manifest in JSON format.
  */
 public final class Manifest {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(Manifest.class);
 
     /**
      * New image manifest format (schemaVersion = 2).
@@ -162,7 +159,13 @@ public final class Manifest {
      */
     public long size() {
         long size = this.source.length;
-        LOGGER.debug("Manifest size for digest {}: {} bytes", this.manifestDigest, size);
+        EcsLogger.debug("com.artipie.docker")
+            .message("Manifest size calculated")
+            .eventCategory("repository")
+            .eventAction("manifest_size")
+            .field("package.checksum", this.manifestDigest.string())
+            .field("package.size", size)
+            .log();
         return size;
     }
 }

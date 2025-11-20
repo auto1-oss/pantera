@@ -10,7 +10,7 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -135,20 +135,21 @@ public final class CircuitBreakerSlice implements Slice {
 
             if (timeSinceFailure > this.timeoutMillis) {
                 // Timeout expired - try half-open
-                Logger.info(
-                    this,
-                    "Circuit breaker half-open after %dms, testing upstream",
-                    timeSinceFailure
-                );
+                EcsLogger.info("com.artipie.http")
+                    .message("Circuit breaker HALF_OPEN, testing upstream after " + timeSinceFailure + "ms since last failure")
+                    .eventCategory("circuit_breaker")
+                    .eventAction("state_change")
+                    .eventOutcome("success")
+                    .log();
                 this.state.compareAndSet(State.OPEN, State.HALF_OPEN);
             } else {
                 // Still open - fail fast
-                Logger.debug(
-                    this,
-                    "Circuit breaker OPEN, failing fast (%d failures, %dms since last)",
-                    this.failureCount.get(),
-                    timeSinceFailure
-                );
+                EcsLogger.debug("com.artipie.http")
+                    .message("Circuit breaker OPEN, failing fast with " + this.failureCount.get() + " failures (" + timeSinceFailure + "ms since last failure)")
+                    .eventCategory("circuit_breaker")
+                    .eventAction("fail_fast")
+                    .eventOutcome("success")
+                    .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.serviceUnavailable(
                         "Circuit breaker open - upstream unavailable"
@@ -192,18 +193,20 @@ public final class CircuitBreakerSlice implements Slice {
         if (currentState == State.HALF_OPEN) {
             // Recovery successful
             this.state.compareAndSet(State.HALF_OPEN, State.CLOSED);
-            Logger.info(
-                this,
-                "Circuit breaker CLOSED - upstream recovered (was %d failures)",
-                failures
-            );
+            EcsLogger.info("com.artipie.http")
+                .message("Circuit breaker CLOSED - upstream recovered after " + failures + " previous failures")
+                .eventCategory("circuit_breaker")
+                .eventAction("state_change")
+                .eventOutcome("success")
+                .log();
         } else if (failures > 0) {
             // Reset failure count
-            Logger.debug(
-                this,
-                "Circuit breaker reset failure count from %d to 0",
-                failures
-            );
+            EcsLogger.debug("com.artipie.http")
+                .message("Circuit breaker reset failure count (" + failures + " previous failures)")
+                .eventCategory("circuit_breaker")
+                .eventAction("failure_reset")
+                .eventOutcome("success")
+                .log();
         }
     }
 
@@ -219,21 +222,22 @@ public final class CircuitBreakerSlice implements Slice {
             // Open circuit
             final boolean wasOpen = this.state.getAndSet(State.OPEN) == State.OPEN;
             if (!wasOpen) {
-                Logger.warn(
-                    this,
-                    "Circuit breaker OPENED after %d failures: %s",
-                    failures,
-                    error.getMessage()
-                );
+                EcsLogger.warn("com.artipie.http")
+                    .message("Circuit breaker OPENED after " + failures + " failures (threshold: " + this.failureThreshold + ")")
+                    .eventCategory("circuit_breaker")
+                    .eventAction("state_change")
+                    .eventOutcome("failure")
+                    .field("error.message", error.getMessage())
+                    .log();
             }
         } else {
-            Logger.debug(
-                this,
-                "Circuit breaker failure %d/%d: %s",
-                failures,
-                this.failureThreshold,
-                error.getMessage()
-            );
+            EcsLogger.debug("com.artipie.http")
+                .message("Circuit breaker failure recorded (" + failures + "/" + this.failureThreshold + " failures)")
+                .eventCategory("circuit_breaker")
+                .eventAction("failure_record")
+                .eventOutcome("failure")
+                .field("error.message", error.getMessage())
+                .log();
         }
     }
 

@@ -5,8 +5,8 @@
 package com.artipie.http;
 
 import com.artipie.asto.Content;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -34,7 +34,13 @@ final class SafeSlice implements Slice {
         try {
             return this.origin.response(line, headers, body);
         } catch (final Exception err) {
-            Logger.error(this, "Failed to respond to request: %[exception]s", err);
+            EcsLogger.error("com.artipie.http")
+                .message("Failed to respond to request")
+                .eventCategory("http")
+                .eventAction("request_handling")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             return CompletableFuture.completedFuture(ResponseBuilder.internalError()
                 .textBody("Failed to respond to request: " + err.getMessage())
                 .build()

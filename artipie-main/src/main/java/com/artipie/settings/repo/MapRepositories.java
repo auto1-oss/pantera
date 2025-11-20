@@ -11,8 +11,7 @@ import com.artipie.settings.AliasSettings;
 import com.artipie.settings.ConfigFile;
 import com.artipie.settings.Settings;
 import com.artipie.settings.StorageByAlias;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -25,8 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class MapRepositories implements Repositories {
-
-    private final static Logger LOGGER = LoggerFactory.getLogger(MapRepositories.class);
 
     private final Settings settings;
 
@@ -88,7 +85,13 @@ public class MapRepositories implements Repositories {
                                 this.map.put(config.name(), config);
                             }
                         }).exceptionally(e -> {
-                            LOGGER.error("Failed to load repository config", e);
+                            EcsLogger.error("com.artipie.settings")
+                                .message("Failed to load repository config")
+                                .eventCategory("configuration")
+                                .eventAction("config_load")
+                                .eventOutcome("failure")
+                                .error(e)
+                                .log();
                             return null;
                         }))
                         .collect(Collectors.toList());
@@ -96,7 +99,12 @@ public class MapRepositories implements Repositories {
                     return CompletableFuture.allOf(
                         updates.toArray(new CompletableFuture[0])
                     ).thenApply(ignored -> {
-                        LOGGER.info("Loaded {} repository configurations", this.map.size());
+                        EcsLogger.info("com.artipie.settings")
+                            .message("Loaded " + this.map.size() + " repository configurations")
+                            .eventCategory("configuration")
+                            .eventAction("config_load")
+                            .eventOutcome("success")
+                            .log();
                         return null;
                     });
                 });
@@ -138,12 +146,26 @@ public class MapRepositories implements Repositories {
                             this.settings.metrics().storage()
                         );
                     } catch (Exception e) {
-                        LOGGER.error("Can't parse repository config file: {}", file.name(), e);
+                        EcsLogger.error("com.artipie.settings")
+                            .message("Cannot parse repository config file")
+                            .eventCategory("configuration")
+                            .eventAction("config_parse")
+                            .eventOutcome("failure")
+                            .field("file.path", file.name())
+                            .error(e)
+                            .log();
                         return null;
                     }
                 }
             ).exceptionally(err -> {
-                LOGGER.error("Failed to load repository config: {}", file.name(), err);
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to load repository config")
+                    .eventCategory("configuration")
+                    .eventAction("config_load")
+                    .eventOutcome("failure")
+                    .field("file.path", file.name())
+                    .error(err)
+                    .log();
                 return null;
             });
         }

@@ -17,8 +17,7 @@ import org.eclipse.jetty.client.Origin;
 import org.eclipse.jetty.http3.client.HTTP3Client;
 import org.eclipse.jetty.http3.client.transport.HttpClientTransportOverHTTP3;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -29,8 +28,6 @@ import org.slf4j.LoggerFactory;
  * @since 0.1
  */
 public final class JettyClientSlices implements ClientSlices, AutoCloseable {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(JettyClientSlices.class);
 
     /**
      * Default HTTP port.
@@ -103,19 +100,33 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     public void stop() {
         if (stopped.compareAndSet(false, true)) {
             try {
-                LOGGER.debug("Stopping Jetty HTTP client (destinations: {})", 
-                    this.clnt.getDestinations().size());
-                
+                EcsLogger.debug("com.artipie.http.client")
+                    .message("Stopping Jetty HTTP client (" + this.clnt.getDestinations().size() + " destinations)")
+                    .eventCategory("http")
+                    .eventAction("http_client_stop")
+                    .log();
+
                 // First, stop accepting new requests
                 this.clnt.stop();
-                
+
                 // Then destroy to release all resources (connection pools, threads)
                 // This is critical to prevent connection leaks
                 this.clnt.destroy();
-                
-                LOGGER.debug("Jetty HTTP client stopped and destroyed successfully");
+
+                EcsLogger.debug("com.artipie.http.client")
+                    .message("Jetty HTTP client stopped and destroyed successfully")
+                    .eventCategory("http")
+                    .eventAction("http_client_stop")
+                    .eventOutcome("success")
+                    .log();
             } catch (Exception e) {
-                LOGGER.error("Failed to stop Jetty HTTP client cleanly", e);
+                EcsLogger.error("com.artipie.http.client")
+                    .message("Failed to stop Jetty HTTP client cleanly")
+                    .eventCategory("http")
+                    .eventAction("http_client_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
                 throw new ArtipieException(
                     "Failed to stop Jetty HTTP client. Some connections may not be closed properly.",
                     e

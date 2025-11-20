@@ -14,7 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 final class JdbcCooldownService implements CooldownService {
 
@@ -73,8 +73,14 @@ final class JdbcCooldownService implements CooldownService {
         
         // Circuit breaker: Auto-allow if service is degraded
         if (!this.circuitBreaker.shouldEvaluate()) {
-            Logger.warn(this, "Circuit breaker OPEN - auto-allowing %s:%s",
-                request.artifact(), request.version());
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("Circuit breaker OPEN - auto-allowing artifact")
+                .eventCategory("cooldown")
+                .eventAction("evaluate")
+                .eventOutcome("allowed")
+                .field("package.name", request.artifact())
+                .field("package.version", request.version())
+                .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
         
@@ -163,9 +169,13 @@ final class JdbcCooldownService implements CooldownService {
         }, this.executor).thenCompose(result -> {
             if (result.isPresent()) {
                 final BlockCacheEntry entry = result.get();
-                Logger.debug(this, "Database %s for %s:%s", 
-                    entry.blocked ? "block found" : "no block",
-                    request.artifact(), request.version());
+                EcsLogger.debug("com.artipie.cooldown")
+                    .message((entry.blocked ? "Database block found" : "Database no block") + " (blocked: " + entry.blocked + ")")
+                    .eventCategory("cooldown")
+                    .eventAction("db_check")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .log();
                 // Cache the result with appropriate TTL
                 if (entry.blocked && entry.blockedUntil != null) {
                     this.cache.putBlocked(request.repoName(), request.artifact(), 
@@ -260,8 +270,15 @@ final class JdbcCooldownService implements CooldownService {
         return inspector.releaseDate(request.artifact(), request.version())
             .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
             .exceptionally(error -> {
-                Logger.warn(this, "Failed to fetch release date for %s:%s - %s (allowing)",
-                    request.artifact(), request.version(), error.getMessage());
+                EcsLogger.warn("com.artipie.cooldown")
+                    .message("Failed to fetch release date (allowing)")
+                    .eventCategory("cooldown")
+                    .eventAction("release_date_fetch")
+                    .eventOutcome("failure")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .field("error.message", error.getMessage())
+                    .log();
                 return Optional.empty();
             })
             .thenCompose(release -> {
@@ -285,47 +302,71 @@ final class JdbcCooldownService implements CooldownService {
         final Instant now = request.requestedAt();
         
         if (release.isEmpty()) {
-            Logger.debug(this,
-                "No release date found for %s:%s:%s:%s - allowing",
-                request.repoType(), request.repoName(), request.artifact(), request.version()
-            );
+            EcsLogger.debug("com.artipie.cooldown")
+                .message("No release date found - allowing")
+                .eventCategory("cooldown")
+                .eventAction("evaluate")
+                .eventOutcome("allowed")
+                .field("repository.type", request.repoType())
+                .field("repository.name", request.repoName())
+                .field("package.name", request.artifact())
+                .field("package.version", request.version())
+                .log();
             this.cache.put(request.repoName(), request.artifact(), request.version(), false);
             return CompletableFuture.completedFuture(false);
         }
-        
+
         // Use per-repo-type minimum allowed age
         final Duration fresh = this.settings.minimumAllowedAgeFor(request.repoType());
         final Instant date = release.get();
-        
+
         if (date.plus(fresh).isAfter(now)
             && !fresh.isZero() && !fresh.isNegative()) {
             final Instant until = date.plus(fresh);
-            Logger.info(this,
-                "BLOCKING %s:%s - too fresh (released=%s, blockedUntil=%s)",
-                request.artifact(), request.version(), date, until
-            );
+            EcsLogger.info("com.artipie.cooldown")
+                .message("BLOCKING artifact - too fresh (released: " + date.toString() + ", blocked until: " + until.toString() + ")")
+                .eventCategory("cooldown")
+                .eventAction("evaluate")
+                .eventOutcome("blocked")
+                .field("package.name", request.artifact())
+                .field("package.version", request.version())
+                .field("package.release_date", date.toString())
+                .log();
             // Create block in database (async)
             return this.createBlockInDatabase(request, inspector, CooldownReason.FRESH_RELEASE, until)
                 .thenApply(success -> {
                     // Cache as blocked with dynamic TTL (until block expires)
-                    this.cache.putBlocked(request.repoName(), request.artifact(), 
+                    this.cache.putBlocked(request.repoName(), request.artifact(),
                         request.version(), until);
                     return true;
                 })
                 .exceptionally(error -> {
-                    Logger.error(this, "Failed to create block for %s:%s - %s (blocking anyway)",
-                        request.artifact(), request.version(), error.getMessage());
+                    EcsLogger.error("com.artipie.cooldown")
+                        .message("Failed to create block (blocking anyway)")
+                        .eventCategory("cooldown")
+                        .eventAction("block_create")
+                        .eventOutcome("failure")
+                        .field("package.name", request.artifact())
+                        .field("package.version", request.version())
+                        .field("error.message", error.getMessage())
+                        .log();
                     // Still cache as blocked with dynamic TTL
                     this.cache.putBlocked(request.repoName(), request.artifact(), 
                         request.version(), until);
                     return true;
                 });
         }
-        
-        Logger.debug(this,
-            "ALLOWING %s:%s - old enough (released=%s, age=%s)",
-            request.artifact(), request.version(), date, Duration.between(date, now)
-        );
+
+        EcsLogger.debug("com.artipie.cooldown")
+            .message("ALLOWING artifact - old enough")
+            .eventCategory("cooldown")
+            .eventAction("evaluate")
+            .eventOutcome("allowed")
+            .field("package.name", request.artifact())
+            .field("package.version", request.version())
+            .field("package.release_date", date.toString())
+            .field("package.age", Duration.between(date, now).getSeconds())
+            .log();
         this.cache.put(request.repoName(), request.artifact(), request.version(), false);
         return CompletableFuture.completedFuture(false);
     }
@@ -420,11 +461,24 @@ final class JdbcCooldownService implements CooldownService {
                     SYSTEM_ACTOR,
                     main.id()
                 );
-                Logger.debug(this, "Inserted %d dependencies for %s:%s",
-                    deps.size(), request.artifact(), request.version());
+                EcsLogger.debug("com.artipie.cooldown")
+                    .message("Inserted " + deps.size() + " dependencies")
+                    .eventCategory("cooldown")
+                    .eventAction("dependency_insert")
+                    .eventOutcome("success")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .log();
             } catch (Exception ex) {
-                Logger.warn(this, "Failed to insert dependencies for %s:%s - %s",
-                    request.artifact(), request.version(), ex.getMessage());
+                EcsLogger.warn("com.artipie.cooldown")
+                    .message("Failed to insert dependencies")
+                    .eventCategory("cooldown")
+                    .eventAction("dependency_insert")
+                    .eventOutcome("failure")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .field("error.message", ex.getMessage())
+                    .log();
             }
         }, this.executor);
         

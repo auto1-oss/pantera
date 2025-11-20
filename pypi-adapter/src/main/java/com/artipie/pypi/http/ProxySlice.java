@@ -17,6 +17,7 @@ import com.artipie.cooldown.CooldownRequest;
 import com.artipie.cooldown.CooldownResponses;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
@@ -30,7 +31,6 @@ import com.artipie.http.slice.KeyFromPath;
 import com.artipie.pypi.NormalizedProjectName;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jcabi.log.Logger;
 
 import java.io.IOException;
 import java.net.URI;
@@ -200,33 +200,38 @@ final class ProxySlice implements Slice {
                 user,
                 Instant.now()
             );
-            Logger.info(
-                this,
-                "Evaluating cooldown for artifact %s:%s (user=%s, repo=%s/%s)",
-                info.artifact(),
-                info.version(),
-                user,
-                this.rtype,
-                this.rname
-            );
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Evaluating cooldown for artifact")
+                .eventCategory("repository")
+                .eventAction("cooldown_evaluation")
+                .field("package.name", info.artifact())
+                .field("package.version", info.version())
+                .field("user.name", user)
+                .field("repository.type", this.rtype)
+                .field("repository.name", this.rname)
+                .log();
             return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
                 if (evaluation.blocked()) {
-                    Logger.warn(
-                        this,
-                        "Artifact %s:%s BLOCKED by cooldown",
-                        info.artifact(),
-                        info.version()
-                    );
+                    EcsLogger.warn("com.artipie.pypi")
+                        .message("Artifact BLOCKED by cooldown")
+                        .eventCategory("repository")
+                        .eventAction("cooldown_evaluation")
+                        .eventOutcome("failure")
+                        .field("package.name", info.artifact())
+                        .field("package.version", info.version())
+                        .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponses.forbidden(evaluation.block().orElseThrow())
                     );
                 }
-                Logger.info(
-                    this,
-                    "Artifact %s:%s ALLOWED by cooldown - serving content",
-                    info.artifact(),
-                    info.version()
-                );
+                EcsLogger.debug("com.artipie.pypi")
+                    .message("Artifact ALLOWED by cooldown - serving content")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_evaluation")
+                    .eventOutcome("success")
+                    .field("package.name", info.artifact())
+                    .field("package.version", info.version())
+                    .log();
                 // Cooldown passed - now serve the artifact (no further cooldown checks)
                 return this.serveArtifact(line, rqheaders, info, user);
             });
@@ -252,41 +257,45 @@ final class ProxySlice implements Slice {
                     // Check mirror cache first for all paths
                     final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
                     if (mirror != null) {
-                        Logger.debug(
-                            this,
-                            "Serving %s via cached mirror %s",
-                            line.uri().getPath(),
-                            mirror
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Serving via cached mirror")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", mirror.toString())
+                            .log();
                         fetch = this.fetchFromMirror(line, mirror);
                     } else if (this.isPackageFilePath(line)) {
                         // For /packages/ paths without mirror mapping:
                         // PyPI serves package files from files.pythonhosted.org, not pypi.org/simple
                         // Construct the CDN URL directly since pip may request files before index pages
                         final URI filesUri = URI.create("https://files.pythonhosted.org" + line.uri().getPath());
-                        Logger.debug(
-                            this,
-                            "Package file request %s (no mirror) -> fetching from files.pythonhosted.org: %s",
-                            line.uri().getPath(),
-                            filesUri
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Package file request (no mirror) -> fetching from files.pythonhosted.org")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", filesUri.toString())
+                            .log();
                         fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
-                            Logger.debug(
-                                this,
-                                "files.pythonhosted.org response for %s: status=%s",
-                                line.uri().getPath(),
-                                resp.status()
-                            );
+                            EcsLogger.debug("com.artipie.pypi")
+                                .message("files.pythonhosted.org response")
+                                .eventCategory("repository")
+                                .eventAction("proxy_request")
+                                .field("url.path", line.uri().getPath())
+                                .field("http.response.status_code", resp.status().code())
+                                .log();
                             return resp;
                         });
                     } else {
                         // For other paths without mirrors, forward to upstream
-                        Logger.debug(
-                            this,
-                            "Forwarding %s to primary upstream %s",
-                            line.uri().getPath(),
-                            upstream.uri()
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Forwarding to primary upstream")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", upstream.uri().toString())
+                            .log();
                         fetch = this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
                     }
                     return fetch.thenApply(response -> {
@@ -349,41 +358,45 @@ final class ProxySlice implements Slice {
                     // Check mirror cache first for all paths
                     final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
                     if (mirror != null) {
-                        Logger.debug(
-                            this,
-                            "Serving %s via cached mirror %s",
-                            line.uri().getPath(),
-                            mirror
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Serving via cached mirror")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", mirror.toString())
+                            .log();
                         fetch = this.fetchFromMirror(line, mirror);
                     } else if (this.isPackageFilePath(line)) {
                         // For /packages/ paths without mirror mapping:
                         // PyPI serves package files from files.pythonhosted.org, not pypi.org/simple
                         // Construct the CDN URL directly since pip may request files before index pages
                         final URI filesUri = URI.create("https://files.pythonhosted.org" + line.uri().getPath());
-                        Logger.debug(
-                            this,
-                            "Package file request %s (no mirror) -> fetching from files.pythonhosted.org: %s",
-                            line.uri().getPath(),
-                            filesUri
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Package file request (no mirror) -> fetching from files.pythonhosted.org")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", filesUri.toString())
+                            .log();
                         fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
-                            Logger.debug(
-                                this,
-                                "files.pythonhosted.org response for %s: status=%s",
-                                line.uri().getPath(),
-                                resp.status()
-                            );
+                            EcsLogger.debug("com.artipie.pypi")
+                                .message("files.pythonhosted.org response")
+                                .eventCategory("repository")
+                                .eventAction("proxy_request")
+                                .field("url.path", line.uri().getPath())
+                                .field("http.response.status_code", resp.status().code())
+                                .log();
                             return resp;
                         });
                     } else {
                         // For other paths without mirrors, forward to upstream
-                        Logger.debug(
-                            this,
-                            "Forwarding %s to primary upstream %s",
-                            line.uri().getPath(),
-                            upstream.uri()
-                        );
+                        EcsLogger.debug("com.artipie.pypi")
+                            .message("Forwarding to primary upstream")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("url.path", line.uri().getPath())
+                            .field("destination.address", upstream.uri().toString())
+                            .log();
                         fetch = this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
                     }
                     
@@ -500,12 +513,13 @@ final class ProxySlice implements Slice {
             .process(stream -> {
                 try {
                     final byte[] data = stream.readAllBytes();
-                    Logger.warn(
-                        this,
-                        "Responding with cached artifact %s (%d bytes)",
-                        key,
-                        data.length
-                    );
+                    EcsLogger.debug("com.artipie.pypi")
+                        .message("Responding with cached artifact")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .field("package.name", key.string())
+                        .field("package.size", data.length)
+                        .log();
                     final Content payload = new Content.From(data);
                     return new ContentAndCoords(payload, info, data.length, data);
                 } catch (final java.io.IOException ex) {
@@ -565,12 +579,12 @@ final class ProxySlice implements Slice {
                     }
                     // Size limit protection
                     if (bytes.length > MAX_INDEX_SIZE) {
-                        Logger.warn(
-                            this,
-                            "PyPI index too large (%d bytes), limit is %d bytes",
-                            bytes.length,
-                            MAX_INDEX_SIZE
-                        );
+                        EcsLogger.warn("com.artipie.pypi")
+                            .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
+                            .eventCategory("repository")
+                            .eventAction("index_rewrite")
+                            .eventOutcome("failure")
+                            .log();
                         return Optional.empty();
                     }
                     // Process in single pass to minimize memory copies
@@ -592,11 +606,13 @@ final class ProxySlice implements Slice {
             .handle(
                 (Optional<Content> body, Throwable error) -> {
                     if (error != null) {
-                        Logger.warn(
-                            this,
-                            "Failed to rewrite PyPI index content: %s",
-                            error.getMessage()
-                        );
+                        EcsLogger.warn("com.artipie.pypi")
+                            .message("Failed to rewrite PyPI index content")
+                            .eventCategory("repository")
+                            .eventAction("index_rewrite")
+                            .eventOutcome("failure")
+                            .error(error)
+                            .log();
                         return Optional.of(new Content.From(new byte[0]));
                     }
                     return body;
@@ -637,12 +653,13 @@ final class ProxySlice implements Slice {
         // Example: /test_prefix/api/pypi/pypi_group/workday/ -> /test_prefix/api/pypi/pypi_group
         // This ensures download links preserve the correct path prefix for proxy routing.
         final String base = this.extractBasePath(line);
-        Logger.debug(
-            this,
-            "Rewriting index body: request path=%s, extracted base=%s",
-            line.uri().getPath(),
-            base
-        );
+        EcsLogger.debug("com.artipie.pypi")
+            .message("Rewriting index body")
+            .eventCategory("repository")
+            .eventAction("index_rewrite")
+            .field("url.path", line.uri().getPath())
+            .field("url.path", base)
+            .log();
         String result = body;
         if (this.isHtml(header) || this.looksLikeHtml(body)) {
             result = this.rewriteHtmlLinks(result, base);
@@ -767,14 +784,12 @@ final class ProxySlice implements Slice {
         
         // Pattern: /packages/{hash}/{filename} or /packages/{hash}/{filename}.metadata
         final boolean isPackage = path.startsWith("/packages/");
-        Logger.debug(
-            this,
-            "isPackageFilePath check: original=%s, repoPrefix=%s, normalized=%s, result=%s",
-            line.uri().getPath(),
-            repoPrefix,
-            path,
-            isPackage
-        );
+        EcsLogger.debug("com.artipie.pypi")
+            .message("isPackageFilePath check: " + path + " (repo prefix: " + repoPrefix + ", is package: " + isPackage + ")")
+            .eventCategory("repository")
+            .eventAction("path_classification")
+            .field("url.original", line.uri().getPath())
+            .log();
         return isPackage;
     }
 
@@ -821,17 +836,23 @@ final class ProxySlice implements Slice {
 
     private void storeMirror(final String path, final URI upstream) {
         this.mirrors.put(path, upstream);
-        Logger.debug(this, "Registered mirror mapping %s -> %s", path, upstream);
+        EcsLogger.debug("com.artipie.pypi")
+            .message("Registered mirror mapping")
+            .eventCategory("repository")
+            .eventAction("mirror_registration")
+            .field("url.path", path)
+            .field("destination.address", upstream.toString())
+            .log();
         if (!path.endsWith(".metadata")) {
             final URI metadata = ProxySlice.metadataUri(upstream);
             this.mirrors.put(path + ".metadata", metadata);
-            Logger.debug(
-                this,
-                "Registered metadata mirror mapping %s -> %s (cache size: %d)",
-                path + ".metadata",
-                metadata,
-                this.mirrors.estimatedSize()
-            );
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Registered metadata mirror mapping (cache size: " + this.mirrors.estimatedSize() + ")")
+                .eventCategory("repository")
+                .eventAction("mirror_registration")
+                .field("url.path", path + ".metadata")
+                .field("url.original", metadata.toString())
+                .log();
         }
     }
 

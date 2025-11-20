@@ -5,7 +5,7 @@
 package com.artipie.maven.http;
 
 import com.artipie.asto.Key;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -146,20 +146,24 @@ public final class PersistedMetadataCache extends MetadataCache {
                         restored++;
                     }
                 }
-                
+
                 final long elapsed = System.currentTimeMillis() - start;
-                Logger.debug(
-                    this,
-                    "Restored %d entries from snapshot in %d ms",
-                    restored, elapsed
-                );
+                EcsLogger.debug("com.artipie.maven")
+                    .message("Restored " + restored + " cache entries from snapshot")
+                    .eventCategory("repository")
+                    .eventAction("cache_restore")
+                    .eventOutcome("success")
+                    .duration(elapsed)
+                    .log();
             }
         } catch (IOException | ClassNotFoundException e) {
-            Logger.warn(
-                this,
-                "Failed to restore from snapshot: %s",
-                e.getMessage()
-            );
+            EcsLogger.warn("com.artipie.maven")
+                .message("Failed to restore cache from snapshot, starting with empty cache")
+                .eventCategory("repository")
+                .eventAction("cache_restore")
+                .eventOutcome("failure")
+                .field("error.message", e.getMessage())
+                .log();
             // Continue with empty cache
         }
     }
@@ -172,11 +176,13 @@ public final class PersistedMetadataCache extends MetadataCache {
         try {
             this.snapshotToDisk();
         } catch (IOException e) {
-            Logger.warn(
-                this,
-                "Snapshot failed: %s",
-                e.getMessage()
-            );
+            EcsLogger.warn("com.artipie.maven")
+                .message("Cache snapshot failed")
+                .eventCategory("repository")
+                .eventAction("cache_snapshot")
+                .eventOutcome("failure")
+                .field("error.message", e.getMessage())
+                .log();
         }
     }
     
@@ -214,13 +220,15 @@ public final class PersistedMetadataCache extends MetadataCache {
         
         // Atomic rename (no corruption on crash)
         Files.move(tempFile, this.snapshotPath, StandardCopyOption.ATOMIC_MOVE);
-        
+
         final long elapsed = System.currentTimeMillis() - start;
-        Logger.debug(
-            this,
-            "Snapshot saved: %d entries in %d ms",
-            data.entries.size(), elapsed
-        );
+        EcsLogger.debug("com.artipie.maven")
+            .message("Cache snapshot saved (" + data.entries.size() + " entries)")
+            .eventCategory("repository")
+            .eventAction("cache_snapshot")
+            .eventOutcome("success")
+            .duration(elapsed)
+            .log();
     }
     
     /**
@@ -242,11 +250,13 @@ public final class PersistedMetadataCache extends MetadataCache {
             try {
                 this.snapshotToDisk();
             } catch (IOException e) {
-                Logger.warn(
-                    this,
-                    "Failed to save final snapshot: %s",
-                    e.getMessage()
-                );
+                EcsLogger.warn("com.artipie.maven")
+                    .message("Failed to save final cache snapshot on shutdown")
+                    .eventCategory("repository")
+                    .eventAction("cache_snapshot")
+                    .eventOutcome("failure")
+                    .field("error.message", e.getMessage())
+                    .log();
             }
         }
     }

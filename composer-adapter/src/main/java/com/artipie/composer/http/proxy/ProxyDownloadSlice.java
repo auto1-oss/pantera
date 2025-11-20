@@ -14,13 +14,13 @@ import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.cooldown.CooldownInspector;
 import com.artipie.cooldown.CooldownRequest;
 import com.artipie.cooldown.CooldownResponses;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.scheduling.ProxyArtifactEvent;
-import com.jcabi.log.Logger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -137,91 +137,156 @@ public final class ProxyDownloadSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        final String path = line.uri().getPath();
-        Logger.info(this, "ProxyDownloadSlice handling: %s (method: %s)", path, line.method().value());
-        Logger.debug(this, "Full request URI: %s", line.uri().toString());
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored -> {
+            final String path = line.uri().getPath();
+            EcsLogger.info("com.artipie.composer")
+                .message("ProxyDownloadSlice handling request")
+                .eventCategory("repository")
+                .eventAction("proxy_download")
+                .field("url.path", path)
+                .field("http.request.method", line.method().value())
+                .log();
+            EcsLogger.debug("com.artipie.composer")
+                .message("Full request URI")
+                .eventCategory("repository")
+                .eventAction("proxy_download")
+                .field("url.full", line.uri().toString())
+                .log();
 
-        // Extract package info from rewritten URL
-        final Matcher matcher = DOWNLOAD_PATTERN.matcher(path);
-        if (!matcher.matches()) {
-            Logger.warn(
-                this, 
-                "URL doesn't match download pattern: %s (expected pattern: /dist/vendor/package/version)",
-                path
-            );
-            // Still proxy to remote in case it's a valid request
-            return this.remote.response(line, Headers.EMPTY, Content.EMPTY);
-        }
-
-        final String vendor = matcher.group("vendor");
-        final String pkg = matcher.group("package");
-        final String version = matcher.group("version");
-        final String packageName = vendor + "/" + pkg;
-
-        Logger.info(this, "Download request for %s:%s", packageName, version);
-
-        // Evaluate cooldown before proceeding
-        final String owner = new Login(headers).getValue();
-        final CooldownRequest cdreq = new CooldownRequest(
-            this.rtype,
-            this.rname,
-            packageName,
-            version,
-            owner,
-            Instant.now()
-        );
-
-        return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
-            if (result.blocked()) {
-                Logger.info(this, "Cooldown BLOCKED download for %s:%s", packageName, version);
-                return CompletableFuture.completedFuture(
-                    CooldownResponses.forbidden(result.block().orElseThrow())
-                );
+            // Extract package info from rewritten URL
+            final Matcher matcher = DOWNLOAD_PATTERN.matcher(path);
+            if (!matcher.matches()) {
+                EcsLogger.warn("com.artipie.composer")
+                    .message("URL doesn't match download pattern (expected pattern: /dist/vendor/package/version)")
+                    .eventCategory("repository")
+                    .eventAction("proxy_download")
+                    .eventOutcome("failure")
+                    .field("url.path", path)
+                    .log();
+                // Still proxy to remote in case it's a valid request
+                return this.remote.response(line, Headers.EMPTY, Content.EMPTY);
             }
 
-            // Look up original URL from cached metadata
-            return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
-                if (originalUrl.isEmpty()) {
-                    Logger.error(this, "Could not find original URL for %s:%s", packageName, version);
+            final String vendor = matcher.group("vendor");
+            final String pkg = matcher.group("package");
+            final String version = matcher.group("version");
+            final String packageName = vendor + "/" + pkg;
+
+            EcsLogger.info("com.artipie.composer")
+                .message("Download request for package")
+                .eventCategory("repository")
+                .eventAction("proxy_download")
+                .field("package.name", packageName)
+                .field("package.version", version)
+                .log();
+
+            // Evaluate cooldown before proceeding
+            final String owner = new Login(headers).getValue();
+            final CooldownRequest cdreq = new CooldownRequest(
+                this.rtype,
+                this.rname,
+                packageName,
+                version,
+                owner,
+                Instant.now()
+            );
+
+            return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
+                if (result.blocked()) {
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Cooldown blocked download")
+                        .eventCategory("repository")
+                        .eventAction("proxy_download")
+                        .eventOutcome("blocked")
+                        .field("package.name", packageName)
+                        .field("package.version", version)
+                        .log();
                     return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
+                        CooldownResponses.forbidden(result.block().orElseThrow())
                     );
                 }
 
-                final String orig = originalUrl.get();
-                Logger.info(this, "Fetching from original URL: %s", orig);
+                // Look up original URL from cached metadata
+                return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
+                    if (originalUrl.isEmpty()) {
+                        EcsLogger.error("com.artipie.composer")
+                            .message("Could not find original URL for package")
+                            .eventCategory("repository")
+                            .eventAction("proxy_download")
+                            .eventOutcome("failure")
+                            .field("package.name", packageName)
+                            .field("package.version", version)
+                            .log();
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        );
+                    }
 
-                final URI ouri = URI.create(orig);
-            // Decide which slice to use: same-host -> reuse remote; other host -> build dynamic slice
-            final Slice target;
-            if (sameHost(this.remoteBase, ouri)) {
-                target = this.remote;
-            } else {
-                // Build client for target host without applying remote auth
-                target = new UriClientSlice(this.clients, baseOf(ouri));
-            }
+                    final String orig = originalUrl.get();
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Fetching from original URL")
+                        .eventCategory("repository")
+                        .eventAction("proxy_download")
+                        .field("package.name", packageName)
+                        .field("package.version", version)
+                        .field("url.original", orig)
+                        .log();
 
-            // Build path+query request line for target host
-            final String pathWithQuery = buildPathWithQuery(ouri);
-            final RequestLine newLine = RequestLine.from(
-                line.method().value() + " " + pathWithQuery + " " + line.version()
-            );
+                    final URI ouri = URI.create(orig);
+                    // Decide which slice to use: same-host -> reuse remote; other host -> build dynamic slice
+                    final Slice target;
+                    if (sameHost(this.remoteBase, ouri)) {
+                        target = this.remote;
+                    } else {
+                        // Build client for target host without applying remote auth
+                        target = new UriClientSlice(this.clients, baseOf(ouri));
+                    }
 
-            // Prepare minimal safe headers for upstream
-            final Headers out = buildUpstreamHeaders(headers);
+                    // Build path+query request line for target host
+                    final String pathWithQuery = buildPathWithQuery(ouri);
+                    final RequestLine newLine = RequestLine.from(
+                        line.method().value() + " " + pathWithQuery + " " + line.version()
+                    );
 
-            // Fetch from original URL using chosen slice
-            // Note: Headers are already cleaned by buildUpstreamHeaders
-            Logger.debug(this, "Proxying to %s%s", baseOf(ouri), pathWithQuery);
-            return target.response(newLine, out, Content.EMPTY).thenApply(response -> {
-                if (response.status().success()) {
-                    Logger.info(this, "Successfully downloaded %s:%s", packageName, version);
-                    this.emitEvent(packageName, version, headers);
-                } else {
-                    Logger.warn(this, "Download failed for %s:%s: %s", packageName, version, response.status());
-                }
-                return response;
-            });
+                    // Prepare minimal safe headers for upstream
+                    final Headers out = buildUpstreamHeaders(headers);
+
+                    // Fetch from original URL using chosen slice
+                    // Note: Headers are already cleaned by buildUpstreamHeaders
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Proxying to upstream")
+                        .eventCategory("repository")
+                        .eventAction("proxy_download")
+                        .field("url.domain", baseOf(ouri))
+                        .field("url.path", pathWithQuery)
+                        .log();
+                    return target.response(newLine, out, Content.EMPTY).thenApply(response -> {
+                        if (response.status().success()) {
+                            EcsLogger.info("com.artipie.composer")
+                                .message("Successfully downloaded package")
+                                .eventCategory("repository")
+                                .eventAction("proxy_download")
+                                .eventOutcome("success")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .log();
+                            this.emitEvent(packageName, version, headers);
+                        } else {
+                            EcsLogger.warn("com.artipie.composer")
+                                .message("Download failed")
+                                .eventCategory("repository")
+                                .eventAction("proxy_download")
+                                .eventOutcome("failure")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("http.response.status_code", response.status().code())
+                                .log();
+                        }
+                        return response;
+                    });
+                });
             });
         });
     }
@@ -320,7 +385,13 @@ public final class ProxyDownloadSlice implements Slice {
         
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
-                Logger.warn(this, "Metadata not found for %s", packageName);
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Metadata not found for package")
+                    .eventCategory("repository")
+                    .eventAction("proxy_download")
+                    .eventOutcome("failure")
+                    .field("package.name", packageName)
+                    .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             }
             
@@ -374,20 +445,55 @@ public final class ProxyDownloadSlice implements Slice {
                         String originalUrl = null;
                         if (dist.containsKey("original_url")) {
                             originalUrl = dist.getString("original_url");
-                            Logger.info(this, "Using original_url from metadata for %s:%s = %s", packageName, version, originalUrl);
+                            EcsLogger.info("com.artipie.composer")
+                                .message("Using original_url from metadata")
+                                .eventCategory("repository")
+                                .eventAction("proxy_download")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("url.original", originalUrl)
+                                .log();
                         } else if (dist.containsKey("url")) {
                             // Fallback to "url" for backward compatibility
                             originalUrl = dist.getString("url");
-                            Logger.warn(this, "No original_url found in dist, using url field for %s:%s = %s", packageName, version, originalUrl);
+                            EcsLogger.warn("com.artipie.composer")
+                                .message("No original_url found in dist, using url field")
+                                .eventCategory("repository")
+                                .eventAction("proxy_download")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .field("url.original", originalUrl)
+                                .log();
                         }
                         if (originalUrl == null || originalUrl.isEmpty()) {
-                            Logger.warn(this, "No dist URL found for %s:%s", packageName, version);
+                            EcsLogger.warn("com.artipie.composer")
+                                .message("No dist URL found for package")
+                                .eventCategory("repository")
+                                .eventAction("proxy_download")
+                                .eventOutcome("failure")
+                                .field("package.name", packageName)
+                                .field("package.version", version)
+                                .log();
                             return Optional.empty();
                         }
-                        Logger.info(this, "Found original URL for %s:%s = %s", packageName, version, originalUrl);
+                        EcsLogger.info("com.artipie.composer")
+                            .message("Found original URL for package")
+                            .eventCategory("repository")
+                            .eventAction("proxy_download")
+                            .field("package.name", packageName)
+                            .field("package.version", version)
+                            .field("url.original", originalUrl)
+                            .log();
                         return Optional.ofNullable(originalUrl);
                     } catch (Exception ex) {
-                        Logger.error(this, "Failed to parse metadata for %s: %[exception]s", packageName, ex);
+                        EcsLogger.error("com.artipie.composer")
+                            .message("Failed to parse metadata")
+                            .eventCategory("repository")
+                            .eventAction("proxy_download")
+                            .eventOutcome("failure")
+                            .field("package.name", packageName)
+                            .error(ex)
+                            .log();
                         return Optional.empty();
                     }
                 })
@@ -415,7 +521,12 @@ public final class ProxyDownloadSlice implements Slice {
      */
     private void emitEvent(final String packageName, final String version, final Headers headers) {
         if (this.events.isEmpty()) {
-            Logger.debug(this, "Events queue is empty, skipping event for %s", packageName);
+            EcsLogger.debug("com.artipie.composer")
+                .message("Events queue is empty, skipping event")
+                .eventCategory("repository")
+                .eventAction("proxy_download")
+                .field("package.name", packageName)
+                .log();
             return;
         }
         final String owner = new Login(headers).getValue();
@@ -429,13 +540,14 @@ public final class ProxyDownloadSlice implements Slice {
                 Optional.empty()  // No release date from download
             )
         );
-        Logger.info(
-            this,
-            "Emitted download event for %s:%s (owner=%s, queue_size=%d)",
-            packageName,
-            version,
-            owner,
-            this.events.get().size()
-        );
+        EcsLogger.info("com.artipie.composer")
+            .message("Emitted download event (queue size: " + this.events.get().size() + ")")
+            .eventCategory("repository")
+            .eventAction("proxy_download")
+            .eventOutcome("success")
+            .field("package.name", packageName)
+            .field("package.version", version)
+            .field("user.name", owner)
+            .log();
     }
 }

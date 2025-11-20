@@ -6,6 +6,7 @@ package com.artipie.composer.http.proxy;
 
 import com.artipie.asto.Content;
 import com.artipie.composer.JsonPackage;
+import com.artipie.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -133,13 +134,12 @@ public interface MergePackage {
         ) {
             final Set<String> vrsns = lcl.keySet();
             final JsonObjectBuilder bldr = Json.createObjectBuilder();
-            com.jcabi.log.Logger.debug(
-                this,
-                "Merging package %s: local has %d versions, remote present: %s",
-                this.name,
-                vrsns.size(),
-                rmt.isPresent()
-            );
+            EcsLogger.debug("com.artipie.composer")
+                .message("Merging package versions (" + vrsns.size() + " local versions, remote present: " + rmt.isPresent() + ")")
+                .eventCategory("repository")
+                .eventAction("package_merge")
+                .field("package.name", this.name)
+                .log();
             vrsns.forEach(
                 vers -> bldr.add(
                     vers, Json.createObjectBuilder(lcl.getJsonObject(vers))

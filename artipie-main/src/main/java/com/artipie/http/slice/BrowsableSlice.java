@@ -13,7 +13,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.Accept;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -236,23 +236,22 @@ public final class BrowsableSlice implements Slice {
         // FileStorage: Use direct NIO for 10x performance boost
         // IMPORTANT: Pass original storage (with SubStorage prefix) to maintain repo scoping
         if (unwrapped instanceof FileStorage) {
-            Logger.info(
-                this,
-                "Using FileSystemBrowseSlice for direct NIO access (10x faster) - detected %s under %s",
-                unwrapped.getClass().getSimpleName(),
-                this.storage.getClass().getSimpleName()
-            );
+            EcsLogger.debug("com.artipie.http")
+                .message("Using FileSystemBrowseSlice for direct NIO access (unwrapped: " + unwrapped.getClass().getSimpleName() + ", original: " + this.storage.getClass().getSimpleName() + ")")
+                .eventCategory("http")
+                .eventAction("browse_slice_select")
+                .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
             return new FileSystemBrowseSlice(this.storage);
         }
-        
+
         // S3 and other storage types: Use streaming abstraction
         // TODO: Add S3BrowseSlice with pagination for large S3 directories
-        Logger.info(
-            this,
-            "Using StreamingBrowseSlice for storage type: %s",
-            unwrapped.getClass().getSimpleName()
-        );
+        EcsLogger.debug("com.artipie.http")
+            .message("Using StreamingBrowseSlice for storage type: " + unwrapped.getClass().getSimpleName())
+            .eventCategory("http")
+            .eventAction("browse_slice_select")
+            .log();
         return new StreamingBrowseSlice(this.storage);
     }
 
@@ -275,36 +274,47 @@ public final class BrowsableSlice implements Slice {
             try {
                 // Try DiskCacheStorage unwrapping
                 if (className.equals("DiskCacheStorage")) {
-                    final java.lang.reflect.Field backend = 
+                    final java.lang.reflect.Field backend =
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
                     final Storage next = (Storage) backend.get(current);
-                    Logger.debug(BrowsableSlice.class, "Unwrapped DiskCacheStorage to %s", 
-                        next.getClass().getSimpleName());
+                    EcsLogger.debug("com.artipie.http")
+                        .message("Unwrapped DiskCacheStorage to: " + next.getClass().getSimpleName())
+                        .eventCategory("http")
+                        .eventAction("storage_unwrap")
+                        .log();
                     current = next;
                     unwrapped = true;
                 }
-                
+
                 // Try SubStorage unwrapping
                 if (className.equals("SubStorage")) {
-                    final java.lang.reflect.Field origin = 
+                    final java.lang.reflect.Field origin =
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);
                     final Storage next = (Storage) origin.get(current);
-                    Logger.debug(BrowsableSlice.class, "Unwrapped SubStorage to %s",
-                        next.getClass().getSimpleName());
+                    EcsLogger.debug("com.artipie.http")
+                        .message("Unwrapped SubStorage to: " + next.getClass().getSimpleName())
+                        .eventCategory("http")
+                        .eventAction("storage_unwrap")
+                        .log();
                     current = next;
                     unwrapped = true;
                 }
-                
+
                 // No more wrappers found, stop unwrapping
                 if (!unwrapped) {
                     break;
                 }
-                
+
             } catch (Exception e) {
-                Logger.debug(BrowsableSlice.class, "Could not unwrap %s: %s", 
-                    className, e.getMessage());
+                EcsLogger.debug("com.artipie.http")
+                    .message("Could not unwrap storage type: " + className)
+                    .eventCategory("http")
+                    .eventAction("storage_unwrap")
+                    .eventOutcome("failure")
+                    .field("error.message", e.getMessage())
+                    .log();
                 break;
             }
         }

@@ -4,7 +4,7 @@
  */
 package com.artipie.misc;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -68,6 +68,13 @@ public final class JavaResource {
         ) {
             IOUtils.copy(src, out);
         }
-        Logger.info(this, "Resource copied successfully `%s` → `%s`", this.name, dest);
+        EcsLogger.debug("com.artipie.misc")
+            .message("Resource copied successfully")
+            .eventCategory("file")
+            .eventAction("resource_copy")
+            .eventOutcome("success")
+            .field("file.path", this.name)
+            .field("file.target_path", dest.toString())
+            .log();
     }
 }

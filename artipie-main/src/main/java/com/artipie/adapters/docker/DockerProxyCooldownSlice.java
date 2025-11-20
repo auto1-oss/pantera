@@ -22,9 +22,7 @@ import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -39,8 +37,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.StreamSupport;
 
 public final class DockerProxyCooldownSlice implements Slice {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(DockerProxyCooldownSlice.class);
 
     private static final String DIGEST_HEADER = "Docker-Content-Digest";
 
@@ -168,7 +164,15 @@ public final class DockerProxyCooldownSlice implements Slice {
                                 );
                         });
                 }).exceptionally(ex -> {
-                    LOGGER.warn("Failed to process manifest for {}@{}: {}", artifact, version, ex.getMessage());
+                    EcsLogger.warn("com.artipie.docker")
+                        .message("Failed to process manifest")
+                        .eventCategory("docker")
+                        .eventAction("manifest_process")
+                        .eventOutcome("failure")
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .error(ex)
+                        .log();
                     // Register with empty release date on error
                     this.inspector.register(artifact, version, Optional.empty(), user, this.repoName, digest);
                     return response;
@@ -215,17 +219,38 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).whenComplete((release, error) -> {
             if (error != null) {
-                LOGGER.warn("Failed to extract release date from config for {}@{}: {}",
-                    artifact, version, error.getMessage());
+                EcsLogger.warn("com.artipie.docker")
+                    .message("Failed to extract release date from config")
+                    .eventCategory("docker")
+                    .eventAction("release_date_extract")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .error(error)
+                    .log();
             } else if (release.isPresent()) {
-                LOGGER.debug("Extracted release date from config for {}@{}: {}", 
-                    artifact, version, release.get());
+                EcsLogger.debug("com.artipie.docker")
+                    .message("Extracted release date from config")
+                    .eventCategory("docker")
+                    .eventAction("release_date_extract")
+                    .eventOutcome("success")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("package.release_date", release.get().toString())
+                    .log();
                 // Also record by digest
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            LOGGER.warn("Exception extracting release date for {}@{}: {}",
-                artifact, version, ex.getMessage());
+            EcsLogger.warn("com.artipie.docker")
+                .message("Exception extracting release date")
+                .eventCategory("docker")
+                .eventAction("release_date_extract")
+                .eventOutcome("failure")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .error(ex)
+                .log();
             return Optional.empty();
         });
     }
@@ -258,14 +283,28 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).thenAccept(release -> {
             if (release.isPresent()) {
-                LOGGER.debug("Extracted release date from config for {}@{}: {}", 
-                    artifact, version, release.get());
+                EcsLogger.debug("com.artipie.docker")
+                    .message("Extracted release date from config")
+                    .eventCategory("docker")
+                    .eventAction("release_date_extract")
+                    .eventOutcome("success")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("package.release_date", release.get().toString())
+                    .log();
                 this.inspector.recordRelease(artifact, version, release.get());
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            LOGGER.debug("Failed to extract release date from config for {}@{}: {}",
-                artifact, version, ex.getMessage());
+            EcsLogger.debug("com.artipie.docker")
+                .message("Failed to extract release date from config")
+                .eventCategory("docker")
+                .eventAction("release_date_extract")
+                .eventOutcome("failure")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .error(ex)
+                .log();
             return null;
         });
     }
@@ -275,7 +314,13 @@ public final class DockerProxyCooldownSlice implements Slice {
             final Digest digest = new DigestHeader(headers).value();
             return Optional.of(new Manifest(digest, bytes));
         } catch (final IllegalArgumentException ex) {
-            LOGGER.warn("Failed to build manifest from response headers: {}", ex.getMessage());
+            EcsLogger.warn("com.artipie.docker")
+                .message("Failed to build manifest from response headers")
+                .eventCategory("docker")
+                .eventAction("manifest_build")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             return Optional.empty();
         }
     }
@@ -288,7 +333,13 @@ public final class DockerProxyCooldownSlice implements Slice {
                 return Optional.of(Instant.parse(created));
             }
         } catch (final DateTimeParseException | JsonException ex) {
-            LOGGER.debug("Unable to parse manifest config `created` field: {}", ex.getMessage());
+            EcsLogger.debug("com.artipie.docker")
+                .message("Unable to parse manifest config created field")
+                .eventCategory("docker")
+                .eventAction("manifest_parse")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
         }
         return Optional.empty();
     }

@@ -24,10 +24,10 @@ import com.artipie.http.cache.CachedArtifactMetadataStore;
 import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.scheduling.ProxyArtifactEvent;
-import com.jcabi.log.Logger;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.binary.Hex;
 
@@ -187,23 +187,38 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        Logger.info(this, "Gradle proxy request: %s", path);
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Gradle proxy request")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("url.path", path)
+            .log();
         if ("/".equals(path) || path.isEmpty()) {
             return this.handleRootPath(line);
         }
         final Key key = new KeyFromPath(path);
-        
+
         // Check negative cache first (404s)
         if (this.negativeCache.isNotFound(key)) {
-            Logger.info(this, "Gradle artifact %s cached as 404 (negative cache hit)", key.string());
+            EcsLogger.debug("com.artipie.gradle")
+                .message("Gradle artifact cached as 404 (negative cache hit)")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
         }
-        
+
         final Optional<CooldownRequest> request = this.cooldownRequest(headers, path);
         if (request.isEmpty()) {
-            Logger.info(this, "No cooldown check for path: %s (doesn't match artifact pattern)", path);
+            EcsLogger.debug("com.artipie.gradle")
+                .message("No cooldown check for path (doesn't match artifact pattern)")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .log();
             return this.fetchThroughCache(line, key, headers);
         }
         return this.cooldown.evaluate(request.get(), this.inspector)
@@ -217,18 +232,23 @@ final class CachedProxySlice implements Slice {
         final Headers headers
     ) {
         if (result.blocked()) {
-            Logger.info(
-                this,
-                "Cooldown BLOCKED request for %s (reason: %s, until: %s)",
-                key.string(),
-                result.block().orElseThrow().reason(),
-                result.block().orElseThrow().blockedUntil()
-            );
+            EcsLogger.info("com.artipie.gradle")
+                .message("Cooldown BLOCKED request (reason: " + result.block().orElseThrow().reason() + ", blocked until: " + result.block().orElseThrow().blockedUntil() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .eventOutcome("blocked")
+                .field("package.name", key.string())
+                .log();
             return CompletableFuture.completedFuture(
                 CooldownResponses.forbidden(result.block().orElseThrow())
             );
         }
-        Logger.debug(this, "Cooldown ALLOWED request for %s", key.string());
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Cooldown ALLOWED request")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("package.name", key.string())
+            .log();
         return this.fetchThroughCache(line, key, headers);
     }
 
@@ -240,7 +260,13 @@ final class CachedProxySlice implements Slice {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose(resp -> {
                 if (!resp.status().success()) {
-                    Logger.debug(this, "Gradle proxy upstream miss for %s - caching 404", key.string());
+                    EcsLogger.debug("com.artipie.gradle")
+                        .message("Gradle proxy upstream miss - caching 404")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .field("package.name", key.string())
+                        .field("http.response.status_code", resp.status().code())
+                        .log();
                     // CRITICAL: Consume body to prevent Vert.x request leak
                     return resp.body().asBytesFuture().thenApply(ignored -> {
                         // Cache 404 to avoid repeated upstream requests
@@ -314,13 +340,25 @@ final class CachedProxySlice implements Slice {
         final String owner,
         final CachedArtifactMetadataStore store
     ) {
-        Logger.debug(this, "Gradle proxy fetching upstream for %s", key.string());
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Gradle proxy fetching upstream")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("package.name", key.string())
+            .log();
         // Request deduplication: if same key is already being fetched, reuse that future
         return this.inFlight.computeIfAbsent(key, k ->
             this.client.response(line, Headers.EMPTY, Content.EMPTY)
                 .thenCompose(resp -> {
                     if (!resp.status().success()) {
-                        Logger.warn(this, "Gradle upstream returned %s for %s - caching 404", resp.status(), key.string());
+                        EcsLogger.warn("com.artipie.gradle")
+                            .message("Gradle upstream returned error - caching 404")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .eventOutcome("failure")
+                            .field("package.name", key.string())
+                            .field("http.response.status_code", resp.status().code())
+                            .log();
                         // Cache 404 to avoid repeated upstream requests
                         this.negativeCache.cacheNotFound(key);
                         return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
@@ -362,10 +400,15 @@ final class CachedProxySlice implements Slice {
         if (isChecksumFile(path) && this.storageBacked) {
             return this.serveChecksumFromStorage(line, key, owner);
         }
-        
+
         // Skip caching for metadata and directories
         if (path.contains("maven-metadata.xml") || !this.storageBacked || isDirectory(path)) {
-            Logger.debug(this, "Gradle proxy bypassing cache for %s", path);
+            EcsLogger.debug("com.artipie.gradle")
+                .message("Gradle proxy bypassing cache")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .log();
             return this.fetchDirect(line, key, owner);
         }
         final CachedArtifactMetadataStore store = this.metadata.orElseThrow();
@@ -401,11 +444,14 @@ final class CachedProxySlice implements Slice {
         final String version = matcher.group("version");
         final String artifactName = String.format("%s.%s", group.replace('/', '.'), artifact);
         final String user = new Login(headers).getValue();
-        Logger.info(
-            this,
-            "Gradle cooldown check for %s:%s (path=%s)",
-            artifactName, version, path
-        );
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Gradle cooldown check")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("package.name", artifactName)
+            .field("package.version", version)
+            .field("url.path", path)
+            .log();
         return Optional.of(
             new CooldownRequest(
                 this.rtype,
@@ -450,13 +496,22 @@ final class CachedProxySlice implements Slice {
                         release
                     )
                 );
-                Logger.debug(
-                    this,
-                    "Added Gradle proxy event for %s:%s:%s (owner=%s)",
-                    group, artifact, version, owner
-                );
+                EcsLogger.debug("com.artipie.gradle")
+                    .message("Added Gradle proxy event")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("package.group", group)
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("user.name", owner)
+                    .log();
             } else {
-                Logger.debug(this, "Path %s did not match artifact pattern", path);
+                EcsLogger.debug("com.artipie.gradle")
+                    .message("Path did not match artifact pattern")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("url.path", path)
+                    .log();
             }
         }
     }

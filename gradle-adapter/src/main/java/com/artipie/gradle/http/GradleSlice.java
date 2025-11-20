@@ -17,6 +17,7 @@ import com.artipie.http.auth.BasicAuthzSlice;
 import com.artipie.http.auth.OperationControl;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
@@ -28,7 +29,6 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.security.policy.Policy;
-import com.jcabi.log.Logger;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -175,13 +175,18 @@ public final class GradleSlice extends Slice.Wrap {
         private void addEvent(final Key key, final String owner) {
             if (this.events.isPresent()) {
                 final String path = key.string();
-                
+
                 // Skip maven-metadata.xml files and their checksums - they're metadata about versions, not actual artifacts
                 if (isMavenMetadataFile(path)) {
-                    Logger.debug(this, "Skipping maven-metadata file for event: %s", path);
+                    EcsLogger.debug("com.artipie.gradle")
+                        .message("Skipping maven-metadata file for event")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .field("url.path", path)
+                        .log();
                     return;
                 }
-                
+
                 final Matcher matcher = ARTIFACT.matcher(path);
                 if (matcher.matches()) {
                     final String group = matcher.group("group");
@@ -302,12 +307,13 @@ public final class GradleSlice extends Slice.Wrap {
             final int semicolonIndex = path.indexOf(';');
             if (semicolonIndex > 0) {
                 sanitizedPath = path.substring(0, semicolonIndex);
-                Logger.debug(
-                    this,
-                    "Stripped metadata properties from path: %s -> %s",
-                    path,
-                    sanitizedPath
-                );
+                EcsLogger.debug("com.artipie.gradle")
+                    .message("Stripped metadata properties from path")
+                    .eventCategory("repository")
+                    .eventAction("upload")
+                    .field("url.original", path)
+                    .field("url.path", sanitizedPath)
+                    .log();
             } else {
                 sanitizedPath = path;
             }
@@ -328,7 +334,13 @@ public final class GradleSlice extends Slice.Wrap {
                 }
             ).exceptionally(
                 throwable -> {
-                    Logger.error(this, "Failed to save artifact: %s", throwable.getMessage());
+                    EcsLogger.error("com.artipie.gradle")
+                        .message("Failed to save artifact")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .eventOutcome("failure")
+                        .error(throwable)
+                        .log();
                     return ResponseBuilder.internalError().build();
                 }
             );
@@ -345,13 +357,18 @@ public final class GradleSlice extends Slice.Wrap {
             if (this.events.isPresent()) {
                 // Ensure path starts with / for pattern matching
                 final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
-                
+
                 // Skip maven-metadata.xml files and their checksums - they're metadata about versions, not actual artifacts
                 if (isMavenMetadataFile(path)) {
-                    Logger.debug(this, "Skipping maven-metadata file for event: %s", path);
+                    EcsLogger.debug("com.artipie.gradle")
+                        .message("Skipping maven-metadata file for event")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .field("url.path", path)
+                        .log();
                     return;
                 }
-                
+
                 final Matcher matcher = ARTIFACT.matcher(path);
                 if (matcher.matches()) {
                     final String group = matcher.group("group");
@@ -370,13 +387,24 @@ public final class GradleSlice extends Slice.Wrap {
                             (Long) null  // No release date for uploads
                         )
                     );
-                    Logger.info(
-                        this,
-                        "Recorded Gradle upload: %s:%s:%s (size=%d, owner=%s)",
-                        group.replace('/', '.'), artifact, version, size, owner
-                    );
+                    EcsLogger.info("com.artipie.gradle")
+                        .message("Recorded Gradle upload")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .eventOutcome("success")
+                        .field("package.group", group.replace('/', '.'))
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .field("package.size", size)
+                        .field("user.name", owner)
+                        .log();
                 } else {
-                    Logger.debug(this, "Path %s did not match artifact pattern for event", path);
+                    EcsLogger.debug("com.artipie.gradle")
+                        .message("Path did not match artifact pattern for event")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .field("url.path", path)
+                        .log();
                 }
             }
         }

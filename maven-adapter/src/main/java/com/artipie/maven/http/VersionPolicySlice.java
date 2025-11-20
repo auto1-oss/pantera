@@ -9,8 +9,8 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
@@ -110,12 +110,14 @@ public final class VersionPolicySlice implements Slice {
 
         // Enforce policy
         if (this.policy == Policy.RELEASE && isSnapshot) {
-            Logger.warn(
-                this,
-                "Rejected SNAPSHOT version %s in RELEASE repository: %s",
-                version,
-                path
-            );
+            EcsLogger.warn("com.artipie.maven")
+                .message("Rejected SNAPSHOT version in RELEASE repository (policy: RELEASE)")
+                .eventCategory("repository")
+                .eventAction("version_policy_check")
+                .eventOutcome("failure")
+                .field("package.version", version)
+                .field("package.path", path)
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest()
                     .textBody(
@@ -130,12 +132,14 @@ public final class VersionPolicySlice implements Slice {
         }
 
         if (this.policy == Policy.SNAPSHOT && !isSnapshot) {
-            Logger.warn(
-                this,
-                "Rejected RELEASE version %s in SNAPSHOT repository: %s",
-                version,
-                path
-            );
+            EcsLogger.warn("com.artipie.maven")
+                .message("Rejected RELEASE version in SNAPSHOT repository (policy: SNAPSHOT)")
+                .eventCategory("repository")
+                .eventAction("version_policy_check")
+                .eventOutcome("failure")
+                .field("package.version", version)
+                .field("package.path", path)
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest()
                     .textBody(
@@ -150,13 +154,14 @@ public final class VersionPolicySlice implements Slice {
         }
 
         // Policy check passed
-        Logger.debug(
-            this,
-            "Version policy check passed for %s (%s policy, version: %s)",
-            path,
-            this.policy,
-            version
-        );
+        EcsLogger.debug("com.artipie.maven")
+            .message("Version policy check passed (policy: " + this.policy.toString() + ")")
+            .eventCategory("repository")
+            .eventAction("version_policy_check")
+            .eventOutcome("success")
+            .field("package.path", path)
+            .field("package.version", version)
+            .log();
 
         return origin.response(line, headers, body);
     }

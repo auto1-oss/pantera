@@ -35,8 +35,12 @@ final class DownloadArchiveSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        final String raw = line.uri().getPath();
-        return this.response(raw);
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored -> {
+            final String raw = line.uri().getPath();
+            return this.response(raw);
+        });
     }
 
     private CompletableFuture<Response> response(final String path) {

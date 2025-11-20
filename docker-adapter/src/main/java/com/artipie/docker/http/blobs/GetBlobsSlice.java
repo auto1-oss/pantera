@@ -29,29 +29,33 @@ public class GetBlobsSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         BlobsRequest request = BlobsRequest.from(line);
-        return this.docker.repo(request.name())
-            .layers().get(request.digest())
-            .thenCompose(
-                found -> found.map(
-                    blob -> blob.content()
-                        .thenCompose(
-                            content -> content.size()
-                                .map(CompletableFuture::completedFuture)
-                                .orElseGet(blob::size)
-                                .thenApply(
-                                    size -> ResponseBuilder.ok()
-                                        .header(new DigestHeader(request.digest()))
-                                        .header(ContentType.mime("application/octet-stream"))
-                                        .body(new Content.From(size, content))
-                                        .build()
-                                )
-                        )
-                ).orElseGet(
-                    () -> ResponseBuilder.notFound()
-                        .jsonBody(new BlobUnknownError(request.digest()).json())
-                        .completedFuture()
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.repo(request.name())
+                .layers().get(request.digest())
+                .thenCompose(
+                    found -> found.map(
+                        blob -> blob.content()
+                            .thenCompose(
+                                content -> content.size()
+                                    .map(CompletableFuture::completedFuture)
+                                    .orElseGet(blob::size)
+                                    .thenApply(
+                                        size -> ResponseBuilder.ok()
+                                            .header(new DigestHeader(request.digest()))
+                                            .header(ContentType.mime("application/octet-stream"))
+                                            .body(new Content.From(size, content))
+                                            .build()
+                                    )
+                            )
+                    ).orElseGet(
+                        () -> ResponseBuilder.notFound()
+                            .jsonBody(new BlobUnknownError(request.digest()).json())
+                            .completedFuture()
+                    )
                 )
-            );
+        );
     }
 
     @Override

@@ -6,6 +6,7 @@ package com.artipie.composer.http.proxy;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.log.LogSanitizer;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.Remote;
@@ -25,7 +26,6 @@ import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ProxyArtifactEvent;
-import com.jcabi.log.Logger;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -136,25 +136,39 @@ final class CachedProxySlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        final String path = line.uri().getPath();
-        Logger.info(this, "Composer proxy request: %s", path);
-        
-        // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
-        final String name = path
-            .replaceAll("^/p2?/", "")
-            .replaceAll("\\^.*", "")
-            .replaceAll(".json$", "");
-        
-        // Check if this is a versioned package request that needs cooldown check
-        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
-        
-        if (cooldownReq.isPresent()) {
-            Logger.info(this, "Evaluating cooldown for %s", name);
-            return this.cooldown.evaluate(cooldownReq.get(), this.inspector)
-                .thenCompose(result -> this.afterCooldown(result, line, name, headers));
-        }
-        
-        return this.fetchThroughCache(line, name, headers);
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored -> {
+            final String path = line.uri().getPath();
+            EcsLogger.info("com.artipie.composer")
+                .message("Composer proxy request")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .log();
+
+            // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
+            final String name = path
+                .replaceAll("^/p2?/", "")
+                .replaceAll("\\^.*", "")
+                .replaceAll(".json$", "");
+
+            // Check if this is a versioned package request that needs cooldown check
+            final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
+
+            if (cooldownReq.isPresent()) {
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Evaluating cooldown for package")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_check")
+                    .field("package.name", name)
+                    .log();
+                return this.cooldown.evaluate(cooldownReq.get(), this.inspector)
+                    .thenCompose(result -> this.afterCooldown(result, line, name, headers));
+            }
+
+            return this.fetchThroughCache(line, name, headers);
+        });
     }
     
     /**
@@ -173,17 +187,25 @@ final class CachedProxySlice implements Slice {
         final Headers headers
     ) {
         if (result.blocked()) {
-            Logger.info(
-                this,
-                "Cooldown BLOCKED request for %s (reason: %s)",
-                name,
-                result.block().orElseThrow().reason()
-            );
+            EcsLogger.info("com.artipie.composer")
+                .message("Cooldown blocked request")
+                .eventCategory("repository")
+                .eventAction("cooldown_check")
+                .eventOutcome("blocked")
+                .field("package.name", name)
+                .field("event.reason", result.block().orElseThrow().reason())
+                .log();
             return CompletableFuture.completedFuture(
                 CooldownResponses.forbidden(result.block().orElseThrow())
             );
         }
-        Logger.debug(this, "Cooldown ALLOWED request for %s", name);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Cooldown allowed request")
+            .eventCategory("repository")
+            .eventAction("cooldown_check")
+            .eventOutcome("allowed")
+            .field("package.name", name)
+            .log();
         return this.fetchThroughCache(line, name, headers);
     }
     
@@ -215,12 +237,12 @@ final class CachedProxySlice implements Slice {
                     .thenApply(content -> {
                         // Note: Do NOT emit events here - this is just metadata
                         // Events should only be emitted when actual zip files are downloaded
-                        Logger.info(
-                            this,
-                            "Fetched package metadata from remote: %s, content present: %s",
-                            name,
-                            content.isPresent()
-                        );
+                        EcsLogger.debug("com.artipie.composer")
+                            .message("Fetched package metadata from remote (content present: " + content.isPresent() + ")")
+                            .eventCategory("repository")
+                            .eventAction("metadata_fetch")
+                            .field("package.name", name)
+                            .log();
                         return content;
                     })
             ),
@@ -234,7 +256,13 @@ final class CachedProxySlice implements Slice {
                 this.evaluateMetadataCooldown(name, headers, bytes)
                     .thenCompose(result -> {
                         if (result.blocked()) {
-                            Logger.info(this, "Cooldown BLOCKED metadata for %s", name);
+                            EcsLogger.info("com.artipie.composer")
+                                .message("Cooldown blocked metadata request")
+                                .eventCategory("repository")
+                                .eventAction("cooldown_check")
+                                .eventOutcome("blocked")
+                                .field("package.name", name)
+                                .log();
                             return CompletableFuture.completedFuture(
                                 CooldownResponses.forbidden(result.block().orElseThrow())
                             );
@@ -248,7 +276,12 @@ final class CachedProxySlice implements Slice {
                             final Content saved = new Content.From(rewrittenBytes);
                             return this.repo.storage().save(metadataKey, saved)
                                 .thenApply(ignored -> {
-                                    Logger.debug(this, "Saved metadata to storage: %s", metadataKey);
+                                    EcsLogger.debug("com.artipie.composer")
+                                        .message("Saved metadata to storage")
+                                        .eventCategory("repository")
+                                        .eventAction("metadata_save")
+                                        .field("package.name", metadataKey.string())
+                                        .log();
                                     return ResponseBuilder.ok()
                                         .header("Content-Type", "application/json")
                                         .body(new Content.From(rewrittenBytes))
@@ -258,7 +291,13 @@ final class CachedProxySlice implements Slice {
                     })
             );
         }).exceptionally(throwable -> {
-            Logger.warn(this, "Failed to read cached item: %[exception]s", throwable);
+            EcsLogger.warn("com.artipie.composer")
+                .message("Failed to read cached item")
+                .eventCategory("repository")
+                .eventAction("cache_read")
+                .eventOutcome("failure")
+                .field("error.message", throwable.getMessage())
+                .log();
             return ResponseBuilder.notFound().build();
         }).toCompletableFuture();
     }
@@ -278,7 +317,11 @@ final class CachedProxySlice implements Slice {
             // If packages is an array (Satis format), skip cooldown check
             // Satis format has empty packages array and uses provider-includes instead
             if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
-                Logger.debug(this, "Satis format detected (packages is array), skipping cooldown check");
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Satis format detected (packages is array), skipping cooldown check")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_check")
+                    .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
             
@@ -307,7 +350,13 @@ final class CachedProxySlice implements Slice {
             );
             return this.cooldown.evaluate(req, this.inspector);
         } catch (Exception e) {
-            Logger.warn(this, "Failed to parse metadata for cooldown check: %s", LogSanitizer.sanitizeMessage(e.getMessage()));
+            EcsLogger.warn("com.artipie.composer")
+                .message("Failed to parse metadata for cooldown check")
+                .eventCategory("repository")
+                .eventAction("cooldown_check")
+                .eventOutcome("failure")
+                .field("error.message", LogSanitizer.sanitizeMessage(e.getMessage()))
+                .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
     }
@@ -370,14 +419,25 @@ final class CachedProxySlice implements Slice {
      * @return Rewritten metadata content
      */
     private Content rewriteMetadata(final byte[] original, final Headers headers) {
-        Logger.debug(this, "Rewriting metadata URLs to proxy through Artipie (base URL: %s)", this.baseUrl);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Rewriting metadata URLs to proxy through Artipie")
+            .eventCategory("repository")
+            .eventAction("metadata_rewrite")
+            .field("url.path", this.baseUrl)
+            .log();
         try {
             final String json = new String(original, java.nio.charset.StandardCharsets.UTF_8);
             final MetadataUrlRewriter rewriter = new MetadataUrlRewriter(this.baseUrl);
             final byte[] rewritten = rewriter.rewrite(json);
             return new Content.From(rewritten);
         } catch (Exception ex) {
-            Logger.error(this, "Failed to rewrite metadata: %[exception]s", ex);
+            EcsLogger.error("com.artipie.composer")
+                .message("Failed to rewrite metadata")
+                .eventCategory("repository")
+                .eventAction("metadata_rewrite")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             return new Content.From(original);
         }
     }
@@ -406,11 +466,23 @@ final class CachedProxySlice implements Slice {
      */
     private void emitEvent(final String name, final Headers headers, final Optional<? extends Content> content) {
         if (this.events.isEmpty()) {
-            Logger.warn(this, "Events queue is empty, cannot emit event for %s", name);
+            EcsLogger.warn("com.artipie.composer")
+                .message("Events queue is empty, cannot emit event")
+                .eventCategory("repository")
+                .eventAction("event_creation")
+                .eventOutcome("failure")
+                .field("package.name", name)
+                .log();
             return;
         }
         if (content.isEmpty()) {
-            Logger.warn(this, "Content is empty, cannot emit event for %s", name);
+            EcsLogger.warn("com.artipie.composer")
+                .message("Content is empty, cannot emit event")
+                .eventCategory("repository")
+                .eventAction("event_creation")
+                .eventOutcome("failure")
+                .field("package.name", name)
+                .log();
             return;
         }
         final String owner = new Login(headers).getValue();
@@ -423,13 +495,14 @@ final class CachedProxySlice implements Slice {
                 Optional.ofNullable(release)
             )
         );
-        Logger.info(
-            this,
-            "Added Composer proxy event for %s (owner=%s, queue_size=%d)",
-            name,
-            owner,
-            this.events.get().size()
-        );
+        EcsLogger.info("com.artipie.composer")
+            .message("Added Composer proxy event (queue size: " + this.events.get().size() + ")")
+            .eventCategory("repository")
+            .eventAction("event_creation")
+            .eventOutcome("success")
+            .field("package.name", name)
+            .field("user.name", owner)
+            .log();
     }
     
     /**
@@ -465,23 +538,26 @@ final class CachedProxySlice implements Slice {
         return new Remote.WithErrorHandling(
             () -> this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                 .thenCompose(response -> {
-                    Logger.debug(
-                        this,
-                        "Remote response for %s: status=%s",
-                        line.uri().getPath(),
-                        response.status()
-                    );
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Remote response received")
+                        .eventCategory("repository")
+                        .eventAction("remote_fetch")
+                        .field("url.path", line.uri().getPath())
+                        .field("http.response.status_code", response.status().code())
+                        .log();
                     if (response.status().success()) {
                         return CompletableFuture.completedFuture(Optional.of(response.body()));
                     }
                     // CRITICAL: Consume body to prevent Vert.x request leak
                     return response.body().asBytesFuture().thenApply(ignored -> {
-                        Logger.warn(
-                            this,
-                            "Remote returned non-success status for %s: %s",
-                            line.uri().getPath(),
-                            response.status()
-                        );
+                        EcsLogger.warn("com.artipie.composer")
+                            .message("Remote returned non-success status")
+                            .eventCategory("repository")
+                            .eventAction("remote_fetch")
+                            .eventOutcome("failure")
+                            .field("url.path", line.uri().getPath())
+                            .field("http.response.status_code", response.status().code())
+                            .log();
                         return Optional.empty();
                     });
                 })

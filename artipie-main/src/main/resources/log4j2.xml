@@ -17,8 +17,27 @@
     </Appenders>
 
     <Loggers>
+        <!-- HTTP Access Logs (ECS-compliant) -->
+        <Logger name="http.access" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+
         <!-- Artipie application logs -->
         <Logger name="com.artipie" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+
+        <!-- Repository adapters - INFO level for production -->
+        <Logger name="com.artipie.maven" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="com.artipie.npm" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="com.artipie.docker" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="com.artipie.pypi" level="info" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
 
@@ -30,6 +49,9 @@
             <AppenderRef ref="Console"/>
         </Logger>
         <Logger name="software.amazon.awssdk" level="warn" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="io.netty" level="warn" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
 

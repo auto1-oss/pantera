@@ -15,6 +15,7 @@ import com.artipie.docker.error.InvalidManifestException;
 import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.manifest.ManifestLayer;
 import com.artipie.docker.misc.Pagination;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
@@ -24,15 +25,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
  * Asto implementation of {@link Manifests}.
  */
 public final class AstoManifests implements Manifests {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(AstoManifests.class);
 
     /**
      * Asto storage.
@@ -76,11 +72,22 @@ public final class AstoManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
-        LOGGER.debug("AstoManifests.get() called for ref: {}", ref.digest());
+        EcsLogger.debug("com.artipie.docker")
+            .message("AstoManifests.get() called")
+            .eventCategory("repository")
+            .eventAction("manifest_get")
+            .field("container.image.hash.all", ref.digest())
+            .log();
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
                 digest -> {
-                    LOGGER.debug("Found link for ref {}, digest: {}", ref.digest(), digest);
+                    EcsLogger.debug("com.artipie.docker")
+                        .message("Found link for manifest reference")
+                        .eventCategory("repository")
+                        .eventAction("manifest_get")
+                        .field("container.image.hash.all", ref.digest())
+                        .field("package.checksum", digest.string())
+                        .log();
                     return this.blobs.blob(digest)
                         .thenCompose(
                             blobOpt -> blobOpt
@@ -88,19 +95,37 @@ public final class AstoManifests implements Manifests {
                                     blob -> blob.content()
                                         .thenCompose(Content::asBytesFuture)
                                         .thenApply(bytes -> {
-                                            LOGGER.info("Creating Manifest from {} bytes for digest {}", 
-                                                bytes.length, digest);
+                                            EcsLogger.info("com.artipie.docker")
+                                                .message("Creating Manifest from bytes")
+                                                .eventCategory("repository")
+                                                .eventAction("manifest_get")
+                                                .eventOutcome("success")
+                                                .field("package.checksum", digest.string())
+                                                .field("package.size", bytes.length)
+                                                .log();
                                             return Optional.of(new Manifest(blob.digest(), bytes));
                                         })
                                 )
                                 .orElseGet(() -> {
-                                    LOGGER.warn("Blob not found for digest: {}", digest);
+                                    EcsLogger.warn("com.artipie.docker")
+                                        .message("Blob not found for digest")
+                                        .eventCategory("repository")
+                                        .eventAction("manifest_get")
+                                        .eventOutcome("failure")
+                                        .field("package.checksum", digest.string())
+                                        .log();
                                     return CompletableFuture.completedFuture(Optional.empty());
                                 })
                         );
                 }
             ).orElseGet(() -> {
-                LOGGER.warn("No link found for ref: {}", ref.digest());
+                EcsLogger.warn("com.artipie.docker")
+                    .message("No link found for manifest reference")
+                    .eventCategory("repository")
+                    .eventAction("manifest_get")
+                    .eventOutcome("failure")
+                    .field("container.image.hash.all", ref.digest())
+                    .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             })
         );

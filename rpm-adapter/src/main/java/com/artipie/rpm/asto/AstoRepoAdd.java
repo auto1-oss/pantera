@@ -9,12 +9,12 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.key.KeyExcludeFirst;
 import com.artipie.asto.lock.storage.StorageLock;
 import com.artipie.asto.rx.RxStorageWrapper;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.rpm.RepoConfig;
 import com.artipie.rpm.http.RpmUpload;
 import com.artipie.rpm.meta.PackageInfo;
 import com.artipie.rpm.pkg.HeaderTags;
 import com.artipie.rpm.pkg.Package;
-import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.schedulers.Schedulers;
@@ -135,10 +135,14 @@ public final class AstoRepoAdd {
                     ).toCompletableFuture()
                 ).onErrorResumeNext(
                     throwable -> {
-                        Logger.warn(
-                            this, "Failed to parse rpm package %s\n%s",
-                            key.string(), throwable.getMessage()
-                        );
+                        EcsLogger.warn("com.artipie.rpm")
+                            .message("Failed to parse rpm package")
+                            .eventCategory("repository")
+                            .eventAction("package_parsing")
+                            .eventOutcome("failure")
+                            .field("package.name", key.string())
+                            .error(throwable)
+                            .log();
                         return new RxStorageWrapper(this.asto).delete(key)
                             .andThen(Flowable.empty());
                     }

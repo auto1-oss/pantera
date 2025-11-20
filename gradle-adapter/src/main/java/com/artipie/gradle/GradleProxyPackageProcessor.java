@@ -5,14 +5,13 @@
 package com.artipie.gradle;
 
 import com.artipie.asto.Key;
-import com.artipie.http.log.LogSanitizer;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.ext.KeyLastPart;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -63,10 +62,19 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
     @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
-            Logger.warn(this, "Gradle proxy processor not initialized properly - stopping job");
+            EcsLogger.warn("com.artipie.gradle")
+                .message("Gradle proxy processor not initialized properly - stopping job")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .log();
             super.stopJob(context);
         } else {
-            Logger.debug(this, "Gradle proxy processor running, queue size: %d", this.packages.size());
+            EcsLogger.debug("com.artipie.gradle")
+                .message("Gradle proxy processor running (queue size: " + this.packages.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .log();
             this.processPackagesBatch();
         }
     }
@@ -98,11 +106,11 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
             .stream()
             .collect(Collectors.toList());
 
-        Logger.info(
-            this,
-            "Processing Gradle batch of %d packages (%d unique, %d duplicates removed)",
-            batch.size(), uniquePackages.size(), batch.size() - uniquePackages.size()
-        );
+        EcsLogger.info("com.artipie.gradle")
+            .message("Processing Gradle batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + (batch.size() - uniquePackages.size()) + ")")
+            .eventCategory("repository")
+            .eventAction("proxy_processor")
+            .log();
 
         List<CompletableFuture<Void>> futures = uniquePackages.stream()
             .map(this::processPackageAsync)
@@ -112,9 +120,20 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.info(this, "Gradle batch processing complete");
+            EcsLogger.info("com.artipie.gradle")
+                .message("Gradle batch processing complete (" + uniquePackages.size() + " packages)")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("success")
+                .log();
         } catch (final RuntimeException err) {
-            Logger.error(this, "Gradle batch processing failed: %s", LogSanitizer.sanitizeMessage(err.getMessage()));
+            EcsLogger.error("com.artipie.gradle")
+                .message("Gradle batch processing failed (" + uniquePackages.size() + " packages)")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
         }
     }
 
@@ -125,29 +144,41 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
      */
     private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        Logger.debug(this, "Processing Gradle proxy event for key: %s", key.string());
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Processing Gradle proxy event")
+            .eventCategory("repository")
+            .eventAction("proxy_processor")
+            .field("package.name", key.string())
+            .log();
 
         return this.asto.list(key).thenCompose(keys -> {
-            Logger.debug(this, "Found %d keys under %s", keys.size(), key.string());
+            EcsLogger.debug("com.artipie.gradle")
+                .message("Found keys under artifact path")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .field("package.name", key.string())
+                .log();
             final Key artifactFile = findArtifactFile(keys);
-            
+
             if (artifactFile == null) {
-                Logger.warn(
-                    this,
-                    "No artifact file found for %s (found %d keys), skipping",
-                    key.string(),
-                    keys.size()
-                );
+                EcsLogger.warn("com.artipie.gradle")
+                    .message("No artifact file found among " + keys.size() + " keys, skipping package: " + key.string())
+                    .eventCategory("repository")
+                    .eventAction("proxy_processor")
+                    .eventOutcome("failure")
+                    .field("package.name", key.string())
+                    .log();
                 return CompletableFuture.completedFuture(null);
             }
 
             final ArtifactCoordinates coords = parseCoordinates(artifactFile);
             if (coords == null) {
-                Logger.debug(
-                    this,
-                    "Could not parse coordinates from %s, skipping",
-                    artifactFile.string()
-                );
+                EcsLogger.debug("com.artipie.gradle")
+                    .message("Could not parse coordinates, skipping")
+                    .eventCategory("repository")
+                    .eventAction("proxy_processor")
+                    .field("file.name", artifactFile.string())
+                    .log();
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -172,23 +203,27 @@ public final class GradleProxyPackageProcessor extends QuartzJob {
                             release
                         )
                     );
-                    
-                    Logger.info(
-                        this,
-                        "Recorded Gradle proxy artifact %s:%s (repo=%s, release=%s)",
-                        coords.artifactName(),
-                        coords.version(),
-                        event.repoName(),
-                        release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString()
-                    );
+
+                    EcsLogger.info("com.artipie.gradle")
+                        .message("Recorded Gradle proxy artifact")
+                        .eventCategory("repository")
+                        .eventAction("proxy_processor")
+                        .eventOutcome("success")
+                        .field("package.name", coords.artifactName())
+                        .field("package.version", coords.version())
+                        .field("repository.name", event.repoName())
+                        .field("package.release_date", release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString())
+                        .log();
                 });
         }).exceptionally(err -> {
-            Logger.error(
-                this,
-                "Failed to process Gradle package %s: %s",
-                key.string(),
-                err.getMessage()
-            );
+            EcsLogger.error("com.artipie.gradle")
+                .message("Failed to process Gradle package")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .field("package.name", key.string())
+                .error(err)
+                .log();
             return null;
         });
     }

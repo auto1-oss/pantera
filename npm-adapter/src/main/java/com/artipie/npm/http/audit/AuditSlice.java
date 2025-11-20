@@ -31,10 +31,11 @@ public final class AuditSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         // For hosted/local repositories: return empty audit response (no vulnerabilities found)
         // This is standard behavior - if no vulnerability database is configured,
         // return empty results rather than error
-        return CompletableFuture.completedFuture(
+        return body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.ok()
                 .jsonBody(Json.createObjectBuilder().build())  // Empty JSON object {}
                 .build()

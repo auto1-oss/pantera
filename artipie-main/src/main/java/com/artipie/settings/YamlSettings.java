@@ -32,7 +32,7 @@ import com.artipie.scheduling.QuartzService;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.settings.cache.CachedUsers;
 import com.artipie.settings.cache.GuavaFiltersCache;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
@@ -287,7 +287,11 @@ public final class YamlSettings implements Settings {
 
     @Override
     public void close() {
-        Logger.info(this, "Closing YamlSettings and cleaning up storage resources...");
+        EcsLogger.info("com.artipie.settings")
+            .message("Closing YamlSettings and cleaning up storage resources")
+            .eventCategory("configuration")
+            .eventAction("settings_close")
+            .log();
         for (final Storage storage : this.trackedStorages) {
             try {
                 // Try to close via factory first (preferred method)
@@ -295,18 +299,39 @@ public final class YamlSettings implements Settings {
                 if (storageType != null) {
                     final StorageFactory factory = StoragesLoader.STORAGES.getFactory(storageType);
                     factory.closeStorage(storage);
-                    Logger.info(this, "Closed storage via factory: %s", storageType);
+                    EcsLogger.info("com.artipie.settings")
+                        .message("Closed storage via factory (type: " + storageType + ")")
+                        .eventCategory("configuration")
+                        .eventAction("storage_close")
+                        .eventOutcome("success")
+                        .log();
                 } else if (storage instanceof AutoCloseable) {
                     // Fallback: direct close for AutoCloseable storages
                     ((AutoCloseable) storage).close();
-                    Logger.info(this, "Closed storage directly: %s", storage.getClass().getSimpleName());
+                    EcsLogger.info("com.artipie.settings")
+                        .message("Closed storage directly (type: " + storage.getClass().getSimpleName() + ")")
+                        .eventCategory("configuration")
+                        .eventAction("storage_close")
+                        .eventOutcome("success")
+                        .log();
                 }
             } catch (final Exception e) {
-                Logger.error(this, "Failed to close storage: %s", e.getMessage());
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to close storage")
+                    .eventCategory("configuration")
+                    .eventAction("storage_close")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
             }
         }
         this.trackedStorages.clear();
-        Logger.info(this, "YamlSettings cleanup complete");
+        EcsLogger.info("com.artipie.settings")
+            .message("YamlSettings cleanup complete")
+            .eventCategory("configuration")
+            .eventAction("settings_close")
+            .eventOutcome("success")
+            .log();
     }
 
     /**
@@ -385,19 +410,31 @@ public final class YamlSettings implements Settings {
     private static Optional<ValkeyConnection> initValkey(final YamlMapping settings) {
         final YamlMapping caches = settings.yamlMapping("caches");
         if (caches == null) {
-            Logger.debug(YamlSettings.class, "No caches configuration found");
+            EcsLogger.debug("com.artipie.settings")
+                .message("No caches configuration found")
+                .eventCategory("configuration")
+                .eventAction("valkey_init")
+                .log();
             return Optional.empty();
         }
         final YamlMapping valkeyConfig = caches.yamlMapping("valkey");
         if (valkeyConfig == null) {
-            Logger.debug(YamlSettings.class, "No valkey configuration found in caches");
+            EcsLogger.debug("com.artipie.settings")
+                .message("No valkey configuration found in caches")
+                .eventCategory("configuration")
+                .eventAction("valkey_init")
+                .log();
             return Optional.empty();
         }
         final boolean enabled = Optional.ofNullable(valkeyConfig.string("enabled"))
             .map(Boolean::parseBoolean)
             .orElse(false);
         if (!enabled) {
-            Logger.info(YamlSettings.class, "Valkey is disabled in configuration");
+            EcsLogger.info("com.artipie.settings")
+                .message("Valkey is disabled in configuration (enabled: false)")
+                .eventCategory("configuration")
+                .eventAction("valkey_init")
+                .log();
             return Optional.empty();
         }
         final String host = Optional.ofNullable(valkeyConfig.string("host"))
@@ -417,19 +454,24 @@ public final class YamlSettings implements Settings {
                 }
             })
             .orElse(Duration.ofMillis(100));
-        
-        Logger.info(
-            YamlSettings.class,
-            "Initializing Valkey connection: %s:%d (timeout=%s)",
-            host, port, timeout
-        );
+
+        EcsLogger.info("com.artipie.settings")
+            .message("Initializing Valkey connection (timeout: " + timeout.toMillis() + "ms)")
+            .eventCategory("configuration")
+            .eventAction("valkey_init")
+            .field("destination.address", host)
+            .field("destination.port", port)
+            .log();
         try {
             return Optional.of(new ValkeyConnection(host, port, timeout));
         } catch (final Exception ex) {
-            Logger.error(
-                YamlSettings.class,
-                "Failed to initialize Valkey connection: %s", ex.getMessage()
-            );
+            EcsLogger.error("com.artipie.settings")
+                .message("Failed to initialize Valkey connection")
+                .eventCategory("configuration")
+                .eventAction("valkey_init")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             return Optional.empty();
         }
     }
@@ -448,10 +490,12 @@ public final class YamlSettings implements Settings {
         Authentication res;
         final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
         if (creds == null || creds.isEmpty()) {
-            Logger.info(
-                ArtipieSecurity.class,
-                "Credentials yaml section is absent or empty, using AuthFromEnv()"
-            );
+            EcsLogger.info("com.artipie.security")
+                .message("Credentials yaml section is absent or empty, using AuthFromEnv()")
+                .eventCategory("authentication")
+                .eventAction("auth_init")
+                .field("event.provider", "env")
+                .log();
             res = new AuthFromEnv();
         } else {
             final AuthLoader loader = new AuthLoader();
@@ -465,7 +509,11 @@ public final class YamlSettings implements Settings {
         }
         // Create CachedUsers with Valkey connection if available
         if (valkey.isPresent()) {
-            Logger.info(YamlSettings.class, "Initializing auth cache with Valkey L2 cache");
+            EcsLogger.info("com.artipie.settings")
+                .message("Initializing auth cache with Valkey L2 cache (type: valkey)")
+                .eventCategory("authentication")
+                .eventAction("auth_cache_init")
+                .log();
             return new CachedUsers(res, valkey.get());
         } else {
             return new CachedUsers(res);

@@ -32,10 +32,13 @@ public class PostUploadSlice extends UploadSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         UploadRequest request = UploadRequest.from(line);
-        if (request.mount().isPresent() && request.from().isPresent()) {
-            return mount(request.mount().get(), request.from().get(), request.name());
-        }
-        return startUpload(request.name());
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            if (request.mount().isPresent() && request.from().isPresent()) {
+                return mount(request.mount().get(), request.from().get(), request.name());
+            }
+            return startUpload(request.name());
+        });
     }
 
     /**

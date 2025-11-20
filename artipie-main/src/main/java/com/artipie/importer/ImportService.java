@@ -14,6 +14,7 @@ import com.artipie.importer.api.ChecksumPolicy;
 import com.artipie.importer.api.DigestType;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.ResponseException;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.settings.repo.RepoConfig;
 import com.artipie.settings.repo.Repositories;
@@ -30,8 +31,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Service that orchestrates import persistence and metadata registration.
@@ -39,11 +38,6 @@ import org.slf4j.LoggerFactory;
  * @since 1.0
  */
 public final class ImportService {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(ImportService.class);
 
     /**
      * Supported digest algorithms for runtime computation.
@@ -169,7 +163,13 @@ public final class ImportService {
                 // Remove the duplicate scope
                 final String correctedTarball = scope + tarballPath.substring(duplicatePattern.length());
                 final String normalized = packagePrefix + "/-/" + correctedTarball;
-                LOG.debug("Normalized NPM path (removed duplicate): {} -> {}", path, normalized);
+                EcsLogger.debug("com.artipie.importer")
+                    .message("Normalized NPM path (removed duplicate)")
+                    .eventCategory("repository")
+                    .eventAction("import_normalize")
+                    .field("url.original", path)
+                    .field("url.path", normalized)
+                    .log();
                 return normalized;
             }
             return path; // Already correct
@@ -177,7 +177,13 @@ public final class ImportService {
             // Tarball is missing scope prefix, add it
             final String correctedTarball = scope + tarballPath;
             final String normalized = packagePrefix + "/-/" + correctedTarball;
-            LOG.debug("Normalized NPM path (added scope): {} -> {}", path, normalized);
+            EcsLogger.debug("com.artipie.importer")
+                .message("Normalized NPM path (added scope)")
+                .eventCategory("repository")
+                .eventAction("import_normalize")
+                .field("url.original", path)
+                .field("url.path", normalized)
+                .log();
             return normalized;
         }
     }
@@ -227,7 +233,12 @@ public final class ImportService {
 
         if (session.status() == ImportSessionStatus.COMPLETED
             || session.status() == ImportSessionStatus.SKIPPED) {
-            LOG.debug("Import skipped for key {} (already completed)", session.key());
+            EcsLogger.debug("com.artipie.importer")
+                .message("Import skipped (already completed, session: " + session.key() + ")")
+                .eventCategory("repository")
+                .eventAction("import_artifact")
+                .eventOutcome("skipped")
+                .log();
             return CompletableFuture.completedFuture(
                 new ImportResult(
                     ImportStatus.ALREADY_PRESENT,
@@ -240,7 +251,13 @@ public final class ImportService {
         }
 
         if (request.metadataOnly()) {
-            LOG.debug("Metadata-only import for {} :: {}", request.repo(), request.path());
+            EcsLogger.debug("com.artipie.importer")
+                .message("Metadata-only import")
+                .eventCategory("repository")
+                .eventAction("import_artifact")
+                .field("repository.name", request.repo())
+                .field("url.path", request.path())
+                .log();
             final long size = request.size().orElse(0L);
             this.sessions.ifPresent(store -> store.markCompleted(session, size, buildExpectedDigests(request)));
             this.enqueueEvent(request, size);
@@ -291,7 +308,15 @@ public final class ImportService {
                 // Configurable import timeout (default: 30 minutes)
                 .orTimeout(Long.getLong("artipie.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
-            LOG.error("Import failed for {} :: {}: {}", request.repo(), request.path(), err.getMessage());
+            EcsLogger.error("com.artipie.importer")
+                .message("Import failed")
+                .eventCategory("repository")
+                .eventAction("import_artifact")
+                .eventOutcome("failure")
+                .field("repository.name", request.repo())
+                .field("url.path", request.path())
+                .error(err)
+                .log();
             this.sessions.ifPresent(store -> store.markFailed(session, err.getMessage()));
             throw new CompletionException(err);
         });
@@ -330,12 +355,15 @@ public final class ImportService {
 
         final Optional<String> mismatch = validate(request, size, computed, expected);
         if (mismatch.isPresent()) {
-            LOG.warn(
-                "Checksum mismatch for {} :: {} -> {}",
-                request.repo(),
-                request.path(),
-                mismatch.get()
-            );
+            EcsLogger.warn("com.artipie.importer")
+                .message("Checksum mismatch")
+                .eventCategory("repository")
+                .eventAction("import_artifact")
+                .eventOutcome("failure")
+                .field("repository.name", request.repo())
+                .field("url.path", request.path())
+                .field("error.message", mismatch.get())
+                .log();
             final Storage root = rootStorage(storage).orElse(storage);
             if (root == storage) {
                 // Same storage, simple move
@@ -382,7 +410,13 @@ public final class ImportService {
                 // Always attempt cleanup regardless of move success/failure
                 cleanupStagingDir(storage, staging)
                     .exceptionally(cleanupErr -> {
-                        LOG.debug("Post-import cleanup error (non-critical): {}", cleanupErr.getMessage());
+                        EcsLogger.debug("com.artipie.importer")
+                            .message("Post-import cleanup error (non-critical)")
+                            .eventCategory("repository")
+                            .eventAction("import_cleanup")
+                            .eventOutcome("failure")
+                            .field("error.message", cleanupErr.getMessage())
+                            .log();
                         return null;
                     });
             })
@@ -395,17 +429,23 @@ public final class ImportService {
                         final String type = request.repoType();
                         if (shards && isShardEligible(type)) {
                             if (MERGE_HINT_WARNED.compareAndSet(false, true)) {
-                                LOG.warn(
-                                    "Import shard mode enabled for repo '{}': remember to trigger metadata merge via POST /.merge/{} after imports, otherwise clients may not see updates immediately",
-                                    request.repo(), request.repo()
-                                );
+                                EcsLogger.warn("com.artipie.importer")
+                                    .message("Import shard mode enabled: remember to trigger metadata merge via POST /.merge/{repo} after imports")
+                                    .eventCategory("repository")
+                                    .eventAction("import_artifact")
+                                    .field("repository.name", request.repo())
+                                    .log();
                             }
                             return writeShardsForImport(storage, target, request, size, toPersist, baseUrl)
                                 .exceptionally(err -> {
-                                    LOG.warn(
-                                        "Shard write failed for {} :: {}: {}",
-                                        request.repo(), target.string(), err.getMessage()
-                                    );
+                                    EcsLogger.warn("com.artipie.importer")
+                                        .message("Shard write failed for repository '" + request.repo() + "' at key: " + target.string())
+                                        .eventCategory("repository")
+                                        .eventAction("import_shard_write")
+                                        .eventOutcome("failure")
+                                        .field("repository.name", request.repo())
+                                        .field("error.message", err.getMessage())
+                                        .log();
                                     return null;
                                 })
                                 .thenCompose(nothing -> isMavenFamily(type.toLowerCase(Locale.ROOT))
@@ -428,10 +468,14 @@ public final class ImportService {
                             );
                             return regenerator.regenerate(target, request)
                                 .exceptionally(err -> {
-                                    LOG.warn(
-                                        "Metadata regeneration failed for {} :: {}: {}",
-                                        request.repo(), target.string(), err.getMessage()
-                                    );
+                                    EcsLogger.warn("com.artipie.importer")
+                                        .message("Metadata regeneration failed for repository '" + request.repo() + "' at key: " + target.string())
+                                        .eventCategory("repository")
+                                        .eventAction("import_metadata_regenerate")
+                                        .eventOutcome("failure")
+                                        .field("repository.name", request.repo())
+                                        .field("error.message", err.getMessage())
+                                        .log();
                                     return null; // Continue even if metadata regeneration fails
                                 })
                                 .thenCompose(nothing -> isMavenFamily(type.toLowerCase(Locale.ROOT))
@@ -500,10 +544,14 @@ public final class ImportService {
         );
         final Key shardKey = new Key.From(".meta", "pypi", "shards", pkg, ver, file + ".json");
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> LOG.info(
-                "Shard written [pypi] {}:{} -> {}",
-                pkg, ver, shardKey.string()
-            ));
+            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+                .message("Shard written [pypi]")
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .eventOutcome("success")
+                .field("package.name", pkg)
+                .field("package.version", ver)
+                .log());
     }
 
     /**
@@ -629,7 +677,12 @@ public final class ImportService {
             return storage.delete(parent)
                 .exceptionally(err -> {
                     // Ignore errors - directory might not be empty or already deleted
-                    LOG.debug("Could not cleanup staging directory {}: {}", parent.string(), err.getMessage());
+                    EcsLogger.debug("com.artipie.importer")
+                        .message("Could not cleanup staging directory at key: " + parent.string())
+                        .eventCategory("repository")
+                        .eventAction("import_cleanup")
+                        .field("error.message", err.getMessage())
+                        .log();
                     return null;
                 })
                 .thenCompose(nothing -> {
@@ -638,7 +691,12 @@ public final class ImportService {
                     if (stagingParent != null && ".import/staging".equals(stagingParent.string())) {
                         return storage.delete(stagingParent)
                             .exceptionally(err -> {
-                                LOG.debug("Could not cleanup .import/staging: {}", err.getMessage());
+                                EcsLogger.debug("com.artipie.importer")
+                                    .message("Could not cleanup .import/staging")
+                                    .eventCategory("repository")
+                                    .eventAction("import_cleanup")
+                                    .field("error.message", err.getMessage())
+                                    .log();
                                 return null;
                             })
                             .thenCompose(nothing2 -> {
@@ -647,7 +705,12 @@ public final class ImportService {
                                 if (importParent != null && ".import".equals(importParent.string())) {
                                     return storage.delete(importParent)
                                         .exceptionally(err -> {
-                                            LOG.debug("Could not cleanup .import: {}", err.getMessage());
+                                            EcsLogger.debug("com.artipie.importer")
+                                                .message("Could not cleanup .import")
+                                                .eventCategory("repository")
+                                                .eventAction("import_cleanup")
+                                                .field("error.message", err.getMessage())
+                                                .log();
                                             return null;
                                         });
                                 }
@@ -729,7 +792,12 @@ public final class ImportService {
                 }
             }
         } catch (final Exception ex) {
-            LOG.debug("Could not read metadata_merge_mode from settings: {}", ex.getMessage());
+            EcsLogger.debug("com.artipie.importer")
+                .message("Could not read metadata_merge_mode from settings")
+                .eventCategory("configuration")
+                .eventAction("settings_read")
+                .field("error.message", ex.getMessage())
+                .log();
         }
         final String prop = System.getProperty("artipie.metadata.merge.mode", "");
         if (!prop.isBlank()) {
@@ -836,17 +904,33 @@ public final class ImportService {
         final String path = target.string();
         // Skip maven-metadata.xml files - they should not be imported as artifacts
         if (path.contains("maven-metadata.xml")) {
-            LOG.debug("Skipping maven-metadata.xml file: {}", path);
+            EcsLogger.debug("com.artipie.importer")
+                .message("Skipping maven-metadata.xml file at path: " + path)
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .log();
             return CompletableFuture.completedFuture(null);
         }
         final MavenCoords coords = inferMavenCoords(path, request.artifact().orElse(null), request.version().orElse(null));
         if (coords == null) {
-            LOG.debug("Could not infer Maven coords for path: {}, artifact: {}, version: {}", 
-                path, request.artifact().orElse(null), request.version().orElse(null));
+            EcsLogger.debug("com.artipie.importer")
+                .message("Could not infer Maven coords from path: " + path)
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .field("package.name", request.artifact().orElse(null))
+                .field("package.version", request.version().orElse(null))
+                .log();
             return CompletableFuture.completedFuture(null);
         }
-        LOG.debug("Inferred Maven coords - groupId: {}, groupPath: {}, artifactId: {}, version: {}", 
-            coords.groupId, coords.groupPath, coords.artifactId, coords.version);
+        EcsLogger.debug("com.artipie.importer")
+            .message("Inferred Maven coords")
+            .eventCategory("repository")
+            .eventAction("import_shard_write")
+            .field("package.group", coords.groupId)
+            .field("file.path", coords.groupPath)
+            .field("package.name", coords.artifactId)
+            .field("package.version", coords.version)
+            .log();
         final String shard = String.format(
             Locale.ROOT,
             "{\"groupId\":\"%s\",\"artifactId\":\"%s\",\"version\":\"%s\",\"path\":\"%s\",\"size\":%d,\"sha1\":%s,\"sha256\":%s,\"ts\":%d}",
@@ -861,7 +945,11 @@ public final class ImportService {
         );
         // Include filename in shard path to avoid overwrites when multiple artifacts have same version
         final String filename = path.substring(path.lastIndexOf('/') + 1);
-        LOG.debug("Extracted filename from path {}: {}", path, filename);
+        EcsLogger.debug("com.artipie.importer")
+            .message("Extracted filename '" + filename + "' from path: " + path)
+            .eventCategory("repository")
+            .eventAction("import_shard_write")
+            .log();
         // Build shard key parts, avoiding empty groupPath
         final java.util.List<String> keyParts = new java.util.ArrayList<>();
         keyParts.add(".meta");
@@ -882,13 +970,22 @@ public final class ImportService {
         // Remove any empty parts that might have been added
         keyParts.removeIf(String::isEmpty);
         // Debug logging to identify empty parts
-        LOG.debug("Creating shard key with parts: {}", keyParts);
+        EcsLogger.debug("com.artipie.importer")
+            .message("Creating shard key (parts: " + keyParts.toString() + ")")
+            .eventCategory("repository")
+            .eventAction("import_shard_write")
+            .log();
         final Key shardKey = new Key.From(keyParts.toArray(new String[0]));
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> LOG.info(
-                "Shard written [maven] {}:{}:{} -> {}",
-                coords.groupId, coords.artifactId, coords.version, shardKey.string()
-            ));
+            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+                .message("Shard written [maven]")
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .eventOutcome("success")
+                .field("package.group", coords.groupId)
+                .field("package.name", coords.artifactId)
+                .field("package.version", coords.version)
+                .log());
     }
 
     /**
@@ -927,7 +1024,12 @@ public final class ImportService {
             }
         }
         if (versionStart <= 0) {
-            LOG.debug("Could not parse Helm name/version from {}", file);
+            EcsLogger.debug("com.artipie.importer")
+                .message("Could not parse Helm name/version")
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .field("file.name", file)
+                .log();
             return CompletableFuture.completedFuture(null);
         }
         final String name = withoutExt.substring(0, versionStart);
@@ -949,10 +1051,14 @@ public final class ImportService {
             name, version + ".json"
         );
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> LOG.info(
-                "Shard written [helm] {}:{} -> {}",
-                name, version, shardKey.string()
-            ));
+            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+                .message("Shard written [helm]")
+                .eventCategory("repository")
+                .eventAction("import_shard_write")
+                .eventOutcome("success")
+                .field("package.name", name)
+                .field("package.version", version)
+                .log());
     }
 
     /**
@@ -963,15 +1069,32 @@ public final class ImportService {
         final String hdrArtifact,
         final String hdrVersion
     ) {
-        LOG.debug("inferMavenCoords called with path: [{}], hdrArtifact: [{}], hdrVersion: [{}]", path, hdrArtifact, hdrVersion);
+        EcsLogger.debug("com.artipie.importer")
+            .message("inferMavenCoords called")
+            .eventCategory("repository")
+            .eventAction("maven_coords_infer")
+            .field("url.path", path)
+            .field("package.name", hdrArtifact)
+            .field("package.version", hdrVersion)
+            .log();
         // Check if path starts with slash and remove it
         String normalizedPath = path;
         if (path.startsWith("/")) {
             normalizedPath = path.substring(1);
-            LOG.debug("Normalized path from [{}] to [{}]", path, normalizedPath);
+            EcsLogger.debug("com.artipie.importer")
+                .message("Normalized path")
+                .eventCategory("repository")
+                .eventAction("maven_coords_infer")
+                .field("url.original", path)
+                .field("url.path", normalizedPath)
+                .log();
         }
         if (hdrArtifact != null && hdrVersion != null && !hdrVersion.isEmpty()) {
-            LOG.debug("Using headers for coordinates");
+            EcsLogger.debug("com.artipie.importer")
+                .message("Using headers for coordinates")
+                .eventCategory("repository")
+                .eventAction("maven_coords_infer")
+                .log();
             final int idx = normalizedPath.lastIndexOf('/');
             if (idx > 0) {
                 final String parent = normalizedPath.substring(0, idx);
@@ -983,13 +1106,26 @@ public final class ImportService {
                 }
             }
         }
-        LOG.debug("Using path parsing fallback");
+        EcsLogger.debug("com.artipie.importer")
+            .message("Using path parsing fallback")
+            .eventCategory("repository")
+            .eventAction("maven_coords_infer")
+            .log();
         // Fallback: .../{artifactId}/{version}/{file}
         final String[] segs = normalizedPath.split("/");
-        LOG.debug("Path segments for {}: {}", normalizedPath, java.util.Arrays.toString(segs));
-        LOG.debug("Total segments: {}", segs.length);
+        EcsLogger.debug("com.artipie.importer")
+            .message("Path segments")
+            .eventCategory("repository")
+            .eventAction("maven_coords_infer")
+            .field("url.path", normalizedPath)
+            .log();
         if (segs.length < 3) {
-            LOG.debug("Path has less than 3 segments, returning null");
+            EcsLogger.debug("com.artipie.importer")
+                .message("Path has less than 3 segments, returning null")
+                .eventCategory("repository")
+                .eventAction("maven_coords_infer")
+                .eventOutcome("failure")
+                .log();
             return null;
         }
         // The last segment is the filename
@@ -1000,10 +1136,15 @@ public final class ImportService {
         final String version = segs[segs.length - 2];
         final String artifactId = segs[segs.length - 3];
         final String groupPath = String.join("/", java.util.Arrays.copyOf(segs, segs.length - 3));
-        LOG.debug("Parsed from path - filename: [{}], artifactId: [{}], version: [{}], groupPath: [{}]", 
-            filename, artifactId, version, groupPath);
-        LOG.debug("Segment indices: filename at [{}], version at [{}], artifactId at [{}], groupPath from 0 to [{}]", 
-            segs.length - 1, segs.length - 2, segs.length - 3, segs.length - 4);
+        EcsLogger.debug("com.artipie.importer")
+            .message("Parsed from path")
+            .eventCategory("repository")
+            .eventAction("maven_coords_infer")
+            .field("file.name", filename)
+            .field("package.name", artifactId)
+            .field("package.version", version)
+            .field("file.path", groupPath)
+            .log();
         if (groupPath.isEmpty()) {
             return null;
         }
@@ -1076,7 +1217,13 @@ public final class ImportService {
             }
             return Optional.of(raw);
         } catch (final IllegalArgumentException ex) {
-            LOG.debug("Repository '{}' has no valid base URL: {}", config.name(), ex.getMessage());
+            EcsLogger.debug("com.artipie.importer")
+                .message("Repository has no valid base URL")
+                .eventCategory("configuration")
+                .eventAction("base_url_resolve")
+                .field("repository.name", config.name())
+                .field("error.message", ex.getMessage())
+                .log();
             return Optional.empty();
         }
     }

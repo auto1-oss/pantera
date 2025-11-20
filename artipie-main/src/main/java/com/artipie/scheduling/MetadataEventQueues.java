@@ -12,7 +12,7 @@ import com.artipie.npm.events.NpmProxyPackageProcessor;
 import com.artipie.pypi.PyProxyPackageProcessor;
 import com.artipie.composer.http.proxy.ComposerProxyPackageProcessor;
 import com.artipie.settings.repo.RepoConfig;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -121,7 +121,13 @@ public final class MetadataEventQueues {
                                 config.name(),
                                 this.quartz.schedulePeriodicJob(interval, threads, type.job(), data)
                             );
-                            Logger.info(this, "Initialized proxy metadata job and queue for %s repository", config.name());
+                            EcsLogger.info("com.artipie.scheduling")
+                                .message("Initialized proxy metadata job and queue")
+                                .eventCategory("scheduling")
+                                .eventAction("metadata_job_init")
+                                .eventOutcome("success")
+                                .field("repository.name", config.name())
+                                .log();
                         } catch (final SchedulerException err) {
                             throw new ArtipieException(err);
                         }
@@ -130,10 +136,14 @@ public final class MetadataEventQueues {
                 );
                 result = Optional.of(events);
             } catch (final Exception err) {
-                Logger.error(
-                    this, "Failed to initialize events queue processing for repo %s:\n%s",
-                    config.name(), err.getMessage()
-                );
+                EcsLogger.error("com.artipie.scheduling")
+                    .message("Failed to initialize events queue processing")
+                    .eventCategory("scheduling")
+                    .eventAction("events_queue_init")
+                    .eventOutcome("failure")
+                    .field("repository.name", config.name())
+                    .error(err)
+                    .log();
                 result = Optional.empty();
             }
         }

@@ -6,7 +6,7 @@ package com.artipie.auth;
 
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.Optional;
 import org.keycloak.authorization.client.AuthzClient;
 import org.keycloak.authorization.client.Configuration;
@@ -38,7 +38,14 @@ public final class AuthFromKeycloak implements Authentication {
             client.obtainAccessToken(username, password);
             res = Optional.of(new AuthUser(username, "keycloak"));
         } catch (final Throwable err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.auth")
+                .message("Keycloak authentication failed")
+                .eventCategory("authentication")
+                .eventAction("login")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .error(err)
+                .log();
             res = Optional.empty();
         }
         return res;

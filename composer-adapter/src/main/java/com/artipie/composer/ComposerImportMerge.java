@@ -7,8 +7,7 @@ package com.artipie.composer;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -52,11 +51,6 @@ import java.util.stream.Collectors;
  * @since 1.18.14
  */
 public final class ComposerImportMerge {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(ComposerImportMerge.class);
 
     /**
      * Storage.
@@ -104,21 +98,36 @@ public final class ComposerImportMerge {
      */
     public CompletionStage<MergeResult> mergeAll() {
         final Key stagingRoot = new Key.From(".versions");
-        
-        LOG.info("Starting Composer import merge from staging area: {}", stagingRoot.string());
-        
+
+        EcsLogger.info("com.artipie.composer")
+            .message("Starting Composer import merge from staging area")
+            .eventCategory("repository")
+            .eventAction("import_merge")
+            .field("file.directory", stagingRoot.string())
+            .log();
+
         // NOTE: storage.exists() returns false for directories in FileStorage,
         // so we try to list the directory instead
         return this.discoverStagedPackages(stagingRoot)
             .thenCompose(packages -> {
                 if (packages.isEmpty()) {
-                    LOG.info("No staged imports found in .versions/, nothing to merge");
+                    EcsLogger.info("com.artipie.composer")
+                        .message("No staged imports found, nothing to merge")
+                        .eventCategory("repository")
+                        .eventAction("import_merge")
+                        .eventOutcome("success")
+                        .field("file.directory", ".versions/")
+                        .log();
                     return CompletableFuture.completedFuture(
                         new MergeResult(0, 0, 0)
                     );
                 }
-                
-                LOG.info("Found {} packages to merge", packages.size());
+
+                EcsLogger.info("com.artipie.composer")
+                    .message("Found " + packages.size() + " packages to merge")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .log();
                 
                 // Merge each package sequentially to avoid overwhelming storage
                 // (packages are independent, but we serialize to control concurrency)
@@ -136,14 +145,21 @@ public final class ComposerImportMerge {
             .thenCompose(result -> {
                 // Clean up staging area after successful merge
                 if (result.failedPackages == 0) {
-                    LOG.info("Merge completed successfully, cleaning up staging area");
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions), cleaning up staging area")
+                        .eventCategory("repository")
+                        .eventAction("import_merge")
+                        .eventOutcome("success")
+                        .log();
                     return this.cleanupStagingArea(stagingRoot)
                         .thenApply(ignored -> result);
                 }
-                LOG.warn(
-                    "Merge completed with {} failures, keeping staging area for retry",
-                    result.failedPackages
-                );
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .eventOutcome("partial_failure")
+                    .log();
                 return CompletableFuture.completedFuture(result);
             });
     }
@@ -158,7 +174,13 @@ public final class ComposerImportMerge {
         return this.storage.list(stagingRoot)
             .exceptionally(ex -> {
                 // If .versions doesn't exist, return empty list
-                LOG.debug("Staging area {} not found or empty: {}", stagingRoot.string(), ex.getMessage());
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Staging area not found or empty")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .field("file.directory", stagingRoot.string())
+                    .field("error.message", ex.getMessage())
+                    .log();
                 return List.of();
             })
             .thenCompose(keys -> {
@@ -221,7 +243,14 @@ public final class ComposerImportMerge {
                 return packageName;
             })
             .exceptionally(ex -> {
-                LOG.warn("Failed to extract package name from {}: {}", fileKey.string(), ex.getMessage());
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Failed to extract package name from file")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .eventOutcome("failure")
+                    .field("file.name", fileKey.string())
+                    .field("error.message", ex.getMessage())
+                    .log();
                 return Optional.<String>empty();
             })
             .toCompletableFuture();
@@ -234,7 +263,12 @@ public final class ComposerImportMerge {
      * @return Completion stage
      */
     private CompletionStage<Void> mergePackage(final String packageName) {
-        LOG.debug("Merging package: {}", packageName);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Merging package")
+            .eventCategory("repository")
+            .eventAction("import_merge")
+            .field("package.name", packageName)
+            .log();
         
         // Convert vendor/package to vendor-package for directory name
         final String packageDir = packageName.replace("/", "-");
@@ -258,7 +292,13 @@ public final class ComposerImportMerge {
             })
             .thenCompose(versionMetadataList -> {
                 if (versionMetadataList.isEmpty()) {
-                    LOG.warn("No valid version files found for package: {}", packageName);
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("No valid version files found for package")
+                        .eventCategory("repository")
+                        .eventAction("import_merge")
+                        .eventOutcome("failure")
+                        .field("package.name", packageName)
+                        .log();
                     return CompletableFuture.completedFuture(null);
                 }
                 
@@ -269,13 +309,13 @@ public final class ComposerImportMerge {
                 for (final JsonObject versionMetadata : versionMetadataList) {
                     this.extractVersions(versionMetadata, packageName, devVersions, stableVersions);
                 }
-                
-                LOG.debug(
-                    "Package {} has {} stable versions and {} dev versions",
-                    packageName,
-                    stableVersions.size(),
-                    devVersions.size()
-                );
+
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Package '" + packageName + "' version breakdown: " + stableVersions.size() + " stable, " + devVersions.size() + " dev")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .field("package.name", packageName)
+                    .log();
                 
                 // Merge stable and dev versions into p2/ files
                 final CompletionStage<Void> stableMerge = stableVersions.isEmpty()
@@ -296,7 +336,14 @@ public final class ComposerImportMerge {
                 });
             })
             .exceptionally(error -> {
-                LOG.error("Failed to merge package {}: {}", packageName, error.getMessage(), error);
+                EcsLogger.error("com.artipie.composer")
+                    .message("Failed to merge package")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .eventOutcome("failure")
+                    .field("package.name", packageName)
+                    .error(error)
+                    .log();
                 this.failedPackages.incrementAndGet();
                 return null;
             });
@@ -421,12 +468,26 @@ public final class ComposerImportMerge {
                         return Optional.of(reader.readObject());
                     }
                 } catch (final Exception error) {
-                    LOG.warn("Failed to parse version file {}: {}", key.string(), error.getMessage());
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("Failed to parse version file")
+                        .eventCategory("repository")
+                        .eventAction("import_merge")
+                        .eventOutcome("failure")
+                        .field("file.name", key.string())
+                        .field("error.message", error.getMessage())
+                        .log();
                     return Optional.<JsonObject>empty();
                 }
             })
             .exceptionally(error -> {
-                LOG.warn("Failed to read version file {}: {}", key.string(), error.getMessage());
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Failed to read version file")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .eventOutcome("failure")
+                    .field("file.name", key.string())
+                    .field("error.message", error.getMessage())
+                    .log();
                 return Optional.empty();
             })
             .toCompletableFuture();
@@ -449,7 +510,13 @@ public final class ComposerImportMerge {
             })
             .thenCompose(ignored -> this.storage.delete(stagingRoot))
             .exceptionally(error -> {
-                LOG.warn("Failed to cleanup staging area: {}", error.getMessage());
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Failed to cleanup staging area")
+                    .eventCategory("repository")
+                    .eventAction("import_merge")
+                    .eventOutcome("failure")
+                    .field("error.message", error.getMessage())
+                    .log();
                 return null;
             });
     }

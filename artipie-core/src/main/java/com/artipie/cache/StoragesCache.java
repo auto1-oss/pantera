@@ -17,8 +17,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.base.Strings;
 import org.apache.commons.lang3.NotImplementedException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.time.Duration;
 
@@ -37,8 +36,6 @@ import java.time.Duration;
  * @since 0.23
  */
 public class StoragesCache implements Cleanable<YamlMapping> {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(StoragesCache.class);
 
     /**
      * Cache for storages.
@@ -68,7 +65,12 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .recordStats()
             .evictionListener(this::onEviction)
             .build();
-        LOGGER.info("StoragesCache initialized with {}", config);
+        EcsLogger.info("com.artipie.cache")
+            .message("StoragesCache initialized with config: " + config.toString())
+            .eventCategory("cache")
+            .eventAction("cache_init")
+            .eventOutcome("success")
+            .log();
     }
 
     /**
@@ -132,10 +134,12 @@ public class StoragesCache implements Cleanable<YamlMapping> {
         final RemovalCause cause
     ) {
         if (storage != null && key != null) {
-            LOGGER.debug(
-                "Storage evicted from cache (cause: {}): {}",
-                cause, key.string("type")
-            );
+            EcsLogger.debug("com.artipie.cache")
+                .message("Storage evicted from cache (type: " + key.string("type") + ", cause: " + cause.toString() + ")")
+                .eventCategory("cache")
+                .eventAction("cache_evict")
+                .eventOutcome("success")
+                .log();
         }
     }
 }

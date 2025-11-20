@@ -11,6 +11,7 @@ import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.Remaining;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.http.slice.ContentWithSize;
@@ -19,7 +20,6 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Headers;
 import com.artipie.http.Slice;
 import com.artipie.scheduling.ArtifactEvent;
-import com.jcabi.log.Logger;
 
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
@@ -99,12 +99,13 @@ final class GoUploadSlice implements Slice {
         final int semicolonIndex = path.indexOf(';');
         if (semicolonIndex > 0) {
             sanitizedPath = path.substring(0, semicolonIndex);
-            Logger.debug(
-                this,
-                "Stripped metadata properties from path: %s -> %s",
-                path,
-                sanitizedPath
-            );
+            EcsLogger.debug("com.artipie.go")
+                .message("Stripped metadata properties from path")
+                .eventCategory("repository")
+                .eventAction("upload")
+                .field("url.original", path)
+                .field("url.path", sanitizedPath)
+                .log();
         } else {
             sanitizedPath = path;
         }

@@ -24,6 +24,7 @@ import com.artipie.settings.Settings;
 import com.artipie.settings.SettingsFromPath;
 import com.artipie.settings.repo.MapRepositories;
 import com.artipie.settings.repo.RepoConfig;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.settings.repo.Repositories;
 import com.artipie.vertx.VertxSliceServer;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -47,8 +48,6 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.tuple.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -65,8 +64,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @SuppressWarnings("PMD.PrematureDeclaration")
 public final class VertxMain {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(VertxMain.class);
 
     /**
      * Default port to start Artipie Rest API service.
@@ -130,13 +127,23 @@ public final class VertxMain {
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
-            LOGGER.info("Applied logging configuration from YAML settings");
+            EcsLogger.info("com.artipie")
+                .message("Applied logging configuration from YAML settings")
+                .eventCategory("configuration")
+                .eventAction("logging_configure")
+                .eventOutcome("success")
+                .log();
         }
-        
+
         // Initialize OpenTelemetry metrics (works with Elastic APM Java Agent)
         com.artipie.metrics.otel.OtelMetrics.initialize();
-        LOGGER.info("OpenTelemetry metrics initialized");
-        
+        EcsLogger.info("com.artipie")
+            .message("OpenTelemetry metrics initialized")
+            .eventCategory("configuration")
+            .eventAction("metrics_initialize")
+            .eventOutcome("success")
+            .log();
+
         final Vertx vertx = VertxMain.vertx(settings.metrics());
         final JWTAuth jwt = JWTAuth.create(
             vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
@@ -149,7 +156,13 @@ public final class VertxMain {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
             } catch (final IllegalStateException ex) {
-                LOGGER.warn("HTTP metrics enabled but MeterRegistry unavailable", ex);
+                EcsLogger.warn("com.artipie")
+                    .message("HTTP metrics enabled but MeterRegistry unavailable")
+                    .eventCategory("configuration")
+                    .eventAction("metrics_configure")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
             }
         }
         // Listen for repository change events to refresh runtime without restart
@@ -204,7 +217,13 @@ public final class VertxMain {
                         }
                     }
                 } catch (final Throwable err) {
-                    LOGGER.error("Failed to process repository event", err);
+                    EcsLogger.error("com.artipie")
+                        .message("Failed to process repository event")
+                        .eventCategory("repository")
+                        .eventAction("event_process")
+                        .eventOutcome("failure")
+                        .error(err)
+                        .log();
                 }
             }
         );
@@ -215,7 +234,13 @@ public final class VertxMain {
             settings.metrics(),
             settings.httpServerRequestTimeout()
         );
-        LOGGER.info("Artipie was started on port {}", main);
+        EcsLogger.info("com.artipie")
+            .message("Artipie was started on port")
+            .eventCategory("server")
+            .eventAction("server_start")
+            .eventOutcome("success")
+            .field("url.port", main)
+            .log();
         this.startRepos(vertx, settings, repos, this.port, slices);
         
         // Deploy RestApi verticle with multiple instances for CPU scaling
@@ -228,35 +253,68 @@ public final class VertxMain {
             deployOpts,
             result -> {
                 if (result.succeeded()) {
-                    LOGGER.info("RestApi deployed with {} instances", apiInstances);
+                    EcsLogger.info("com.artipie.api")
+                        .message("RestApi deployed with " + apiInstances + " instances")
+                        .eventCategory("api")
+                        .eventAction("api_deploy")
+                        .eventOutcome("success")
+                        .log();
                 } else {
-                    LOGGER.error("Failed to deploy RestApi", result.cause());
+                    EcsLogger.error("com.artipie.api")
+                        .message("Failed to deploy RestApi")
+                        .eventCategory("api")
+                        .eventAction("api_deploy")
+                        .eventOutcome("failure")
+                        .error(result.cause())
+                        .log();
                 }
             }
         );
-        
+
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
-        
+
         // Start config watch service for hot reload
         try {
             this.configWatch = new com.artipie.settings.ConfigWatchService(
                 this.config, settings.prefixes()
             );
             this.configWatch.start();
-            LOGGER.info("Config watch service started for hot reload");
+            EcsLogger.info("com.artipie")
+                .message("Config watch service started for hot reload")
+                .eventCategory("configuration")
+                .eventAction("config_watch_start")
+                .eventOutcome("success")
+                .log();
         } catch (final IOException ex) {
-            LOGGER.error("Failed to start config watch service", ex);
+            EcsLogger.error("com.artipie")
+                .message("Failed to start config watch service")
+                .eventCategory("configuration")
+                .eventAction("config_watch_start")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
         }
         
         return main;
     }
 
     public void stop() {
-        LOGGER.info("Stopping Artipie and cleaning up resources...");
+        EcsLogger.info("com.artipie")
+            .message("Stopping Artipie and cleaning up resources")
+            .eventCategory("server")
+            .eventAction("server_stop")
+            .eventOutcome("success")
+            .log();
         this.servers.forEach(s -> {
             s.stop();
-            LOGGER.info("Artipie's server on port {} was stopped", s.port());
+            EcsLogger.info("com.artipie")
+                .message("Artipie's server on port was stopped")
+                .eventCategory("server")
+                .eventAction("server_stop")
+                .eventOutcome("success")
+                .field("destination.port", s.port())
+                .log();
         });
         if (quartz != null) {
             quartz.stop();
@@ -268,12 +326,28 @@ public final class VertxMain {
         if (this.settings != null) {
             try {
                 this.settings.close();
-                LOGGER.info("Settings and storage resources closed successfully");
+                EcsLogger.info("com.artipie")
+                    .message("Settings and storage resources closed successfully")
+                    .eventCategory("server")
+                    .eventAction("resource_cleanup")
+                    .eventOutcome("success")
+                    .log();
             } catch (final Exception e) {
-                LOGGER.error("Failed to close settings", e);
+                EcsLogger.error("com.artipie")
+                    .message("Failed to close settings")
+                    .eventCategory("server")
+                    .eventAction("resource_cleanup")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
             }
         }
-        LOGGER.info("Artipie shutdown complete");
+        EcsLogger.info("com.artipie")
+            .message("Artipie shutdown complete")
+            .eventCategory("server")
+            .eventAction("server_shutdown")
+            .eventOutcome("success")
+            .log();
     }
 
     /**
@@ -298,7 +372,13 @@ public final class VertxMain {
         if (cmd.hasOption(popt)) {
             port = Integer.parseInt(cmd.getOptionValue(popt));
         } else {
-            LOGGER.info("Using default port: {}", defp);
+            EcsLogger.info("com.artipie")
+                .message("Using default port")
+                .eventCategory("configuration")
+                .eventAction("port_configure")
+                .eventOutcome("success")
+                .field("destination.port", defp)
+                .log();
             port = defp;
         }
         if (cmd.hasOption(fopt)) {
@@ -306,17 +386,33 @@ public final class VertxMain {
         } else {
             throw new IllegalStateException("Storage is not configured");
         }
-        LOGGER.info("Used version of Artipie: {}", new ArtipieProperties().version());
+        EcsLogger.info("com.artipie")
+            .message("Used version of Artipie")
+            .eventCategory("server")
+            .eventAction("server_start")
+            .eventOutcome("success")
+            .field("service.version", new ArtipieProperties().version())
+            .log();
         final VertxMain app = new VertxMain(config, port);
-        
+
         // Register shutdown hook to ensure proper cleanup on JVM exit
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LOGGER.info("Shutdown hook triggered - cleaning up resources");
+            EcsLogger.info("com.artipie")
+                .message("Shutdown hook triggered - cleaning up resources")
+                .eventCategory("server")
+                .eventAction("shutdown_hook")
+                .eventOutcome("success")
+                .log();
             app.stop();
         }, "artipie-shutdown-hook"));
-        
+
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
-        LOGGER.info("Artipie started successfully. Press Ctrl+C to shutdown.");
+        EcsLogger.info("com.artipie")
+            .message("Artipie started successfully. Press Ctrl+C to shutdown.")
+            .eventCategory("server")
+            .eventAction("server_start")
+            .eventOutcome("success")
+            .log();
     }
 
     /**
@@ -360,14 +456,42 @@ public final class VertxMain {
                                 settings.httpServerRequestTimeout()
                             );
                         }
-                        LOGGER.info("Artipie repo '{}' was started on port {}", name, prt);
+                        EcsLogger.info("com.artipie")
+                            .message("Artipie repo was started on port")
+                            .eventCategory("repository")
+                            .eventAction("repo_start")
+                            .eventOutcome("success")
+                            .field("repository.name", name)
+                            .field("destination.port", prt)
+                            .log();
                     },
-                    () -> LOGGER.info("Artipie repo '{}' was started on port {}", repo.name(), port)
+                    () -> EcsLogger.info("com.artipie")
+                        .message("Artipie repo was started on port")
+                        .eventCategory("repository")
+                        .eventAction("repo_start")
+                        .eventOutcome("success")
+                        .field("repository.name", repo.name())
+                        .field("destination.port", port)
+                        .log()
                 );
             } catch (final IllegalStateException err) {
-                LOGGER.error("Invalid repo config file: " + repo.name(), err);
+                EcsLogger.error("com.artipie")
+                    .message("Invalid repo config file")
+                    .eventCategory("repository")
+                    .eventAction("repo_start")
+                    .eventOutcome("failure")
+                    .field("repository.name", repo.name())
+                    .error(err)
+                    .log();
             } catch (final ArtipieException err) {
-                LOGGER.error("Failed to start repo:" + repo.name(), err);
+                EcsLogger.error("com.artipie")
+                    .message("Failed to start repo")
+                    .eventCategory("repository")
+                    .eventAction("repo_start")
+                    .eventOutcome("failure")
+                    .field("repository.name", repo.name())
+                    .error(err)
+                    .log();
             }
         }
     }
@@ -451,20 +575,26 @@ public final class VertxMain {
                 new JvmThreadMetrics().bindTo(registry);
             }
             if (endpoint.isPresent()) {
-                LOGGER.info(
-                    "Monitoring is enabled, prometheus metrics are available on localhost:{}{}",
-                    endpoint.get().getValue(), endpoint.get().getKey()
-                );
+                EcsLogger.info("com.artipie")
+                    .message("Monitoring is enabled, prometheus metrics are available")
+                    .eventCategory("configuration")
+                    .eventAction("metrics_configure")
+                    .eventOutcome("success")
+                    .field("destination.port", endpoint.get().getValue())
+                    .field("url.path", endpoint.get().getKey())
+                    .log();
             }
         } else {
             res = Vertx.vertx(options);
         }
-        
-        LOGGER.info(
-            "Vert.x configured: {} event loop threads, {} worker threads",
-            options.getEventLoopPoolSize(), options.getWorkerPoolSize()
-        );
-        
+
+        EcsLogger.info("com.artipie")
+            .message("Vert.x configured with " + options.getEventLoopPoolSize() + " event loop threads and " + options.getWorkerPoolSize() + " worker threads")
+            .eventCategory("configuration")
+            .eventAction("vertx_configure")
+            .eventOutcome("success")
+            .log();
+
         return res;
     }
 

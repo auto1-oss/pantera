@@ -78,6 +78,44 @@ public class NpmProxy {
     }
 
     /**
+     * Retrieve package metadata only (without loading full content into memory).
+     * This is memory-efficient for large packages.
+     * Ensures package is fetched from remote if not cached.
+     * @param name Package name
+     * @return Package metadata or empty
+     */
+    public Maybe<NpmPackage.Metadata> getPackageMetadataOnly(final String name) {
+        // Check if package exists in storage
+        return this.storage.getPackageMetadata(name).switchIfEmpty(
+            Maybe.defer(() -> {
+                // Not in storage - fetch from remote, save, then reload metadata
+                return this.remotePackageAndSave(name).flatMap(
+                    saved -> this.storage.getPackageMetadata(name)
+                );
+            })
+        );
+    }
+
+    /**
+     * Retrieve package content as reactive stream (without loading into memory).
+     * This is memory-efficient for large packages.
+     * Ensures package is fetched from remote if not cached.
+     * @param name Package name
+     * @return Package content as reactive Content or empty
+     */
+    public Maybe<com.artipie.asto.Content> getPackageContentStream(final String name) {
+        // Check if package exists in storage
+        return this.storage.getPackageContent(name).switchIfEmpty(
+            Maybe.defer(() -> {
+                // Not in storage - fetch from remote, save, then reload content stream
+                return this.remotePackageAndSave(name).flatMap(
+                    saved -> this.storage.getPackageContent(name)
+                );
+            })
+        );
+    }
+
+    /**
      * Retrieve asset.
      * @param path Asset path
      * @return Asset data (cached or downloaded from remote repository)
@@ -125,5 +163,22 @@ public class NpmProxy {
             );
         }
         return res;
+    }
+
+    /**
+     * Get package from remote repository, save it to storage, and return completion signal.
+     * CRITICAL MEMORY FIX: Does NOT return the NpmPackage object to avoid holding 200MB+ in memory.
+     * Callers should reload from storage using streaming API.
+     * @param name Package name
+     * @return Completion signal (true if saved, empty if not found)
+     */
+    private Maybe<Boolean> remotePackageAndSave(final String name) {
+        final Maybe<NpmPackage> pckg = this.remote.loadPackage(name);
+        if (pckg == null) {
+            return Maybe.empty();
+        }
+        return pckg.flatMap(
+            pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE))
+        );
     }
 }

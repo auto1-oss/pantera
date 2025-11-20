@@ -23,7 +23,7 @@ import java.security.PermissionCollection;
 import java.util.Optional;
 import javax.json.JsonObject;
 import org.eclipse.jetty.http.HttpStatus;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 /**
  * Rest-api operations for repositories settings CRUD
@@ -327,7 +327,16 @@ public final class RepositoryRest extends BaseRest {
                 if (error == null) {
                     context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                 } else {
-                    Logger.error(this, error.getMessage());
+                    EcsLogger.error("com.artipie.api")
+                        .message("Failed to unblock artifact from cooldown")
+                        .eventCategory("api")
+                        .eventAction("cooldown_unblock")
+                        .eventOutcome("failure")
+                        .field("repository.name", name.toString())
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .error(error)
+                        .log();
                     context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
                         .end(error.getMessage());
                 }
@@ -353,7 +362,14 @@ public final class RepositoryRest extends BaseRest {
                 if (error == null) {
                     context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                 } else {
-                    Logger.error(this, error.getMessage());
+                    EcsLogger.error("com.artipie.api")
+                        .message("Failed to unblock all artifacts from cooldown")
+                        .eventCategory("api")
+                        .eventAction("cooldown_unblock_all")
+                        .eventOutcome("failure")
+                        .field("repository.name", name.toString())
+                        .error(error)
+                        .log();
                     context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
                         .end(error.getMessage());
                 }

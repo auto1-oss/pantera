@@ -5,7 +5,7 @@
 package com.artipie.asto.events;
 
 import com.artipie.ArtipieException;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import java.util.function.Consumer;
 import org.quartz.Job;
 import org.quartz.JobExecutionContext;
@@ -72,16 +72,30 @@ public final class EventsProcessor<T> implements Job {
     private void stopJob(final JobExecutionContext context) {
         final JobKey key = context.getJobDetail().getKey();
         try {
-            Logger.error(
-                this,
-                String.format(
-                    "Events queue or action is null, processing failed. Stopping job %s...", key
-                )
-            );
+            EcsLogger.error("com.artipie.asto")
+                .message("Events queue or action is null, processing failed. Stopping job")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .eventOutcome("failure")
+                .field("process.name", key.toString())
+                .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
-            Logger.error(this, String.format("Job %s stopped.", key));
+            EcsLogger.error("com.artipie.asto")
+                .message("Job stopped")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .eventOutcome("success")
+                .field("process.name", key.toString())
+                .log();
         } catch (final SchedulerException error) {
-            Logger.error(this, String.format("Error while stopping job %s", key));
+            EcsLogger.error("com.artipie.asto")
+                .message("Error while stopping job")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .eventOutcome("failure")
+                .field("process.name", key.toString())
+                .error(error)
+                .log();
             throw new ArtipieException(error);
         }
     }

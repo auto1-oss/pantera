@@ -13,7 +13,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
@@ -91,7 +91,12 @@ public final class ComposerGroupSlice implements Slice {
         
         // For packages.json, merge responses from all members
         if (path.endsWith("/packages.json") || path.equals("/packages.json")) {
-            Logger.info(this, "Composer group %s: merging packages.json from %d members", this.group, this.members.size());
+            EcsLogger.debug("com.artipie.composer")
+                .message("Merging packages.json from " + this.members.size() + " members")
+                .eventCategory("repository")
+                .eventAction("packages_merge")
+                .field("repository.name", this.group)
+                .log();
             // Get original path before any routing rewrites
             // Priority: X-Original-Path (from ApiRoutingSlice) > X-FullPath (from TrimPathSlice) > current path
             final String originalPath = headers.find("X-Original-Path").stream()
@@ -102,20 +107,34 @@ public final class ComposerGroupSlice implements Slice {
                     .map(h -> h.getValue())
                 )
                 .orElse(path);
-            Logger.info(this, "Path: %s, X-FullPath: %s, X-Original-Path: %s, Using: %s", 
-                path, 
-                headers.find("X-FullPath").stream().findFirst().map(h -> h.getValue()).orElse("none"),
-                headers.find("X-Original-Path").stream().findFirst().map(h -> h.getValue()).orElse("none"),
-                originalPath
-            );
+            EcsLogger.debug("com.artipie.composer")
+                .message("Path resolution for packages.json")
+                .eventCategory("repository")
+                .eventAction("path_resolve")
+                .field("url.path", path)
+                .field("url.original", originalPath)
+                .field("http.request.headers.X-FullPath", headers.find("X-FullPath").stream().findFirst().map(h -> h.getValue()).orElse("none"))
+                .field("http.request.headers.X-Original-Path", headers.find("X-Original-Path").stream().findFirst().map(h -> h.getValue()).orElse("none"))
+                .log();
             // Extract base path for metadata-url (everything before /packages.json)
             final String basePath = extractBasePath(originalPath);
-            Logger.info(this, "Base path for metadata-url: %s", basePath);
+            EcsLogger.debug("com.artipie.composer")
+                .message("Base path for metadata-url")
+                .eventCategory("repository")
+                .eventAction("path_resolve")
+                .field("url.path", basePath)
+                .log();
             return mergePackagesJson(line, headers, body, basePath);
         }
 
         // For other requests (individual packages), try members sequentially
-        Logger.debug(this, "Composer group %s: trying members for %s", this.group, path);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Trying members for request")
+            .eventCategory("repository")
+            .eventAction("member_query")
+            .field("repository.name", this.group)
+            .field("url.path", path)
+            .log();
         // CRITICAL: Consume body once before sequential member queries
         return body.asBytesFuture().thenCompose(requestBytes ->
             tryMembersSequentially(0, line, headers)
@@ -146,9 +165,14 @@ public final class ComposerGroupSlice implements Slice {
                     final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
                     final RequestLine rewritten = rewritePath(line, member);
                     final Headers sanitized = dropFullPathHeader(headers);
-                    
-                    Logger.debug(this, "Fetching packages.json from member %s", member);
-                    
+
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Fetching packages.json from member")
+                        .eventCategory("repository")
+                        .eventAction("packages_fetch")
+                        .field("member.name", member)
+                        .log();
+
                     return memberSlice.response(rewritten, sanitized, Content.EMPTY)
                     .thenCompose(resp -> {
                         if (resp.status() == RsStatus.OK) {
@@ -170,43 +194,50 @@ public final class ComposerGroupSlice implements Slice {
                                                 packageCount = json.getJsonObject("provider-includes").size();
                                             }
                                         }
-                                        
-                                        Logger.debug(
-                                            this,
-                                            "Member %s returned packages.json with %d packages/providers",
-                                            member,
-                                            packageCount
-                                        );
+
+                                        EcsLogger.debug("com.artipie.composer")
+                                            .message("Member '" + member + "' returned packages.json (" + packageCount + " packages)")
+                                            .eventCategory("repository")
+                                            .eventAction("packages_fetch")
+                                            .eventOutcome("success")
+                                            .field("member.name", member)
+                                            .log();
                                         return json;
                                     } catch (Exception e) {
-                                        Logger.warn(
-                                            this,
-                                            "Failed to parse packages.json from member %s: %s",
-                                            member,
-                                            e.getMessage()
-                                        );
+                                        EcsLogger.warn("com.artipie.composer")
+                                            .message("Failed to parse packages.json from member")
+                                            .eventCategory("repository")
+                                            .eventAction("packages_parse")
+                                            .eventOutcome("failure")
+                                            .field("member.name", member)
+                                            .field("error.message", e.getMessage())
+                                            .log();
                                         return Json.createObjectBuilder().build();
                                     }
                                 });
                         } else {
-                            Logger.debug(
-                                this,
-                                "Member %s returned status %s for packages.json",
-                                member,
-                                resp.status()
-                            );
+                            EcsLogger.debug("com.artipie.composer")
+                                .message("Member returned non-OK status for packages.json")
+                                .eventCategory("repository")
+                                .eventAction("packages_fetch")
+                                .eventOutcome("failure")
+                                .field("member.name", member)
+                                .field("http.response.status_code", resp.status().code())
+                                .log();
                             return CompletableFuture.completedFuture(
                                 Json.createObjectBuilder().build()
                             );
                         }
                     })
                     .exceptionally(ex -> {
-                        Logger.warn(
-                            this,
-                            "Error fetching packages.json from member %s: %s",
-                            member,
-                            ex.getMessage()
-                        );
+                        EcsLogger.warn("com.artipie.composer")
+                            .message("Error fetching packages.json from member")
+                            .eventCategory("repository")
+                            .eventAction("packages_fetch")
+                            .eventOutcome("failure")
+                            .field("member.name", member)
+                            .field("error.message", ex.getMessage())
+                            .log();
                         return Json.createObjectBuilder().build();
                     });
             })
@@ -233,11 +264,11 @@ public final class ComposerGroupSlice implements Slice {
                         providers.forEach((key, value) -> {
                             providersBuilder.add(key, value);
                         });
-                        Logger.debug(
-                            this,
-                            "Member returned Satis format with %d providers",
-                            providers.size()
-                        );
+                        EcsLogger.debug("com.artipie.composer")
+                            .message("Member returned Satis format (" + providers.size() + " providers)")
+                            .eventCategory("repository")
+                            .eventAction("packages_merge")
+                            .log();
                     }
                     
                     // Handle traditional format (packages object)
@@ -283,22 +314,24 @@ public final class ComposerGroupSlice implements Slice {
                     merged.add("packages", Json.createObjectBuilder()); // Empty object
                     merged.add("providers-url", basePath + "/p2/%package%.json");
                     merged.add("providers", providersBuilder.build());
-                    Logger.info(
-                        this,
-                        "Using Satis format for group %s: %d providers",
-                        this.group,
-                        providersBuilder.build().size()
-                    );
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Using Satis format for group (" + providersBuilder.build().size() + " providers)")
+                        .eventCategory("repository")
+                        .eventAction("packages_merge")
+                        .eventOutcome("success")
+                        .field("repository.name", this.group)
+                        .log();
                 } else {
                     // Use traditional format
                     merged.add("metadata-url", basePath + "/p2/%package%.json");
                     merged.add("packages", packagesBuilder.build());
-                    Logger.info(
-                        this,
-                        "Using traditional format for group %s: %d packages",
-                        this.group,
-                        packagesBuilder.build().size()
-                    );
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Using traditional format for group (" + packagesBuilder.build().size() + " packages)")
+                        .eventCategory("repository")
+                        .eventAction("packages_merge")
+                        .eventOutcome("success")
+                        .field("repository.name", this.group)
+                        .log();
                 }
                 
                 final JsonObject result = merged.build();
@@ -329,7 +362,14 @@ public final class ComposerGroupSlice implements Slice {
         final Headers headers
     ) {
         if (index >= this.members.size()) {
-            Logger.debug(this, "No member in group %s could serve %s", this.group, line.uri().getPath());
+            EcsLogger.debug("com.artipie.composer")
+                .message("No member in group could serve request")
+                .eventCategory("repository")
+                .eventAction("member_query")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("url.path", line.uri().getPath())
+                .log();
             return ResponseBuilder.notFound().completedFuture();
         }
 
@@ -338,23 +378,31 @@ public final class ComposerGroupSlice implements Slice {
         final RequestLine rewritten = rewritePath(line, member);
         final Headers sanitized = dropFullPathHeader(headers);
 
-        Logger.debug(this, "Group %s trying member %s for %s", this.group, member, line.uri().getPath());
+        EcsLogger.debug("com.artipie.composer")
+            .message("Trying member for request")
+            .eventCategory("repository")
+            .eventAction("member_query")
+            .field("repository.name", this.group)
+            .field("member.name", member)
+            .field("url.path", line.uri().getPath())
+            .log();
 
         return memberSlice.response(rewritten, sanitized, Content.EMPTY)
             .thenCompose(resp -> {
-                Logger.debug(
-                    this,
-                    "Member %s responded with %s for %s",
-                    member,
-                    resp.status(),
-                    line.uri().getPath()
-                );
-                
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Member responded")
+                    .eventCategory("repository")
+                    .eventAction("member_query")
+                    .field("member.name", member)
+                    .field("http.response.status_code", resp.status().code())
+                    .field("url.path", line.uri().getPath())
+                    .log();
+
                 if (resp.status() == RsStatus.NOT_FOUND) {
                     // Try next member
                     return tryMembersSequentially(index + 1, line, sanitized);
                 }
-                
+
                 // Return this response (success or error)
                 return CompletableFuture.completedFuture(resp);
             });

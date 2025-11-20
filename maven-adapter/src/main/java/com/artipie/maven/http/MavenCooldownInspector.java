@@ -10,10 +10,10 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Remaining;
 import com.artipie.http.Headers;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
 import com.jcabi.xml.XML;
 import com.jcabi.xml.XMLDocument;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -90,13 +90,15 @@ final class MavenCooldownInspector implements CooldownInspector {
                     return result;
                 });
         }).exceptionally(throwable -> {
-            Logger.error(
-                this,
-                "Failed to read dependencies for %s:%s - %s",
-                artifact,
-                version,
-                throwable.getMessage()
-            );
+            EcsLogger.error("com.artipie.maven")
+                .message("Failed to read dependencies from POM")
+                .eventCategory("repository")
+                .eventAction("dependency_resolution")
+                .eventOutcome("failure")
+                .error(throwable)
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .log();
             return Collections.<CooldownDependency>emptyList();
         });
     }
@@ -111,7 +113,14 @@ final class MavenCooldownInspector implements CooldownInspector {
             // CRITICAL: Always consume body to prevent Vert.x request leak
             return bodyBytes(response.body()).thenApply(bytes -> {
                 if (!response.status().success()) {
-                    Logger.warn(this, "Failed to fetch POM %s: %s", path, response.status());
+                    EcsLogger.warn("com.artipie.maven")
+                        .message("Failed to fetch POM from upstream")
+                        .eventCategory("repository")
+                        .eventAction("pom_fetch")
+                        .eventOutcome("failure")
+                        .field("url.path", path)
+                        .field("http.response.status_code", response.status().code())
+                        .log();
                     return Optional.empty();
                 }
                 return Optional.of(new String(bytes, StandardCharsets.UTF_8));
@@ -146,11 +155,12 @@ final class MavenCooldownInspector implements CooldownInspector {
                     );
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
-                Logger.warn(
-                    MavenCooldownInspector.class,
-                    "Invalid Last-Modified header: %s",
-                    raw
-                );
+                EcsLogger.warn("com.artipie.maven")
+                    .message("Invalid Last-Modified header, using fallback: " + raw)
+                    .eventCategory("network")
+                    .eventAction("header_parsing")
+                    .eventOutcome("failure")
+                    .log();
                 return Optional.empty();
             }
         }
@@ -239,13 +249,15 @@ final class MavenCooldownInspector implements CooldownInspector {
                 return result;
             });
         }).exceptionally(throwable -> {
-            Logger.warn(
-                MavenCooldownInspector.class,
-                "Failed to resolve parent chain for %s:%s - %s",
-                current.artifact(),
-                current.version(),
-                throwable.getMessage()
-            );
+            EcsLogger.warn("com.artipie.maven")
+                .message("Failed to resolve parent POM chain")
+                .eventCategory("repository")
+                .eventAction("parent_resolution")
+                .eventOutcome("failure")
+                .field("package.name", current.artifact())
+                .field("package.version", current.version())
+                .field("error.message", throwable.getMessage())
+                .log();
             return List.of(current);
         });
     }

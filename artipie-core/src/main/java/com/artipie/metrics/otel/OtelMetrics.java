@@ -17,8 +17,7 @@ import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.exporter.otlp.metrics.OtlpGrpcMetricExporter;
 import io.opentelemetry.semconv.ResourceAttributes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.time.Duration;
 import java.util.Map;
@@ -36,8 +35,6 @@ import com.google.common.cache.CacheBuilder;
  */
 public final class OtelMetrics {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(OtelMetrics.class);
-    
     private static volatile OtelMetrics instance;
     
     private final OpenTelemetry openTelemetry;
@@ -226,8 +223,13 @@ public final class OtelMetrics {
             .setDescription("Storage operation duration")
             .setUnit("ms")
             .build();
-        
-        LOGGER.info("OpenTelemetry metrics initialized successfully");
+
+        EcsLogger.info("com.artipie.metrics")
+            .message("OpenTelemetry metrics initialized successfully (service: artipie)")
+            .eventCategory("metrics")
+            .eventAction("otel_init")
+            .eventOutcome("success")
+            .log();
     }
     
     private OpenTelemetry initializeOpenTelemetry() {
@@ -363,7 +365,15 @@ public final class OtelMetrics {
             }
             failures.incrementAndGet();
         } catch (Exception e) {
-            LOGGER.warn("Failed to update consecutive failures for {}:{}", repoName, upstream, e);
+            EcsLogger.warn("com.artipie.metrics")
+                .message("Failed to update consecutive failures metric")
+                .eventCategory("metrics")
+                .eventAction("metric_update")
+                .eventOutcome("failure")
+                .field("repository.name", repoName)
+                .field("destination.address", upstream)
+                .error(e)
+                .log();
         }
 
         setUpstreamAvailability(repoName, upstream, false);
@@ -400,7 +410,15 @@ public final class OtelMetrics {
                 value.set(available ? 1 : 0);
             }
         } catch (Exception e) {
-            LOGGER.warn("Failed to update upstream availability for {}:{}", repoName, upstream, e);
+            EcsLogger.warn("com.artipie.metrics")
+                .message("Failed to update upstream availability metric (available: " + available + ")")
+                .eventCategory("metrics")
+                .eventAction("metric_update")
+                .eventOutcome("failure")
+                .field("repository.name", repoName)
+                .field("destination.address", upstream)
+                .error(e)
+                .log();
         }
     }
     
@@ -568,7 +586,13 @@ public final class OtelMetrics {
                     final long size = sizeSupplier.get();
                     measurement.record(size, attrs);
                 } catch (Exception e) {
-                    LOGGER.debug("Failed to get cache size for {}:{}", cacheName, tier, e);
+                    EcsLogger.debug("com.artipie.metrics")
+                        .message("Failed to get cache size for metric (tier: " + tier + ", cache: " + cacheName + ")")
+                        .eventCategory("metrics")
+                        .eventAction("cache_size_read")
+                        .eventOutcome("failure")
+                        .error(e)
+                        .log();
                 }
             });
     }

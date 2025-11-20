@@ -7,10 +7,10 @@ package com.artipie.goproxy;
 import com.artipie.asto.Key;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -62,11 +62,19 @@ public final class GoProxyPackageProcessor extends QuartzJob {
     @SuppressWarnings({"PMD.AvoidCatchingGenericException"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
-            Logger.error(this, "Go proxy processor not initialized properly");
+            EcsLogger.error("com.artipie.go")
+                .message("Go proxy processor not initialized properly")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .log();
             super.stopJob(context);
         } else {
-            Logger.info(this, "Go proxy processor running, packages queue size: %d", 
-                this.packages.size());
+            EcsLogger.debug("com.artipie.go")
+                .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .log();
             this.processPackagesBatch();
         }
     }
@@ -85,7 +93,11 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        Logger.info(this, "Processing Go batch of %d packages", batch.size());
+        EcsLogger.info("com.artipie.go")
+            .message("Processing Go batch (size: " + batch.size() + ")")
+            .eventCategory("repository")
+            .eventAction("proxy_processor")
+            .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
             .map(this::processGoPackageAsync)
@@ -95,9 +107,20 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.info(this, "Go batch processing complete");
+            EcsLogger.info("com.artipie.go")
+                .message("Go batch processing complete (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("success")
+                .log();
         } catch (Exception err) {
-            Logger.error(this, "Go batch processing failed: %s", err.getMessage());
+            EcsLogger.error("com.artipie.go")
+                .message("Go batch processing failed (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
         }
     }
 
@@ -108,12 +131,23 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      */
     private CompletableFuture<Void> processGoPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        Logger.debug(this, "Processing Go proxy event for key: %s", key.string());
+        EcsLogger.debug("com.artipie.go")
+            .message("Processing Go proxy event")
+            .eventCategory("repository")
+            .eventAction("proxy_processor")
+            .field("package.name", key.string())
+            .log();
 
         // Parse module coordinates from event key
         final ModuleCoordinates coords = parseCoordinates(key);
         if (coords == null) {
-            Logger.warn(this, "Could not parse coordinates from %s, skipping", key.string());
+            EcsLogger.warn("com.artipie.go")
+                .message("Could not parse coordinates, skipping")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .field("package.name", key.string())
+                .log();
             return CompletableFuture.completedFuture(null);
         }
 
@@ -125,12 +159,14 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                Logger.warn(
-                    this,
-                    "No .zip file found for %s (expected: %s), re-queuing for retry",
-                    key.string(),
-                    zipKey.string()
-                );
+                EcsLogger.warn("com.artipie.go")
+                    .message("No .zip file found, re-queuing for retry")
+                    .eventCategory("repository")
+                    .eventAction("proxy_processor")
+                    .eventOutcome("failure")
+                    .field("package.name", key.string())
+                    .field("file.target_path", zipKey.string())
+                    .log();
                 // Re-add event to queue for retry
                 this.packages.add(event);
                 return CompletableFuture.completedFuture(null);
@@ -141,11 +177,13 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .thenApply(sizeOpt -> sizeOpt.map(Long::longValue))
                 .thenAccept(size -> {
                     if (size.isEmpty()) {
-                        Logger.warn(
-                            this,
-                            "Missing size metadata for %s, skipping",
-                            zipKey.string()
-                        );
+                        EcsLogger.warn("com.artipie.go")
+                            .message("Missing size metadata, skipping")
+                            .eventCategory("repository")
+                            .eventAction("proxy_processor")
+                            .eventOutcome("failure")
+                            .field("file.path", zipKey.string())
+                            .log();
                         return;
                     }
 
@@ -168,24 +206,28 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         )
                     );
 
-                    Logger.info(
-                        this,
-                        "Recorded Go proxy module %s@v%s (repo=%s, size=%d, release=%s)",
-                        coords.module(),
-                        coords.version(),
-                        event.repoName(),
-                        size.get(),
-                        release == null ? "unknown" 
-                            : java.time.Instant.ofEpochMilli(release).toString()
-                    );
+                    EcsLogger.info("com.artipie.go")
+                        .message("Recorded Go proxy module")
+                        .eventCategory("repository")
+                        .eventAction("proxy_processor")
+                        .eventOutcome("success")
+                        .field("package.name", coords.module())
+                        .field("package.version", coords.version())
+                        .field("repository.name", event.repoName())
+                        .field("package.size", size.get())
+                        .field("package.release_date", release == null ? "unknown"
+                            : java.time.Instant.ofEpochMilli(release).toString())
+                        .log();
                 });
         }).exceptionally(err -> {
-            Logger.error(
-                this,
-                "Failed to process Go package %s: %s",
-                key.string(),
-                err.getMessage()
-            );
+            EcsLogger.error("com.artipie.go")
+                .message("Failed to process Go package")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .field("package.name", key.string())
+                .error(err)
+                .log();
             return null;
         });
     }

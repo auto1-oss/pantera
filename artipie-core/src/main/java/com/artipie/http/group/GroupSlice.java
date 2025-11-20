@@ -11,8 +11,7 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.RsStatus;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -24,8 +23,6 @@ import java.util.concurrent.ExecutionException;
  * Standard group {@link Slice} implementation.
  */
 public final class GroupSlice implements Slice {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(GroupSlice.class);
 
     /**
      * Target slices.
@@ -86,13 +83,23 @@ public final class GroupSlice implements Slice {
                 .thenCompose(res -> {
                     // If result already completed (someone else won), consume and discard
                     if (result.isDone()) {
-                        LOGGER.debug("Repository {} response arrived after race completed, consuming body", index);
+                        EcsLogger.debug("com.artipie.http")
+                            .message("Repository response arrived after race completed (index: " + index + ")")
+                            .eventCategory("http")
+                            .eventAction("group_race")
+                            .eventOutcome("late")
+                            .log();
                         // CRITICAL: Must consume body even if race lost to prevent Vert.x request leak
                         return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
-                    
+
                     if (res.status() == RsStatus.NOT_FOUND) {
-                        LOGGER.debug("Repository {} returned 404, consuming body", index);
+                        EcsLogger.debug("com.artipie.http")
+                            .message("Repository returned 404 (index: " + index + ")")
+                            .eventCategory("http")
+                            .eventAction("group_race")
+                            .eventOutcome("not_found")
+                            .log();
                         // CRITICAL: Must consume 404 body to prevent Vert.x request leak
                         return res.body().asBytesFuture().thenApply(ignored -> {
                             if (failedCount.incrementAndGet() == this.targets.size()) {
@@ -102,10 +109,16 @@ public final class GroupSlice implements Slice {
                             return null;
                         });
                     }
-                    
+
                     // SUCCESS! This repo has the artifact
                     // Complete the result (first success wins) - don't consume body, it will be served
-                    LOGGER.debug("Repository {} found artifact (status: {})", index, res.status());
+                    EcsLogger.debug("com.artipie.http")
+                        .message("Repository found artifact (index: " + index + ")")
+                        .eventCategory("http")
+                        .eventAction("group_race")
+                        .eventOutcome("success")
+                        .field("http.response.status_code", res.status().code())
+                        .log();
                     result.complete(res);
                     return CompletableFuture.completedFuture(null);
                 })
@@ -113,7 +126,13 @@ public final class GroupSlice implements Slice {
                     if (result.isDone()) {
                         return null;
                     }
-                    LOGGER.warn("Failed to get response from repository at index {}", index, err);
+                    EcsLogger.warn("com.artipie.http")
+                        .message("Failed to get response from repository (index: " + index + ")")
+                        .eventCategory("http")
+                        .eventAction("group_race")
+                        .eventOutcome("failure")
+                        .error(err)
+                        .log();
                     // Count this as a failure
                     if (failedCount.incrementAndGet() == this.targets.size()) {
                         // All repos failed, return 404

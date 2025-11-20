@@ -16,7 +16,7 @@ import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.reactivex.rxjava3.core.Flowable;
 
 import java.io.IOException;
@@ -150,12 +150,14 @@ public final class FileSystemBrowseSlice implements Slice {
                 );
 
                 final long elapsed = System.currentTimeMillis() - startTime;
-                Logger.info(
-                    this,
-                    "FileSystem browse for %s completed in %d ms",
-                    key.string(),
-                    elapsed
-                );
+                EcsLogger.debug("com.artipie.http")
+                    .message("FileSystem browse completed")
+                    .eventCategory("http")
+                    .eventAction("filesystem_browse")
+                    .eventOutcome("success")
+                    .field("url.path", key.string())
+                    .duration(elapsed)
+                    .log();
 
                 return ResponseBuilder.ok()
                     .header(ContentType.mime("text/html; charset=utf-8"))
@@ -163,7 +165,14 @@ public final class FileSystemBrowseSlice implements Slice {
                     .build();
 
             } catch (Exception e) {
-                Logger.error(this, "Failed to browse directory: %s", key, e);
+                EcsLogger.error("com.artipie.http")
+                    .message("Failed to browse directory")
+                    .eventCategory("http")
+                    .eventAction("filesystem_browse")
+                    .eventOutcome("failure")
+                    .field("url.path", key.string())
+                    .error(e)
+                    .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to browse directory: " + e.getMessage())
                     .build();

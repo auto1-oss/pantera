@@ -13,8 +13,8 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.jcabi.log.Logger;
 import org.reactivestreams.Publisher;
 
 import java.io.IOException;
@@ -130,13 +130,14 @@ public final class FileSystemArtifactSlice implements Slice {
                 final Content fileContent = streamFromFilesystem(filePath, fileSize);
 
                 final long elapsed = System.currentTimeMillis() - startTime;
-                Logger.info(
-                    this,
-                    "FileSystem artifact %s (%d bytes) served in %d ms",
-                    key.string(),
-                    fileSize,
-                    elapsed
-                );
+                EcsLogger.debug("com.artipie.http")
+                    .message("FileSystem artifact served: " + key.string())
+                    .eventCategory("storage")
+                    .eventAction("artifact_serve")
+                    .eventOutcome("success")
+                    .duration(elapsed)
+                    .field("file.size", fileSize)
+                    .log();
 
                 return ResponseBuilder.ok()
                     .header("Content-Length", String.valueOf(fileSize))
@@ -144,7 +145,13 @@ public final class FileSystemArtifactSlice implements Slice {
                     .build();
 
             } catch (IOException e) {
-                Logger.error(this, "Failed to serve artifact: %s", key, e);
+                EcsLogger.error("com.artipie.http")
+                    .message("Failed to serve artifact: " + key.string())
+                    .eventCategory("storage")
+                    .eventAction("artifact_serve")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + e.getMessage())
                     .build();

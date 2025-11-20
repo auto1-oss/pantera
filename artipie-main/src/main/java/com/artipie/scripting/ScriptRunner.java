@@ -6,7 +6,7 @@ package com.artipie.scripting;
 
 import com.artipie.ArtipieException;
 import com.artipie.asto.Key;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.HashMap;
 import java.util.Map;
 import javax.script.ScriptException;
@@ -41,15 +41,21 @@ public final class ScriptRunner implements Job {
                 vars.put("_repositories", scontext.getRepositories());
                 script.call(vars);
             } catch (final ScriptException exc) {
-                Logger.error(
-                    ScriptRunner.class,
-                    "Execution error in script %s %[exception]s",
-                    key.toString(),
-                    exc
-                );
+                EcsLogger.error("com.artipie.scripting")
+                    .message("Execution error in script: " + key.toString())
+                    .eventCategory("scripting")
+                    .eventAction("script_execute")
+                    .eventOutcome("failure")
+                    .error(exc)
+                    .log();
             }
         } else {
-            Logger.warn(ScriptRunner.class, "Cannot find script %s", key.toString());
+            EcsLogger.warn("com.artipie.scripting")
+                .message("Cannot find script: " + key.toString())
+                .eventCategory("scripting")
+                .eventAction("script_execute")
+                .eventOutcome("failure")
+                .log();
         }
     }
 
@@ -60,11 +66,29 @@ public final class ScriptRunner implements Job {
     private void stopJob(final JobExecutionContext context) {
         final JobKey key = context.getJobDetail().getKey();
         try {
-            Logger.error(this, String.format("Force stopping job %s...", key));
+            EcsLogger.error("com.artipie.scripting")
+                .message("Force stopping job")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .field("process.name", key.toString())
+                .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
-            Logger.error(this, String.format("Job %s stopped.", key));
+            EcsLogger.error("com.artipie.scripting")
+                .message("Job stopped")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .eventOutcome("success")
+                .field("process.name", key.toString())
+                .log();
         } catch (final SchedulerException error) {
-            Logger.error(this, String.format("Error while stopping job %s", key));
+            EcsLogger.error("com.artipie.scripting")
+                .message("Error while stopping job")
+                .eventCategory("scheduling")
+                .eventAction("job_stop")
+                .eventOutcome("failure")
+                .field("process.name", key.toString())
+                .error(error)
+                .log();
             throw new ArtipieException(error);
         }
     }

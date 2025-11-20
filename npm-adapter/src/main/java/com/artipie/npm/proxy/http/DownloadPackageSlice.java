@@ -4,6 +4,7 @@
  */
 package com.artipie.npm.proxy.http;
 
+import com.artipie.asto.Concatenation;
 import com.artipie.asto.Content;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
@@ -18,10 +19,12 @@ import com.artipie.npm.misc.AbbreviatedMetadata;
 import com.artipie.npm.misc.MetadataETag;
 import com.artipie.npm.misc.MetadataEnhancer;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
+import io.reactivex.Flowable;
 import org.apache.commons.lang3.StringUtils;
 import javax.json.Json;
 import javax.json.JsonObject;
 import java.io.StringReader;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
 import java.net.URL;
@@ -69,57 +72,83 @@ public final class DownloadPackageSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        // P0.1: Check if client requests abbreviated format
-        final boolean abbreviated = this.isAbbreviatedRequest(headers);
-        
-        // P0.2: Check for conditional request (If-None-Match)
-        final Optional<String> clientETag = this.extractClientETag(headers);
-        
-        return this.npm.getPackage(this.path.value(line.uri().getPath()))
-            .map(pkg -> {
-                // Get client-formatted content (with rewritten tarball URLs)
-                final String clientContent = this.clientFormat(pkg.content(), headers);
-                
-                // Parse JSON for processing
-                final JsonObject fullJson = Json.createReader(
-                    new StringReader(clientContent)
-                ).readObject();
-                
-                // P1.1: Enhance metadata with time and users objects
-                final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
-                
-                // P0.1: Generate abbreviated or full format
-                final JsonObject response = abbreviated
-                    ? new AbbreviatedMetadata(enhanced).generate()
-                    : enhanced;
-                
-                final String responseStr = response.toString();
-                
-                // P0.2: Calculate ETag
-                final String etag = new MetadataETag(responseStr).calculate();
-                
-                // P0.2: Check if client has matching ETag (304 Not Modified)
-                if (clientETag.isPresent() && clientETag.get().equals(etag)) {
-                    return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
-                        .header("ETag", etag)
-                        .header("Cache-Control", "public, max-age=300")
-                        .build();
-                }
-                
-                // Return full response with ETag and cache headers
-                return ResponseBuilder.ok()
-                    .header("Content-Type", abbreviated
-                        ? "application/vnd.npm.install-v1+json; charset=utf-8"
-                        : "application/json; charset=utf-8")
-                    .header("Last-Modified", pkg.meta().lastModified())
-                    .header("ETag", etag)
-                    .header("Cache-Control", "public, max-age=300")
-                    .header("CDN-Cache-Control", "public, max-age=600")
-                    .body(responseStr.getBytes(StandardCharsets.UTF_8))
-                    .build();
-            }).toSingle(ResponseBuilder.notFound().build())
-            .to(SingleInterop.get())
-            .toCompletableFuture();
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            // P0.1: Check if client requests abbreviated format
+            final boolean abbreviated = this.isAbbreviatedRequest(headers);
+
+            // P0.2: Check for conditional request (If-None-Match)
+            final Optional<String> clientETag = this.extractClientETag(headers);
+
+            final String packageName = this.path.value(line.uri().getPath());
+
+            // CRITICAL MEMORY FIX: Fully reactive processing - NO blocking!
+            // This allows GC to clean up intermediate objects immediately after use
+            return this.npm.getPackageMetadataOnly(packageName)
+                .flatMap(metadata ->
+                    this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
+                        // Process content stream reactively
+                        new Concatenation(contentStream)
+                            .single()
+                            .map(ByteBuffer::array)
+                            .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
+                            .map(rawContent -> {
+                                // Get client-formatted content (with rewritten tarball URLs)
+                                final String clientContent = this.clientFormat(rawContent, headers);
+
+                                // Parse JSON for processing
+                                final JsonObject fullJson = Json.createReader(
+                                    new StringReader(clientContent)
+                                ).readObject();
+
+                                // P1.1: Enhance metadata with time and users objects
+                                final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
+
+                                // P0.1: Generate abbreviated or full format
+                                final JsonObject response = abbreviated
+                                    ? new AbbreviatedMetadata(enhanced).generate()
+                                    : enhanced;
+
+                                final String responseStr = response.toString();
+
+                                // P0.2: Calculate ETag
+                                final String etag = new MetadataETag(responseStr).calculate();
+
+                                // P0.2: Check if client has matching ETag (304 Not Modified)
+                                if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+                                    return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                                        .header("ETag", etag)
+                                        .header("Cache-Control", "public, max-age=300")
+                                        .build();
+                                }
+
+                                // CRITICAL MEMORY FIX: Use reactive Content that streams the response
+                                // The byte array will be GC'd after streaming completes
+                                final Content streamedContent = new Content.From(
+                                    Flowable.fromArray(
+                                        ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8))
+                                    )
+                                );
+
+                                // Return streaming response
+                                return ResponseBuilder.ok()
+                                    .header("Content-Type", abbreviated
+                                        ? "application/vnd.npm.install-v1+json; charset=utf-8"
+                                        : "application/json; charset=utf-8")
+                                    .header("Last-Modified", metadata.lastModified())
+                                    .header("ETag", etag)
+                                    .header("Cache-Control", "public, max-age=300")
+                                    .header("CDN-Cache-Control", "public, max-age=600")
+                                    .body(streamedContent)
+                                    .build();
+                            })
+                            .toMaybe()  // Convert Single<Response> to Maybe<Response>
+                    )
+                )
+                .toSingle(ResponseBuilder.notFound().build())
+                .to(SingleInterop.get())
+                .toCompletableFuture();
+        });
     }
     
     /**

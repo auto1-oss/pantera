@@ -16,7 +16,7 @@ import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.RepoData;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -206,8 +206,23 @@ public final class RestApi extends AbstractVerticle {
         }
         server.requestHandler(router)
             .listen(this.port)
-            .onComplete(res -> Logger.info(this, "Rest API started on port %d, swagger is available on %s://localhost:%d/api/index.html", this.port, schema, this.port))
-            .onFailure(err -> Logger.error(this, err.getMessage()));
+            .onComplete(res -> EcsLogger.info("com.artipie.api")
+                .message("Rest API started")
+                .eventCategory("api")
+                .eventAction("server_start")
+                .eventOutcome("success")
+                .field("url.port", this.port)
+                .field("url.scheme", schema)
+                .field("url.full", schema + "://localhost:" + this.port + "/api/index.html")
+                .log())
+            .onFailure(err -> EcsLogger.error("com.artipie.api")
+                .message("Failed to start Rest API")
+                .eventCategory("api")
+                .eventAction("server_start")
+                .eventOutcome("failure")
+                .field("url.port", this.port)
+                .error(err)
+                .log());
     }
 
     /**

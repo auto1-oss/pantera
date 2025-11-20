@@ -9,9 +9,9 @@ import com.artipie.cooldown.CooldownInspector;
 import com.artipie.asto.Content;
 import com.artipie.asto.Remaining;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 
@@ -95,13 +95,15 @@ final class GoCooldownInspector implements CooldownInspector {
             }
             return parseGoModDependencies(gomod.get());
         }).exceptionally(throwable -> {
-            Logger.error(
-                this,
-                "Failed to read dependencies for %s@v%s - %s",
-                artifact,
-                version,
-                throwable.getMessage()
-            );
+            EcsLogger.error("com.artipie.go")
+                .message("Failed to read dependencies")
+                .eventCategory("repository")
+                .eventAction("cooldown_inspector")
+                .eventOutcome("failure")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .error(throwable)
+                .log();
             return Collections.<CooldownDependency>emptyList();
         });
     }
@@ -114,7 +116,14 @@ final class GoCooldownInspector implements CooldownInspector {
             Content.EMPTY
         ).thenCompose(response -> {
             if (!response.status().success()) {
-                Logger.warn(this, "Failed to fetch go.mod %s: %s", path, response.status());
+                EcsLogger.warn("com.artipie.go")
+                    .message("Failed to fetch go.mod")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .eventOutcome("failure")
+                    .field("url.path", path)
+                    .field("http.response.status_code", response.status().code())
+                    .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             }
             return bodyBytes(response.body())
@@ -144,11 +153,13 @@ final class GoCooldownInspector implements CooldownInspector {
                     DateTimeFormatter.ofPattern("EEE, dd MMM yyyy H:mm:ss z", Locale.US);
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
-                Logger.warn(
-                    GoCooldownInspector.class,
-                    "Invalid Last-Modified header: %s",
-                    raw
-                );
+                EcsLogger.warn("com.artipie.go")
+                    .message("Invalid Last-Modified header")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .eventOutcome("failure")
+                    .field("http.response.headers.Last-Modified", raw)
+                    .log();
                 return Optional.empty();
             }
         }

@@ -13,6 +13,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.importer.ImportRequest;
 import com.artipie.importer.ImportResult;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.importer.ImportService;
 import com.artipie.importer.ImportStatus;
 import com.artipie.importer.api.DigestType;
@@ -20,8 +21,6 @@ import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonObjectBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * HTTP slice exposing the global import endpoint.
@@ -29,11 +28,6 @@ import org.slf4j.LoggerFactory;
  * @since 1.0
  */
 public final class ImportSlice implements Slice {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(ImportSlice.class);
 
     /**
      * Import service.
@@ -61,7 +55,14 @@ public final class ImportSlice implements Slice {
         } catch (final ResponseException error) {
             return CompletableFuture.completedFuture(error.response());
         } catch (final Exception error) {
-            LOG.error("Failed to parse import request", error);
+            EcsLogger.error("com.artipie.importer")
+                .message("Failed to parse import request")
+                .eventCategory("api")
+                .eventAction("import_artifact")
+                .eventOutcome("failure")
+                .field("url.path", line.uri().getPath())
+                .error(error)
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.badRequest(error).build()
             );
@@ -74,13 +75,25 @@ public final class ImportSlice implements Slice {
                     if (cause instanceof ResponseException rex) {
                         return rex.response();
                     }
-                    LOG.error("Import processing failed", cause);
+                    EcsLogger.error("com.artipie.importer")
+                        .message("Import processing failed")
+                        .eventCategory("repository")
+                        .eventAction("import_artifact")
+                        .eventOutcome("failure")
+                        .error(cause)
+                        .log();
                     return ResponseBuilder.internalError(cause).build();
                 }).toCompletableFuture();
         } catch (final ResponseException rex) {
             return CompletableFuture.completedFuture(rex.response());
         } catch (final Exception ex) {
-            LOG.error("Import processing failed", ex);
+            EcsLogger.error("com.artipie.importer")
+                .message("Import processing failed")
+                .eventCategory("repository")
+                .eventAction("import_artifact")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             return CompletableFuture.completedFuture(ResponseBuilder.internalError(ex).build());
         }
     }

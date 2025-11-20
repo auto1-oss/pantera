@@ -33,41 +33,57 @@ public class GetManifestSlice extends DockerActionSlice {
             java.nio.file.Files.writeString(
                 java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
                 "GET request for: " + request.reference() + ", method=" + line.method() + "\n",
-                java.nio.file.StandardOpenOption.CREATE, 
+                java.nio.file.StandardOpenOption.CREATE,
                 java.nio.file.StandardOpenOption.APPEND
             );
         } catch (Exception e) {}
-        
-        return this.docker.repo(request.name())
-            .manifests()
-            .get(request.reference())
-            .thenApply(
-                manifest -> manifest.map(
-                    found -> {
-                        try {
-                            java.nio.file.Files.writeString(
-                                java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
-                                "Manifest found, size=" + found.size() + ", mediaType=" + found.mediaType() + "\n",
-                                java.nio.file.StandardOpenOption.CREATE, 
-                                java.nio.file.StandardOpenOption.APPEND
-                            );
-                        } catch (Exception e) {}
-                        
-                        Response response = ResponseBuilder.ok()
-                            .header(ContentType.mime(found.mediaType()))
-                            .header(new DigestHeader(found.digest()))
-                            .body(found.content())
-                            .build();
-                        System.err.println("GET/HEAD manifest response headers:");
-                        response.headers().forEach(h -> System.err.println("  " + h.getKey() + ": " + h.getValue()));
-                        return response;
-                    }
-                ).orElseGet(
-                    () -> ResponseBuilder.notFound()
-                        .jsonBody(new ManifestError(request.reference()).json())
-                        .build()
+
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.repo(request.name())
+                .manifests()
+                .get(request.reference())
+                .thenApply(
+                    manifest -> manifest.map(
+                        found -> {
+                            try {
+                                java.nio.file.Files.writeString(
+                                    java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
+                                    "Manifest found, size=" + found.size() + ", mediaType=" + found.mediaType() + "\n",
+                                    java.nio.file.StandardOpenOption.CREATE,
+                                    java.nio.file.StandardOpenOption.APPEND
+                                );
+                            } catch (Exception e) {}
+
+                            Response response = ResponseBuilder.ok()
+                                .header(ContentType.mime(found.mediaType()))
+                                .header(new DigestHeader(found.digest()))
+                                .body(found.content())
+                                .build();
+
+                            // Log response headers at DEBUG level for diagnostics
+                            com.artipie.http.log.EcsLogger.debug("com.artipie.docker")
+                                .message("GET manifest response headers")
+                                .eventCategory("repository")
+                                .eventAction("manifest_get")
+                                .field("container.image.name", request.name())
+                                .field("container.image.tag", request.reference().digest())
+                                .field("file.type", found.mediaType())
+                                .field("package.checksum", found.digest())
+                                .field("http.response.headers.Content-Type", found.mediaType())
+                                .field("http.response.headers.Docker-Content-Digest", found.digest())
+                                .log();
+
+                            return response;
+                        }
+                    ).orElseGet(
+                        () -> ResponseBuilder.notFound()
+                            .jsonBody(new ManifestError(request.reference()).json())
+                            .build()
+                    )
                 )
-            );
+        );
     }
 
     @Override

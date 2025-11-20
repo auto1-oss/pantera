@@ -15,7 +15,7 @@ import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
 import io.reactivex.rxjava3.core.Flowable;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -79,16 +79,15 @@ public final class StreamingBrowseSlice implements Slice {
         return this.storage.list(key, "/").thenApplyAsync(result -> {
             final long elapsed = System.currentTimeMillis() - startTime;
             final int totalEntries = result.files().size() + result.directories().size();
-            
-            Logger.info(
-                this,
-                "Listed directory %s: %d files, %d dirs (%d total) in %d ms",
-                key.string(),
-                result.files().size(),
-                result.directories().size(),
-                totalEntries,
-                elapsed
-            );
+
+            EcsLogger.debug("com.artipie.http")
+                .message("Listed directory (" + result.files().size() + " files, " + result.directories().size() + " directories, " + totalEntries + " total)")
+                .eventCategory("http")
+                .eventAction("directory_list")
+                .eventOutcome("success")
+                .field("url.path", key.string())
+                .duration(elapsed)
+                .log();
 
             // Stream the HTML response
             final Content htmlContent = this.streamHtml(
@@ -103,7 +102,14 @@ public final class StreamingBrowseSlice implements Slice {
                 .body(htmlContent)
                 .build();
         }).exceptionally(throwable -> {
-            Logger.error(this, "Failed to list directory: %s", key, throwable);
+            EcsLogger.error("com.artipie.http")
+                .message("Failed to list directory")
+                .eventCategory("http")
+                .eventAction("directory_list")
+                .eventOutcome("failure")
+                .field("url.path", key.string())
+                .error(throwable)
+                .log();
             return ResponseBuilder.internalError()
                 .textBody("Failed to list directory: " + throwable.getMessage())
                 .build();

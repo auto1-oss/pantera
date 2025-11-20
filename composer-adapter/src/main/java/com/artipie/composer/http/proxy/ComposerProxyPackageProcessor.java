@@ -6,10 +6,10 @@ package com.artipie.composer.http.proxy;
 
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
 
 import java.util.Queue;
 import org.quartz.JobExecutionContext;
@@ -46,25 +46,41 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.CognitiveComplexity"})
     public void execute(final JobExecutionContext context) {
         if (this.asto == null || this.packages == null || this.events == null) {
-            Logger.warn(this, "Composer proxy processor not initialized properly - stopping job");
+            EcsLogger.warn("com.artipie.composer")
+                .message("Composer proxy processor not initialized properly - stopping job")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .log();
             super.stopJob(context);
         } else {
-            Logger.debug(this, "Composer proxy processor running, queue size: %d", this.packages.size());
+            EcsLogger.debug("com.artipie.composer")
+                .message("Composer proxy processor running (queue size: " + this.packages.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .log();
             while (!this.packages.isEmpty()) {
                 final ProxyArtifactEvent event = this.packages.poll();
                 if (event != null) {
                     final Key key = event.artifactKey();
-                    Logger.debug(this, "Processing Composer proxy event for key: %s", key.string());
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Processing Composer proxy event")
+                        .eventCategory("repository")
+                        .eventAction("proxy_processor")
+                        .field("package.path", key.string())
+                        .log();
                     try {
                         // Key format is now "vendor/package/version" from ProxyDownloadSlice
                         // Extract package name and version from key
                         final String[] parts = key.string().split("/");
                         if (parts.length < 3) {
-                            Logger.warn(
-                                this,
-                                "Invalid event key format (expected vendor/package/version): %s",
-                                key.string()
-                            );
+                            EcsLogger.warn("com.artipie.composer")
+                                .message("Invalid event key format (expected vendor/package/version)")
+                                .eventCategory("repository")
+                                .eventAction("proxy_processor")
+                                .eventOutcome("failure")
+                                .field("package.path", key.string())
+                                .log();
                             continue;
                         }
 
@@ -96,15 +112,17 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             )
                         );
 
-                        Logger.info(
-                            this,
-                            "Recorded Composer proxy download %s:%s (repo=%s, owner=%s, release=%s)",
-                            normalizedName,
-                            version,
-                            event.repoName(),
-                            owner,
-                            release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString()
-                        );
+                        EcsLogger.info("com.artipie.composer")
+                            .message("Recorded Composer proxy download")
+                            .eventCategory("repository")
+                            .eventAction("proxy_processor")
+                            .eventOutcome("success")
+                            .field("package.name", normalizedName)
+                            .field("package.version", version)
+                            .field("repository.name", event.repoName())
+                            .field("user.name", owner)
+                            .field("package.release_date", release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString())
+                            .log();
 
                         // Remove all duplicate events from queue
                         while (this.packages.remove(event)) {
@@ -112,12 +130,14 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         }
 
                     } catch (final Exception err) {
-                        Logger.error(
-                            this,
-                            "Failed to process composer proxy package %s: %s",
-                            key.string(),
-                            err.getMessage()
-                        );
+                        EcsLogger.error("com.artipie.composer")
+                            .message("Failed to process composer proxy package")
+                            .eventCategory("repository")
+                            .eventAction("proxy_processor")
+                            .eventOutcome("failure")
+                            .field("package.path", key.string())
+                            .error(err)
+                            .log();
                     }
                 }
             }
@@ -160,9 +180,14 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
         try {
             // Metadata is stored at: vendor/package.json
             final com.artipie.asto.Key metadataKey = new com.artipie.asto.Key.From(packageName + ".json");
-            
+
             if (!this.asto.exists(metadataKey).join()) {
-                Logger.debug(this, "Metadata not found for %s, cannot extract release date", packageName);
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Metadata not found, cannot extract release date")
+                    .eventCategory("repository")
+                    .eventAction("proxy_processor")
+                    .field("package.name", packageName)
+                    .log();
                 return null;
             }
 
@@ -198,26 +223,28 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
             if (timeStr != null) {
                 final java.time.Instant instant = java.time.Instant.parse(timeStr);
                 final long releaseMillis = instant.toEpochMilli();
-                Logger.debug(
-                    this,
-                    "Extracted release date for %s:%s = %s (%d)",
-                    packageName,
-                    version,
-                    timeStr,
-                    releaseMillis
-                );
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Extracted release date from metadata")
+                    .eventCategory("repository")
+                    .eventAction("proxy_processor")
+                    .field("package.name", packageName)
+                    .field("package.version", version)
+                    .field("package.release_date", timeStr)
+                    .log();
                 return releaseMillis;
             }
 
             return null;
         } catch (final Exception err) {
-            Logger.warn(
-                this,
-                "Failed to extract release date for %s:%s: %s",
-                packageName,
-                version,
-                err.getMessage()
-            );
+            EcsLogger.warn("com.artipie.composer")
+                .message("Failed to extract release date")
+                .eventCategory("repository")
+                .eventAction("proxy_processor")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .field("package.version", version)
+                .field("error.message", err.getMessage())
+                .log();
             return null;
         }
     }

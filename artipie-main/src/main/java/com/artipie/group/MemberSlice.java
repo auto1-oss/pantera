@@ -6,7 +6,7 @@ package com.artipie.group;
 
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.net.URI;
 import java.time.Duration;
@@ -107,16 +107,17 @@ public final class MemberSlice {
         // Check if timeout has expired (transition to HALF_OPEN)
         final Duration elapsed = Duration.between(this.openedAt, Instant.now());
         if (elapsed.compareTo(RESET_TIMEOUT) >= 0) {
-            Logger.info(
-                this,
-                "Circuit breaker for %s entering HALF_OPEN state (elapsed=%dms)",
-                this.name,
-                elapsed.toMillis()
-            );
+            EcsLogger.info("com.artipie.group")
+                .message("Circuit breaker entering HALF_OPEN state for member: " + this.name)
+                .eventCategory("repository")
+                .eventAction("circuit_breaker_half_open")
+                .eventOutcome("success")
+                .duration(elapsed.toMillis())
+                .log();
             this.openedAt = null;
             return false;
         }
-        
+
         return true;
     }
 
@@ -127,12 +128,12 @@ public final class MemberSlice {
     public void recordSuccess() {
         final int previousFailures = this.failureCount.getAndSet(0);
         if (previousFailures > 0) {
-            Logger.info(
-                this,
-                "Member %s recovered after %d failures, circuit breaker CLOSED",
-                this.name,
-                previousFailures
-            );
+            EcsLogger.info("com.artipie.group")
+                .message("Member '" + this.name + "' recovered - circuit breaker CLOSED (previous failures: " + previousFailures + ")")
+                .eventCategory("repository")
+                .eventAction("circuit_breaker_close")
+                .eventOutcome("success")
+                .log();
         }
         this.openedAt = null;
     }
@@ -143,23 +144,22 @@ public final class MemberSlice {
      */
     public void recordFailure() {
         final int failures = this.failureCount.incrementAndGet();
-        
+
         if (failures >= FAILURE_THRESHOLD && this.openedAt == null) {
             this.openedAt = Instant.now();
-            Logger.warn(
-                this,
-                "Circuit breaker OPENED for member %s after %d consecutive failures",
-                this.name,
-                failures
-            );
+            EcsLogger.warn("com.artipie.group")
+                .message("Circuit breaker OPENED for member '" + this.name + "' after " + failures + " consecutive failures")
+                .eventCategory("repository")
+                .eventAction("circuit_breaker_open")
+                .eventOutcome("failure")
+                .log();
         } else if (failures < FAILURE_THRESHOLD) {
-            Logger.debug(
-                this,
-                "Member %s failure count: %d/%d",
-                this.name,
-                failures,
-                FAILURE_THRESHOLD
-            );
+            EcsLogger.debug("com.artipie.group")
+                .message("Member '" + this.name + "' failure count incremented (" + failures + "/" + FAILURE_THRESHOLD + ")")
+                .eventCategory("repository")
+                .eventAction("circuit_breaker_failure")
+                .eventOutcome("failure")
+                .log();
         }
     }
 

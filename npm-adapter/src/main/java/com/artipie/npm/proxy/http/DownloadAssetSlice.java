@@ -95,20 +95,23 @@ public final class DownloadAssetSlice implements Slice {
     public CompletableFuture<Response> response(final RequestLine line,
                                                 final Headers rqheaders,
                                                 final Content body) {
-        final String tgz = this.path.value(line.uri().getPath());
-        final Optional<CooldownRequest> request = this.cooldownRequest(tgz, rqheaders);
-        if (request.isEmpty()) {
-            return this.serveAsset(tgz, rqheaders);
-        }
-        return this.cooldown.evaluate(request.get(), this.inspector)
-            .thenCompose(result -> {
-                if (result.blocked()) {
-                    return CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(result.block().orElseThrow())
-                    );
-                }
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            final String tgz = this.path.value(line.uri().getPath());
+            final Optional<CooldownRequest> request = this.cooldownRequest(tgz, rqheaders);
+            if (request.isEmpty()) {
                 return this.serveAsset(tgz, rqheaders);
-            });
+            }
+            return this.cooldown.evaluate(request.get(), this.inspector)
+                .thenCompose(result -> {
+                    if (result.blocked()) {
+                        return CompletableFuture.completedFuture(
+                            CooldownResponses.forbidden(result.block().orElseThrow())
+                        );
+                    }
+                    return this.serveAsset(tgz, rqheaders);
+                });
+        });
     }
 
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {

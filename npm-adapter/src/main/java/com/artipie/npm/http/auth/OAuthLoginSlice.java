@@ -6,6 +6,7 @@ package com.artipie.npm.http.auth;
 
 import com.artipie.asto.Content;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
@@ -19,8 +20,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonReader;
@@ -32,9 +31,7 @@ import javax.json.JsonReader;
  * @since 1.2
  */
 public final class OAuthLoginSlice implements Slice {
-    
-    private static final Logger LOGGER = Logger.getLogger(OAuthLoginSlice.class.getName());
-    
+
     /**
      * Authentication to validate credentials.
      * In Artipie, this should be connected to the system that can return JWT tokens.
@@ -67,32 +64,55 @@ public final class OAuthLoginSlice implements Slice {
                 final JsonObject json = parseJson(bodyStr);
                 final String username = json.getString("name");
                 final String password = json.getString("password");
-                
-                LOGGER.log(Level.INFO, "NPM login attempt for user: {0}", username);
-                
+
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM login attempt")
+                    .eventCategory("authentication")
+                    .eventAction("login")
+                    .field("user.name", username)
+                    .log();
+
                 // Validate credentials via Authentication (synchronous)
-                final java.util.Optional<com.artipie.http.auth.AuthUser> optUser = 
+                final java.util.Optional<com.artipie.http.auth.AuthUser> optUser =
                     this.auth.user(username, password);
-                
+
                 if (optUser.isPresent()) {
                     // Authentication successful
                     final AuthUser authUser = optUser.get();
-                    LOGGER.log(Level.INFO, "NPM login successful for: {0}", authUser.name());
+                    EcsLogger.info("com.artipie.npm")
+                        .message("NPM login successful")
+                        .eventCategory("authentication")
+                        .eventAction("login")
+                        .eventOutcome("success")
+                        .field("user.name", authUser.name())
+                        .log();
                     final String token = createToken(authUser, username, password, headers);
                     return CompletableFuture.completedFuture(
                         successResponse(username, token)
                     );
                 }
-                
-                LOGGER.log(Level.WARNING, "NPM login failed for: {0}", username);
+
+                EcsLogger.warn("com.artipie.npm")
+                    .message("NPM login failed")
+                    .eventCategory("authentication")
+                    .eventAction("login")
+                    .eventOutcome("failure")
+                    .field("user.name", username)
+                    .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.unauthorized()
                         .jsonBody("{\"error\": \"Invalid credentials\"}")
                         .build()
                 );
-                    
+
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "NPM login error", e);
+                EcsLogger.error("com.artipie.npm")
+                    .message("NPM login error")
+                    .eventCategory("authentication")
+                    .eventAction("login")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.badRequest()
                         .jsonBody("{\"error\": \"Invalid request\"}")
@@ -121,11 +141,14 @@ public final class OAuthLoginSlice implements Slice {
             try {
                 token = this.tokens.generate(user);
             } catch (final Exception err) {
-                LOGGER.log(
-                    Level.WARNING,
-                    "Failed to generate npm token via Tokens service for {0}: {1}",
-                    new Object[] { user.name(), err.getMessage() }
-                );
+                EcsLogger.warn("com.artipie.npm")
+                    .message("Failed to generate npm token via Tokens service")
+                    .eventCategory("authentication")
+                    .eventAction("token_generation")
+                    .eventOutcome("failure")
+                    .field("user.name", user.name())
+                    .error(err)
+                    .log();
             }
         }
         if (token == null || token.isEmpty()) {

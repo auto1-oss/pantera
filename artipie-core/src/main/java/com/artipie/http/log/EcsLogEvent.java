@@ -7,8 +7,9 @@ package com.artipie.http.log;
 import com.artipie.http.Headers;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.Header;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.message.MapMessage;
+import org.slf4j.MDC;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -29,41 +30,27 @@ import java.util.Optional;
  */
 public final class EcsLogEvent {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("http.access");
+    private static final org.apache.logging.log4j.Logger LOGGER = LogManager.getLogger("http.access");
     
     /**
      * Latency threshold for slow request warnings (ms).
      */
     private static final long SLOW_REQUEST_THRESHOLD_MS = 5000;
 
-    // ECS Base Fields
+    // All ECS fields stored flat with dot notation for proper JSON serialization
     private String message;
-    private final Map<String, Object> ecs = new HashMap<>();
-    
-    // ECS HTTP Fields
-    private final Map<String, Object> http = new HashMap<>();
-    private final Map<String, Object> httpRequest = new HashMap<>();
-    private final Map<String, Object> httpResponse = new HashMap<>();
-    
-    // ECS Client/Server Fields
-    private final Map<String, Object> client = new HashMap<>();
-    private final Map<String, Object> destination = new HashMap<>();
-    private final Map<String, Object> user = new HashMap<>();
-    private final Map<String, Object> url = new HashMap<>();
-    private final Map<String, Object> userAgent = new HashMap<>();
-    
-    // ECS Event Fields
-    private final Map<String, Object> event = new HashMap<>();
+    private final Map<String, Object> fields = new HashMap<>();
 
     /**
      * Create new log event builder.
      */
     public EcsLogEvent() {
-        ecs.put("@timestamp", java.time.Instant.now().toString());
-        ecs.put("ecs.version", "8.11");
-        event.put("kind", "event");
-        event.put("category", "web");
-        event.put("type", "access");
+        fields.put("event.kind", "event");
+        fields.put("event.category", "web");
+        fields.put("event.type", "access");
+        // Add data stream fields (ECS data_stream.*)
+        fields.put("data_stream.type", "logs");
+        fields.put("data_stream.dataset", "artipie.log");
     }
 
     /**
@@ -72,7 +59,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent httpMethod(final String method) {
-        httpRequest.put("method", method);
+        fields.put("http.request.method", method);
         return this;
     }
 
@@ -82,7 +69,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent httpVersion(final String version) {
-        http.put("version", version);
+        fields.put("http.version", version);
         return this;
     }
 
@@ -92,7 +79,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent httpStatus(final RsStatus status) {
-        httpResponse.put("status_code", status.code());
+        fields.put("http.response.status_code", status.code());
         return this;
     }
 
@@ -102,7 +89,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent httpResponseBytes(final long bytes) {
-        httpResponse.put("body.bytes", bytes);
+        fields.put("http.response.body.bytes", bytes);
         return this;
     }
 
@@ -112,7 +99,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent duration(final long durationMs) {
-        event.put("duration", durationMs * 1_000_000); // Convert to nanoseconds (ECS standard)
+        fields.put("event.duration", durationMs * 1_000_000); // Convert to nanoseconds (ECS standard)
         return this;
     }
 
@@ -122,7 +109,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent clientIp(final String ip) {
-        client.put("ip", ip);
+        fields.put("client.ip", ip);
         return this;
     }
 
@@ -132,7 +119,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent clientPort(final int port) {
-        client.put("port", port);
+        fields.put("client.port", port);
         return this;
     }
 
@@ -145,28 +132,24 @@ public final class EcsLogEvent {
         for (Header h : headers.find("user-agent")) {
             final String original = h.getValue();
             if (original != null && !original.isEmpty()) {
-                userAgent.put("original", original);
-                
+                fields.put("user_agent.original", original);
+
                 // Parse user agent (basic parsing - can be enhanced with ua-parser library)
                 final UserAgentInfo info = parseUserAgent(original);
                 if (info.name != null) {
-                    userAgent.put("name", info.name);
+                    fields.put("user_agent.name", info.name);
                 }
                 if (info.version != null) {
-                    userAgent.put("version", info.version);
+                    fields.put("user_agent.version", info.version);
                 }
                 if (info.osName != null) {
-                    final Map<String, Object> os = new HashMap<>();
-                    os.put("name", info.osName);
+                    fields.put("user_agent.os.name", info.osName);
                     if (info.osVersion != null) {
-                        os.put("version", info.osVersion);
+                        fields.put("user_agent.os.version", info.osVersion);
                     }
-                    userAgent.put("os", os);
                 }
                 if (info.deviceName != null) {
-                    final Map<String, Object> device = new HashMap<>();
-                    device.put("name", info.deviceName);
-                    userAgent.put("device", device);
+                    fields.put("user_agent.device.name", info.deviceName);
                 }
             }
             break;
@@ -181,7 +164,7 @@ public final class EcsLogEvent {
      */
     public EcsLogEvent userName(final String username) {
         if (username != null && !username.isEmpty()) {
-            user.put("name", username);
+            fields.put("user.name", username);
         }
         return this;
     }
@@ -192,7 +175,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent urlPath(final String path) {
-        url.put("path", LogSanitizer.sanitizeUrl(path));
+        fields.put("url.path", LogSanitizer.sanitizeUrl(path));
         return this;
     }
 
@@ -203,7 +186,7 @@ public final class EcsLogEvent {
      */
     public EcsLogEvent urlQuery(final String query) {
         if (query != null && !query.isEmpty()) {
-            url.put("query", LogSanitizer.sanitizeUrl(query));
+            fields.put("url.query", LogSanitizer.sanitizeUrl(query));
         }
         return this;
     }
@@ -215,7 +198,7 @@ public final class EcsLogEvent {
      */
     public EcsLogEvent destinationAddress(final String address) {
         if (address != null && !address.isEmpty()) {
-            destination.put("address", address);
+            fields.put("destination.address", address);
         }
         return this;
     }
@@ -226,7 +209,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent destinationPort(final int port) {
-        destination.put("port", port);
+        fields.put("destination.port", port);
         return this;
     }
 
@@ -236,7 +219,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent outcome(final String outcome) {
-        event.put("outcome", outcome);
+        fields.put("event.outcome", outcome);
         return this;
     }
 
@@ -253,31 +236,28 @@ public final class EcsLogEvent {
     /**
      * Add error details (ECS-compliant).
      * Captures exception message, fully qualified type, and full stack trace.
-     * 
+     *
      * @param error Error/Exception
      * @return this
      * @see <a href="https://www.elastic.co/docs/reference/ecs/ecs-error">ECS Error Fields</a>
      */
     public EcsLogEvent error(final Throwable error) {
-        final Map<String, Object> errorMap = new HashMap<>();
-        
         // ECS error.message - The error message
-        errorMap.put("message", error.getMessage() != null ? error.getMessage() : error.toString());
-        
+        fields.put("error.message", error.getMessage() != null ? error.getMessage() : error.toString());
+
         // ECS error.type - Fully qualified class name for better categorization
-        errorMap.put("type", error.getClass().getName());
-        
+        fields.put("error.type", error.getClass().getName());
+
         // ECS error.stack_trace - Full stack trace as string
-        errorMap.put("stack_trace", getStackTrace(error));
-        
-        ecs.put("error", errorMap);
-        event.put("outcome", "failure");
+        fields.put("error.stack_trace", getStackTrace(error));
+
+        fields.put("event.outcome", "failure");
         return this;
     }
 
     /**
      * Log at appropriate level based on outcome.
-     * 
+     *
      * <p>Strategy to reduce log volume:
      * <ul>
      *   <li>ERROR (>= 500): Always log at ERROR level</li>
@@ -286,56 +266,38 @@ public final class EcsLogEvent {
      * </ul>
      */
     public void log() {
-        // Build complete ECS structure
-        if (!httpRequest.isEmpty()) {
-            http.put("request", httpRequest);
-        }
-        if (!httpResponse.isEmpty()) {
-            http.put("response", httpResponse);
-        }
-        if (!http.isEmpty()) {
-            ecs.put("http", http);
-        }
-        if (!client.isEmpty()) {
-            ecs.put("client", client);
-        }
-        if (!destination.isEmpty()) {
-            ecs.put("destination", destination);
-        }
-        if (!user.isEmpty()) {
-            ecs.put("user", user);
-        }
-        if (!url.isEmpty()) {
-            ecs.put("url", url);
-        }
-        if (!userAgent.isEmpty()) {
-            ecs.put("user_agent", userAgent);
-        }
-        if (!event.isEmpty()) {
-            ecs.put("event", event);
+        // Add trace.id from MDC if available (ECS tracing field)
+        final String traceId = MDC.get("trace.id");
+        if (traceId != null && !traceId.isEmpty()) {
+            fields.put("trace.id", traceId);
         }
 
         // Determine log level based on status and duration
-        final Integer statusCode = (Integer) httpResponse.get("status_code");
-        final Long durationNs = (Long) event.get("duration");
+        final Integer statusCode = (Integer) fields.get("http.response.status_code");
+        final Long durationNs = (Long) fields.get("event.duration");
         final long durationMs = durationNs != null ? durationNs / 1_000_000 : 0;
-        
-        final String logMessage = this.message != null 
-            ? this.message 
+
+        final String logMessage = this.message != null
+            ? this.message
             : buildDefaultMessage(statusCode);
+
+        // Create MapMessage with all fields for structured JSON output
+        final MapMessage mapMessage = new MapMessage(fields);
+        mapMessage.with("message", logMessage);
 
         if (statusCode != null && statusCode >= 500) {
             // Server errors always logged
-            LOGGER.error(logMessage, ecs);
+            LOGGER.error(mapMessage);
         } else if (statusCode != null && statusCode >= 400) {
             // Client errors - log at WARN
-            LOGGER.warn(logMessage, ecs);
+            LOGGER.warn(mapMessage);
         } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
             // Slow requests - log at WARN
-            LOGGER.warn("Slow request: {}ms - {}", durationMs, logMessage, ecs);
+            mapMessage.with("message", String.format("Slow request: %dms - %s", durationMs, logMessage));
+            LOGGER.warn(mapMessage);
         } else {
             // Success - log at DEBUG (disabled in production)
-            LOGGER.debug(logMessage, ecs);
+            LOGGER.debug(mapMessage);
         }
     }
 
@@ -343,9 +305,9 @@ public final class EcsLogEvent {
      * Build default message from ECS fields.
      */
     private String buildDefaultMessage(final Integer statusCode) {
-        final String method = (String) httpRequest.get("method");
-        final String path = (String) url.get("path");
-        return String.format("%s %s %d", 
+        final String method = (String) fields.get("http.request.method");
+        final String path = (String) fields.get("url.path");
+        return String.format("%s %s %d",
             method != null ? method : "?",
             path != null ? path : "?",
             statusCode != null ? statusCode : 0

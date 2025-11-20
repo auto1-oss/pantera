@@ -14,7 +14,7 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -102,12 +102,12 @@ public final class StorageArtifactSlice implements Slice {
         // FileStorage: Use direct NIO for maximum performance
         // IMPORTANT: Pass original storage (with SubStorage prefix) to maintain repo scoping
         if (unwrapped instanceof FileStorage) {
-            Logger.info(
-                this,
-                "Using FileSystemArtifactSlice for direct NIO access (100-1000x faster) - detected %s under %s",
-                unwrapped.getClass().getSimpleName(),
-                this.storage.getClass().getSimpleName()
-            );
+            EcsLogger.debug("com.artipie.http")
+                .message("Using FileSystemArtifactSlice for direct NIO access (detected: " + unwrapped.getClass().getSimpleName() + ", wrapper: " + this.storage.getClass().getSimpleName() + ")")
+                .eventCategory("storage")
+                .eventAction("artifact_slice_select")
+                .eventOutcome("success")
+                .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
             return new FileSystemArtifactSlice(this.storage);
         }
@@ -115,11 +115,12 @@ public final class StorageArtifactSlice implements Slice {
         // S3 and other storage types: Use generic abstraction
         // Note: S3-specific optimizations require S3Storage class which is in asto-s3 module
         // TODO: Add S3ArtifactSlice when needed (requires refactoring module dependencies)
-        Logger.info(
-            this,
-            "Using generic storage abstraction for storage type: %s",
-            unwrapped.getClass().getSimpleName()
-        );
+        EcsLogger.debug("com.artipie.http")
+            .message("Using generic storage abstraction (type: " + unwrapped.getClass().getSimpleName() + ")")
+            .eventCategory("storage")
+            .eventAction("artifact_slice_select")
+            .eventOutcome("success")
+            .log();
         return new GenericArtifactSlice(this.storage);
     }
 
@@ -240,7 +241,13 @@ public final class StorageArtifactSlice implements Slice {
                         .build()
                 );
             }).exceptionally(throwable -> {
-                Logger.error(this, "Failed to serve artifact: %s", key, throwable);
+                EcsLogger.error("com.artipie.http")
+                    .message("Failed to serve artifact at key: " + key.string())
+                    .eventCategory("storage")
+                    .eventAction("artifact_serve")
+                    .eventOutcome("failure")
+                    .error(throwable)
+                    .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to serve artifact: " + throwable.getMessage())
                     .build();

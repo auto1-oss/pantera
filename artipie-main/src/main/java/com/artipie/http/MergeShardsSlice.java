@@ -15,8 +15,7 @@ import com.artipie.settings.repo.RepoConfig;
 import com.artipie.maven.metadata.MavenMetadata;
 import com.artipie.helm.metadata.IndexYaml;
 import com.artipie.helm.metadata.IndexYamlMapping;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.helm.misc.DateTimeNow;
 import org.yaml.snakeyaml.Yaml;
 
@@ -69,11 +68,6 @@ import java.security.MessageDigest;
  * @since 1.18.14
  */
 public final class MergeShardsSlice implements Slice {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(MergeShardsSlice.class);
 
     /**
      * Pattern to extract repository name from path.
@@ -218,9 +212,14 @@ public final class MergeShardsSlice implements Slice {
                 .textBody("Only POST method is supported")
                 .completedFuture();
         }
-        
-        LOG.info("Triggering metadata merge for repository: {}", repoName);
-        
+
+        EcsLogger.info("com.artipie.http")
+            .message("Triggering metadata merge for repository")
+            .eventCategory("repository")
+            .eventAction("metadata_merge")
+            .field("repository.name", repoName)
+            .log();
+
         // Get repository configuration
         final Optional<RepoConfig> repoConfigOpt = this.slices.repositories().config(repoName);
         
@@ -304,10 +303,23 @@ public final class MergeShardsSlice implements Slice {
                 .body(responseBytes)
                 .build();
         }).exceptionally(error -> {
-            LOG.error("Metadata merge failed for {}: {}", repoName, error.getMessage(), error);
+            EcsLogger.error("com.artipie.http")
+                .message("Metadata merge failed")
+                .eventCategory("repository")
+                .eventAction("metadata_merge")
+                .eventOutcome("failure")
+                .field("repository.name", repoName)
+                .error(error)
+                .log();
             // Clean up even on failure
             cleanupTempFolders(storage).exceptionally(e -> {
-                LOG.warn("Failed to cleanup after merge failure: {}", e.getMessage());
+                EcsLogger.warn("com.artipie.http")
+                    .message("Failed to cleanup after merge failure")
+                    .eventCategory("repository")
+                    .eventAction("cleanup")
+                    .eventOutcome("failure")
+                    .field("error.message", e.getMessage())
+                    .log();
                 return null;
             });
             final String errorMsg = String.format(
@@ -375,11 +387,25 @@ public final class MergeShardsSlice implements Slice {
                                 }
                             }
                         } catch (Exception e) {
-                            LOG.warn("Failed to parse version from shard {}: {}", p, e.getMessage());
+                            EcsLogger.warn("com.artipie.http")
+                                .message("Failed to parse version from shard")
+                                .eventCategory("repository")
+                                .eventAction("shard_parse")
+                                .eventOutcome("failure")
+                                .field("file.path", p)
+                                .field("error.message", e.getMessage())
+                                .log();
                         }
                     })
                     .exceptionally(e -> {
-                        LOG.warn("Failed to read shard {}: {}", p, e.getMessage());
+                        EcsLogger.warn("com.artipie.http")
+                            .message("Failed to read shard")
+                            .eventCategory("repository")
+                            .eventAction("shard_read")
+                            .eventOutcome("failure")
+                            .field("file.path", p)
+                            .field("error.message", e.getMessage())
+                            .log();
                         return null;
                     });
                 futures.add(future);
@@ -630,31 +656,82 @@ public final class MergeShardsSlice implements Slice {
      * Deletes .import and .meta folders and all their contents.
      */
     private static CompletionStage<Void> cleanupTempFolders(final Storage storage) {
-        LOG.info("Starting cleanup of temporary folders after merge");
+        EcsLogger.info("com.artipie.http")
+            .message("Starting cleanup of temporary folders after merge")
+            .eventCategory("repository")
+            .eventAction("cleanup")
+            .log();
         final List<CompletionStage<Void>> deletions = new ArrayList<>();
-        
+
         // Delete .import folder completely
-        LOG.info("Deleting .import folder");
+        EcsLogger.debug("com.artipie.http")
+            .message("Deleting .import folder")
+            .eventCategory("repository")
+            .eventAction("cleanup")
+            .field("file.directory", ".import")
+            .log();
         deletions.add(storage.delete(new Key.From(".import"))
-            .thenRun(() -> LOG.info(".import folder deleted successfully"))
+            .thenRun(() -> EcsLogger.debug("com.artipie.http")
+                .message(".import folder deleted successfully")
+                .eventCategory("repository")
+                .eventAction("cleanup")
+                .eventOutcome("success")
+                .field("file.directory", ".import")
+                .log())
             .exceptionally(e -> {
-                LOG.warn("Failed to delete .import folder: {}", e.getMessage());
+                EcsLogger.warn("com.artipie.http")
+                    .message("Failed to delete .import folder")
+                    .eventCategory("repository")
+                    .eventAction("cleanup")
+                    .eventOutcome("failure")
+                    .field("file.directory", ".import")
+                    .field("error.message", e.getMessage())
+                    .log();
                 return null;
             }));
-        
+
         // Delete .meta folder completely
-        LOG.info("Deleting .meta folder");
+        EcsLogger.debug("com.artipie.http")
+            .message("Deleting .meta folder")
+            .eventCategory("repository")
+            .eventAction("cleanup")
+            .field("file.directory", ".meta")
+            .log();
         deletions.add(storage.delete(new Key.From(".meta"))
-            .thenRun(() -> LOG.info(".meta folder deleted successfully"))
+            .thenRun(() -> EcsLogger.debug("com.artipie.http")
+                .message(".meta folder deleted successfully")
+                .eventCategory("repository")
+                .eventAction("cleanup")
+                .eventOutcome("success")
+                .field("file.directory", ".meta")
+                .log())
             .exceptionally(e -> {
-                LOG.warn("Failed to delete .meta folder: {}", e.getMessage());
+                EcsLogger.warn("com.artipie.http")
+                    .message("Failed to delete .meta folder")
+                    .eventCategory("repository")
+                    .eventAction("cleanup")
+                    .eventOutcome("failure")
+                    .field("file.directory", ".meta")
+                    .field("error.message", e.getMessage())
+                    .log();
                 return null;
             }));
-        
+
         return CompletableFuture.allOf(deletions.toArray(new CompletableFuture[0]))
-            .thenRun(() -> LOG.info("Temporary folders cleanup completed"))
+            .thenRun(() -> EcsLogger.info("com.artipie.http")
+                .message("Temporary folders cleanup completed")
+                .eventCategory("repository")
+                .eventAction("cleanup")
+                .eventOutcome("success")
+                .log())
             .exceptionally(e -> {
-                LOG.warn("Failed to cleanup temporary folders: {}", e.getMessage());
+                EcsLogger.warn("com.artipie.http")
+                    .message("Failed to cleanup temporary folders")
+                    .eventCategory("repository")
+                    .eventAction("cleanup")
+                    .eventOutcome("failure")
+                    .field("error.message", e.getMessage())
+                    .log();
                 return null;
             });
     }

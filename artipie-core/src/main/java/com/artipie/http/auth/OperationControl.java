@@ -5,8 +5,7 @@
 package com.artipie.http.auth;
 
 import com.artipie.security.policy.Policy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.security.Permission;
 import java.util.Collection;
@@ -21,8 +20,6 @@ import java.util.List;
  * permission for the adapter's operation.
  */
 public final class OperationControl {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(OperationControl.class);
 
     /**
      * Security policy.
@@ -70,10 +67,15 @@ public final class OperationControl {
     public boolean allowed(final AuthUser user) {
         final boolean res = perms.stream()
             .anyMatch(perm -> policy.getPermissions(user).implies(perm));
-        LOGGER.debug(
-            "Authorization operation: [permission={}, user={}, result={}}]",
-            this.perms, user.name(), res ? "allowed" : "NOT allowed"
-        );
+        EcsLogger.debug("com.artipie.security")
+            .message("Authorization operation")
+            .eventCategory("security")
+            .eventAction("authorization_check")
+            .eventOutcome(res ? "success" : "failure")
+            .field("user.name", user.name())
+            .field("user.roles", this.perms.toString())
+            .field("event.outcome", res ? "allowed" : "denied")
+            .log();
         return res;
     }
 }

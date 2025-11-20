@@ -215,11 +215,15 @@ public final class CachedProxySlice implements Slice {
         final Optional<com.artipie.cache.ValkeyConnection> valkeyOpt = 
             com.artipie.cache.GlobalCacheConfig.valkeyConnection();
         final com.artipie.cache.ValkeyConnection valkeyConn = valkeyOpt.orElse(null);
-        
+
         if (valkeyConn == null) {
-            new RuntimeException(
-                String.format("WARNING: CachedProxySlice(%s) initialized WITHOUT Valkey connection!", rname)
-            ).printStackTrace(System.err);
+            com.artipie.http.log.EcsLogger.warn("com.artipie.maven")
+                .message("CachedProxySlice initialized WITHOUT Valkey connection - caching will be disabled (type: valkey)")
+                .eventCategory("configuration")
+                .eventAction("cache_init")
+                .eventOutcome("failure")
+                .field("repository.name", rname)
+                .log();
         }
         return valkeyConn;
     }

@@ -8,6 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.ext.KeyLastPart;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.pypi.NormalizedProjectName;
 import com.artipie.pypi.meta.Metadata;
 import com.artipie.pypi.meta.PackageInfo;
@@ -15,7 +16,6 @@ import com.artipie.pypi.meta.ValidFilename;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -77,7 +77,12 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        Logger.info(this, "Processing PyPI batch of %d packages", batch.size());
+        final long startTime = System.currentTimeMillis();
+        EcsLogger.info("com.artipie.pypi")
+            .message("Processing PyPI batch (size: " + batch.size() + ")")
+            .eventCategory("repository")
+            .eventAction("batch_processing")
+            .log();
 
         List<CompletableFuture<Void>> futures = batch.stream()
             .map(this::processPackageAsync)
@@ -87,9 +92,24 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.info(this, "PyPI batch processing complete");
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.info("com.artipie.pypi")
+                .message("PyPI batch processing complete (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("success")
+                .duration(duration)
+                .log();
         } catch (Exception err) {
-            Logger.error(this, "PyPI batch processing failed: %s", err.getMessage());
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.error("com.artipie.pypi")
+                .message("PyPI batch processing failed (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("failure")
+                .duration(duration)
+                .error(err)
+                .log();
         }
     }
 
@@ -104,11 +124,12 @@ public final class PyProxyPackageProcessor extends QuartzJob {
 
         return this.asto.exists(key).thenCompose(exists -> {
             if (!exists) {
-                Logger.debug(
-                    this,
-                    "Artifact %s is not yet cached, re-queuing for retry",
-                    key.string()
-                );
+                EcsLogger.debug("com.artipie.pypi")
+                    .message("Artifact not yet cached, re-queuing for retry")
+                    .eventCategory("repository")
+                    .eventAction("package_processing")
+                    .field("package.name", key.string())
+                    .log();
                 // Re-add event to queue for retry
                 this.packages.add(event);
                 return CompletableFuture.completedFuture(null);
@@ -144,36 +165,47 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 )
                             );
 
-                            Logger.info(
-                                this,
-                                "Recorded PyPI proxy release %s:%s (repo=%s, size=%dB, release=%s)",
-                                project,
-                                info.version(),
-                                event.repoName(),
-                                archive.length,
-                                release == null ? "unknown"
-                                    : Instant.ofEpochMilli(release).toString()
-                            );
+                            EcsLogger.info("com.artipie.pypi")
+                                .message("Recorded PyPI proxy release")
+                                .eventCategory("repository")
+                                .eventAction("package_processing")
+                                .eventOutcome("success")
+                                .field("package.name", project)
+                                .field("package.version", info.version())
+                                .field("repository.name", event.repoName())
+                                .field("package.size", archive.length)
+                                .field("package.name", release == null ? "unknown"
+                                    : Instant.ofEpochMilli(release).toString())
+                                .log();
                         } else {
-                            Logger.error(
-                                this,
-                                "Python proxy package %s is not valid", key.string()
-                            );
+                            EcsLogger.error("com.artipie.pypi")
+                                .message("Python proxy package is not valid")
+                                .eventCategory("repository")
+                                .eventAction("package_processing")
+                                .eventOutcome("failure")
+                                .field("package.name", key.string())
+                                .log();
                         }
                     } catch (final Exception err) {
-                        Logger.error(
-                            this,
-                            "Failed to parse/check python proxy package %s: %s",
-                            key.string(), err.getMessage()
-                        );
+                        EcsLogger.error("com.artipie.pypi")
+                            .message("Failed to parse/check python proxy package")
+                            .eventCategory("repository")
+                            .eventAction("package_processing")
+                            .eventOutcome("failure")
+                            .field("package.name", key.string())
+                            .error(err)
+                            .log();
                     }
                 });
         }).exceptionally(err -> {
-            Logger.error(
-                this,
-                "Failed to process PyPI package %s: %s",
-                key.string(), err.getMessage()
-            );
+            EcsLogger.error("com.artipie.pypi")
+                .message("Failed to process PyPI package")
+                .eventCategory("repository")
+                .eventAction("package_processing")
+                .eventOutcome("failure")
+                .field("package.name", key.string())
+                .error(err)
+                .log();
             return null;
         });
     }

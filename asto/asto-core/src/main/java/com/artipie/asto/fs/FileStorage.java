@@ -16,7 +16,7 @@ import com.artipie.asto.UnderLockOperation;
 import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
@@ -115,11 +115,13 @@ public final class FileStorage implements Storage {
                     } catch (final NoSuchFileException nsfe) {
                         // Handle race condition: directory was deleted between exists() check and walk()
                         // Treat as empty directory to avoid breaking callers
-                        Logger.debug(
-                            this,
-                            "Directory disappeared during list operation: %s",
-                            path
-                        );
+                        EcsLogger.debug("com.artipie.asto")
+                            .message("Directory disappeared during list operation")
+                            .eventCategory("storage")
+                            .eventAction("list_keys")
+                            .eventOutcome("success")
+                            .field("file.path", path.toString())
+                            .log();
                         keys = Collections.emptyList();
                     } catch (final IOException iex) {
                         throw new ArtipieIOException(iex);
@@ -127,11 +129,14 @@ public final class FileStorage implements Storage {
                 } else {
                     keys = Collections.emptyList();
                 }
-                Logger.info(
-                    this,
-                    "Found %d objects by the prefix \"%s\" in %s by %s: %s",
-                    keys.size(), prefix.string(), this.dir, path, keys
-                );
+                EcsLogger.debug("com.artipie.asto")
+                    .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
+                    .eventCategory("storage")
+                    .eventAction("list_keys")
+                    .eventOutcome("success")
+                    .field("file.path", path.toString())
+                    .field("file.directory", this.dir.toString())
+                    .log();
                 return keys;
             }
         );
@@ -142,20 +147,24 @@ public final class FileStorage implements Storage {
         return this.keyPath(prefix).thenApplyAsync(
             path -> {
                 if (!Files.exists(path)) {
-                    Logger.debug(
-                        this,
-                        "Path does not exist for prefix \"%s\": %s",
-                        prefix.string(), path
-                    );
+                    EcsLogger.debug("com.artipie.asto")
+                        .message("Path does not exist for prefix: " + prefix.string())
+                        .eventCategory("storage")
+                        .eventAction("list_hierarchical")
+                        .eventOutcome("success")
+                        .field("file.path", path.toString())
+                        .log();
                     return ListResult.EMPTY;
                 }
-                
+
                 if (!Files.isDirectory(path)) {
-                    Logger.debug(
-                        this,
-                        "Path is not a directory for prefix \"%s\": %s",
-                        prefix.string(), path
-                    );
+                    EcsLogger.debug("com.artipie.asto")
+                        .message("Path is not a directory for prefix: " + prefix.string())
+                        .eventCategory("storage")
+                        .eventAction("list_hierarchical")
+                        .eventOutcome("success")
+                        .field("file.path", path.toString())
+                        .log();
                     return ListResult.EMPTY;
                 }
                 
@@ -193,13 +202,14 @@ public final class FileStorage implements Storage {
                 } catch (final IOException iex) {
                     throw new ArtipieIOException(iex);
                 }
-                
-                Logger.debug(
-                    this,
-                    "Hierarchical list for prefix \"%s\": %d files, %d directories",
-                    prefix.string(), files.size(), directories.size()
-                );
-                
+
+                EcsLogger.debug("com.artipie.asto")
+                    .message("Hierarchical list completed for prefix '" + prefix.string() + "' (" + files.size() + " files, " + directories.size() + " directories)")
+                    .eventCategory("storage")
+                    .eventAction("list_hierarchical")
+                    .eventOutcome("success")
+                    .log();
+
                 return new ListResult.Simple(files, new ArrayList<>(directories));
             }
         );

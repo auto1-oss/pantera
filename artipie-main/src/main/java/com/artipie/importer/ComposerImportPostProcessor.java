@@ -6,8 +6,7 @@ package com.artipie.importer;
 
 import com.artipie.asto.Storage;
 import com.artipie.composer.ComposerImportMerge;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -30,11 +29,6 @@ import java.util.concurrent.CompletionStage;
  * @since 1.18.14
  */
 public final class ComposerImportPostProcessor {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(ComposerImportPostProcessor.class);
 
     /**
      * Storage.
@@ -74,38 +68,45 @@ public final class ComposerImportPostProcessor {
      * @return Completion stage with merge result
      */
     public CompletionStage<ComposerImportMerge.MergeResult> process() {
-        LOG.info(
-            "Starting Composer import post-processing for repository: {}",
-            this.repoName
-        );
-        
+        EcsLogger.info("com.artipie.importer")
+            .message("Starting Composer import post-processing")
+            .eventCategory("repository")
+            .eventAction("import_post_process")
+            .field("repository.name", this.repoName)
+            .log();
+
         final ComposerImportMerge merge = new ComposerImportMerge(
             this.storage,
             this.baseUrl
         );
-        
+
         return merge.mergeAll()
             .whenComplete((result, error) -> {
                 if (error != null) {
-                    LOG.error(
-                        "Composer import merge failed for {}: {}",
-                        this.repoName,
-                        error.getMessage(),
-                        error
-                    );
+                    EcsLogger.error("com.artipie.importer")
+                        .message("Composer import merge failed")
+                        .eventCategory("repository")
+                        .eventAction("import_post_process")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .error(error)
+                        .log();
                 } else if (result.failedPackages > 0) {
-                    LOG.warn(
-                        "Composer import merge completed with errors for {}: {}",
-                        this.repoName,
-                        result
-                    );
+                    EcsLogger.warn("com.artipie.importer")
+                        .message("Composer import merge completed with errors (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged, " + result.failedPackages + " failed)")
+                        .eventCategory("repository")
+                        .eventAction("import_post_process")
+                        .eventOutcome("partial_failure")
+                        .field("repository.name", this.repoName)
+                        .log();
                 } else {
-                    LOG.info(
-                        "Composer import merge completed successfully for {}: merged {} packages ({} versions)",
-                        this.repoName,
-                        result.mergedPackages,
-                        result.mergedVersions
-                    );
+                    EcsLogger.info("com.artipie.importer")
+                        .message("Composer import merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged)")
+                        .eventCategory("repository")
+                        .eventAction("import_post_process")
+                        .eventOutcome("success")
+                        .field("repository.name", this.repoName)
+                        .log();
                 }
             });
     }

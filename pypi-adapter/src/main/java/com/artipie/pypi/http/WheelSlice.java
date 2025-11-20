@@ -12,6 +12,7 @@ import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.streams.ContentAsStream;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
@@ -26,7 +27,6 @@ import com.artipie.pypi.meta.Metadata;
 import com.artipie.pypi.meta.PackageInfo;
 import com.artipie.pypi.meta.ValidFilename;
 import com.artipie.scheduling.ArtifactEvent;
-import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -161,11 +161,20 @@ final class WheelSlice implements Slice {
                 }
             )
         ).doOnNext(
-            part -> Logger.debug(this, "WS: multipart request body parsed, part %s found", part)
+            part -> EcsLogger.debug("com.artipie.pypi")
+                .message("WS: multipart request body parsed, part found: " + part.toString())
+                .eventCategory("repository")
+                .eventAction("upload")
+                .log()
         ).flatMapSingle(
             part -> SingleInterop.fromFuture(
                 this.storage.save(temp, new Content.From(part))
-                    .thenRun(() -> Logger.debug(this, "WS: content saved to temp file `%s`", temp.string()))
+                    .thenRun(() -> EcsLogger.debug("com.artipie.pypi")
+                        .message("WS: content saved to temp file")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .field("file.name", temp.string())
+                        .log())
                     .thenApply(nothing -> new ContentDisposition(part.headers()).fileName())
             )
         ).toList().map(

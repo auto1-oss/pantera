@@ -28,28 +28,27 @@ public final class WhoAmISlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        // Extract authenticated username from context header set by auth slices
-        // The BearerAuthzSlice/CombinedAuthzSliceWrap adds "artipie_login" header
-        final String username = new RqHeaders(headers, "artipie_login").stream()
-            .findFirst()
-            .orElse(null);
-            
-        if (username == null || username.isEmpty()) {
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.unauthorized()
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenApply(ignored -> {
+            // Extract authenticated username from context header set by auth slices
+            // The BearerAuthzSlice/CombinedAuthzSliceWrap adds "artipie_login" header
+            final String username = new RqHeaders(headers, "artipie_login").stream()
+                .findFirst()
+                .orElse(null);
+
+            if (username == null || username.isEmpty()) {
+                return ResponseBuilder.unauthorized()
                     .jsonBody(Json.createObjectBuilder()
                         .add("error", "Not authenticated")
                         .build())
-                    .build()
-            );
-        }
-        
-        return CompletableFuture.completedFuture(
-            ResponseBuilder.ok()
+                    .build();
+            }
+
+            return ResponseBuilder.ok()
                 .jsonBody(Json.createObjectBuilder()
                     .add("username", username)
                     .build())
-                .build()
-        );
+                .build();
+        });
     }
 }

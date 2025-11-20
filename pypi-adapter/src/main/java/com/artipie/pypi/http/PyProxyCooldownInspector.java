@@ -127,26 +127,29 @@ final class PyProxyCooldownInspector implements CooldownInspector,
             uri,
             "HTTP/1.1"
         );
-        com.jcabi.log.Logger.info(
-            this,
-            "Fetching release date for %s:%s from PyPI JSON API: %s",
-            artifact,
-            version,
-            uri
-        );
+        com.artipie.http.log.EcsLogger.debug("com.artipie.pypi")
+            .message("Fetching release date from PyPI JSON API")
+            .eventCategory("repository")
+            .eventAction("cooldown_inspection")
+            .field("package.name", artifact)
+            .field("package.version", version)
+            .field("url.full", uri.toString())
+            .log();
         return this.metadata.response(
             line,
             com.artipie.http.Headers.EMPTY,
             com.artipie.asto.Content.EMPTY
         ).toCompletableFuture().thenCompose(response -> {
             if (!response.status().success()) {
-                com.jcabi.log.Logger.warn(
-                    this,
-                    "PyPI JSON API returned non-success status for %s:%s: %s",
-                    artifact,
-                    version,
-                    response.status()
-                );
+                com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                    .message("PyPI JSON API returned non-success status")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspection")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("http.response.status_code", response.status().code())
+                    .log();
                 return java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty());
             }
             return response.body().asBytesFuture().thenApply(bytes -> {
@@ -157,55 +160,64 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     // PyPI JSON API structure: { "urls": [ { "upload_time_iso_8601": "..." } ] }
                     final javax.json.JsonArray urls = root.getJsonArray("urls");
                     if (urls == null || urls.isEmpty()) {
-                        com.jcabi.log.Logger.warn(
-                            this,
-                            "No 'urls' field or empty urls array in PyPI JSON response for %s:%s",
-                            artifact,
-                            version
-                        );
+                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                            .message("No 'urls' field or empty urls array in PyPI JSON response")
+                            .eventCategory("repository")
+                            .eventAction("cooldown_inspection")
+                            .eventOutcome("failure")
+                            .field("package.name", artifact)
+                            .field("package.version", version)
+                            .log();
                         return java.util.Optional.empty();
                     }
                     // Get the first file's upload time (all files in a release have the same upload time)
                     final javax.json.JsonObject first = urls.getJsonObject(0);
                     final String iso = first.getString("upload_time_iso_8601", null);
                     if (iso == null) {
-                        com.jcabi.log.Logger.warn(
-                            this,
-                            "No upload_time_iso_8601 field for %s:%s in PyPI JSON response",
-                            artifact,
-                            version
-                        );
+                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                            .message("No upload_time_iso_8601 field in PyPI JSON response")
+                            .eventCategory("repository")
+                            .eventAction("cooldown_inspection")
+                            .eventOutcome("failure")
+                            .field("package.name", artifact)
+                            .field("package.version", version)
+                            .log();
                         return java.util.Optional.empty();
                     }
                     try {
                         final java.time.Instant releaseDate = java.time.Instant.parse(iso);
-                        com.jcabi.log.Logger.info(
-                            this,
-                            "Found release date for %s:%s: %s",
-                            artifact,
-                            version,
-                            releaseDate
-                        );
+                        com.artipie.http.log.EcsLogger.debug("com.artipie.pypi")
+                            .message("Found release date")
+                            .eventCategory("repository")
+                            .eventAction("cooldown_inspection")
+                            .eventOutcome("success")
+                            .field("package.name", artifact)
+                            .field("package.version", version)
+                            .field("package.name", releaseDate.toString())
+                            .log();
                         return java.util.Optional.of(releaseDate);
                     } catch (final Exception ex) {
-                        com.jcabi.log.Logger.warn(
-                            this,
-                            "Failed to parse upload_time_iso_8601 '%s' for %s:%s: %s",
-                            iso,
-                            artifact,
-                            version,
-                            ex.getMessage()
-                        );
+                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                            .message("Failed to parse upload_time_iso_8601: " + iso)
+                            .eventCategory("repository")
+                            .eventAction("cooldown_inspection")
+                            .eventOutcome("failure")
+                            .field("package.name", artifact)
+                            .field("package.version", version)
+                            .error(ex)
+                            .log();
                         return java.util.Optional.empty();
                     }
                 } catch (final Exception ex) {
-                    com.jcabi.log.Logger.warn(
-                        this,
-                        "Failed to parse PyPI JSON response for %s:%s: %s",
-                        artifact,
-                        version,
-                        ex.getMessage()
-                    );
+                    com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                        .message("Failed to parse PyPI JSON response")
+                        .eventCategory("repository")
+                        .eventAction("cooldown_inspection")
+                        .eventOutcome("failure")
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .error(ex)
+                        .log();
                     return java.util.Optional.empty();
                 }
             });

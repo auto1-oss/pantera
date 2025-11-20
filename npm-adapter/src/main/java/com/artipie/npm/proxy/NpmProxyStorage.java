@@ -41,4 +41,19 @@ public interface NpmProxyStorage {
      * @return NPM asset or empty
      */
     Maybe<NpmAsset> getAsset(String path);
+
+    /**
+     * Retrieve package metadata (without loading full content into memory).
+     * Returns only the metadata (last-modified, refreshed dates).
+     * @param name Package name
+     * @return Package metadata or empty
+     */
+    Maybe<NpmPackage.Metadata> getPackageMetadata(String name);
+
+    /**
+     * Retrieve package content as reactive stream (without loading into memory).
+     * @param name Package name
+     * @return Package content as reactive Content or empty
+     */
+    Maybe<com.artipie.asto.Content> getPackageContent(String name);
 }

@@ -16,11 +16,10 @@ import com.artipie.helm.metadata.IndexYaml;
 import com.artipie.importer.api.DigestType;
 import com.artipie.maven.metadata.Version;
 import com.artipie.npm.MetaUpdate;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.pypi.http.IndexGenerator;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Flowable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.xembly.Directives;
 import org.xembly.Xembler;
 
@@ -54,11 +53,6 @@ import java.util.stream.Collectors;
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataRegenerator {
-
-    /**
-     * Logger.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(MetadataRegenerator.class);
 
     /**
      * Date format for Maven metadata lastUpdated field.
@@ -141,12 +135,13 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     public CompletionStage<Void> regenerate(final Key artifactKey, final ImportRequest request) {
-        LOG.debug(
-            "Regenerating metadata for {} :: {} (type: {})",
-            this.repoName,
-            artifactKey.string(),
-            this.repoType
-        );
+        EcsLogger.debug("com.artipie.importer")
+            .message("Regenerating metadata for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
+            .eventCategory("repository")
+            .eventAction("metadata_regenerate")
+            .field("repository.name", this.repoName)
+            .field("repository.type", this.repoType)
+            .log();
         final CompletionStage<Void> operation = switch (this.repoType.toLowerCase(Locale.ROOT)) {
             case "file", "files", "generic", "docker", "oci", "nuget", "conan" ->
                 CompletableFuture.completedFuture(null);
@@ -161,11 +156,14 @@ public final class MetadataRegenerator {
             case "rpm" -> this.regenerateRpm(artifactKey);
             case "conda" -> this.regenerateConda(artifactKey);
             default -> {
-                LOG.warn(
-                    "Unknown repository type '{}' for {} - skipping metadata regeneration",
-                    this.repoType,
-                    this.repoName
-                );
+                EcsLogger.warn("com.artipie.importer")
+                    .message("Unknown repository type - skipping metadata regeneration")
+                    .eventCategory("repository")
+                    .eventAction("metadata_regenerate")
+                    .eventOutcome("failure")
+                    .field("repository.type", this.repoType)
+                    .field("repository.name", this.repoName)
+                    .log();
                 yield CompletableFuture.completedFuture(null);
             }
         };
@@ -174,16 +172,15 @@ public final class MetadataRegenerator {
                 this.successCount.incrementAndGet();
             } else {
                 this.failureCount.incrementAndGet();
-                LOG.warn(
-                    "Metadata regeneration failed for {} :: {} ({}) - {}",
-                    this.repoName,
-                    artifactKey.string(),
-                    this.repoType,
-                    error.getMessage()
-                );
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Metadata regeneration failure stacktrace", error);
-                }
+                EcsLogger.warn("com.artipie.importer")
+                    .message("Metadata regeneration failed for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
+                    .eventCategory("repository")
+                    .eventAction("metadata_regenerate")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("repository.type", this.repoType)
+                    .error(error)
+                    .log();
             }
         });
     }
@@ -253,7 +250,11 @@ public final class MetadataRegenerator {
             metadataKey,
             lockedStorage -> this.storage.list(baseKey)
                 .exceptionally(ex -> {
-                    LOG.debug("Base key {} doesn't exist yet, creating metadata for first version", baseKey);
+                    EcsLogger.debug("com.artipie.importer")
+                        .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
+                        .eventCategory("repository")
+                        .eventAction("maven_metadata_regenerate")
+                        .log();
                     return List.of();
                 })
                 .thenApply(keys -> collectMavenVersions(baseKey, version, keys))
@@ -303,7 +304,12 @@ public final class MetadataRegenerator {
                 versions.add(firstSegment);
             } catch (final Exception ignored) {
                 // Not a valid version, skip it
-                LOG.debug("Skipping non-version directory: {}", firstSegment);
+                EcsLogger.debug("com.artipie.importer")
+                    .message("Skipping non-version directory")
+                    .eventCategory("repository")
+                    .eventAction("maven_metadata_regenerate")
+                    .field("file.directory", firstSegment)
+                    .log();
             }
         }
         return versions;
@@ -425,10 +431,12 @@ public final class MetadataRegenerator {
     ) {
         final String packageName = composerJson.getString("name", null);
         if (packageName == null || packageName.isBlank()) {
-            LOG.warn(
-                "Skipping Composer metadata regeneration for {} - package name missing",
-                storagePath
-            );
+            EcsLogger.warn("com.artipie.importer")
+                .message("Skipping Composer metadata regeneration - package name missing at key: " + storagePath)
+                .eventCategory("repository")
+                .eventAction("composer_metadata_regenerate")
+                .eventOutcome("failure")
+                .log();
             return CompletableFuture.completedFuture(null);
         }
         String version = composerJson.getString("version", null);
@@ -438,10 +446,12 @@ public final class MetadataRegenerator {
                 .orElse(null);
         }
         if (version == null || version.isBlank()) {
-            LOG.warn(
-                "Skipping Composer metadata regeneration for {} - unable to determine version",
-                storagePath
-            );
+            EcsLogger.warn("com.artipie.importer")
+                .message("Skipping Composer metadata regeneration - unable to determine version at key: " + storagePath)
+                .eventCategory("repository")
+                .eventAction("composer_metadata_regenerate")
+                .eventOutcome("failure")
+                .log();
             return CompletableFuture.completedFuture(null);
         }
         
@@ -510,20 +520,25 @@ public final class MetadataRegenerator {
                     final String packageName = manifest.getString("name", null);
                     
                     if (packageName == null || packageName.isBlank()) {
-                        LOG.warn(
-                            "Skipping NPM metadata regeneration for {} - package name missing",
-                            path
-                        );
+                        EcsLogger.warn("com.artipie.importer")
+                            .message("Skipping NPM metadata regeneration - package name missing at key: " + path)
+                            .eventCategory("repository")
+                            .eventAction("npm_metadata_regenerate")
+                            .eventOutcome("failure")
+                            .log();
                         return CompletableFuture.completedFuture(null);
                     }
-                    
+
                     // MetaUpdate.ByJson now uses storage.exclusively() for atomic updates
                     return new MetaUpdate.ByTgz(tgz).update(new Key.From(packageName), this.storage);
                 } catch (final Exception ex) {
-                    LOG.error(
-                        "Failed to extract NPM package metadata from {} - {}",
-                        path, ex.getMessage()
-                    );
+                    EcsLogger.error("com.artipie.importer")
+                        .message("Failed to extract NPM package metadata at key: " + path)
+                        .eventCategory("repository")
+                        .eventAction("npm_metadata_regenerate")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
                     throw new CompletionException(ex);
                 }
             });
@@ -696,7 +711,11 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateDebian(final Key artifactKey) {
-        LOG.debug("Debian metadata regeneration not implemented for {}", artifactKey.string());
+        EcsLogger.debug("com.artipie.importer")
+            .message("Debian metadata regeneration not implemented for key: " + artifactKey.string())
+            .eventCategory("repository")
+            .eventAction("debian_metadata_regenerate")
+            .log();
         return CompletableFuture.completedFuture(null);
     }
 
@@ -707,7 +726,11 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateRpm(final Key artifactKey) {
-        LOG.debug("RPM metadata regeneration not implemented for {}", artifactKey.string());
+        EcsLogger.debug("com.artipie.importer")
+            .message("RPM metadata regeneration not implemented for key: " + artifactKey.string())
+            .eventCategory("repository")
+            .eventAction("rpm_metadata_regenerate")
+            .log();
         return CompletableFuture.completedFuture(null);
     }
 
@@ -718,7 +741,11 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateConda(final Key artifactKey) {
-        LOG.debug("Conda metadata regeneration not implemented for {}", artifactKey.string());
+        EcsLogger.debug("com.artipie.importer")
+            .message("Conda metadata regeneration not implemented for key: " + artifactKey.string())
+            .eventCategory("repository")
+            .eventAction("conda_metadata_regenerate")
+            .log();
         return CompletableFuture.completedFuture(null);
     }
 
@@ -809,10 +836,13 @@ public final class MetadataRegenerator {
                                 // Generate checksums for this artifact
                                 return this.generateMavenChecksums(artifactKey)
                                     .exceptionally(ex -> {
-                                        LOG.warn(
-                                            "Failed to generate checksums for {} - {}",
-                                            path, ex.getMessage()
-                                        );
+                                        EcsLogger.warn("com.artipie.importer")
+                                            .message("Failed to generate checksums")
+                                            .eventCategory("repository")
+                                            .eventAction("maven_checksum_generate")
+                                            .eventOutcome("failure")
+                                            .field("error.message", ex.getMessage())
+                                            .log();
                                         return null;
                                     }).toCompletableFuture();
                             });
@@ -902,14 +932,22 @@ public final class MetadataRegenerator {
                 if (attempt < maxRetries) {
                     // Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, ...
                     final long delayMs = 10L * (1L << attempt);
-                    LOG.warn(
-                        "Retry {}/{} for {} after {}ms: {}",
-                        attempt + 1, maxRetries, description, delayMs, error.getMessage()
-                    );
+                    EcsLogger.warn("com.artipie.importer")
+                        .message("Retrying operation '" + description + "' (attempt " + (attempt + 1) + "/" + maxRetries + ", delay: " + delayMs + "ms)")
+                        .eventCategory("repository")
+                        .eventAction("metadata_regenerate_retry")
+                        .field("error.message", error.getMessage())
+                        .log();
                     // Return null to signal retry needed
                     return null;
                 } else {
-                    LOG.error("Failed after {} retries for {}: {}", maxRetries, description, error.getMessage());
+                    EcsLogger.error("com.artipie.importer")
+                        .message("Failed operation '" + description + "' after " + maxRetries + " retry attempts")
+                        .eventCategory("repository")
+                        .eventAction("metadata_regenerate_retry")
+                        .eventOutcome("failure")
+                        .error(error)
+                        .log();
                     throw new CompletionException(error);
                 }
             })

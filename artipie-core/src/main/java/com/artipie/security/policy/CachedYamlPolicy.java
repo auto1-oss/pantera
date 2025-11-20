@@ -25,7 +25,7 @@ import com.artipie.security.perms.UserPermissions;
 import com.artipie.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.PermissionCollection;
@@ -213,7 +213,14 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             try {
                 return this.createUserPermissions(user).call();
             } catch (Exception err) {
-                Logger.error("security", err.getMessage());
+                EcsLogger.error("com.artipie.security")
+                    .message("Failed to get user permissions")
+                    .eventCategory("security")
+                    .eventAction("permissions_get")
+                    .eventOutcome("failure")
+                    .field("user.name", user.name())
+                    .error(err)
+                    .log();
                 throw new ArtipieException(err);
             }
         });
@@ -256,7 +263,14 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                 res = CachedYamlPolicy.readPermissionsFromYaml(mapping);
             }
         } catch (final IOException | ValueNotFoundException err) {
-            Logger.error("security", String.format("Failed to read/parse file '%s'", filename));
+            EcsLogger.error("com.artipie.security")
+                .message("Failed to read/parse role permissions file")
+                .eventCategory("security")
+                .eventAction("role_permissions_read")
+                .eventOutcome("failure")
+                .field("file.name", filename)
+                .field("user.roles", role)
+                .log();
             res = EmptyPermissions.INSTANCE;
         }
         return res;
@@ -450,7 +464,14 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             try {
                 res = CachedYamlPolicy.readFile(asto, filename);
             } catch (final IOException | ValueNotFoundException err) {
-                Logger.error("security", "Failed to read or parse file '%s'", filename);
+                EcsLogger.error("com.artipie.security")
+                    .message("Failed to read or parse user file")
+                    .eventCategory("security")
+                    .eventAction("user_file_read")
+                    .eventOutcome("failure")
+                    .field("file.name", filename)
+                    .field("user.name", username)
+                    .log();
                 res = Yaml.createYamlMappingBuilder().build();
             }
             return res;

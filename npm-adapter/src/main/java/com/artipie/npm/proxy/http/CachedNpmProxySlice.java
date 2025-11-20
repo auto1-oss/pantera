@@ -8,6 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
@@ -15,7 +16,6 @@ import com.artipie.http.cache.CachedArtifactMetadataStore;
 import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
-import com.jcabi.log.Logger;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -112,15 +112,25 @@ public final class CachedNpmProxySlice implements Slice {
         
         // Skip caching for special npm endpoints
         if (this.isSpecialEndpoint(path)) {
-            Logger.debug(this, "NPM proxy: bypassing cache for special endpoint %s", path);
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM proxy: bypassing cache for special endpoint")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", path)
+                .log();
             return this.origin.response(line, headers, body);
         }
-        
+
         final Key key = new KeyFromPath(path);
-        
+
         // Check negative cache first (404s)
         if (this.negativeCache.isNotFound(key)) {
-            Logger.info(this, "NPM package %s cached as 404 (negative cache hit)", key.string());
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM package cached as 404 (negative cache hit)")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
@@ -167,7 +177,12 @@ public final class CachedNpmProxySlice implements Slice {
     ) {
         return this.metadata.orElseThrow().load(key).thenCompose(meta -> {
             if (meta.isPresent()) {
-                Logger.debug(this, "NPM proxy: serving %s from metadata cache", key.string());
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: serving from metadata cache")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .log();
                 // Metadata exists - serve cached with headers
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -189,19 +204,34 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
-        Logger.debug(this, "NPM proxy: fetching upstream for %s", key.string());
+        EcsLogger.debug("com.artipie.npm")
+            .message("NPM proxy: fetching upstream")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("package.name", key.string())
+            .log();
         return this.origin.response(line, headers, body).thenCompose(response -> {
             // Check for 404 status
             if (response.status().code() == 404) {
-                Logger.debug(this, "NPM proxy: caching 404 for %s", key.string());
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: caching 404")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .log();
                 // Cache 404 to avoid repeated upstream requests
                 this.negativeCache.cacheNotFound(key);
                 return CompletableFuture.completedFuture(response);
             }
-            
+
             if (response.status().success() && this.metadata.isPresent() && this.isCacheable(key.string())) {
                 // Cache successful response metadata
-                Logger.debug(this, "NPM proxy: caching metadata for %s", key.string());
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: caching metadata")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .log();
                 // Note: Full metadata caching with body digests would require
                 // consuming the response body, which is complex.
                 // For now, just cache the 404s (most impactful).

@@ -12,7 +12,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -129,14 +129,13 @@ public final class GroupSlice implements Slice {
                 resolver.slice(new Key.From(name), port, 0)
             ))
             .toList();
-        
-        Logger.debug(
-            this,
-            "GroupSlice %s: initialized with %d members (deduplicated from %d)",
-            group,
-            this.members.size(),
-            members.size()
-        );
+
+        EcsLogger.debug("com.artipie.group")
+            .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total)")
+            .eventCategory("repository")
+            .eventAction("group_init")
+            .field("repository.name", group)
+            .log();
     }
 
     @Override
@@ -220,12 +219,14 @@ public final class GroupSlice implements Slice {
         final byte[] requestBytes
     ) {
         if (member.isCircuitOpen()) {
-            Logger.warn(
-                this,
-                "Group %s: member %s circuit OPEN, skipping",
-                this.group,
-                member.name()
-            );
+            EcsLogger.warn("com.artipie.group")
+                .message("Member circuit OPEN, skipping")
+                .eventCategory("repository")
+                .eventAction("group_query")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("member.name", member.name())
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.unavailable().build()
             );
@@ -264,36 +265,42 @@ public final class GroupSlice implements Slice {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
                 if (latency > 1000) {
-                    Logger.warn(
-                        this,
-                        "Group %s: slow member response from %s (latency=%dms)",
-                        this.group,
-                        member.name(),
-                        latency
-                    );
+                    EcsLogger.warn("com.artipie.group")
+                        .message("Slow member response")
+                        .eventCategory("repository")
+                        .eventAction("group_query")
+                        .eventOutcome("success")
+                        .field("repository.name", this.group)
+                        .field("member.name", member.name())
+                        .duration(latency)
+                        .log();
                 }
                 member.recordSuccess();
                 recordSuccess(member.name(), latency);
                 result.complete(resp);
             } else {
-                Logger.debug(
-                    this,
-                    "Group %s: member %s returned %s but another member already won",
-                    this.group,
-                    member.name(),
-                    status
-                );
+                EcsLogger.debug("com.artipie.group")
+                    .message("Member returned success but another member already won")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .field("repository.name", this.group)
+                    .field("member.name", member.name())
+                    .field("http.response.status_code", status.code())
+                    .log();
                 drainBody(member.name(), resp.body());
             }
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
-                Logger.info(
-                    this,
-                    "Group %s: member %s returned FORBIDDEN (cooldown/blocked)",
-                    this.group,
-                    member.name()
-                );
+                EcsLogger.info("com.artipie.group")
+                    .message("Member returned FORBIDDEN (cooldown/blocked)")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .eventOutcome("success")
+                    .field("repository.name", this.group)
+                    .field("member.name", member.name())
+                    .field("http.response.status_code", 403)
+                    .log();
                 member.recordSuccess(); // Not a failure - valid response
                 result.complete(resp);
             } else {
@@ -301,21 +308,24 @@ public final class GroupSlice implements Slice {
             }
         } else {
             // Other errors (404, 500, etc.): try next member
-            Logger.warn(
-                this,
-                "Group %s: member %s returned %s (pending=%d)",
-                this.group,
-                member.name(),
-                status,
-                pending.get() - 1
-            );
+            EcsLogger.warn("com.artipie.group")
+                .message("Member returned error status (" + (pending.get() - 1) + " pending)")
+                .eventCategory("repository")
+                .eventAction("group_query")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("member.name", member.name())
+                .field("http.response.status_code", status.code())
+                .log();
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
-                Logger.warn(
-                    this,
-                    "Group %s: all members exhausted, returning 404",
-                    this.group
-                );
+                EcsLogger.warn("com.artipie.group")
+                    .message("All members exhausted, returning 404")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .log();
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
             }
@@ -332,15 +342,17 @@ public final class GroupSlice implements Slice {
         final AtomicInteger pending,
         final CompletableFuture<Response> result
     ) {
-        Logger.warn(
-            this,
-            "Group %s: member %s FAILED: %s",
-            this.group,
-            member.name(),
-            err.getMessage()
-        );
+        EcsLogger.warn("com.artipie.group")
+            .message("Member query failed")
+            .eventCategory("repository")
+            .eventAction("group_query")
+            .eventOutcome("failure")
+            .field("repository.name", this.group)
+            .field("member.name", member.name())
+            .field("error.message", err.getMessage())
+            .log();
         member.recordFailure();
-        
+
         if (pending.decrementAndGet() == 0 && !completed.get()) {
             recordNotFound();
             result.complete(ResponseBuilder.notFound().build());
@@ -353,13 +365,15 @@ public final class GroupSlice implements Slice {
     private void drainBody(final String memberName, final Content body) {
         body.asBytesFuture().whenComplete((bytes, err) -> {
             if (err != null) {
-                Logger.warn(
-                    this,
-                    "Group %s: failed to drain %s body: %s",
-                    this.group,
-                    memberName,
-                    err.getMessage()
-                );
+                EcsLogger.warn("com.artipie.group")
+                    .message("Failed to drain response body")
+                    .eventCategory("repository")
+                    .eventAction("body_drain")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .field("member.name", memberName)
+                    .field("error.message", err.getMessage())
+                    .log();
             }
         });
     }

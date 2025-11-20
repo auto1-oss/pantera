@@ -9,8 +9,9 @@ import com.artipie.asto.Key;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
+import com.artipie.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -108,14 +109,15 @@ public final class MetadataRebuildSlice implements Slice {
      * @param uploadPath Path that was uploaded
      */
     private void rebuildMetadataAsync(final MavenCoords coords, final String uploadPath) {
-        Logger.debug(
-            this,
-            "Triggering metadata rebuild for %s:%s:%s (uploaded: %s)",
-            coords.groupId,
-            coords.artifactId,
-            coords.version,
-            uploadPath
-        );
+        EcsLogger.debug("com.artipie.maven")
+            .message("Triggering metadata rebuild")
+            .eventCategory("repository")
+            .eventAction("metadata_rebuild_trigger")
+            .field("package.group", coords.groupId)
+            .field("package.name", coords.artifactId)
+            .field("package.version", coords.version)
+            .field("file.path", uploadPath)
+            .log();
 
         // Build metadata path: /{groupId}/{artifactId}/maven-metadata.xml
         final Key metadataKey = new Key.From(
@@ -124,32 +126,38 @@ public final class MetadataRebuildSlice implements Slice {
             "maven-metadata.xml"
         );
 
-        // Trigger rebuild asynchronously (fire and forget)
-        CompletableFuture.runAsync(() -> {
+        // Trigger rebuild asynchronously (fire and forget) with trace context propagation
+        CompletableFuture.runAsync(TraceContextExecutor.wrap(() -> {
             try {
                 // Here you would call your metadata generator
                 // For now, just log the intention
-                Logger.debug(
-                    this,
-                    "Metadata rebuild queued for %s",
-                    metadataKey.string()
-                );
+                EcsLogger.debug("com.artipie.maven")
+                    .message("Metadata rebuild queued")
+                    .eventCategory("repository")
+                    .eventAction("metadata_rebuild")
+                    .field("package.group", coords.groupId)
+                    .field("package.name", coords.artifactId)
+                    .field("package.version", coords.version)
+                    .field("package.name", metadataKey.string())
+                    .log();
 
                 // TODO: Integrate with existing MavenMetadata class
                 // new MavenMetadata(...).updateMetadata(coords).join();
 
             } catch (RuntimeException e) {  // NOPMD - Best-effort async, catch all
-                Logger.warn(
-                    this,
-                    "Metadata rebuild failed for %s:%s:%s - %s",
-                    coords.groupId,
-                    coords.artifactId,
-                    coords.version,
-                    e.getMessage()
-                );
+                EcsLogger.warn("com.artipie.maven")
+                    .message("Metadata rebuild failed")
+                    .eventCategory("repository")
+                    .eventAction("metadata_rebuild")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .field("package.group", coords.groupId)
+                    .field("package.name", coords.artifactId)
+                    .field("package.version", coords.version)
+                    .log();
                 // Don't propagate error - metadata rebuild is best-effort
             }
-        });
+        }));
     }
 
     /**

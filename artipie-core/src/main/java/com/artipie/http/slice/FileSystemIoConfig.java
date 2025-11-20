@@ -4,7 +4,7 @@
  */
 package com.artipie.http.slice;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 /**
  * Configuration for filesystem I/O thread pool.
@@ -73,12 +73,12 @@ public final class FileSystemIoConfig {
      */
     private FileSystemIoConfig() {
         this.threads = this.resolveThreadPoolSize();
-        Logger.info(
-            this,
-            "FileSystem I/O thread pool configured: %d threads (CPU cores: %d)",
-            this.threads,
-            Runtime.getRuntime().availableProcessors()
-        );
+        EcsLogger.info("com.artipie.http")
+            .message("FileSystem I/O thread pool configured with " + this.threads + " threads (" + Runtime.getRuntime().availableProcessors() + " CPU cores)")
+            .eventCategory("configuration")
+            .eventAction("thread_pool_init")
+            .eventOutcome("success")
+            .log();
     }
 
     /**
@@ -113,12 +113,12 @@ public final class FileSystemIoConfig {
                 final int value = Integer.parseInt(sysProp.trim());
                 return this.validateThreadPoolSize(value, "system property");
             } catch (final NumberFormatException ex) {
-                Logger.warn(
-                    this,
-                    "Invalid thread pool size in system property %s: %s (using default)",
-                    PROPERTY_THREADS,
-                    sysProp
-                );
+                EcsLogger.warn("com.artipie.http")
+                    .message("Invalid thread pool size in system property " + PROPERTY_THREADS + "='" + sysProp + "', using default")
+                    .eventCategory("configuration")
+                    .eventAction("thread_pool_config")
+                    .eventOutcome("failure")
+                    .log();
             }
         }
 
@@ -129,23 +129,24 @@ public final class FileSystemIoConfig {
                 final int value = Integer.parseInt(envVar.trim());
                 return this.validateThreadPoolSize(value, "environment variable");
             } catch (final NumberFormatException ex) {
-                Logger.warn(
-                    this,
-                    "Invalid thread pool size in environment variable %s: %s (using default)",
-                    ENV_THREADS,
-                    envVar
-                );
+                EcsLogger.warn("com.artipie.http")
+                    .message("Invalid thread pool size in environment variable " + ENV_THREADS + "='" + envVar + "', using default")
+                    .eventCategory("configuration")
+                    .eventAction("thread_pool_config")
+                    .eventOutcome("failure")
+                    .log();
             }
         }
 
         // Use default: 2x CPU cores (minimum 8)
         final int cpuCores = Runtime.getRuntime().availableProcessors();
         final int defaultSize = Math.max(8, cpuCores * 2);
-        Logger.info(
-            this,
-            "Using default thread pool size: %d (2x CPU cores, minimum 8)",
-            defaultSize
-        );
+        EcsLogger.debug("com.artipie.http")
+            .message("Using default thread pool size of " + defaultSize + " threads (" + cpuCores + " CPU cores)")
+            .eventCategory("configuration")
+            .eventAction("thread_pool_config")
+            .eventOutcome("success")
+            .log();
         return defaultSize;
     }
 
@@ -158,31 +159,29 @@ public final class FileSystemIoConfig {
      */
     private int validateThreadPoolSize(final int value, final String source) {
         if (value < MIN_THREADS) {
-            Logger.warn(
-                this,
-                "Thread pool size from %s (%d) is below minimum (%d), using minimum",
-                source,
-                value,
-                MIN_THREADS
-            );
+            EcsLogger.warn("com.artipie.http")
+                .message("Thread pool size from " + source + " below minimum (requested: " + value + ", using: " + MIN_THREADS + ", min: " + MIN_THREADS + ")")
+                .eventCategory("configuration")
+                .eventAction("thread_pool_validate")
+                .eventOutcome("success")
+                .log();
             return MIN_THREADS;
         }
         if (value > MAX_THREADS) {
-            Logger.warn(
-                this,
-                "Thread pool size from %s (%d) exceeds maximum (%d), using maximum",
-                source,
-                value,
-                MAX_THREADS
-            );
+            EcsLogger.warn("com.artipie.http")
+                .message("Thread pool size from " + source + " exceeds maximum (requested: " + value + ", using: " + MAX_THREADS + ", max: " + MAX_THREADS + ")")
+                .eventCategory("configuration")
+                .eventAction("thread_pool_validate")
+                .eventOutcome("success")
+                .log();
             return MAX_THREADS;
         }
-        Logger.info(
-            this,
-            "Thread pool size from %s: %d",
-            source,
-            value
-        );
+        EcsLogger.debug("com.artipie.http")
+            .message("Thread pool size from " + source + " validated: " + value + " threads")
+            .eventCategory("configuration")
+            .eventAction("thread_pool_validate")
+            .eventOutcome("success")
+            .log();
         return value;
     }
 }

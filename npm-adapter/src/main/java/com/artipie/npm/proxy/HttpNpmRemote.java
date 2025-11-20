@@ -7,6 +7,7 @@ package com.artipie.npm.proxy;
 import com.artipie.asto.Content;
 import com.artipie.http.ArtipieHttpException;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
@@ -16,7 +17,6 @@ import com.artipie.npm.misc.DateTimeNowStr;
 import com.artipie.npm.proxy.json.CachedContent;
 import com.artipie.npm.proxy.model.NpmAsset;
 import com.artipie.npm.proxy.model.NpmPackage;
-import com.jcabi.log.Logger;
 import io.reactivex.Maybe;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
@@ -49,21 +49,29 @@ public final class HttpNpmRemote implements NpmRemote {
         return Maybe.fromFuture(
             this.performRemoteRequest(name).thenCompose(
                 pair -> pair.getKey().asStringFuture().thenApply(
-                    str -> new NpmPackage(
-                        name,
-                        new CachedContent(str, name).value().toString(),
-                        HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
-                        OffsetDateTime.now()
-                    )
+                    str -> {
+                        // Transform to cached format (strip upstream URLs)
+                        // NOTE: This creates JsonObject temporarily, but it's released after .toString()
+                        // The memory issue is NOT here - it's in the RxJava chain holding references
+                        final String cachedContent = new CachedContent(str, name).value().toString();
+                        return new NpmPackage(
+                            name,
+                            cachedContent,
+                            HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
+                            OffsetDateTime.now()
+                        );
+                    }
                 )
             ).toCompletableFuture()
         ).onErrorResumeNext(
             throwable -> {
-                Logger.error(
-                    HttpNpmRemote.class,
-                    "Error occurred when process get package call: %s",
-                    throwable.getMessage()
-                );
+                EcsLogger.error("com.artipie.npm")
+                    .message("Error occurred when process get package call")
+                    .eventCategory("repository")
+                    .eventAction("get_package")
+                    .eventOutcome("failure")
+                    .error(throwable)
+                    .log();
                 return Maybe.empty();
             }
         );
@@ -82,11 +90,14 @@ public final class HttpNpmRemote implements NpmRemote {
             )
         ).onErrorResumeNext(
             throwable -> {
-                Logger.error(
-                    HttpNpmRemote.class,
-                    "Error occurred when process get asset call: %s",
-                    throwable.getMessage()
-                );
+                EcsLogger.error("com.artipie.npm")
+                    .message("Error occurred when process get asset call")
+                    .eventCategory("repository")
+                    .eventAction("get_asset")
+                    .eventOutcome("failure")
+                    .field("package.path", path)
+                    .error(throwable)
+                    .log();
                 return Maybe.empty();
             }
         );

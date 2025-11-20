@@ -17,10 +17,10 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownInspector;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.scheduling.ProxyArtifactEvent;
-import com.jcabi.log.Logger;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
@@ -141,26 +141,47 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        Logger.info(this, "DEBUG: Processing Go proxy request path: %s", path);
-        
+        EcsLogger.debug("com.artipie.go")
+            .message("Processing Go proxy request")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("url.path", path)
+            .log();
+
         if ("/".equals(path) || path.isEmpty()) {
-            Logger.debug(this, "DEBUG: Handling root path");
+            EcsLogger.debug("com.artipie.go")
+                .message("Handling root path")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .log();
             return this.handleRootPath(line);
         }
         final Key key = new KeyFromPath(path);
         final Matcher matcher = ARTIFACT.matcher(key.string());
-        
+
         // For non-artifact paths (e.g., list endpoints), skip cooldown and cache directly
         if (!matcher.matches()) {
-            Logger.debug(this, "DEBUG: Non-artifact path, skipping cooldown: %s", key.string());
+            EcsLogger.debug("com.artipie.go")
+                .message("Non-artifact path, skipping cooldown")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .log();
             return this.fetchThroughCache(line, key, headers, Optional.empty(), Optional.empty());
         }
-        
+
         // Extract artifact info and create cooldown request
         final String module = matcher.group("module");
         final String version = matcher.group("version");
         final String user = new Login(headers).getValue();
-        Logger.info(this, "DEBUG: Go artifact request - module: %s, version: %s, user: %s", module, version, user);
+        EcsLogger.debug("com.artipie.go")
+            .message("Go artifact request")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("package.name", module)
+            .field("package.version", version)
+            .field("user.name", user)
+            .log();
         
         final CooldownRequest request = new CooldownRequest(
             this.rtype,
@@ -175,23 +196,37 @@ final class CachedProxySlice implements Slice {
         return this.cooldown.evaluate(request, this.inspector)
             .thenCompose(result -> {
                 if (result.blocked()) {
-                    Logger.info(
-                        this,
-                        "DEBUG: Blocked Go artifact %s@v%s due to cooldown: %s",
-                        module,
-                        version,
-                        result.block().orElseThrow().reason()
-                    );
+                    EcsLogger.info("com.artipie.go")
+                        .message("Blocked Go artifact due to cooldown: " + result.block().orElseThrow().reason())
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .eventOutcome("blocked")
+                        .field("package.name", module)
+                        .field("package.version", version)
+                        .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponses.forbidden(result.block().orElseThrow())
                     );
                 }
-                Logger.info(this, "DEBUG: Cooldown passed for %s@v%s, proceeding with fetch", module, version);
+                EcsLogger.debug("com.artipie.go")
+                    .message("Cooldown passed, proceeding with fetch")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("package.name", module)
+                    .field("package.version", version)
+                    .log();
                 // Cooldown passed, proceed with fetch
                 // Get the release date for database event
                 return this.inspector.releaseDate(module, version)
                     .thenCompose(releaseDate -> {
-                        Logger.debug(this, "DEBUG: Release date for %s@v%s: %s", module, version, releaseDate.orElse(null));
+                        EcsLogger.debug("com.artipie.go")
+                            .message("Release date retrieved")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("package.name", module)
+                            .field("package.version", version)
+                            .field("package.release_date", releaseDate.orElse(null))
+                            .log();
                         return this.fetchThroughCache(
                             line, 
                             key, 
@@ -257,27 +292,27 @@ final class CachedProxySlice implements Slice {
                             // Record database event ONLY after successful cache load for .zip files
                             // This ensures the full module is downloaded before recording the event
                             if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
-                                Logger.info(
-                                    this,
-                                    "DEBUG: Attempting to enqueue Go proxy event for key: %s, artifactPath: %s, owner: %s",
-                                    key.string(),
-                                    artifactPath.get(),
-                                    owner
-                                );
+                                EcsLogger.debug("com.artipie.go")
+                                    .message("Attempting to enqueue Go proxy event")
+                                    .eventCategory("repository")
+                                    .eventAction("proxy_request")
+                                    .field("package.name", key.string())
+                                    .field("file.path", artifactPath.get())
+                                    .field("user.name", owner)
+                                    .log();
                                 this.enqueueEvent(
-                                    key, 
-                                    owner, 
-                                    artifactPath, 
+                                    key,
+                                    owner,
+                                    artifactPath,
                                     releaseDate.or(() -> this.parseLastModified(rshdr.get()))
                                 );
                             } else {
-                                Logger.debug(
-                                    this,
-                                    "DEBUG: Skipping event enqueue - key: %s, isZip: %s, hasArtifactPath: %s",
-                                    key.string(),
-                                    key.string().endsWith(".zip"),
-                                    artifactPath.isPresent()
-                                );
+                                EcsLogger.debug("com.artipie.go")
+                                    .message("Skipping event enqueue for " + key.string() + " (is_zip: " + key.string().endsWith(".zip") + ", has_artifact_path: " + artifactPath.isPresent() + ")")
+                                    .eventCategory("repository")
+                                    .eventAction("proxy_request")
+                                    .field("package.name", key.string())
+                                    .log();
                             }
                             return ResponseBuilder.ok()
                                 .headers(rshdr.get())
@@ -285,7 +320,13 @@ final class CachedProxySlice implements Slice {
                                 .build();
                         }
                         if (throwable != null) {
-                            Logger.error(this, throwable.getMessage());
+                            EcsLogger.error("com.artipie.go")
+                                .message("Failed to fetch through cache")
+                                .eventCategory("repository")
+                                .eventAction("proxy_request")
+                                .eventOutcome("failure")
+                                .error(throwable)
+                                .log();
                         }
                         return ResponseBuilder.notFound().build();
                     }
@@ -348,10 +389,15 @@ final class CachedProxySlice implements Slice {
      */
     private void addEventToQueue(final Key key, final String owner, final Optional<Long> release) {
         if (this.events.isEmpty()) {
-            Logger.error(this, "DEBUG: Events queue is NOT present - cannot enqueue events!");
+            EcsLogger.error("com.artipie.go")
+                .message("Events queue is NOT present - cannot enqueue events")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .eventOutcome("failure")
+                .log();
             return;
         }
-        
+
         this.events.ifPresent(queue -> {
             final ProxyArtifactEvent event = new ProxyArtifactEvent(
                 key,
@@ -360,15 +406,15 @@ final class CachedProxySlice implements Slice {
                 release
             );
             queue.add(event);
-            Logger.info(
-                this,
-                "DEBUG: Successfully enqueued Go proxy event - key: %s, repo: %s, owner: %s, release: %s, queue size: %d",
-                key.string(),
-                this.rname,
-                owner,
-                release.map(Object::toString).orElse("unknown"),
-                queue.size()
-            );
+            EcsLogger.debug("com.artipie.go")
+                .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .field("repository.name", this.rname)
+                .field("user.name", owner)
+                .field("package.release_date", release.map(Object::toString).orElse("unknown"))
+                .log();
         });
     }
 

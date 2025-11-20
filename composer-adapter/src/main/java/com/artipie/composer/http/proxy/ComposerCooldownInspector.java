@@ -9,9 +9,9 @@ import com.artipie.cooldown.CooldownDependency;
 import com.artipie.cooldown.CooldownInspector;
 import com.artipie.http.Headers;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -51,21 +51,46 @@ public final class ComposerCooldownInspector implements CooldownInspector {
         final String artifact,
         final String version
     ) {
-        Logger.info(this, "Checking release date for %s:%s", artifact, version);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Checking release date for package")
+            .eventCategory("repository")
+            .eventAction("cooldown_release_date")
+            .field("package.name", artifact)
+            .field("package.version", version)
+            .log();
         return this.fetchMetadata(artifact).thenApply(metadata -> {
             if (metadata.isEmpty()) {
-                Logger.warn(this, "No metadata found for %s", artifact);
+                EcsLogger.warn("com.artipie.composer")
+                    .message("No metadata found for package")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_release_date")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .log();
                 return Optional.empty();
             }
             final JsonObject json = metadata.get();
             final JsonObject packages = json.getJsonObject("packages");
             if (packages == null) {
-                Logger.warn(this, "No 'packages' object in metadata for %s", artifact);
+                EcsLogger.warn("com.artipie.composer")
+                    .message("No 'packages' object in metadata")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_release_date")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .log();
                 return Optional.empty();
             }
             final JsonObject versionData = findVersionData(packages, artifact, version);
             if (versionData == null) {
-                Logger.warn(this, "Version %s not found for package %s", version, artifact);
+                EcsLogger.warn("com.artipie.composer")
+                    .message("Version not found for package")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_release_date")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .log();
                 return Optional.empty();
             }
             final String timeStr = versionData.getString("time", null);
@@ -73,13 +98,35 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 try {
                     final java.time.OffsetDateTime odt = java.time.OffsetDateTime.parse(timeStr);
                     final Instant instant = odt.toInstant();
-                    Logger.info(this, "Found release date for %s:%s = %s", artifact, version, instant);
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Found release date for package")
+                        .eventCategory("repository")
+                        .eventAction("cooldown_release_date")
+                        .eventOutcome("success")
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .field("package.release_date", instant.toString())
+                        .log();
                     return Optional.of(instant);
                 } catch (final DateTimeParseException e) {
-                    Logger.warn(this, "Failed to parse time '%s' for %s:%s", timeStr, artifact, version);
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("Failed to parse time field: " + timeStr)
+                        .eventCategory("repository")
+                        .eventAction("cooldown_release_date")
+                        .eventOutcome("failure")
+                        .field("package.name", artifact)
+                        .field("package.version", version)
+                        .log();
                 }
             }
-            Logger.warn(this, "No 'time' field found for %s:%s", artifact, version);
+            EcsLogger.warn("com.artipie.composer")
+                .message("No 'time' field found in metadata")
+                .eventCategory("repository")
+                .eventAction("cooldown_release_date")
+                .eventOutcome("failure")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .log();
             return Optional.empty();
         });
     }
@@ -89,10 +136,22 @@ public final class ComposerCooldownInspector implements CooldownInspector {
         final String artifact,
         final String version
     ) {
-        Logger.info(this, "Fetching dependencies for %s:%s", artifact, version);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Fetching dependencies for package")
+            .eventCategory("repository")
+            .eventAction("cooldown_dependencies")
+            .field("package.name", artifact)
+            .field("package.version", version)
+            .log();
         return this.fetchMetadata(artifact).thenApply(metadata -> {
             if (metadata.isEmpty()) {
-                Logger.warn(this, "No metadata found for %s", artifact);
+                EcsLogger.warn("com.artipie.composer")
+                    .message("No metadata found for package")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_dependencies")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .log();
                 return Collections.emptyList();
             }
             final JsonObject json = metadata.get();
@@ -106,7 +165,13 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             }
             final JsonObject require = versionData.getJsonObject("require");
             if (require == null || require.isEmpty()) {
-                Logger.debug(this, "No dependencies found for %s:%s", artifact, version);
+                EcsLogger.debug("com.artipie.composer")
+                    .message("No dependencies found for package")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_dependencies")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .log();
                 return Collections.emptyList();
             }
             final List<CooldownDependency> deps = new ArrayList<>();
@@ -117,7 +182,14 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 final String versionConstraint = require.getString(depName);
                 deps.add(new CooldownDependency(depName, versionConstraint));
             }
-            Logger.info(this, "Found %d dependencies for %s:%s", deps.size(), artifact, version);
+            EcsLogger.debug("com.artipie.composer")
+                .message("Found " + deps.size() + " dependencies for package")
+                .eventCategory("repository")
+                .eventAction("cooldown_dependencies")
+                .eventOutcome("success")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .log();
             return deps;
         });
 
@@ -164,7 +236,13 @@ public final class ComposerCooldownInspector implements CooldownInspector {
     private CompletableFuture<Optional<JsonObject>> fetchMetadata(final String packageName) {
         // Packagist v2 API: /p2/{vendor}/{package}.json
         final String path = String.format("/p2/%s.json", packageName);
-        Logger.debug(this, "Fetching metadata from %s", path);
+        EcsLogger.debug("com.artipie.composer")
+            .message("Fetching metadata from remote")
+            .eventCategory("repository")
+            .eventAction("metadata_fetch")
+            .field("url.path", path)
+            .field("package.name", packageName)
+            .log();
         return this.remote.response(
             new RequestLine(RqMethod.GET, path),
             Headers.EMPTY,
@@ -173,24 +251,28 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             // CRITICAL: Always consume body to prevent Vert.x request leak
             return new Content.From(response.body()).asStringFuture().thenApply(content -> {
                 if (!response.status().success()) {
-                    Logger.warn(
-                        this,
-                        "Failed to fetch metadata for %s (status: %s)",
-                        packageName,
-                        response.status()
-                    );
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("Failed to fetch metadata from remote")
+                        .eventCategory("repository")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .field("package.name", packageName)
+                        .field("http.response.status_code", response.status().code())
+                        .log();
                     return Optional.empty();
                 }
                 try {
                     final JsonObject json = Json.createReader(new StringReader(content)).readObject();
                     return Optional.of(json);
                 } catch (final Exception e) {
-                    Logger.error(
-                        this,
-                        "Failed to parse JSON metadata for %s: %s",
-                        packageName,
-                        e.getMessage()
-                    );
+                    EcsLogger.error("com.artipie.composer")
+                        .message("Failed to parse JSON metadata")
+                        .eventCategory("repository")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .field("package.name", packageName)
+                        .error(e)
+                        .log();
                     return Optional.empty();
                 }
             });

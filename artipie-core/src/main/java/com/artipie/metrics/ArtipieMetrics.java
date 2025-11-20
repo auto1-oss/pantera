@@ -4,8 +4,7 @@
  */
 package com.artipie.metrics;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 /**
  * Artipie metrics - Compatibility wrapper for OpenTelemetry.
@@ -17,8 +16,6 @@ import org.slf4j.LoggerFactory;
 @Deprecated
 public final class ArtipieMetrics {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ArtipieMetrics.class);
-    
     private static volatile ArtipieMetrics instance;
     
     private ArtipieMetrics() {
@@ -34,7 +31,12 @@ public final class ArtipieMetrics {
             synchronized (ArtipieMetrics.class) {
                 if (instance == null) {
                     instance = new ArtipieMetrics();
-                    LOGGER.info("ArtipieMetrics compatibility wrapper initialized (delegates to OtelMetrics)");
+                    EcsLogger.info("com.artipie.metrics")
+                        .message("ArtipieMetrics compatibility wrapper initialized (delegate: OtelMetrics)")
+                        .eventCategory("metrics")
+                        .eventAction("metrics_init")
+                        .eventOutcome("success")
+                        .log();
                 }
             }
         }

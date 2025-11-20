@@ -12,9 +12,9 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ArtifactEvent;
-import com.jcabi.log.Logger;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -79,19 +79,31 @@ final class AddArchiveSlice implements Slice {
         
         // Validate path doesn't contain directory traversal
         if (uri.contains("..")) {
-            Logger.warn(this, "Rejected archive path with '..': %s", uri);
+            EcsLogger.warn("com.artipie.composer")
+                .message("Rejected archive path with directory traversal")
+                .eventCategory("repository")
+                .eventAction("archive_upload")
+                .eventOutcome("failure")
+                .field("url.path", uri)
+                .log();
             return ResponseBuilder.badRequest()
                 .textBody("Path traversal not allowed")
                 .completedFuture();
         }
-        
+
         // Validate archive format - support .zip, .tar.gz, .tgz
         final String lowerUri = uri.toLowerCase();
         final boolean isZip = lowerUri.endsWith(".zip");
         final boolean isTarGz = lowerUri.endsWith(".tar.gz") || lowerUri.endsWith(".tgz");
-        
+
         if (!isZip && !isTarGz) {
-            Logger.warn(this, "Rejected unsupported archive format: %s", uri);
+            EcsLogger.warn("com.artipie.composer")
+                .message("Rejected unsupported archive format")
+                .eventCategory("repository")
+                .eventAction("archive_upload")
+                .eventOutcome("failure")
+                .field("url.path", uri)
+                .log();
             return ResponseBuilder.badRequest()
                 .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
                 .completedFuture();
@@ -112,7 +124,13 @@ final class AddArchiveSlice implements Slice {
                     // Extract name and version from composer.json (source of truth)
                     final String packageName = composerJson.getString("name", null);
                     if (packageName == null || packageName.trim().isEmpty()) {
-                        Logger.warn(this, "Missing or empty 'name' in composer.json for: %s", uri);
+                        EcsLogger.warn("com.artipie.composer")
+                            .message("Missing or empty 'name' in composer.json")
+                            .eventCategory("repository")
+                            .eventAction("archive_upload")
+                            .eventOutcome("failure")
+                            .field("url.path", uri)
+                            .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
                                 .textBody("composer.json must contain non-empty 'name' field")
@@ -131,22 +149,25 @@ final class AddArchiveSlice implements Slice {
                     } else {
                         // Try to extract version from filename
                         version = extractVersionFromFilename(filename).orElse("dev-master");
-                        Logger.info(
-                            this,
-                            "Version not found in composer.json, extracted '%s' from filename: %s",
-                            version,
-                            filename
-                        );
+                        EcsLogger.debug("com.artipie.composer")
+                            .message("Version not found in composer.json, extracted from filename")
+                            .eventCategory("repository")
+                            .eventAction("archive_upload")
+                            .field("package.version", version)
+                            .field("file.name", filename)
+                            .log();
                     }
                     
                     // Validate package name format (must be vendor/package)
                     final String[] parts = packageName.split("/");
                     if (parts.length != 2) {
-                        Logger.warn(
-                            this,
-                            "Invalid package name format '%s', expected 'vendor/package'",
-                            packageName
-                        );
+                        EcsLogger.warn("com.artipie.composer")
+                            .message("Invalid package name format, expected 'vendor/package'")
+                            .eventCategory("repository")
+                            .eventAction("archive_upload")
+                            .eventOutcome("failure")
+                            .field("package.name", packageName)
+                            .log();
                         return CompletableFuture.completedFuture(
                             ResponseBuilder.badRequest()
                                 .textBody("Package name must be in format 'vendor/package'")
@@ -174,11 +195,11 @@ final class AddArchiveSlice implements Slice {
                         final java.util.regex.Matcher matcher = devPattern.matcher(filename);
                         if (matcher.find()) {
                             uniqueSuffix = "-" + matcher.group(1);
-                            Logger.info(
-                                this,
-                                "Dev version detected, preserving unique identifier: %s",
-                                uniqueSuffix
-                            );
+                            EcsLogger.debug("com.artipie.composer")
+                                .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
+                                .eventCategory("repository")
+                                .eventAction("archive_upload")
+                                .log();
                         }
                     }
                     
@@ -202,14 +223,15 @@ final class AddArchiveSlice implements Slice {
                         artifactFilename
                     );
                     
-                    Logger.info(
-                        this,
-                        "Processing Composer package: %s version %s -> %s (format: %s)",
-                        packageName,
-                        version,
-                        artifactPath,
-                        isZip ? "ZIP" : "TAR.GZ"
-                    );
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Processing Composer package upload")
+                        .eventCategory("repository")
+                        .eventAction("archive_upload")
+                        .field("package.name", packageName)
+                        .field("package.version", version)
+                        .field("package.path", artifactPath)
+                        .field("file.type", isZip ? "ZIP" : "TAR.GZ")
+                        .log();
                     
                     // Create appropriate archive handler for final storage
                     // Use sanitized version for metadata consistency
@@ -236,11 +258,13 @@ final class AddArchiveSlice implements Slice {
                                         .map(Long::longValue)
                                         .orElse(0L);
                                 } catch (final Exception e) {
-                                    Logger.warn(
-                                        this,
-                                        "Failed to get file size: %s",
-                                        e.getMessage()
-                                    );
+                                    EcsLogger.warn("com.artipie.composer")
+                                        .message("Failed to get file size for event")
+                                        .eventCategory("repository")
+                                        .eventAction("event_creation")
+                                        .eventOutcome("failure")
+                                        .field("error.message", e.getMessage())
+                                        .log();
                                     return;
                                 }
                                 final long created = System.currentTimeMillis();
@@ -256,14 +280,16 @@ final class AddArchiveSlice implements Slice {
                                         (Long) null  // No release date for local uploads
                                     )
                                 );
-                                Logger.info(
-                                    this,
-                                    "Recorded Composer upload: %s:%s (repo=%s, size=%d)",
-                                    packageName,
-                                    version,
-                                    this.rname,
-                                    size
-                                );
+                                EcsLogger.info("com.artipie.composer")
+                                    .message("Recorded Composer package upload event")
+                                    .eventCategory("repository")
+                                    .eventAction("event_creation")
+                                    .eventOutcome("success")
+                                    .field("package.name", packageName)
+                                    .field("package.version", version)
+                                    .field("repository.name", this.rname)
+                                    .field("package.size", size)
+                                    .log();
                             }
                         );
                     }
@@ -271,12 +297,14 @@ final class AddArchiveSlice implements Slice {
                     return res.thenApply(nothing -> ResponseBuilder.created().build());
                 })
                 .exceptionally(error -> {
-                    Logger.error(
-                        this,
-                        "Failed to process Composer package %s: %s",
-                        filename,
-                        error.getMessage()
-                    );
+                    EcsLogger.error("com.artipie.composer")
+                        .message("Failed to process Composer package")
+                        .eventCategory("repository")
+                        .eventAction("archive_upload")
+                        .eventOutcome("failure")
+                        .error(error)
+                        .field("file.name", filename)
+                        .log();
                     return ResponseBuilder.internalError()
                         .textBody(
                             String.format(

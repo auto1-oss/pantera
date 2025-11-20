@@ -6,7 +6,7 @@ package com.artipie.db;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.ArtipieException;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
@@ -216,13 +216,13 @@ public final class ArtifactDbFactory {
         final HikariDataSource source = new HikariDataSource(hikariConfig);
 
         // Log connection pool configuration for monitoring
-        Logger.info(
-            ArtifactDbFactory.class,
-            "HikariCP connection pool initialized: maxPoolSize=%d, minIdle=%d, leakDetectionThreshold=60s",
-            poolMaxSize,
-            poolMinIdle
-        );
-        
+        EcsLogger.info("com.artipie.db")
+            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: 60000ms)")
+            .eventCategory("database")
+            .eventAction("connection_pool_init")
+            .eventOutcome("success")
+            .log();
+
         ArtifactDbFactory.createStructure(source);
         return source;
     }

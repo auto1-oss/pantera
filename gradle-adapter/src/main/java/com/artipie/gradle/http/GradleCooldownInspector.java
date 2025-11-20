@@ -9,10 +9,10 @@ import com.artipie.cooldown.CooldownInspector;
 import com.artipie.asto.Content;
 import com.artipie.http.Headers;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -48,7 +48,13 @@ final class GradleCooldownInspector implements CooldownInspector {
 
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
-        Logger.info(this, "Checking release date for %s:%s", artifact, version);
+        EcsLogger.debug("com.artipie.gradle")
+            .message("Checking release date")
+            .eventCategory("repository")
+            .eventAction("cooldown_inspector")
+            .field("package.name", artifact)
+            .field("package.version", version)
+            .log();
         final String modulePath = GradlePathBuilder.modulePath(artifact, version);
         final String pomPath = GradlePathBuilder.pomPath(artifact, version);
         final String jarPath = GradlePathBuilder.jarPath(artifact, version);
@@ -69,7 +75,12 @@ final class GradleCooldownInspector implements CooldownInspector {
     private CompletableFuture<Optional<Instant>> tryModuleHead(final String path) {
         return this.head.head(path).thenApply(headers -> {
             final Optional<Instant> result = headers.flatMap(GradleCooldownInspector::parseLastModified);
-            result.ifPresent(instant -> Logger.info(this, "Found release date from module HEAD: %s", instant));
+            result.ifPresent(instant -> EcsLogger.debug("com.artipie.gradle")
+                .message("Found release date from module HEAD")
+                .eventCategory("repository")
+                .eventAction("cooldown_inspector")
+                .field("package.release_date", instant)
+                .log());
             return result;
         }).toCompletableFuture();
     }
@@ -77,7 +88,12 @@ final class GradleCooldownInspector implements CooldownInspector {
     private CompletableFuture<Optional<Instant>> tryPomHead(final String path) {
         return this.head.head(path).thenApply(headers -> {
             final Optional<Instant> result = headers.flatMap(GradleCooldownInspector::parseLastModified);
-            result.ifPresent(instant -> Logger.info(this, "Found release date from POM HEAD: %s", instant));
+            result.ifPresent(instant -> EcsLogger.debug("com.artipie.gradle")
+                .message("Found release date from POM HEAD")
+                .eventCategory("repository")
+                .eventAction("cooldown_inspector")
+                .field("package.release_date", instant)
+                .log());
             return result;
         }).toCompletableFuture();
     }
@@ -88,7 +104,12 @@ final class GradleCooldownInspector implements CooldownInspector {
                 final Optional<Instant> result = resp.status().success()
                     ? parseLastModified(resp.headers())
                     : Optional.empty();
-                result.ifPresent(instant -> Logger.info(this, "Found release date from module GET: %s", instant));
+                result.ifPresent(instant -> EcsLogger.debug("com.artipie.gradle")
+                    .message("Found release date from module GET")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .field("package.release_date", instant)
+                    .log());
                 return result;
             }).toCompletableFuture();
     }
@@ -101,9 +122,21 @@ final class GradleCooldownInspector implements CooldownInspector {
         return this.head.head(path).thenApply(headers -> {
             final Optional<Instant> result = headers.flatMap(GradleCooldownInspector::parseLastModified);
             if (result.isEmpty()) {
-                Logger.warn(this, "Could not find release date for %s:%s", artifact, version);
+                EcsLogger.warn("com.artipie.gradle")
+                    .message("Could not find release date")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .log();
             } else {
-                Logger.info(this, "Found release date from JAR HEAD: %s", result.get());
+                EcsLogger.debug("com.artipie.gradle")
+                    .message("Found release date from JAR HEAD")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .field("package.release_date", result.get())
+                    .log();
             }
             return result;
         }).toCompletableFuture();
@@ -133,13 +166,15 @@ final class GradleCooldownInspector implements CooldownInspector {
                     });
             });
         }).exceptionally(throwable -> {
-            Logger.error(
-                this,
-                "Failed to read dependencies for %s:%s - %s",
-                artifact,
-                version,
-                throwable.getMessage()
-            );
+            EcsLogger.error("com.artipie.gradle")
+                .message("Failed to read dependencies")
+                .eventCategory("repository")
+                .eventAction("cooldown_inspector")
+                .eventOutcome("failure")
+                .field("package.name", artifact)
+                .field("package.version", version)
+                .error(throwable)
+                .log();
             return Collections.<CooldownDependency>emptyList();
         });
     }
@@ -167,11 +202,13 @@ final class GradleCooldownInspector implements CooldownInspector {
                     DateTimeFormatter.ofPattern("EEE, dd MMM yyyy H:mm:ss z", Locale.US);
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
-                Logger.warn(
-                    GradleCooldownInspector.class,
-                    "Invalid Last-Modified header: %s",
-                    raw
-                );
+                EcsLogger.warn("com.artipie.gradle")
+                    .message("Invalid Last-Modified header")
+                    .eventCategory("repository")
+                    .eventAction("cooldown_inspector")
+                    .eventOutcome("failure")
+                    .field("http.response.headers.Last-Modified", raw)
+                    .log();
                 return Optional.empty();
             }
         }
@@ -231,13 +268,15 @@ final class GradleCooldownInspector implements CooldownInspector {
                 return result;
             });
         }).exceptionally(throwable -> {
-            Logger.warn(
-                GradleCooldownInspector.class,
-                "Failed to resolve parent chain for %s:%s - %s",
-                current.artifact(),
-                current.version(),
-                throwable.getMessage()
-            );
+            EcsLogger.warn("com.artipie.gradle")
+                .message("Failed to resolve parent chain")
+                .eventCategory("repository")
+                .eventAction("cooldown_inspector")
+                .eventOutcome("failure")
+                .field("package.name", current.artifact())
+                .field("package.version", current.version())
+                .error(throwable)
+                .log();
             return List.of(current);
         });
     }

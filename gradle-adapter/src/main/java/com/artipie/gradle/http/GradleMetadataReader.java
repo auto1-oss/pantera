@@ -7,10 +7,10 @@ package com.artipie.gradle.http;
 import com.artipie.asto.Content;
 import com.artipie.asto.Remaining;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 
@@ -60,7 +60,14 @@ final class GradleMetadataReader {
             Content.EMPTY
         ).thenCompose(response -> {
             if (!response.status().success()) {
-                Logger.warn(this, "Failed to fetch POM %s: %s", path, response.status());
+                EcsLogger.warn("com.artipie.gradle")
+                    .message("Failed to fetch POM")
+                    .eventCategory("repository")
+                    .eventAction("metadata_reader")
+                    .eventOutcome("failure")
+                    .field("url.path", path)
+                    .field("http.response.status_code", response.status().code())
+                    .log();
                 // CRITICAL: Consume body before returning empty to prevent memory leak
                 return response.body().asBytesFuture().thenApply(ignored ->
                     Optional.empty()

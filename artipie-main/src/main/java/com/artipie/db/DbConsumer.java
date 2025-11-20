@@ -5,7 +5,7 @@
 package com.artipie.db;
 
 import com.artipie.scheduling.ArtifactEvent;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
 import io.reactivex.rxjava3.disposables.Disposable;
@@ -93,7 +93,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
         @Override
         public void onSubscribe(final @NonNull Disposable disposable) {
-            Logger.debug(this, "Subscribed to insert/delete db records");
+            EcsLogger.debug("com.artipie.db")
+                .message("Subscribed to insert/delete db records")
+                .eventCategory("database")
+                .eventAction("subscription_start")
+                .log();
         }
 
         @Override
@@ -145,13 +149,27 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             delete.execute();
                         }
                     } catch (final SQLException ex) {
-                        Logger.error(this, ex.getMessage());
+                        EcsLogger.error("com.artipie.db")
+                            .message("Failed to process artifact event")
+                            .eventCategory("database")
+                            .eventAction("artifact_event_process")
+                            .eventOutcome("failure")
+                            .field("repository.name", record.repoName())
+                            .field("package.name", record.artifactName())
+                            .error(ex)
+                            .log();
                         errors.add(record);
                     }
                 }
                 conn.commit();
             } catch (final SQLException ex) {
-                Logger.error(this, ex.getMessage());
+                EcsLogger.error("com.artipie.db")
+                    .message("Failed to commit artifact events batch (" + events.size() + " events)")
+                    .eventCategory("database")
+                    .eventAction("batch_commit")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
                 events.forEach(DbConsumer.this.subject::onNext);
                 error = true;
             }
@@ -162,12 +180,22 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
         @Override
         public void onError(final @NonNull Throwable error) {
-            Logger.error(this, "Fatal error!");
+            EcsLogger.error("com.artipie.db")
+                .message("Fatal error in database consumer")
+                .eventCategory("database")
+                .eventAction("subscription_error")
+                .eventOutcome("failure")
+                .error(error)
+                .log();
         }
 
         @Override
         public void onComplete() {
-            Logger.debug(this, "Subscription cancelled");
+            EcsLogger.debug("com.artipie.db")
+                .message("Subscription cancelled")
+                .eventCategory("database")
+                .eventAction("subscription_complete")
+                .log();
         }
     }
 }

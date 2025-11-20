@@ -13,7 +13,7 @@ import com.artipie.asto.UnderLockOperation;
 import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
@@ -114,11 +114,14 @@ public final class VertxFileStorage implements Storage {
                 } else {
                     keys = Collections.emptyList();
                 }
-                Logger.info(
-                    this,
-                    "Found %d objects by the prefix \"%s\" in %s by %s: %s",
-                    keys.size(), prefix.string(), this.dir, path, keys
-                );
+                EcsLogger.debug("com.artipie.asto")
+                    .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
+                    .eventCategory("storage")
+                    .eventAction("list_keys")
+                    .eventOutcome("success")
+                    .field("file.path", path.toString())
+                    .field("file.directory", this.dir.toString())
+                    .log();
                 return keys;
             })
             .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))

@@ -4,7 +4,7 @@
  */
 package com.artipie.group;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -98,21 +98,21 @@ public final class GroupMemberFlattener {
         
         // Deduplicate while preserving order
         final List<String> deduplicated = new ArrayList<>(new LinkedHashSet<>(flat));
-        
-        Logger.info(
-            this,
-            "Flattened group %s: %d members → %d unique members",
-            groupName,
-            flat.size(),
-            deduplicated.size()
-        );
-        
+
+        EcsLogger.debug("com.artipie.group")
+            .message("Flattened group members (" + flat.size() + " total, " + deduplicated.size() + " unique)")
+            .eventCategory("repository")
+            .eventAction("group_flatten")
+            .eventOutcome("success")
+            .field("repository.name", groupName)
+            .log();
+
         return deduplicated;
     }
 
     /**
      * Recursive flattening with cycle detection.
-     * 
+     *
      * @param repoName Repository to flatten (group or leaf)
      * @param visited Already visited groups (for cycle detection)
      * @return Flat list of leaf repositories
@@ -132,46 +132,47 @@ public final class GroupMemberFlattener {
                 )
             );
         }
-        
+
         final List<String> result = new ArrayList<>();
-        
+
         // Check if this is a group repository
         if (this.isGroup.apply(repoName)) {
-            Logger.debug(
-                this,
-                "Flattening group: %s (depth=%d)",
-                repoName,
-                visited.size()
-            );
-            
+            EcsLogger.debug("com.artipie.group")
+                .message("Flattening group repository (recursion depth: " + visited.size() + ")")
+                .eventCategory("repository")
+                .eventAction("group_flatten_recursive")
+                .field("repository.name", repoName)
+                .log();
+
             // Mark as visited
             visited.add(repoName);
-            
+
             // Get members and recursively flatten each
             final List<String> members = this.getMembers.apply(repoName);
             for (String member : members) {
                 result.addAll(flattenRecursive(member, new HashSet<>(visited)));
             }
-            
+
             // Unmark (for parallel branches)
             visited.remove(repoName);
         } else {
             // Leaf repository - add directly
-            Logger.debug(
-                this,
-                "Adding leaf repository: %s",
-                repoName
-            );
+            EcsLogger.debug("com.artipie.group")
+                .message("Adding leaf repository")
+                .eventCategory("repository")
+                .eventAction("group_add_leaf")
+                .field("repository.name", repoName)
+                .log();
             result.add(repoName);
         }
-        
+
         return result;
     }
 
     /**
      * Flatten and deduplicate in one pass.
      * More efficient for large group hierarchies.
-     * 
+     *
      * @param groupName Group repository name
      * @return Deduplicated flat list
      */
@@ -179,14 +180,15 @@ public final class GroupMemberFlattener {
         final Set<String> visited = new HashSet<>();
         final LinkedHashSet<String> unique = new LinkedHashSet<>();
         flattenIntoSet(groupName, visited, unique);
-        
-        Logger.info(
-            this,
-            "Flattened group %s: %d unique members",
-            groupName,
-            unique.size()
-        );
-        
+
+        EcsLogger.debug("com.artipie.group")
+            .message("Flattened and deduplicated group (" + unique.size() + " unique members)")
+            .eventCategory("repository")
+            .eventAction("group_flatten_deduplicate")
+            .eventOutcome("success")
+            .field("repository.name", groupName)
+            .log();
+
         return new ArrayList<>(unique);
     }
 

@@ -7,9 +7,8 @@ package com.artipie.auth;
 
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.Optional;
-import java.util.logging.Level;
 
 /**
  * Loggin implementation of {@link LoggingAuth}.
@@ -23,43 +22,34 @@ public final class LoggingAuth implements Authentication {
     private final Authentication origin;
 
     /**
-     * Log level.
-     */
-    private final Level level;
-
-    /**
-     * Decorates {@link Authentication} with {@code INFO} logger.
+     * Decorates {@link Authentication} with logger.
      * @param origin Authentication
      */
     public LoggingAuth(final Authentication origin) {
-        this(origin, Level.INFO);
-    }
-
-    /**
-     * Decorates {@link Authentication} with logger.
-     * @param origin Origin auth
-     * @param level Log level
-     */
-    public LoggingAuth(final Authentication origin, final Level level) {
         this.origin = origin;
-        this.level = level;
     }
 
     @Override
     public Optional<AuthUser> user(final String username, final String password) {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isEmpty()) {
-            Logger.log(
-                this.level, this.origin,
-                "Failed to authenticate '%s' user via %s",
-                username, this.origin
-            );
+            EcsLogger.warn("com.artipie.auth")
+                .message("Failed to authenticate user")
+                .eventCategory("authentication")
+                .eventAction("login")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .field("event.provider", this.origin.toString())
+                .log();
         } else {
-            Logger.log(
-                this.level, this.origin,
-                "Successfully authenticated '%s' user via %s",
-                username, this.origin
-            );
+            EcsLogger.info("com.artipie.auth")
+                .message("Successfully authenticated user")
+                .eventCategory("authentication")
+                .eventAction("login")
+                .eventOutcome("success")
+                .field("user.name", username)
+                .field("event.provider", this.origin.toString())
+                .log();
         }
         return res;
     }

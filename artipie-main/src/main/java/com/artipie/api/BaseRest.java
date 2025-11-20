@@ -4,7 +4,7 @@
  */
 package com.artipie.api;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.HttpException;
@@ -47,7 +47,14 @@ abstract class BaseRest {
                     .setStatusCode(code)
                     .end();
             }
-            Logger.error(this, context.failure().getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("REST API request failed")
+                .eventCategory("api")
+                .eventAction("request_handling")
+                .eventOutcome("failure")
+                .field("http.response.status_code", code)
+                .error(context.failure())
+                .log();
         };
     }
 

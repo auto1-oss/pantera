@@ -7,8 +7,7 @@ package com.artipie.settings;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.io.IOException;
 import java.nio.file.ClosedWatchServiceException;
@@ -34,8 +33,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * @since 1.0
  */
 public final class ConfigWatchService implements AutoCloseable {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(ConfigWatchService.class);
 
     /**
      * Debounce delay in milliseconds.
@@ -114,13 +111,25 @@ public final class ConfigWatchService implements AutoCloseable {
                     StandardWatchEventKinds.ENTRY_MODIFY,
                     StandardWatchEventKinds.ENTRY_CREATE
                 );
-                LOGGER.info("Started watching config file: {}", this.configPath);
+                EcsLogger.info("com.artipie.settings")
+                    .message("Started watching config file")
+                    .eventCategory("configuration")
+                    .eventAction("config_watch_start")
+                    .eventOutcome("success")
+                    .field("file.path", this.configPath.toString())
+                    .log();
 
                 this.watchThread = new Thread(this::watchLoop, "config-watcher");
                 this.watchThread.setDaemon(true);
                 this.watchThread.start();
             } catch (final IOException ex) {
-                LOGGER.error("Failed to start config watch service", ex);
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to start config watch service")
+                    .eventCategory("configuration")
+                    .eventAction("config_watch_start")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
                 this.running.set(false);
             }
         }
@@ -154,7 +163,13 @@ public final class ConfigWatchService implements AutoCloseable {
             } catch (final ClosedWatchServiceException ex) {
                 break;
             } catch (final Exception ex) {
-                LOGGER.error("Error in config watch loop", ex);
+                EcsLogger.error("com.artipie.settings")
+                    .message("Error in config watch loop")
+                    .eventCategory("configuration")
+                    .eventAction("config_watch")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
             }
         }
     }
@@ -181,13 +196,21 @@ public final class ConfigWatchService implements AutoCloseable {
         try {
             final List<String> newPrefixes = this.readPrefixes();
             this.prefixesConfig.update(newPrefixes);
-            LOGGER.info(
-                "Reloaded global_prefixes from config: {} (version: {})",
-                newPrefixes,
-                this.prefixesConfig.version()
-            );
+            EcsLogger.info("com.artipie.settings")
+                .message("Reloaded global_prefixes from config (prefixes: " + newPrefixes.toString() + ", version: " + this.prefixesConfig.version() + ")")
+                .eventCategory("configuration")
+                .eventAction("config_reload")
+                .eventOutcome("success")
+                .log();
         } catch (final Exception ex) {
-            LOGGER.error("Failed to reload config file: {}", this.configPath, ex);
+            EcsLogger.error("com.artipie.settings")
+                .message("Failed to reload config file")
+                .eventCategory("configuration")
+                .eventAction("config_reload")
+                .eventOutcome("failure")
+                .field("file.path", this.configPath.toString())
+                .error(ex)
+                .log();
         }
     }
 
@@ -229,7 +252,13 @@ public final class ConfigWatchService implements AutoCloseable {
             try {
                 this.watcher.close();
             } catch (final IOException ex) {
-                LOGGER.error("Error closing watch service", ex);
+                EcsLogger.error("com.artipie.settings")
+                    .message("Error closing watch service")
+                    .eventCategory("configuration")
+                    .eventAction("config_watch_stop")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
             }
             this.executor.shutdown();
             try {
@@ -243,7 +272,12 @@ public final class ConfigWatchService implements AutoCloseable {
             if (this.watchThread != null) {
                 this.watchThread.interrupt();
             }
-            LOGGER.info("Config watch service stopped");
+            EcsLogger.info("com.artipie.settings")
+                .message("Config watch service stopped")
+                .eventCategory("configuration")
+                .eventAction("config_watch_stop")
+                .eventOutcome("success")
+                .log();
         }
     }
 }

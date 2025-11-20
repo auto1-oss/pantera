@@ -7,21 +7,18 @@ package com.artipie.npm.proxy.http;
 import com.artipie.asto.Content;
 import com.artipie.http.Headers;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
-import java.util.logging.Logger;
-import java.util.logging.Level;
 
 /**
  * Minimal proxy for npm security audit endpoints.
  * Forwards requests to the upstream registry without caching or transformation.
  */
 final class SecurityAuditProxySlice implements Slice {
-
-    private static final Logger LOGGER = Logger.getLogger(SecurityAuditProxySlice.class.getName());
 
     /**
      * Upstream slice (e.g., UriClientSlice to remote registry).
@@ -46,15 +43,18 @@ final class SecurityAuditProxySlice implements Slice {
     ) {
         final RequestLine upstreamLine = upstream(line);
 
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Original path: {0}", line.uri().getPath());
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Upstream path: {0}", upstreamLine.uri().getPath());
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Repo prefix: {0}", this.repo);
+        EcsLogger.debug("com.artipie.npm")
+            .message("NPM Audit Proxy - Streaming request (repo: " + this.repo + ")")
+            .eventCategory("repository")
+            .eventAction("audit_proxy")
+            .field("url.original", line.uri().getPath())
+            .field("url.path", upstreamLine.uri().getPath())
+            .log();
 
         // OPTIMIZATION: Stream body without buffering (98% memory reduction)
         // Use chunked transfer encoding instead of Content-Length
         // This allows streaming large audit payloads without loading into memory
-        
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Streaming request (no buffering)");
+
 
         // Build clean headers for upstream - only forward client headers, not internal ones
         // Remove: Host, authorization, artipie_login, X-Real-IP, X-Forwarded-*, Connection, Content-Length
@@ -93,8 +93,6 @@ final class SecurityAuditProxySlice implements Slice {
         // Use chunked transfer encoding - no Content-Length needed
         // HTTP client will handle chunking automatically
         clean.add("Transfer-Encoding", "chunked");
-
-        LOGGER.log(Level.INFO, "NPM Audit Proxy - Using chunked transfer encoding (streaming)");
 
         // Stream body directly - NO buffering! Memory usage: ~4KB instead of full body size
         // UriClientSlice will add the correct Host header automatically

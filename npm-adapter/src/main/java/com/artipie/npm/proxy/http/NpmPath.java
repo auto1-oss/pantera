@@ -5,7 +5,7 @@
 package com.artipie.npm.proxy.http;
 
 import com.artipie.ArtipieException;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,7 +36,12 @@ public abstract class NpmPath {
         final Matcher matcher = this.pattern().matcher(abspath);
         if (matcher.matches()) {
             final String path = matcher.group(1);
-            Logger.debug(this, "Determined path is: %s", path);
+            EcsLogger.debug("com.artipie.npm")
+                .message("Determined path")
+                .eventCategory("repository")
+                .eventAction("path_resolution")
+                .field("url.path", path)
+                .log();
             return path;
         } else {
             throw new ArtipieException(

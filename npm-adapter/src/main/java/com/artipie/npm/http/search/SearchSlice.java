@@ -68,45 +68,48 @@ public final class SearchSlice implements Slice {
         final Headers headers,
         final Content body
     ) {
-        final String query = line.uri().getQuery();
-        if (query == null || query.isEmpty()) {
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.badRequest()
-                    .textBody("Search query required")
-                    .build()
-            );
-        }
-        
-        final Matcher matcher = QUERY_PATTERN.matcher(query);
-        if (!matcher.find()) {
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.badRequest()
-                    .textBody("Invalid search query")
-                    .build()
-            );
-        }
-        
-        final String text = matcher.group(1);
-        final int size = matcher.group(2) != null 
-            ? Integer.parseInt(matcher.group(2)) 
-            : DEFAULT_SIZE;
-        final int from = matcher.group(3) != null 
-            ? Integer.parseInt(matcher.group(3)) 
-            : 0;
-        
-        return this.index.search(text, size, from)
-            .thenApply(results -> {
-                final JsonArrayBuilder objects = Json.createArrayBuilder();
-                results.forEach(pkg -> objects.add(this.packageToJson(pkg)));
-                
-                return ResponseBuilder.ok()
-                    .jsonBody(Json.createObjectBuilder()
-                        .add("objects", objects)
-                        .add("total", results.size())
-                        .add("time", System.currentTimeMillis())
-                        .build())
-                    .build();
-            });
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            final String query = line.uri().getQuery();
+            if (query == null || query.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badRequest()
+                        .textBody("Search query required")
+                        .build()
+                );
+            }
+
+            final Matcher matcher = QUERY_PATTERN.matcher(query);
+            if (!matcher.find()) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badRequest()
+                        .textBody("Invalid search query")
+                        .build()
+                );
+            }
+
+            final String text = matcher.group(1);
+            final int size = matcher.group(2) != null
+                ? Integer.parseInt(matcher.group(2))
+                : DEFAULT_SIZE;
+            final int from = matcher.group(3) != null
+                ? Integer.parseInt(matcher.group(3))
+                : 0;
+
+            return this.index.search(text, size, from)
+                .thenApply(results -> {
+                    final JsonArrayBuilder objects = Json.createArrayBuilder();
+                    results.forEach(pkg -> objects.add(this.packageToJson(pkg)));
+
+                    return ResponseBuilder.ok()
+                        .jsonBody(Json.createObjectBuilder()
+                            .add("objects", objects)
+                            .add("total", results.size())
+                            .add("time", System.currentTimeMillis())
+                            .build())
+                        .build();
+                });
+        });
     }
     
     /**

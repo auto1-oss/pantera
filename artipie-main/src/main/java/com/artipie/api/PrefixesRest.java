@@ -11,12 +11,11 @@ import com.amihaiemil.eoyaml.YamlSequenceBuilder;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.settings.PrefixesConfig;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,8 +32,6 @@ import java.util.concurrent.CompletableFuture;
  * @since 1.0
  */
 public final class PrefixesRest {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(PrefixesRest.class);
 
     /**
      * Prefixes configuration.
@@ -138,7 +135,13 @@ public final class PrefixesRest {
                 .putHeader("Content-Type", "application/json")
                 .end(response.encode());
         } catch (final Exception ex) {
-            LOGGER.error("Failed to validate prefixes", ex);
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to validate prefixes")
+                .eventCategory("api")
+                .eventAction("prefixes_validate")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             ctx.response()
                 .setStatusCode(400)
                 .putHeader("Content-Type", "application/json")
@@ -183,7 +186,12 @@ public final class PrefixesRest {
             this.updateConfigFile(newPrefixes)
                 .thenAccept(updated -> {
                     if (updated) {
-                        LOGGER.info("Updated global_prefixes in artipie.yml: {}", newPrefixes);
+                        EcsLogger.info("com.artipie.api")
+                            .message("Updated global_prefixes in artipie.yml: " + newPrefixes.toString())
+                            .eventCategory("api")
+                            .eventAction("prefixes_update")
+                            .eventOutcome("success")
+                            .log();
                         ctx.response()
                             .setStatusCode(200)
                             .putHeader("Content-Type", "application/json")
@@ -205,7 +213,13 @@ public final class PrefixesRest {
                     }
                 })
                 .exceptionally(ex -> {
-                    LOGGER.error("Failed to update prefixes", ex);
+                    EcsLogger.error("com.artipie.api")
+                        .message("Failed to update prefixes")
+                        .eventCategory("api")
+                        .eventAction("prefixes_update")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
                     ctx.response()
                         .setStatusCode(500)
                         .putHeader("Content-Type", "application/json")
@@ -217,7 +231,13 @@ public final class PrefixesRest {
                     return null;
                 });
         } catch (final Exception ex) {
-            LOGGER.error("Failed to update prefixes", ex);
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to update prefixes")
+                .eventCategory("api")
+                .eventAction("prefixes_update")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
             ctx.response()
                 .setStatusCode(400)
                 .putHeader("Content-Type", "application/json")
@@ -270,7 +290,14 @@ public final class PrefixesRest {
 
                 return true;
             } catch (final IOException ex) {
-                LOGGER.error("Failed to update config file", ex);
+                EcsLogger.error("com.artipie.api")
+                    .message("Failed to update config file")
+                    .eventCategory("api")
+                    .eventAction("config_update")
+                    .eventOutcome("failure")
+                    .field("file.path", this.configPath.toString())
+                    .error(ex)
+                    .log();
                 return false;
             }
         });

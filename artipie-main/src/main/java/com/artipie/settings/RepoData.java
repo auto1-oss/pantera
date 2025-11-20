@@ -16,7 +16,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.SubStorage;
 import com.artipie.cache.StoragesCache;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -66,10 +66,13 @@ public final class RepoData {
                         .deleteAll(new Key.From(repo))
                         .thenAccept(
                             nothing ->
-                                Logger.info(
-                                    this,
-                                    String.format("Removed data from repository %s", repo)
-                                )
+                                EcsLogger.info("com.artipie.settings")
+                                    .message("Removed data from repository")
+                                    .eventCategory("repository")
+                                    .eventAction("data_remove")
+                                    .eventOutcome("success")
+                                    .field("repository.name", repo)
+                                    .log()
                         )
             );
     }
@@ -96,14 +99,12 @@ public final class RepoData {
                         ).thenCompose(nothing -> asto.deleteAll(new Key.From(repo)))
                         .thenAccept(
                             nothing ->
-                                Logger.info(
-                                    this,
-                                    String.format(
-                                        "Moved data from repository %s to %s",
-                                        repo,
-                                        nrepo
-                                    )
-                                )
+                                EcsLogger.info("com.artipie.settings")
+                                    .message("Moved data from repository (" + repo.toString() + " -> " + nrepo.toString() + ")")
+                                    .eventCategory("repository")
+                                    .eventAction("data_move")
+                                    .eventOutcome("success")
+                                    .log()
                         )
             );
     }

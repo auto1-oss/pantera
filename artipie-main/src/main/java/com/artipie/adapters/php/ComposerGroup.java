@@ -11,7 +11,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.settings.repo.RepoConfig;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +46,11 @@ public final class ComposerGroup implements Slice {
      */
     public ComposerGroup(final List<Slice> repositories) {
         this.repositories = repositories;
-        Logger.info(this, "Created Composer group with %d repositories", this.repositories.size());
+        EcsLogger.debug("com.artipie.composer")
+            .message("Created Composer group (" + this.repositories.size() + " repositories)")
+            .eventCategory("repository")
+            .eventAction("group_create")
+            .log();
     }
 
     @Override
@@ -55,7 +59,12 @@ public final class ComposerGroup implements Slice {
         final Headers headers,
         final Content body
     ) {
-        Logger.info(this, "Composer group request: %s", line.uri().getPath());
+        EcsLogger.debug("com.artipie.composer")
+            .message("Composer group request")
+            .eventCategory("http")
+            .eventAction("group_request")
+            .field("url.path", line.uri().getPath())
+            .log();
         return this.tryRepositories(0, line, headers, body);
     }
 
@@ -66,28 +75,36 @@ public final class ComposerGroup implements Slice {
         final Content body
     ) {
         if (index >= this.repositories.size()) {
-            Logger.warn(this, "No repository in group could serve: %s", line.uri().getPath());
+            EcsLogger.warn("com.artipie.composer")
+                .message("No repository in group could serve request")
+                .eventCategory("http")
+                .eventAction("group_request")
+                .eventOutcome("failure")
+                .field("url.path", line.uri().getPath())
+                .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
         }
 
         final Slice repo = this.repositories.get(index);
         return repo.response(line, headers, body).thenCompose(response -> {
             if (response.status().success()) {
-                Logger.info(
-                    this,
-                    "Repository %d served request successfully: %s",
-                    index,
-                    line.uri().getPath()
-                );
+                EcsLogger.debug("com.artipie.composer")
+                    .message("Repository served request successfully (index: " + index + ")")
+                    .eventCategory("http")
+                    .eventAction("group_request")
+                    .eventOutcome("success")
+                    .field("url.path", line.uri().getPath())
+                    .log();
                 return CompletableFuture.completedFuture(response);
             }
-            Logger.debug(
-                this,
-                "Repository %d failed (status %s), trying next: %s",
-                index,
-                response.status(),
-                line.uri().getPath()
-            );
+            EcsLogger.debug("com.artipie.composer")
+                .message("Repository failed, trying next (index: " + index + ")")
+                .eventCategory("http")
+                .eventAction("group_request")
+                .eventOutcome("failure")
+                .field("http.response.status_code", response.status().code())
+                .field("url.path", line.uri().getPath())
+                .log();
             return this.tryRepositories(index + 1, line, headers, body);
         });
     }

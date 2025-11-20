@@ -51,18 +51,22 @@ public final class PackageMetadataSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return this.packages(line.uri().getPath())
-            .toCompletableFuture()
-            .thenApply(
-                opt -> opt.map(
-                    packages -> packages.content()
-                        .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
-                ).orElse(
-                    CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.packages(line.uri().getPath())
+                .toCompletableFuture()
+                .thenApply(
+                    opt -> opt.map(
+                        packages -> packages.content()
+                            .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
+                    ).orElse(
+                        CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        )
                     )
-                )
-            ).thenCompose(Function.identity());
+                ).thenCompose(Function.identity())
+        );
     }
 
     /**

@@ -10,8 +10,8 @@ import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.binary.Hex;
@@ -117,11 +117,11 @@ final class ChecksumProxySlice implements Slice {
                         // CRITICAL: This directly computes the checksum from the artifact body
                         // without relying on caching side effects. This ensures checksums are always
                         // available even if caching fails or is bypassed.
-                        Logger.debug(
-                            this,
-                            "Computing %s checksum for %s (streaming mode)",
-                            algorithm, artifactPath
-                        );
+                        EcsLogger.debug("com.artipie.maven")
+                            .message("Computing " + algorithm + " checksum from artifact (streaming mode): " + artifactPath)
+                            .eventCategory("repository")
+                            .eventAction("checksum_computation")
+                            .log();
                         return computeChecksumStreaming(artifactResp.body(), algorithm, artifactPath);
                     });
             });
@@ -158,19 +158,23 @@ final class ChecksumProxySlice implements Slice {
             .doOnComplete(() -> {
                 // Finalize digest and encode as hex
                 final String hash = Hex.encodeHexString(digest.digest());
-                Logger.debug(
-                    this,
-                    "Computed %s checksum for %s: %s",
-                    algorithm, artifactPath, hash.substring(0, Math.min(16, hash.length())) + "..."
-                );
+                EcsLogger.debug("com.artipie.maven")
+                    .message("Checksum computed successfully (" + algorithm + "): " + hash.substring(0, Math.min(16, hash.length())) + "...")
+                    .eventCategory("repository")
+                    .eventAction("checksum_computation")
+                    .eventOutcome("success")
+                    .field("file.path", artifactPath)
+                    .log();
                 hashFuture.complete(hash);
             })
             .doOnError(err -> {
-                Logger.warn(
-                    this,
-                    "Failed to compute %s checksum for %s: %s",
-                    algorithm, artifactPath, err.getMessage()
-                );
+                EcsLogger.warn("com.artipie.maven")
+                    .message("Failed to compute " + algorithm + " checksum during streaming for: " + artifactPath)
+                    .eventCategory("repository")
+                    .eventAction("checksum_computation")
+                    .eventOutcome("failure")
+                    .field("error.message", err.getMessage())
+                    .log();
                 hashFuture.completeExceptionally(err);
             })
             .to(CompletableInterop.await())
@@ -185,11 +189,14 @@ final class ChecksumProxySlice implements Slice {
             })
             .exceptionally(err -> {
                 // Graceful fallback on streaming failure
-                Logger.error(
-                    this,
-                    "Checksum computation failed for %s: %s",
-                    artifactPath, err.getMessage()
-                );
+                EcsLogger.error("com.artipie.maven")
+                    .message("Checksum computation failed")
+                    .eventCategory("repository")
+                    .eventAction("checksum_computation")
+                    .eventOutcome("failure")
+                    .error(err instanceof Throwable ? (Throwable) err : new RuntimeException(err))
+                    .field("file.path", artifactPath)
+                    .log();
                 return ResponseBuilder.internalError().build();
             })
             .toCompletableFuture();

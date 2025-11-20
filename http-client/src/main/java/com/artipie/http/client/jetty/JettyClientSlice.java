@@ -21,8 +21,8 @@ import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.log.LogSanitizer;
 
 import java.net.URI;
 import java.nio.ByteBuffer;
@@ -37,8 +37,6 @@ import java.util.concurrent.TimeoutException;
  * <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-non-blocking">Docs</a>
  */
 final class JettyClientSlice implements Slice {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(JettyClientSlice.class);
 
     /**
      * HTTP client.
@@ -106,14 +104,18 @@ final class JettyClientSlice implements Slice {
                     demander.run();
                 }
         );
-        if (LOGGER.isDebugEnabled()) {
-            final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
-            LOGGER.debug("Send {} {}:{}{} {} \n{}",
-                request.getMethod(), request.getHost(), request.getPort(), 
-                LogSanitizer.sanitizeUrl(request.getPath()), request.getVersion(),
-                sanitizedHeaders
-            );
-        }
+        final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
+        EcsLogger.debug("com.artipie.http.client")
+            .message("Sending HTTP request")
+            .eventCategory("http")
+            .eventAction("http_request_send")
+            .field("http.request.method", request.getMethod())
+            .field("url.domain", request.getHost())
+            .field("url.port", request.getPort())
+            .field("url.path", LogSanitizer.sanitizeUrl(request.getPath()))
+            .field("http.version", request.getVersion().toString())
+            .field("http.request.headers", sanitizedHeaders.toString())
+            .log();
         request.send(
                 result -> {
                     if (result.getFailure() == null) {
@@ -125,15 +127,17 @@ final class JettyClientSlice implements Slice {
                                     return item;
                                 }
                             );
-                        if (LOGGER.isDebugEnabled()) {
-                            final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
-                                toHeaders(result.getResponse().getHeaders())
-                            );
-                            LOGGER.debug("Got {} {}\n{}",
-                                result.getResponse().getStatus(), 
-                                result.getResponse().getReason(),
-                                sanitizedRespHeaders);
-                        }
+                        final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
+                            toHeaders(result.getResponse().getHeaders())
+                        );
+                        EcsLogger.debug("com.artipie.http.client")
+                            .message("Received HTTP response")
+                            .eventCategory("http")
+                            .eventAction("http_response_receive")
+                            .field("http.response.status_code", result.getResponse().getStatus())
+                            .field("http.response.body.content", result.getResponse().getReason())
+                            .field("http.response.headers", sanitizedRespHeaders.toString())
+                            .log();
                         res.complete(
                             ResponseBuilder.from(status)
                                 .headers(toHeaders(result.getResponse().getHeaders()))
@@ -141,7 +145,13 @@ final class JettyClientSlice implements Slice {
                                 .build()
                         );
                     } else {
-                        LOGGER.error("Got failure: {}", LogSanitizer.sanitizeMessage(result.getFailure().getMessage()), result.getFailure());
+                        EcsLogger.error("com.artipie.http.client")
+                            .message("HTTP request failed")
+                            .eventCategory("http")
+                            .eventAction("http_request_send")
+                            .eventOutcome("failure")
+                            .error(result.getFailure())
+                            .log();
                         res.completeExceptionally(result.getFailure());
                     }
                 }
@@ -234,8 +244,13 @@ final class JettyClientSlice implements Slice {
             while (iterations++ < maxIterations) {
                 // Check timeout
                 if (System.nanoTime() - startTime > timeoutNanos) {
-                    LOGGER.error("Response reading timeout after 30 seconds for {}", 
-                        this.response.getRequest().getURI());
+                    EcsLogger.error("com.artipie.http.client")
+                        .message("Response reading timeout (30 seconds)")
+                        .eventCategory("http")
+                        .eventAction("http_response_read")
+                        .eventOutcome("timeout")
+                        .field("url.full", this.response.getRequest().getURI().toString())
+                        .log();
                     this.response.abort(new TimeoutException("Response reading timeout"));
                     return;
                 }
@@ -249,8 +264,14 @@ final class JettyClientSlice implements Slice {
                     final Throwable failure = chunk.getFailure();
                     if (chunk.isLast()) {
                         this.response.abort(failure);
-                        LOGGER.error("HTTP response read failed for {}", 
-                            this.response.getRequest().getURI(), failure);
+                        EcsLogger.error("com.artipie.http.client")
+                            .message("HTTP response read failed")
+                            .eventCategory("http")
+                            .eventAction("http_response_read")
+                            .eventOutcome("failure")
+                            .field("url.full", this.response.getRequest().getURI().toString())
+                            .error(failure)
+                            .log();
                         return;
                     } else {
                         // A transient failure such as a read timeout.
@@ -264,8 +285,14 @@ final class JettyClientSlice implements Slice {
                         } else {
                             // The transient failure is treated as a terminal failure.
                             this.response.abort(failure);
-                            LOGGER.error("Transient failure treated as terminal for {}", 
-                                this.response.getRequest().getURI(), failure);
+                            EcsLogger.error("com.artipie.http.client")
+                                .message("Transient failure treated as terminal")
+                                .eventCategory("http")
+                                .eventAction("http_response_read")
+                                .eventOutcome("failure")
+                                .field("url.full", this.response.getRequest().getURI().toString())
+                                .error(failure)
+                                .log();
                             return;
                         }
                     }
@@ -276,10 +303,15 @@ final class JettyClientSlice implements Slice {
                     return;
                 }
             }
-            
+
             // Max iterations exceeded
-            LOGGER.error("Max iterations ({}) exceeded while reading response from {}", 
-                maxIterations, this.response.getRequest().getURI());
+            EcsLogger.error("com.artipie.http.client")
+                .message("Max iterations exceeded while reading response (max: " + maxIterations + ")")
+                .eventCategory("http")
+                .eventAction("http_response_read")
+                .eventOutcome("failure")
+                .field("url.full", this.response.getRequest().getURI().toString())
+                .log();
             this.response.abort(new IllegalStateException("Too many chunks - possible infinite loop"));
         }
     }

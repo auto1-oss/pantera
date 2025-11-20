@@ -10,7 +10,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Objects;
@@ -108,7 +108,14 @@ public final class AuthFromStorage implements Authentication {
                 }
             }
         } catch (final IOException err) {
-            Logger.error(AuthFromStorage.class, "Failed to parse yaml for user %s", name);
+            EcsLogger.error("com.artipie.auth")
+                .message("Failed to parse yaml for user")
+                .eventCategory("authentication")
+                .eventAction("user_lookup")
+                .eventOutcome("failure")
+                .field("user.name", name)
+                .error(err)
+                .log();
         }
         return res;
     }

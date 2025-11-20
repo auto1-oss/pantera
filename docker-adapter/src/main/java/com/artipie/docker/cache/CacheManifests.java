@@ -15,9 +15,8 @@ import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.manifest.ManifestLayer;
 import com.artipie.docker.misc.JoinedTagsSource;
 import com.artipie.docker.misc.Pagination;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -36,8 +35,6 @@ import java.util.function.Function;
  * Cache implementation of {@link Repo}.
  */
 public final class CacheManifests implements Manifests {
-
-    private final static Logger LOGGER = LoggerFactory.getLogger(CacheManifests.class);
 
     /**
      * Repository type.
@@ -112,15 +109,28 @@ public final class CacheManifests implements Manifests {
                             this.copy(ref);
                             result = CompletableFuture.completedFuture(original);
                         } else {
-                            LOGGER.warn("Cannot add manifest to cache: [manifest={}, mediaType={}]",
-                                    ref.digest(), manifest.mediaType());
+                            EcsLogger.warn("com.artipie.docker")
+                                .message("Cannot add manifest to cache")
+                                .eventCategory("repository")
+                                .eventAction("manifest_cache")
+                                .eventOutcome("failure")
+                                .field("container.image.hash.all", ref.digest())
+                                .field("file.type", manifest.mediaType())
+                                .log();
                             result = CompletableFuture.completedFuture(original);
                         }
                     } else {
                         result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
                     }
                 } else {
-                    LOGGER.error("Failed getting manifest ref=" + ref.digest(), throwable);
+                    EcsLogger.error("com.artipie.docker")
+                        .message("Failed getting manifest")
+                        .eventCategory("repository")
+                        .eventAction("manifest_get")
+                        .eventOutcome("failure")
+                        .field("container.image.hash.all", ref.digest())
+                        .error(throwable)
+                        .log();
                     result = this.cache.manifests().get(ref);
                 }
                 return result;
@@ -148,7 +158,14 @@ public final class CacheManifests implements Manifests {
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
-                        LOGGER.error("Failed to cache manifest " + ref.digest(), ex);
+                        EcsLogger.error("com.artipie.docker")
+                            .message("Failed to cache manifest")
+                            .eventCategory("repository")
+                            .eventAction("manifest_cache")
+                            .eventOutcome("failure")
+                            .field("container.image.hash.all", ref.digest())
+                            .error(ex)
+                            .log();
                     }
                     return null;
                 }
@@ -172,7 +189,15 @@ public final class CacheManifests implements Manifests {
         final CompletionStage<Optional<Long>> release = needRelease
             ? this.releaseTimestamp(manifest)
                 .exceptionally(ex -> {
-                    LOGGER.warn("Failed to extract release timestamp for {}@{}: {}", this.name, ref.digest(), ex.getMessage());
+                    EcsLogger.warn("com.artipie.docker")
+                        .message("Failed to extract release timestamp")
+                        .eventCategory("repository")
+                        .eventAction("manifest_cache")
+                        .eventOutcome("failure")
+                        .field("container.image.name", this.name)
+                        .field("container.image.hash.all", ref.digest())
+                        .field("error.message", ex.getMessage())
+                        .log();
                     return Optional.empty();
                 })
             : CompletableFuture.completedFuture(Optional.empty());
@@ -265,7 +290,12 @@ public final class CacheManifests implements Manifests {
                 return Optional.of(Instant.parse(created).toEpochMilli());
             }
         } catch (final DateTimeParseException | JsonException ex) {
-            LOGGER.debug("Unable to parse manifest config `created` field: {}", ex.getMessage());
+            EcsLogger.debug("com.artipie.docker")
+                .message("Unable to parse manifest config `created` field")
+                .eventCategory("repository")
+                .eventAction("manifest_cache")
+                .field("error.message", ex.getMessage())
+                .log();
         }
         return Optional.empty();
     }

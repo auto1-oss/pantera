@@ -33,7 +33,7 @@ final class NpmCooldownInspector implements CooldownInspector,
     com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
 
     private final NpmRemote remote;
-    
+
     /**
      * Bounded cache of package metadata.
      * Max 10,000 packages, expire after 24 hours.
@@ -173,24 +173,24 @@ final class NpmCooldownInspector implements CooldownInspector,
         if (cached != null) {
             return cached;
         }
-        
+
         // Create future and cache it immediately to prevent duplicate loads
         final CompletableFuture<Optional<JsonObject>> future = this.loadPackage(name)
             .thenApply(optional -> optional.map(pkg ->
                 Json.createReader(new StringReader(pkg.content())).readObject()
             ));
-        
+
         // Cache the future immediately (even if it might fail)
         // This prevents duplicate concurrent loads for the same package
         this.metadata.put(name, future);
-        
+
         // Remove from cache if load fails or returns empty
         future.thenAccept(result -> {
             if (result.isEmpty()) {
                 this.metadata.invalidate(name);
             }
         });
-        
+
         return future;
     }
 

@@ -40,35 +40,38 @@ public final class DeleteDistTagsSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers iterable, Content body) {
         final Matcher matcher = AddDistTagsSlice.PTRN.matcher(line.uri().getPath());
-        if (matcher.matches()) {
-            final Key meta = new Key.From(matcher.group("pkg"), "meta.json");
-            final String tag = matcher.group("tag");
-            return this.storage.exists(meta).thenCompose(
-                exists -> {
-                    if (exists) {
-                        return this.storage.value(meta)
-                            .thenCompose(Content::asJsonObjectFuture)
-                            .thenApply(
-                                json -> Json.createObjectBuilder(json).add(
-                                    DeleteDistTagsSlice.FIELD,
-                                    Json.createObjectBuilder()
-                                        .addAll(
-                                            Json.createObjectBuilder(
-                                                json.getJsonObject(DeleteDistTagsSlice.FIELD)
-                                            )
-                                        ).remove(tag)
-                                ).build()
-                            ).thenApply(
-                                json -> json.toString().getBytes(StandardCharsets.UTF_8)
-                            ).thenCompose(
-                                bytes -> this.storage.save(meta, new Content.From(bytes))
-                                    .thenApply(unused -> ResponseBuilder.ok().build())
-                            );
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            if (matcher.matches()) {
+                final Key meta = new Key.From(matcher.group("pkg"), "meta.json");
+                final String tag = matcher.group("tag");
+                return this.storage.exists(meta).thenCompose(
+                    exists -> {
+                        if (exists) {
+                            return this.storage.value(meta)
+                                .thenCompose(Content::asJsonObjectFuture)
+                                .thenApply(
+                                    json -> Json.createObjectBuilder(json).add(
+                                        DeleteDistTagsSlice.FIELD,
+                                        Json.createObjectBuilder()
+                                            .addAll(
+                                                Json.createObjectBuilder(
+                                                    json.getJsonObject(DeleteDistTagsSlice.FIELD)
+                                                )
+                                            ).remove(tag)
+                                    ).build()
+                                ).thenApply(
+                                    json -> json.toString().getBytes(StandardCharsets.UTF_8)
+                                ).thenCompose(
+                                    bytes -> this.storage.save(meta, new Content.From(bytes))
+                                        .thenApply(unused -> ResponseBuilder.ok().build())
+                                );
+                        }
+                        return ResponseBuilder.notFound().completedFuture();
                     }
-                    return ResponseBuilder.notFound().completedFuture();
-                }
-            );
-        }
-        return ResponseBuilder.badRequest().completedFuture();
+                );
+            }
+            return ResponseBuilder.badRequest().completedFuture();
+        });
     }
 }

@@ -88,6 +88,36 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             );
     }
 
+    @Override
+    public Maybe<NpmPackage.Metadata> getPackageMetadata(final String name) {
+        return this.storage.exists(new Key.From(name, "meta.meta"))
+            .flatMapMaybe(exists -> {
+                if (!exists) {
+                    return Maybe.empty();
+                }
+                return this.storage.value(new Key.From(name, "meta.meta"))
+                    .map(Content::asBytesFuture)
+                    .flatMap(SingleInterop::fromFuture)
+                    .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
+                    .map(JsonObject::new)
+                    .map(NpmPackage.Metadata::new)
+                    .toMaybe();
+            });
+    }
+
+    @Override
+    public Maybe<Content> getPackageContent(final String name) {
+        return this.storage.exists(new Key.From(name, "meta.json"))
+            .flatMapMaybe(exists -> {
+                if (!exists) {
+                    return Maybe.empty();
+                }
+                // Return Content directly - NO loading into memory!
+                // Convert Single<Content> to Maybe<Content>
+                return this.storage.value(new Key.From(name, "meta.json")).toMaybe();
+            });
+    }
+
     /**
      * Read NPM package from storage.
      * @param name Package name

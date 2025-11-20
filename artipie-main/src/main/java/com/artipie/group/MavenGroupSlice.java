@@ -14,7 +14,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -177,12 +177,14 @@ public final class MavenGroupSlice implements Slice {
                                 .body(hexString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
-                            Logger.error(
-                                this,
-                                "Failed to compute checksum for %s: %s",
-                                path,
-                                e.getMessage()
-                            );
+                            EcsLogger.error("com.artipie.maven")
+                                .message("Failed to compute checksum")
+                                .eventCategory("repository")
+                                .eventAction("checksum_compute")
+                                .eventOutcome("failure")
+                                .field("url.path", path)
+                                .error(e)
+                                .log();
                             return ResponseBuilder.internalError()
                                 .textBody("Failed to compute checksum")
                                 .build();
@@ -206,12 +208,14 @@ public final class MavenGroupSlice implements Slice {
         // Check cache first
         final byte[] cached = METADATA_CACHE.getIfPresent(cacheKey);
         if (cached != null) {
-            Logger.debug(
-                this,
-                "Maven group %s: returning cached merged metadata for %s",
-                this.group,
-                path
-            );
+            EcsLogger.debug("com.artipie.maven")
+                .message("Returning cached merged metadata (cache hit)")
+                .eventCategory("repository")
+                .eventAction("metadata_merge")
+                .eventOutcome("success")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
                     .header("Content-Type", "application/xml")
@@ -253,16 +257,15 @@ public final class MavenGroupSlice implements Slice {
                     }
                 })
                 .exceptionally(err -> {
-                    final String errMsg = err.getMessage() != null ? err.getMessage() : err.getClass().getName();
-                    final String causeMsg = err.getCause() != null ? err.getCause().toString() : "no cause";
-                    Logger.warn(
-                        this,
-                        "Maven group %s: member %s failed to fetch metadata: %s (cause: %s)",
-                        this.group,
-                        member,
-                        errMsg,
-                        causeMsg
-                    );
+                    EcsLogger.warn("com.artipie.maven")
+                        .message("Member failed to fetch metadata")
+                        .eventCategory("repository")
+                        .eventAction("metadata_fetch")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group)
+                        .field("member.name", member)
+                        .error(err)
+                        .log();
                     return null;
                 });
             
@@ -281,12 +284,14 @@ public final class MavenGroupSlice implements Slice {
                 }
 
                 if (metadataList.isEmpty()) {
-                    Logger.warn(
-                        this,
-                        "Maven group %s: no metadata found in any member for %s",
-                        this.group,
-                        path
-                    );
+                    EcsLogger.warn("com.artipie.maven")
+                        .message("No metadata found in any member")
+                        .eventCategory("repository")
+                        .eventAction("metadata_merge")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group)
+                        .field("url.path", path)
+                        .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.notFound().build()
                     );
@@ -300,19 +305,20 @@ public final class MavenGroupSlice implements Slice {
                         
                         // Cache the merged result
                         METADATA_CACHE.put(cacheKey, mergedBytes);
-                        
+
                         // Only log slow merges
                         if (mergeDuration > 500) {
-                            Logger.warn(
-                                this,
-                                "Maven group %s: slow metadata merge (%dms) from %d members for %s",
-                                this.group,
-                                mergeDuration,
-                                metadataList.size(),
-                                path
-                            );
+                            EcsLogger.warn("com.artipie.maven")
+                                .message("Slow metadata merge (" + metadataList.size() + " members)")
+                                .eventCategory("repository")
+                                .eventAction("metadata_merge")
+                                .eventOutcome("success")
+                                .field("repository.name", this.group)
+                                .field("url.path", path)
+                                .duration(mergeDuration)
+                                .log();
                         }
-                        
+
                         return ResponseBuilder.ok()
                             .header("Content-Type", "application/xml")
                             .body(mergedBytes)
@@ -322,22 +328,15 @@ public final class MavenGroupSlice implements Slice {
             .exceptionally(err -> {
                 // Unwrap CompletionException to get the real cause
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
-                Logger.error(
-                    this,
-                    "Maven group %s: failed to merge metadata for %s: %s\n%s",
-                    this.group,
-                    path,
-                    cause.getMessage(),
-                    java.util.Arrays.toString(cause.getStackTrace())
-                );
-                if (cause.getCause() != null) {
-                    Logger.error(
-                        this,
-                        "Caused by: %s\n%s",
-                        cause.getCause().getMessage(),
-                        java.util.Arrays.toString(cause.getCause().getStackTrace())
-                    );
-                }
+                EcsLogger.error("com.artipie.maven")
+                    .message("Failed to merge metadata")
+                    .eventCategory("repository")
+                    .eventAction("metadata_merge")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .field("url.path", path)
+                    .error(cause)
+                    .log();
                 return ResponseBuilder.internalError()
                     .textBody("Failed to merge metadata: " + cause.getMessage())
                     .build();
@@ -370,20 +369,13 @@ public final class MavenGroupSlice implements Slice {
             return mergeFuture.thenCompose(this::readResponseBody);
             
         } catch (Exception e) {
-            Logger.error(
-                this,
-                "Failed to merge metadata using reflection: %s\n%s",
-                e.getMessage(),
-                java.util.Arrays.toString(e.getStackTrace())
-            );
-            if (e.getCause() != null) {
-                Logger.error(
-                    this,
-                    "Caused by: %s\n%s",
-                    e.getCause().getMessage(),
-                    java.util.Arrays.toString(e.getCause().getStackTrace())
-                );
-            }
+            EcsLogger.error("com.artipie.maven")
+                .message("Failed to merge metadata using reflection")
+                .eventCategory("repository")
+                .eventAction("metadata_merge")
+                .eventOutcome("failure")
+                .error(e)
+                .log();
             return CompletableFuture.failedFuture(
                 new IllegalStateException("Maven metadata merging not available", e)
             );

@@ -8,11 +8,12 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.ext.KeyLastPart;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContext;
 import com.artipie.maven.http.MavenSlice;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -80,6 +81,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
      */
     @SuppressWarnings({"PMD.AssignmentInOperand", "PMD.AvoidCatchingGenericException"})
     private void processPackagesBatch() {
+        // Set trace context for background job
+        final String traceId = TraceContext.generateTraceId();
+        TraceContext.set(traceId);
+
         // Drain up to 100 packages for batch processing
         final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
         ProxyArtifactEvent event = this.packages.poll();
@@ -103,11 +108,14 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             .stream()
             .collect(Collectors.toList());
 
-        Logger.debug(
-            this,
-            "Processing Maven batch of %d packages (%d unique, %d duplicates removed)",
-            batch.size(), uniquePackages.size(), batch.size() - uniquePackages.size()
-        );
+        final long startTime = System.currentTimeMillis();
+        final int duplicatesRemoved = batch.size() - uniquePackages.size();
+
+        EcsLogger.debug("com.artipie.maven")
+            .message("Processing Maven batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + duplicatesRemoved + ")")
+            .eventCategory("repository")
+            .eventAction("batch_processing")
+            .log();
 
         // Process all unique packages in parallel
         List<CompletableFuture<Void>> futures = uniquePackages.stream()
@@ -119,9 +127,27 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            Logger.debug(this, "Maven batch processing complete");
+
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.info("com.artipie.maven")
+                .message("Maven batch processing complete (" + uniquePackages.size() + " packages)")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("success")
+                .duration(duration)
+                .log();
         } catch (final RuntimeException err) {
-            Logger.error(this, "Maven batch processing failed: %s", err.getMessage());
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.error("com.artipie.maven")
+                .message("Maven batch processing failed (" + uniquePackages.size() + " packages)")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("failure")
+                .duration(duration)
+                .error(err)
+                .log();
+        } finally {
+            TraceContext.clear();
         }
     }
 
@@ -142,11 +168,14 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         .collect(Collectors.toList());
                     
                     if (filtered.isEmpty()) {
-                        Logger.debug(
-                            this,
-                            "Maven package %s has only temporary files, skipping (will retry later)",
-                            event.artifactKey()
-                        );
+                        EcsLogger.debug("com.artipie.maven")
+                            .message("Maven package has only temporary files, skipping (will retry later)")
+                            .eventCategory("repository")
+                            .eventAction("proxy_package_process")
+                            .eventOutcome("skipped")
+                            .field("repository.type", REPO_TYPE)
+                            .field("package.name", event.artifactKey().string())
+                            .log();
                         return CompletableFuture.completedFuture(null);
                     }
                     
@@ -180,31 +209,43 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             // Clear retry count on successful processing
                             this.retryCount.remove(event.artifactKey().string());
 
-                            Logger.debug(
-                                this,
-                                "Recorded Maven proxy artifact %s:%s (size=%d)",
-                                artifactName, version, size
-                            );
+                            EcsLogger.debug("com.artipie.maven")
+                                .message("Recorded Maven proxy artifact")
+                                .eventCategory("repository")
+                                .eventAction("proxy_artifact_record")
+                                .eventOutcome("success")
+                                .field("repository.type", REPO_TYPE)
+                                .field("package.name", artifactName)
+                                .field("package.version", version)
+                                .field("file.size", size)
+                                .log();
                         })
                         .exceptionally(err -> {
                             this.handleProcessingError(event, err);
                             return null;
                         });
                 } catch (final RuntimeException err) {
-                    Logger.error(
-                        this,
-                        "Failed to extract Maven archive from keys: %s",
-                        err.getMessage()
-                    );
+                    EcsLogger.error("com.artipie.maven")
+                        .message("Failed to extract Maven archive from keys")
+                        .eventCategory("repository")
+                        .eventAction("proxy_package_process")
+                        .eventOutcome("failure")
+                        .field("repository.type", REPO_TYPE)
+                        .error(err)
+                        .log();
                     return CompletableFuture.completedFuture(null);
                 }
             })
             .exceptionally(err -> {
-                Logger.error(
-                    this,
-                    "Failed to process Maven package %s: %s",
-                    event.artifactKey(), err.getMessage()
-                );
+                EcsLogger.error("com.artipie.maven")
+                    .message("Failed to process Maven package")
+                    .eventCategory("repository")
+                    .eventAction("proxy_package_process")
+                    .eventOutcome("failure")
+                    .field("repository.type", REPO_TYPE)
+                    .field("package.name", event.artifactKey().string())
+                    .error(err)
+                    .log();
                 return null;
             });
     }
@@ -253,32 +294,39 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 this.retryCount.put(key, currentRetries + 1);
                 this.packages.add(event);
 
-                Logger.debug(
-                    this,
-                    "Maven package %s not found (likely still being written), retry %d/%d: %s",
-                    event.artifactKey(),
-                    currentRetries + 1,
-                    MavenProxyPackageProcessor.MAX_RETRIES,
-                    err.getMessage()
-                );
+                EcsLogger.debug("com.artipie.maven")
+                    .message("Maven package not found (likely still being written), retrying (attempt " + (currentRetries + 1) + "/" + MavenProxyPackageProcessor.MAX_RETRIES + ")")
+                    .eventCategory("repository")
+                    .eventAction("proxy_package_retry")
+                    .eventOutcome("retry")
+                    .field("repository.type", REPO_TYPE)
+                    .field("package.name", event.artifactKey().string())
+                    .error(err)
+                    .log();
             } else {
                 // Max retries reached, give up and clean up retry count
                 this.retryCount.remove(key);
 
-                Logger.warn(
-                    this,
-                    "Maven package %s not found after %d retries, giving up: %s",
-                    event.artifactKey(),
-                    MavenProxyPackageProcessor.MAX_RETRIES,
-                    err.getMessage()
-                );
+                EcsLogger.warn("com.artipie.maven")
+                    .message("Maven package not found after " + MavenProxyPackageProcessor.MAX_RETRIES + " retries, giving up")
+                    .eventCategory("repository")
+                    .eventAction("proxy_package_retry")
+                    .eventOutcome("abandoned")
+                    .field("repository.type", REPO_TYPE)
+                    .field("package.name", event.artifactKey().string())
+                    .error(err)
+                    .log();
             }
         } else {
-            Logger.error(
-                this,
-                "Failed to read Maven artifact metadata %s: %s",
-                event.artifactKey(), err.getMessage()
-            );
+            EcsLogger.error("com.artipie.maven")
+                .message("Failed to read Maven artifact metadata")
+                .eventCategory("repository")
+                .eventAction("proxy_package_process")
+                .eventOutcome("failure")
+                .field("repository.type", REPO_TYPE)
+                .field("package.name", event.artifactKey().string())
+                .error(err)
+                .log();
         }
     }
 }
