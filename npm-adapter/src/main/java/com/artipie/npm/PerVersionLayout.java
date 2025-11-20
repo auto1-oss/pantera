@@ -8,6 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import javax.json.Json;
@@ -132,7 +133,6 @@ public final class PerVersionLayout {
                         final var metaBuilder = Json.createObjectBuilder();
                         
                         String packageName = null;
-                        String latestVersion = null;
                         
                         for (CompletableFuture<JsonObject> future : futures) {
                             final JsonObject versionJson = future.join();
@@ -152,13 +152,23 @@ public final class PerVersionLayout {
                                 packageName = versionJson.getString("name", packageKey.string());
                             }
                             
-                            // Track latest version (simplified: last alphabetically)
-                            if (latestVersion == null || version.compareTo(latestVersion) > 0) {
-                                latestVersion = version;
-                            }
-                            
                             // Add to versions map
                             versionsBuilder.add(version, versionJson);
+                        }
+                        
+                        // Build versions object
+                        final JsonObject versionsObj = versionsBuilder.build();
+                        
+                        // Find latest STABLE version using semver (exclude prereleases)
+                        final String latestVersion;
+                        if (!versionsObj.isEmpty()) {
+                            final List<String> stableVersions = new com.artipie.npm.misc.DescSortedVersions(
+                                versionsObj,
+                                true  // excludePrereleases = true
+                            ).value();
+                            latestVersion = stableVersions.isEmpty() ? null : stableVersions.get(0);
+                        } else {
+                            latestVersion = null;
                         }
                         
                         // Build complete meta.json structure
@@ -171,7 +181,7 @@ public final class PerVersionLayout {
                                     .add("latest", latestVersion)
                             );
                         }
-                        metaBuilder.add("versions", versionsBuilder.build());
+                        metaBuilder.add("versions", versionsObj);
                         
                         return metaBuilder.build();
                     });

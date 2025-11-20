@@ -50,6 +50,12 @@ public final class MetadataEnhancer {
             builder.add("versions", this.stripInternalFields(this.original.getJsonObject("versions")));
         }
 
+        // Add dist-tags if missing or null (REQUIRED by npm/pnpm clients)
+        if (!this.original.containsKey("dist-tags") 
+            || this.original.isNull("dist-tags")) {
+            builder.add("dist-tags", this.generateDistTags());
+        }
+
         // Add time object if missing
         if (!this.original.containsKey("time")) {
             builder.add("time", this.generateTimeObject());
@@ -94,6 +100,53 @@ public final class MetadataEnhancer {
         return builder.build();
     }
     
+    /**
+     * Generate dist-tags object with latest tag.
+     *
+     * <p>Finds the highest stable version (excluding prereleases) and sets it as "latest".
+     * If no stable versions exist, uses the highest version overall.</p>
+     *
+     * <p>Structure:
+     * <pre>
+     * {
+     *   "latest": "1.0.1"
+     * }
+     * </pre>
+     * </p>
+     *
+     * @return Dist-tags object
+     */
+    private JsonObject generateDistTags() {
+        final JsonObjectBuilder tagsBuilder = Json.createObjectBuilder();
+
+        if (this.original.containsKey("versions")) {
+            final JsonObject versions = this.original.getJsonObject("versions");
+
+            // Find latest stable version using DescSortedVersions
+            final java.util.List<String> stableVersions = new com.artipie.npm.misc.DescSortedVersions(
+                versions,
+                true  // excludePrereleases = true
+            ).value();
+
+            if (!stableVersions.isEmpty()) {
+                // Use highest stable version
+                tagsBuilder.add("latest", stableVersions.get(0));
+            } else {
+                // No stable versions - use highest version overall (including prereleases)
+                final java.util.List<String> allVersions = new com.artipie.npm.misc.DescSortedVersions(
+                    versions,
+                    false  // excludePrereleases = false
+                ).value();
+
+                if (!allVersions.isEmpty()) {
+                    tagsBuilder.add("latest", allVersions.get(0));
+                }
+            }
+        }
+
+        return tagsBuilder.build();
+    }
+
     /**
      * Generate time object from version metadata.
      *
