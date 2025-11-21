@@ -310,6 +310,115 @@ class SliceIndexTest {
         );
     }
 
+    @Test
+    void normalizesPackageNameWithHyphens() {
+        // Package stored with normalized name (hyphens)
+        final String normalized = "sm-pipelines";
+        final String gzip = normalized + "/" + normalized + "-0.1.0.tar.gz";
+        final String wheel = normalized + "/" + normalized + "-0.2.0.whl";
+        this.storage.save(new Key.From(gzip), new Content.From(gzip.getBytes())).join();
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with hyphens should work
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/sm-pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+
+        // Request with underscores should also work (normalized to hyphens)
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/sm_pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+
+        // Request with mixed case should also work (normalized to lowercase)
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/SM-Pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithUnderscores() {
+        // Package stored with normalized name (underscores become hyphens)
+        final String normalized = "my-package";
+        final String wheel = normalized + "/" + normalized + "-1.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with underscores should find the hyphenated storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/my_package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithDots() {
+        // Package stored with normalized name (dots become hyphens)
+        final String normalized = "my-package";
+        final String wheel = normalized + "/" + normalized + "-1.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with dots should find the hyphenated storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/my.package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithMixedSeparators() {
+        // Package stored with normalized name (all separators become single hyphen)
+        final String normalized = "my-super-package";
+        final String wheel = normalized + "/" + normalized + "-2.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with mixed separators should find the normalized storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/My._Super__Package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
     @SafeVarargs
     private static byte[] html(final Map.Entry<String, byte[]>... items) {
         return

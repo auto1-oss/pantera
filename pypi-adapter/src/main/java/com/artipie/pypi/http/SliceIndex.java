@@ -17,6 +17,7 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RequestLinePrefix;
+import com.artipie.pypi.NormalizedProjectName;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -78,18 +79,20 @@ final class SliceIndex implements Slice {
         } else {
             final boolean underSimple = !segments.isEmpty() && isSimpleSegment(segments.get(0));
             final String last = segments.get(segments.size() - 1);
+            final String rawPackageName;
             if (underSimple) {
-                packageName = segments.get(1);
-                listKey = new Key.From(packageName);
+                rawPackageName = segments.get(1);
             } else {
                 final boolean endsWithIndex = "index.html".equalsIgnoreCase(last) && segments.size() > 1;
-                packageName = endsWithIndex
+                rawPackageName = endsWithIndex
                     ? segments.get(segments.size() - 2)
                     : last;
-                listKey = endsWithIndex
-                    ? new Key.From(String.join("/", segments.subList(0, segments.size() - 1)))
-                    : new Key.From(String.join("/", segments));
             }
+            // Normalize package name according to PEP 503
+            // This ensures that requests for "sm-pipelines", "sm_pipelines", "SM-Pipelines" etc.
+            // all resolve to the same normalized storage path
+            packageName = new NormalizedProjectName.Simple(rawPackageName).value();
+            listKey = new Key.From(packageName);
             indexKey = new Key.From(PYPI_METADATA, packageName, packageName + ".html");
         }
 

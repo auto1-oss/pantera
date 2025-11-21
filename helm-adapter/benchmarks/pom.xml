@@ -26,13 +26,13 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.1</version>
+    <version>1.20.2</version>
     <relativePath>/../../pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>helm-bench</artifactId>
   <groupId>benchmarks</groupId>
-  <version>1.20.1</version>
+  <version>1.20.2</version>
   <properties>
     <jmh.version>1.29</jmh.version>
     <header.license>${project.basedir}/../../LICENSE.header</header.license>
@@ -41,7 +41,7 @@ SOFTWARE.
     <dependency>
       <artifactId>helm-adapter</artifactId>
       <groupId>com.artipie</groupId>
-      <version>1.20.1</version>
+      <version>1.20.2</version>
     </dependency>
     <dependency>
       <groupId>org.openjdk.jmh</groupId>
