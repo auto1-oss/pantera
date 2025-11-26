@@ -86,6 +86,26 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     }
 
     /**
+     * Emit ECS audit log for successful artifact publish operations.
+     * @param record Artifact event that was persisted
+     */
+    private static void logArtifactPublish(final ArtifactEvent record) {
+        final EcsLogger logger = EcsLogger.info("com.artipie.audit")
+            .message("Artifact publish recorded")
+            .eventCategory("artifact")
+            .eventAction("artifact_publish")
+            .eventOutcome("success")
+            .field("repository.type", record.repoType())
+            .field("repository.name", normalizeRepoName(record.repoName()))
+            .field("package.name", record.artifactName())
+            .field("package.version", record.artifactVersion())
+            .field("package.size", record.size())
+            .userName(record.owner());
+        record.releaseDate().ifPresent(release -> logger.field("artifact.release", release));
+        logger.log();
+    }
+
+    /**
      * Database observer. Writes pack into database.
      * @since 0.31
      */
@@ -138,6 +158,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setLong(7, release);
                             upsert.setString(8, record.owner());
                             upsert.execute();
+                            logArtifactPublish(record);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());

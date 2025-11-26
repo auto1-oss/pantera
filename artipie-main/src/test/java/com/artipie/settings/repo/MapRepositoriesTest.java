@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.time.Duration;
 import java.nio.file.Path;
 import java.util.NoSuchElementException;
 
@@ -69,7 +70,7 @@ final class MapRepositoriesTest {
     @Test
     void throwsExceptionWhenConfigYamlAbsent() {
         Assertions.assertTrue(
-            new MapRepositories(this.settings)
+            new MapRepositories(this.settings, Duration.ZERO)
                 .config(MapRepositoriesTest.REPO)
                 .isEmpty()
         );
@@ -132,14 +133,14 @@ final class MapRepositoriesTest {
         Key key = new Key.From("some-repo.yaml");
         new BlockingStorage(this.settings.repoConfigsStorage())
             .save(key, "repo:\n  type: old_type".getBytes());
-        Repositories repos = new MapRepositories(this.settings);
+        Repositories repos = new MapRepositories(this.settings, Duration.ZERO);
         new BlockingStorage(this.settings.repoConfigsStorage())
             .save(key, "repo:\n  type: new_type".getBytes());
 
         Assertions.assertEquals("old_type",
             repos.config(key.string()).orElseThrow().type());
 
-        repos.refresh();
+        repos.refreshAsync().join();
 
         Assertions.assertEquals("new_type",
             repos.config(key.string()).orElseThrow().type());
@@ -152,7 +153,7 @@ final class MapRepositoriesTest {
         Key config = new Key.From("bin.yaml");
         BlockingStorage cfgStorage = new BlockingStorage(this.settings.repoConfigsStorage());
         cfgStorage.save(config, "repo:\n  type: maven\n  storage: default".getBytes());
-        Repositories repo = new MapRepositories(this.settings);
+        Repositories repo = new MapRepositories(this.settings, Duration.ZERO);
         cfgStorage.save(config, "repo:\n  type: maven".getBytes());
 
         Assertions.assertTrue(
@@ -160,7 +161,7 @@ final class MapRepositoriesTest {
                 .orElseThrow().storageOpt().isPresent()
         );
 
-        repo.refresh();
+        repo.refreshAsync().join();
 
         Assertions.assertTrue(
             repo.config(config.string())
@@ -169,7 +170,7 @@ final class MapRepositoriesTest {
     }
 
     private RepoConfig repoConfig() {
-        return new MapRepositories(this.settings)
+        return new MapRepositories(this.settings, Duration.ZERO)
             .config(MapRepositoriesTest.REPO)
             .orElseThrow();
     }
@@ -201,7 +202,7 @@ final class MapRepositoriesTest {
                 .saveTo(this.storage, "repo" + i);
         }
 
-        final MapRepositories repos = new MapRepositories(this.settings);
+        final MapRepositories repos = new MapRepositories(this.settings, Duration.ZERO);
 
         // Verify refreshAsync completes without blocking
         // If it blocks the ForkJoinPool, this will timeout

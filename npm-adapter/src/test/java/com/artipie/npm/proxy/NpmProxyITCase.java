@@ -42,7 +42,7 @@ import org.quartz.impl.StdSchedulerFactory;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.shaded.org.awaitility.Awaitility;
+import org.awaitility.Awaitility;
 
 /**
  * Integration test for NPM Proxy.

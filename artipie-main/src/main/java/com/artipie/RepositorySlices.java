@@ -224,11 +224,6 @@ public class RepositorySlices {
      */
     private Optional<SliceValue> resolve(final Key name, final int port, final int depth) {
         Optional<RepoConfig> opt = repos.config(name.string());
-        if (opt.isEmpty()) {
-            // Attempt to refresh repositories on miss to support runtime additions
-            repos.refresh();
-            opt = repos.config(name.string());
-        }
         if (opt.isPresent()) {
             final RepoConfig cfg = opt.get();
             if (cfg.port().isEmpty() || cfg.port().getAsInt() == port) {

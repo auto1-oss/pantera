@@ -93,6 +93,7 @@ SOFTWARE.
     <fasterxml.jackson.version>2.16.2</fasterxml.jackson.version>
     <micrometer.version>1.12.1</micrometer.version>
     <opentelemetry.version>1.56.0</opentelemetry.version>
+    <testcontainers.version>2.0.2</testcontainers.version>
   </properties>
   <developers>
     <!-- Required for publishing to central -->
@@ -237,31 +238,31 @@ SOFTWARE.
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>testcontainers</artifactId>
-      <version>1.19.1</version>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>1.19.1</version>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
-      <artifactId>mockserver</artifactId>
-      <version>1.19.1</version>
+      <artifactId>testcontainers-mockserver</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
-      <artifactId>localstack</artifactId>
-      <version>1.19.1</version>
+      <artifactId>testcontainers-localstack</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>
-      <artifactId>nginx</artifactId>
-      <version>1.19.1</version>
+      <artifactId>testcontainers-nginx</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>

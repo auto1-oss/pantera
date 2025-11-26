@@ -9,7 +9,7 @@ import java.util.Map;
 import javax.script.ScriptException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 /**
  * Tests Script.StandardScript and Script.PrecompiledScript.

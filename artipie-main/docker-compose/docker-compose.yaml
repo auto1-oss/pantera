@@ -9,6 +9,7 @@ services:
         condition: service_healthy
     image: auto1-artipie:1.20.2
     cpus: 2
+    mem_limit: 4gb
     mem_reservation: 4gb
     container_name: artipie
     restart: unless-stopped
@@ -26,7 +27,7 @@ services:
       - ARTIPIE_VERSION=1.20.2
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
-      - ELASTIC_APM_ENABLED=true
+      - ELASTIC_APM_ENABLED=false
       - ELASTIC_APM_ENVIRONMENT=development
       - ELASTIC_APM_SERVER_URL=http://apm:8200
       - ELASTIC_APM_SERVICE_NAME=artipie
@@ -39,17 +40,18 @@ services:
       - ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME=false
       - ELASTIC_APM_SPAN_COMPRESSION_ENABLED=true
       - ELASTIC_APM_CAPTURE_JMX_METRICS=object_name[*:type=*,name=*] attribute[*]
+      - JVM_ARGS=-Xms2g -Xmx3g -XX:+UseG1GC -XX:G1ReservePercent=10 -XX:MaxGCPauseMillis=200 -XX:MaxDirectMemorySize=512m -XX:ParallelGCThreads=2 -XX:ConcGCThreads=1 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled -XX:+UseContainerSupport -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/artipie/logs/heapdump.hprof -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=50M -Djava.io.tmpdir=/var/artipie/cache/tmp -Dvertx.cacheDirBase=/var/artipie/cache/tmp -Dio.netty.leakDetection.level=simple -XX:InitiatingHeapOccupancyPercent=45 -XX:+AlwaysPreTouch -Dvertx.max.worker.execute.time=120000000000 -Dartipie.filesystem.io.threads=4
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml
-      - ./artipie/repo:/var/artipie/repo
+      - ~/Desktop/Support/repo:/var/artipie/repo
       - ./artipie/security:/var/artipie/security
       - ./artipie/data:/var/artipie/data
       - ./artipie/cache:/var/artipie/cache
       - ~/.aws:/home/.aws
     networks:
       - artipie-net
-      - es
+    #  - es
     ports:
       - "8086:8086"
       - "8087:8087"
@@ -142,12 +144,55 @@ services:
     volumes:
       - valkey-data:/data
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - artipie-net
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      - artipie
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - artipie-net
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 networks:
   artipie-net:
     driver: bridge
-  es:
-    external: true
-    name: 92_es
+#  es:
+#    external: true
+#    name: 92_es
 
 volumes:
   valkey-data:
+  prometheus-data:
+  grafana-data:

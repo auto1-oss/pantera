@@ -285,18 +285,20 @@ public final class EcsLogEvent {
         final MapMessage mapMessage = new MapMessage(fields);
         mapMessage.with("message", logMessage);
 
+        final boolean failureOutcome = "failure".equals(fields.get("event.outcome"));
         if (statusCode != null && statusCode >= 500) {
-            // Server errors always logged
-            LOGGER.error(mapMessage);
+            mapMessage.with("event.severity", "critical");
+            LOGGER.info(mapMessage);
         } else if (statusCode != null && statusCode >= 400) {
-            // Client errors - log at WARN
-            LOGGER.warn(mapMessage);
+            mapMessage.with("event.severity", "warning");
+            LOGGER.info(mapMessage);
         } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
-            // Slow requests - log at WARN
+            mapMessage.with("event.severity", "warning");
             mapMessage.with("message", String.format("Slow request: %dms - %s", durationMs, logMessage));
-            LOGGER.warn(mapMessage);
+            LOGGER.info(mapMessage);
+        } else if (failureOutcome) {
+            LOGGER.info(mapMessage);
         } else {
-            // Success - log at DEBUG (disabled in production)
             LOGGER.debug(mapMessage);
         }
     }

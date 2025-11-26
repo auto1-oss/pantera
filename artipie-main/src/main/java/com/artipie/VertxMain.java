@@ -176,44 +176,95 @@ public final class VertxMain {
                         final String action = parts[0];
                         final String name = parts[1];
                         if (RepositoryEvents.UPSERT.equals(action)) {
-                            repos.refresh();
-                            slices.invalidateRepo(name);
-                            repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
-                                prt -> {
-                                    final Slice slice = slices.slice(new Key.From(name), prt);
-                                    if (cfg.startOnHttp3()) {
-                                        this.http3.computeIfAbsent(
-                                            prt, key -> {
-                                                final Http3Server server = new Http3Server(
-                                                    new LoggingSlice(slice), prt,
-                                                    new SslFactoryFromYaml(cfg.repoYaml()).build()
-                                                );
-                                                server.start();
-                                                return server;
-                                            }
-                                        );
-                                    } else {
-                                        // Start dedicated HTTP server if not already serving this port
-                                        final boolean exists = this.servers.stream().anyMatch(s -> s.port() == prt);
-                                        if (!exists) {
-                                            this.listenOn(
-                                                slice,
-                                                prt,
-                                                vertx,
-                                                settings.metrics(),
-                                                settings.httpServerRequestTimeout()
-                                            );
-                                        }
+                            repos.refreshAsync().whenComplete(
+                                (ignored, err) -> {
+                                    if (err != null) {
+                                        EcsLogger.error("com.artipie")
+                                            .message("Failed to refresh repositories after UPSERT event")
+                                            .eventCategory("repository")
+                                            .eventAction("event_process")
+                                            .eventOutcome("failure")
+                                            .error(err)
+                                            .log();
+                                        return;
                                     }
+                                    vertx.getDelegate().runOnContext(
+                                        nothing -> {
+                                            slices.invalidateRepo(name);
+                                            repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
+                                                prt -> {
+                                                    final Slice slice = slices.slice(new Key.From(name), prt);
+                                                    if (cfg.startOnHttp3()) {
+                                                        this.http3.computeIfAbsent(
+                                                            prt, key -> {
+                                                                final Http3Server server = new Http3Server(
+                                                                    new LoggingSlice(slice), prt,
+                                                                    new SslFactoryFromYaml(cfg.repoYaml()).build()
+                                                                );
+                                                                server.start();
+                                                                return server;
+                                                            }
+                                                        );
+                                                    } else {
+                                                        final boolean exists = this.servers
+                                                            .stream()
+                                                            .anyMatch(s -> s.port() == prt);
+                                                        if (!exists) {
+                                                            this.listenOn(
+                                                                slice,
+                                                                prt,
+                                                                vertx,
+                                                                settings.metrics(),
+                                                                settings.httpServerRequestTimeout()
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            ));
+                                        }
+                                    );
                                 }
-                            ));
+                            );
                         } else if (RepositoryEvents.REMOVE.equals(action)) {
-                            slices.invalidateRepo(name);
-                            repos.refresh();
+                            repos.refreshAsync().whenComplete(
+                                (ignored, err) -> {
+                                    if (err != null) {
+                                        EcsLogger.error("com.artipie")
+                                            .message("Failed to refresh repositories after REMOVE event")
+                                            .eventCategory("repository")
+                                            .eventAction("event_process")
+                                            .eventOutcome("failure")
+                                            .error(err)
+                                            .log();
+                                        return;
+                                    }
+                                    vertx.getDelegate().runOnContext(
+                                        nothing -> slices.invalidateRepo(name)
+                                    );
+                                }
+                            );
                         } else if (RepositoryEvents.MOVE.equals(action) && parts.length >= 3) {
-                            slices.invalidateRepo(name);
-                            slices.invalidateRepo(parts[2]);
-                            repos.refresh();
+                            final String target = parts[2];
+                            repos.refreshAsync().whenComplete(
+                                (ignored, err) -> {
+                                    if (err != null) {
+                                        EcsLogger.error("com.artipie")
+                                            .message("Failed to refresh repositories after MOVE event")
+                                            .eventCategory("repository")
+                                            .eventAction("event_process")
+                                            .eventOutcome("failure")
+                                            .error(err)
+                                            .log();
+                                        return;
+                                    }
+                                    vertx.getDelegate().runOnContext(
+                                        nothing -> {
+                                            slices.invalidateRepo(name);
+                                            slices.invalidateRepo(target);
+                                        }
+                                    );
+                                }
+                            );
                         }
                     }
                 } catch (final Throwable err) {

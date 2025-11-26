@@ -16,7 +16,7 @@ import java.util.zip.GZIPInputStream;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.shaded.org.apache.commons.io.IOUtils;
+import org.apache.commons.io.IOUtils;
 
 /**
  * Test for {@link AstoArchive}.

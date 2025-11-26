@@ -4,7 +4,6 @@
  */
 package com.artipie.http;
 
-import com.artipie.http.slice.EcsLoggingSlice;
 import com.artipie.micrometer.MicrometerSlice;
 import com.artipie.settings.MetricsContext;
 
@@ -28,9 +27,7 @@ public final class BaseSlice extends Slice.Wrap {
         super(
             BaseSlice.wrapToBaseMetricsSlices(
                 mctx,
-                new SafeSlice(
-                    new EcsLoggingSlice(origin)
-                )
+                new SafeSlice(origin)
             )
         );
     }

@@ -11,6 +11,9 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogEvent;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.slice.EcsLoggingSlice;
 import com.artipie.http.log.LogSanitizer;
 import co.elastic.apm.api.ElasticApm;
 import co.elastic.apm.api.Transaction;
@@ -32,8 +35,11 @@ import java.net.HttpURLConnection;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -42,7 +48,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Objects;
-import com.artipie.http.log.EcsLogger;
 
 /**
  * Vert.x Slice.
@@ -363,18 +368,22 @@ public final class VertxSliceServer implements Closeable {
      */
     private CompletionStage<Void> serveWithBody(final HttpServerRequest req, final Buffer body) {
         final Headers requestHeaders = Headers.from(req.headers());
+        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
+        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
         
         // Extract or generate trace ID for request correlation
         final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
         com.artipie.http.trace.TraceContext.set(traceId);
 
-        EcsLogger.info("com.artipie.vertx")
-            .message("Serving request with body")
-            .eventCategory("http")
-            .eventAction("request_serve")
-            .field("http.request.method", req.method().name())
-            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-            .log();
+        addRequestContext(
+            EcsLogger.info("com.artipie.vertx")
+                .message("Serving request with body")
+                .eventCategory("http")
+                .eventAction("request_serve")
+                .field("http.request.method", req.method().name())
+                .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+            ctx
+        ).log();
 
         final boolean isHead = "HEAD".equals(req.method().name());
         
@@ -384,7 +393,7 @@ public final class VertxSliceServer implements Closeable {
         );
         
         final CompletionStage<Response> response = withRequestTimeout(
-            this.served.response(
+            loggedSlice.response(
                 new RequestLine(req.method().name(), req.uri(), req.version().toString()),
                 requestHeaders,
                 requestBody
@@ -397,14 +406,16 @@ public final class VertxSliceServer implements Closeable {
                 resp -> {
                     // Ensure trace context is set for response handling
                     com.artipie.http.trace.TraceContext.set(traceId);
-                    EcsLogger.debug("com.artipie.vertx")
-                        .message("Accepting response")
-                        .eventCategory("http")
-                        .eventAction("response_accept")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .field("http.response.status_code", resp.status().code())
-                        .log();
+                    addRequestContext(
+                        EcsLogger.debug("com.artipie.vertx")
+                            .message("Accepting response")
+                            .eventCategory("http")
+                            .eventAction("response_accept")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .field("http.response.status_code", resp.status().code()),
+                        ctx
+                    ).log();
 
                     // Add HTTP status to current APM transaction
                     final Transaction transaction = ElasticApm.currentTransaction();
@@ -419,24 +430,28 @@ public final class VertxSliceServer implements Closeable {
                 // Ensure trace context is set for completion logging
                 com.artipie.http.trace.TraceContext.set(traceId);
                 if (error != null) {
-                    EcsLogger.error("com.artipie.vertx")
-                        .message("Request failed")
-                        .eventCategory("http")
-                        .eventAction("request_serve")
-                        .eventOutcome("failure")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .error(error)
-                        .log();
+                    addRequestContext(
+                        EcsLogger.error("com.artipie.vertx")
+                            .message("Request failed")
+                            .eventCategory("http")
+                            .eventAction("request_serve")
+                            .eventOutcome("failure")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .error(error),
+                        ctx
+                    ).log();
                 } else {
-                    EcsLogger.debug("com.artipie.vertx")
-                        .message("Request completed successfully")
-                        .eventCategory("http")
-                        .eventAction("request_serve")
-                        .eventOutcome("success")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .log();
+                    addRequestContext(
+                        EcsLogger.debug("com.artipie.vertx")
+                            .message("Request completed successfully")
+                            .eventCategory("http")
+                            .eventAction("request_serve")
+                            .eventOutcome("success")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                        ctx
+                    ).log();
                 }
                 // Clean up trace context after request completes
                 com.artipie.http.trace.TraceContext.clear();
@@ -452,18 +467,22 @@ public final class VertxSliceServer implements Closeable {
      */
     private CompletionStage<Void> serve(final HttpServerRequest req, final Buffer unused) {
         final Headers requestHeaders = Headers.from(req.headers());
+        final RequestLogContext ctx = RequestLogContext.from(req, requestHeaders);
+        final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
         // Extract or generate trace ID for request correlation
         final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
         com.artipie.http.trace.TraceContext.set(traceId);
 
-        EcsLogger.info("com.artipie.vertx")
-            .message("Serving request without body")
-            .eventCategory("http")
-            .eventAction("request_serve")
-            .field("http.request.method", req.method().name())
-            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-            .log();
+        addRequestContext(
+            EcsLogger.info("com.artipie.vertx")
+                .message("Serving request without body")
+                .eventCategory("http")
+                .eventAction("request_serve")
+                .field("http.request.method", req.method().name())
+                .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+            ctx
+        ).log();
 
         final boolean isHead = "HEAD".equals(req.method().name());
         
@@ -471,7 +490,7 @@ public final class VertxSliceServer implements Closeable {
         final Content requestBody = Content.EMPTY;
         
         final CompletionStage<Response> response = withRequestTimeout(
-            this.served.response(
+            loggedSlice.response(
                 new RequestLine(req.method().name(), req.uri(), req.version().toString()),
                 requestHeaders,
                 requestBody
@@ -484,14 +503,16 @@ public final class VertxSliceServer implements Closeable {
                 resp -> {
                     // Ensure trace context is set for response handling
                     com.artipie.http.trace.TraceContext.set(traceId);
-                    EcsLogger.debug("com.artipie.vertx")
-                        .message("Accepting response")
-                        .eventCategory("http")
-                        .eventAction("response_accept")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .field("http.response.status_code", resp.status().code())
-                        .log();
+                    addRequestContext(
+                        EcsLogger.debug("com.artipie.vertx")
+                            .message("Accepting response")
+                            .eventCategory("http")
+                            .eventAction("response_accept")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .field("http.response.status_code", resp.status().code()),
+                        ctx
+                    ).log();
 
                     // Add HTTP status to current APM transaction
                     final Transaction transaction = ElasticApm.currentTransaction();
@@ -506,24 +527,28 @@ public final class VertxSliceServer implements Closeable {
                 // Ensure trace context is set for completion logging
                 com.artipie.http.trace.TraceContext.set(traceId);
                 if (error != null) {
-                    EcsLogger.error("com.artipie.vertx")
-                        .message("Request failed")
-                        .eventCategory("http")
-                        .eventAction("request_serve")
-                        .eventOutcome("failure")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .error(error)
-                        .log();
+                    addRequestContext(
+                        EcsLogger.error("com.artipie.vertx")
+                            .message("Request failed")
+                            .eventCategory("http")
+                            .eventAction("request_serve")
+                            .eventOutcome("failure")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
+                            .error(error),
+                        ctx
+                    ).log();
                 } else {
-                    EcsLogger.debug("com.artipie.vertx")
-                        .message("Request completed successfully")
-                        .eventCategory("http")
-                        .eventAction("request_serve")
-                        .eventOutcome("success")
-                        .field("http.request.method", req.method().name())
-                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                        .log();
+                    addRequestContext(
+                        EcsLogger.debug("com.artipie.vertx")
+                            .message("Request completed successfully")
+                            .eventCategory("http")
+                            .eventAction("request_serve")
+                            .eventOutcome("success")
+                            .field("http.request.method", req.method().name())
+                            .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                        ctx
+                    ).log();
                 }
                 // Clean up trace context after request completes
                 com.artipie.http.trace.TraceContext.clear();
@@ -562,14 +587,17 @@ public final class VertxSliceServer implements Closeable {
             }
             final Throwable cause = unwrapCompletionCause(error);
             if (cause instanceof RequestTimeoutException timeout) {
-                EcsLogger.warn("com.artipie.vertx")
-                    .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
-                    .eventCategory("http")
-                    .eventAction("request_timeout")
-                    .eventOutcome("timeout")
-                    .field("http.request.method", req.method().name())
-                    .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
-                    .log();
+                final RequestLogContext timeoutCtx = RequestLogContext.from(req, Headers.from(req.headers()));
+                addRequestContext(
+                    EcsLogger.warn("com.artipie.vertx")
+                        .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
+                        .eventCategory("http")
+                        .eventAction("request_timeout")
+                        .eventOutcome("timeout")
+                        .field("http.request.method", req.method().name())
+                        .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
+                    timeoutCtx
+                ).log();
                 return ResponseBuilder.unavailable()
                     .textBody(
                         String.format(
@@ -715,6 +743,123 @@ public final class VertxSliceServer implements Closeable {
             }
         }
         return promise;
+    }
+
+    /**
+     * Attach common request metadata to ECS logs.
+     * @param logger Logger builder
+     * @param ctx Request context
+     * @return Enriched logger
+     */
+    private static EcsLogger addRequestContext(final EcsLogger logger, final RequestLogContext ctx) {
+        if (ctx.clientIp() != null && !ctx.clientIp().isEmpty()) {
+            logger.field("client.ip", ctx.clientIp());
+        }
+        if (ctx.remotePort() >= 0) {
+            logger.field("client.port", ctx.remotePort());
+        }
+        if (ctx.userAgent() != null && !ctx.userAgent().isEmpty()) {
+            logger.field("user_agent.original", ctx.userAgent());
+        }
+        ctx.username().ifPresent(logger::userName);
+        if (!ctx.headers().isEmpty()) {
+            logger.field("http.request.headers", ctx.headers());
+        }
+        return logger;
+    }
+
+    /**
+     * Request metadata snapshot for logging.
+     */
+    private static final class RequestLogContext {
+
+        private final String remoteHost;
+        private final int remotePort;
+        private final String clientIp;
+        private final String userAgent;
+        private final Optional<String> username;
+        private final Map<String, String> headers;
+
+        private RequestLogContext(
+            final String remoteHost,
+            final int remotePort,
+            final String clientIp,
+            final String userAgent,
+            final Optional<String> username,
+            final Map<String, String> headers
+        ) {
+            this.remoteHost = remoteHost;
+            this.remotePort = remotePort;
+            this.clientIp = clientIp;
+            this.userAgent = userAgent;
+            this.username = username;
+            this.headers = headers;
+        }
+
+        static RequestLogContext from(final HttpServerRequest req, final Headers headers) {
+            final io.vertx.reactivex.core.net.SocketAddress remote = req.remoteAddress();
+            final String host = remote == null ? "unknown" : remote.host();
+            final int port = remote == null ? -1 : remote.port();
+            final String clientIp = EcsLogEvent.extractClientIp(headers, host);
+            final Optional<String> username = EcsLogEvent.extractUsername(headers);
+            final String userAgent = headers.values("user-agent").stream().findFirst().orElse(null);
+            final Map<String, String> snapshot = captureHeaders(headers);
+            return new RequestLogContext(host, port, clientIp, userAgent, username, snapshot);
+        }
+
+        String remoteHost() {
+            return this.remoteHost;
+        }
+
+        int remotePort() {
+            return this.remotePort;
+        }
+
+        String clientIp() {
+            return this.clientIp;
+        }
+
+        String userAgent() {
+            return this.userAgent;
+        }
+
+        Optional<String> username() {
+            return this.username;
+        }
+
+        Map<String, String> headers() {
+            return this.headers;
+        }
+    }
+
+    /**
+     * Capture a sanitized snapshot of incoming headers for auditing.
+     * @param headers Request headers
+     * @return Map of header names to values
+     */
+    private static Map<String, String> captureHeaders(final Headers headers) {
+        final Map<String, String> snapshot = new LinkedHashMap<>();
+        for (Header header : headers) {
+            final String key = header.getKey();
+            if (key == null) {
+                continue;
+            }
+            String value = header.getValue();
+            if (value == null) {
+                continue;
+            }
+            if ("authorization".equalsIgnoreCase(key) || "proxy-authorization".equalsIgnoreCase(key)) {
+                value = "<redacted>";
+            } else if (value.length() > 256) {
+                value = value.substring(0, 256) + "...";
+            }
+            final String normalized = key.toLowerCase(Locale.ROOT);
+            snapshot.merge(normalized, value, (existing, update) -> existing + ", " + update);
+            if (snapshot.size() >= 25) {
+                break;
+            }
+        }
+        return snapshot;
     }
 
     private static <T> CompletableFuture<T> toFuture(final CompletionStage<T> stage) {
