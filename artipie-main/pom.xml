@@ -249,6 +249,16 @@ SOFTWARE.
             <artifactId>jetty-http3-server</artifactId>
             <version>${jetty.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.quic</groupId>
+            <artifactId>jetty-quic-quiche-jna</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.quic</groupId>
+            <artifactId>jetty-quic-quiche-server</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
         <!--        adapters      -->
         <dependency>
             <groupId>com.artipie</groupId>

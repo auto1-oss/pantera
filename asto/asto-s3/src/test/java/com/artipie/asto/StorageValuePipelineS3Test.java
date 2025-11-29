@@ -4,8 +4,11 @@
  */
 package com.artipie.asto;
 
-import com.adobe.testing.s3mock.junit5.S3MockExtension;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amihaiemil.eoyaml.Yaml;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.factory.Config;
@@ -18,9 +21,15 @@ import com.artipie.asto.test.ReadWithDelaysStorage;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.apache.commons.io.IOUtils;
@@ -33,17 +42,29 @@ import java.util.Random;
 import java.util.UUID;
 
 /**
- * Test for {@link StorageValuePipeline} backed by {@link S3Storage}
+ * Test for {@link StorageValuePipeline} backed by {@link S3Storage}.
+ * Uses Testcontainers to run S3Mock in isolated Docker container,
+ * avoiding Jetty 11/12 classpath conflicts.
  */
+@Testcontainers
 public class StorageValuePipelineS3Test {
 
     /**
-     * Mock S3 server.
+     * S3Mock container running in Docker.
+     * Isolated from our Jetty 12.1.4 classpath.
      */
-    @RegisterExtension
-    static final S3MockExtension MOCK = S3MockExtension.builder()
-        .withSecureConnection(false)
-        .build();
+    @Container
+    static final GenericContainer<?> S3_MOCK = new GenericContainer<>(
+        DockerImageName.parse("adobe/s3mock:3.5.2")
+    )
+        .withExposedPorts(9090, 9191)
+        .withEnv("initialBuckets", "test")
+        .waitingFor(Wait.forHttp("/").forPort(9090));
+
+    /**
+     * S3 client for test setup.
+     */
+    private static AmazonS3 s3Client;
 
     /**
      * Bucket to use in tests.
@@ -55,10 +76,42 @@ public class StorageValuePipelineS3Test {
      */
     private Storage asto;
 
+    @BeforeAll
+    static void setUpClient() {
+        final String endpoint = String.format(
+            "http://%s:%d",
+            S3_MOCK.getHost(),
+            S3_MOCK.getMappedPort(9090)
+        );
+        s3Client = AmazonS3ClientBuilder.standard()
+            .withEndpointConfiguration(
+                new AwsClientBuilder.EndpointConfiguration(endpoint, "us-east-1")
+            )
+            .withCredentials(
+                new AWSStaticCredentialsProvider(
+                    new BasicAWSCredentials("foo", "bar")
+                )
+            )
+            .withPathStyleAccessEnabled(true)
+            .build();
+    }
+
+    @AfterAll
+    static void tearDownClient() {
+        if (s3Client != null) {
+            s3Client.shutdown();
+        }
+    }
+
     @BeforeEach
-    void setUp(final AmazonS3 client) {
+    void setUp() {
         this.bucket = UUID.randomUUID().toString();
-        client.createBucket(this.bucket);
+        s3Client.createBucket(this.bucket);
+        final String endpoint = String.format(
+            "http://%s:%d",
+            S3_MOCK.getHost(),
+            S3_MOCK.getMappedPort(9090)
+        );
         asto = StoragesLoader.STORAGES
             .newObject(
                 "s3",
@@ -66,7 +119,7 @@ public class StorageValuePipelineS3Test {
                     Yaml.createYamlMappingBuilder()
                         .add("region", "us-east-1")
                         .add("bucket", this.bucket)
-                        .add("endpoint", String.format("http://localhost:%d", MOCK.getHttpPort()))
+                        .add("endpoint", endpoint)
                         .add(
                             "credentials",
                             Yaml.createYamlMappingBuilder()

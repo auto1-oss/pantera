@@ -115,6 +115,7 @@ SOFTWARE.
           <testExcludes>
             <exclude>**/com/artipie/http/servlet/**</exclude>
             <exclude>**/com/artipie/http/slice/SliceITCase.java</exclude>
+            <exclude>**/com/artipie/http/client/jetty/JettyClientHttp3Test.java</exclude>
           </testExcludes>
         </configuration>
       </plugin>

@@ -4,8 +4,11 @@
  */
 package com.artipie.asto.s3;
 
-import com.adobe.testing.s3mock.junit5.S3MockExtension;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amihaiemil.eoyaml.Yaml;
 import com.artipie.asto.Content;
@@ -19,37 +22,76 @@ import java.util.Random;
 import java.util.UUID;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
-import org.junit.jupiter.api.extension.RegisterExtension;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 /**
  * Functional test for parallel range downloads.
  */
 @DisabledOnOs(OS.WINDOWS)
+@Testcontainers
 final class S3ParallelDownloadTest {
-    @RegisterExtension
-    static final S3MockExtension MOCK = S3MockExtension.builder()
-        .withSecureConnection(false)
-        .build();
+    @Container
+    static final GenericContainer<?> S3_MOCK = new GenericContainer<>(
+        DockerImageName.parse("adobe/s3mock:3.5.2")
+    )
+        .withExposedPorts(9090, 9191)
+        .withEnv("initialBuckets", "test")
+        .waitingFor(Wait.forHttp("/").forPort(9090));
+
+    private static AmazonS3 s3Client;
 
     private String bucket;
 
+    @BeforeAll
+    static void setUpClient() {
+        final String endpoint = String.format(
+            "http://%s:%d",
+            S3_MOCK.getHost(),
+            S3_MOCK.getMappedPort(9090)
+        );
+        s3Client = AmazonS3ClientBuilder.standard()
+            .withEndpointConfiguration(
+                new AwsClientBuilder.EndpointConfiguration(endpoint, "us-east-1")
+            )
+            .withCredentials(
+                new AWSStaticCredentialsProvider(
+                    new BasicAWSCredentials("foo", "bar")
+                )
+            )
+            .withPathStyleAccessEnabled(true)
+            .build();
+    }
+
+    @AfterAll
+    static void tearDownClient() {
+        if (s3Client != null) {
+            s3Client.shutdown();
+        }
+    }
+
     @BeforeEach
-    void setUp(final AmazonS3 client) {
+    void setUp() {
         this.bucket = UUID.randomUUID().toString();
-        client.createBucket(this.bucket);
+        s3Client.createBucket(this.bucket);
     }
 
     @Test
-    void downloadsLargeObjectInParallel(final AmazonS3 client) throws Exception {
+    void downloadsLargeObjectInParallel() throws Exception {
         final int size = 32 * 1024 * 1024;
         final byte[] data = new byte[size];
         new Random().nextBytes(data);
         final String key = "large-parallel";
-        client.putObject(
+        s3Client.putObject(
             this.bucket,
             key,
             new ByteArrayInputStream(data),
@@ -68,7 +110,11 @@ final class S3ParallelDownloadTest {
                     Yaml.createYamlMappingBuilder()
                         .add("region", "us-east-1")
                         .add("bucket", this.bucket)
-                        .add("endpoint", String.format("http://localhost:%d", MOCK.getHttpPort()))
+                        .add("endpoint", String.format(
+                            "http://%s:%d",
+                            S3_MOCK.getHost(),
+                            S3_MOCK.getMappedPort(9090)
+                        ))
                         .add("parallel-download", String.valueOf(parallel))
                         .add("parallel-download-min-bytes", "1")
                         .add("parallel-download-chunk-bytes", String.valueOf(1 * 1024 * 1024))
