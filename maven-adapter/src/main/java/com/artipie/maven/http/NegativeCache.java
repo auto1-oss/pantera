@@ -142,29 +142,9 @@ public final class NegativeCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
-        
-        // Initialize OpenTelemetry metrics (after cache is created)
-        if (this.enabled && com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            // Metrics are optional - silent failure is acceptable
-            this.registerMetrics();
-        }
     }
-    
-    /**
-     * Register cache size metrics (isolated to avoid PMD violations).
-     * Metrics registration failures are silently ignored as they are optional.
-     */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
-    private void registerMetrics() {
-        try {
-            com.artipie.metrics.otel.OtelMetrics.get()
-                .registerCacheSize("maven_negative", "l1", 
-                    () -> this.notFoundCache.estimatedSize());
-        } catch (RuntimeException ex) {
-            // Metrics registration failed - silently ignore
-            // Empty catch is acceptable: metrics are optional, no action needed
-        }
-    }
+
+
     
     /**
      * Check if key is in negative cache (known 404).
@@ -182,19 +162,17 @@ public final class NegativeCache {
             return false;
         }
         
-        final long startNanos = System.nanoTime();
         final boolean found = this.notFoundCache.getIfPresent(key) != null;
-        
+
         // Track L1 metrics
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            final double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
             if (found) {
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("maven_negative", durationMs);
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
             } else {
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("maven_negative", durationMs);
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
             }
         }
-        
+
         return found;
     }
     
@@ -212,57 +190,48 @@ public final class NegativeCache {
         }
         
         // Check L1 first
-        final long l1StartNanos = System.nanoTime();
         if (this.notFoundCache.getIfPresent(key) != null) {
-            if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("maven_negative", durationMs);
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
             }
             return CompletableFuture.completedFuture(true);
         }
-        
+
         // L1 MISS
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-            com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("maven_negative", durationMs);
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
         }
         
         // Check L2 if enabled
         if (this.twoTier) {
             final String redisKey = "maven:negative:" + this.repoName + ":" + key.string();
-            final long l2StartNanos = System.nanoTime();
             
             return this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
                 .exceptionally(err -> {
-                    // Track L2 error
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                        final String errorType = err instanceof java.util.concurrent.TimeoutException
-                            ? "timeout" : "connection_error";
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Error("maven_negative", errorType, durationMs);
+                    // Track L2 error - simplified for Micrometer
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheMiss("maven_negative", "l2");
                     }
                     return null;
                 })
                 .thenApply(l2Bytes -> {
-                    final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                    
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                            com.artipie.metrics.otel.OtelMetrics.get()
-                                .recordL2Hit("maven_negative", durationMs);
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance()
+                                .recordCacheHit("maven_negative", "l2");
                         }
                         this.notFoundCache.put(key, CACHED);
                         return true;
                     }
-                    
+
                     // L2 MISS
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Miss("maven_negative", durationMs);
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheMiss("maven_negative", "l2");
                     }
                     return false;
                 });

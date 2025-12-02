@@ -53,6 +53,8 @@ public final class MavenGroupSlice implements Slice {
     private static final Cache<String, byte[]> METADATA_CACHE = Caffeine.newBuilder()
         .maximumSize(1000)
         .expireAfterWrite(Duration.ofMinutes(5))
+        .recordStats()
+        .evictionListener(MavenGroupSlice::onEviction)
         .build();
 
     /**
@@ -204,10 +206,20 @@ public final class MavenGroupSlice implements Slice {
         final String path
     ) {
         final String cacheKey = this.group + ":" + path;
-        
-        // Check cache first
+
+        // Check cache first with metrics
+        final long cacheStartNanos = System.nanoTime();
         final byte[] cached = METADATA_CACHE.getIfPresent(cacheKey);
+        final long cacheDurationMs = (System.nanoTime() - cacheStartNanos) / 1_000_000;
+
         if (cached != null) {
+            // Cache HIT
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("metadata", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheOperationDuration("metadata", "l1", "get", cacheDurationMs);
+            }
+
             EcsLogger.debug("com.artipie.maven")
                 .message("Returning cached merged metadata (cache hit)")
                 .eventCategory("repository")
@@ -222,6 +234,13 @@ public final class MavenGroupSlice implements Slice {
                     .body(cached)
                     .build()
             );
+        }
+
+        // Cache MISS
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("metadata", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("metadata", "l1", "get", cacheDurationMs);
         }
 
         // CRITICAL: Consume original body to prevent OneTimePublisher errors
@@ -302,9 +321,19 @@ public final class MavenGroupSlice implements Slice {
                 return mergeUsingReflection(metadataList)
                     .thenApply(mergedBytes -> {
                         final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
-                        
-                        // Cache the merged result
+
+                        // Cache the merged result with PUT latency tracking
+                        final long putStartNanos = System.nanoTime();
                         METADATA_CACHE.put(cacheKey, mergedBytes);
+                        final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance()
+                                .recordCacheOperationDuration("metadata", "l1", "put", putDurationMs);
+                        }
+
+                        // Record metadata merge metrics
+                        recordMetadataOperation("merge", mergeDuration);
 
                         // Only log slow merges
                         if (mergeDuration > 500) {
@@ -472,6 +501,32 @@ public final class MavenGroupSlice implements Slice {
             );
         } catch (URISyntaxException ex) {
             throw new IllegalArgumentException("Failed to rewrite path", ex);
+        }
+    }
+
+    private void recordMetadataOperation(final String operation, final long duration) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataOperation(this.group, "maven", operation);
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataGenerationDuration(this.group, "maven", duration);
+        }
+    }
+
+    /**
+     * Handle metadata cache eviction - record metrics.
+     * @param key Cache key
+     * @param metadata Metadata bytes
+     * @param cause Eviction cause
+     */
+    private static void onEviction(
+        final String key,
+        final byte[] metadata,
+        final com.github.benmanes.caffeine.cache.RemovalCause cause
+    ) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheEviction("metadata", "l1", cause.toString().toLowerCase());
         }
     }
 }

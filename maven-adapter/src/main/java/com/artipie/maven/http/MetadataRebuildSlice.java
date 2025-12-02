@@ -43,11 +43,26 @@ public final class MetadataRebuildSlice implements Slice {
     private final Slice origin;
 
     /**
+     * Repository name.
+     */
+    private final String repoName;
+
+    /**
      * Constructor.
+     * @param origin Origin slice to wrap
+     * @param repoName Repository name
+     */
+    public MetadataRebuildSlice(final Slice origin, final String repoName) {
+        this.origin = origin;
+        this.repoName = repoName;
+    }
+
+    /**
+     * Constructor (backward compatibility).
      * @param origin Origin slice to wrap
      */
     public MetadataRebuildSlice(final Slice origin) {
-        this.origin = origin;
+        this(origin, "unknown");
     }
 
     @Override
@@ -128,6 +143,7 @@ public final class MetadataRebuildSlice implements Slice {
 
         // Trigger rebuild asynchronously (fire and forget) with trace context propagation
         CompletableFuture.runAsync(TraceContextExecutor.wrap(() -> {
+            final long startTime = System.currentTimeMillis();
             try {
                 // Here you would call your metadata generator
                 // For now, just log the intention
@@ -144,7 +160,12 @@ public final class MetadataRebuildSlice implements Slice {
                 // TODO: Integrate with existing MavenMetadata class
                 // new MavenMetadata(...).updateMetadata(coords).join();
 
+                // Record successful metadata rebuild
+                final long duration = System.currentTimeMillis() - startTime;
+                recordMetadataOperation("rebuild", duration);
+
             } catch (RuntimeException e) {  // NOPMD - Best-effort async, catch all
+                final long duration = System.currentTimeMillis() - startTime;
                 EcsLogger.warn("com.artipie.maven")
                     .message("Metadata rebuild failed")
                     .eventCategory("repository")
@@ -155,9 +176,20 @@ public final class MetadataRebuildSlice implements Slice {
                     .field("package.name", coords.artifactId)
                     .field("package.version", coords.version)
                     .log();
+                // Record failed metadata rebuild
+                recordMetadataOperation("rebuild_failed", duration);
                 // Don't propagate error - metadata rebuild is best-effort
             }
         }));
+    }
+
+    private void recordMetadataOperation(final String operation, final long duration) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataOperation(this.repoName, "maven", operation);
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataGenerationDuration(this.repoName, "maven", duration);
+        }
     }
 
     /**

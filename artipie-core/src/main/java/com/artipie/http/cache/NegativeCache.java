@@ -149,17 +149,6 @@ public final class NegativeCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
-        
-        // Initialize OpenTelemetry metrics (after cache is created)
-        if (this.enabled && com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            try {
-                com.artipie.metrics.otel.OtelMetrics.get()
-                    .registerCacheSize("negative", "l1", 
-                        () -> this.notFoundCache.estimatedSize());
-            } catch (Exception e) {
-                // Metrics are optional
-            }
-        }
     }
     
     /**
@@ -180,17 +169,19 @@ public final class NegativeCache {
         
         final long startNanos = System.nanoTime();
         final boolean found = this.notFoundCache.getIfPresent(key) != null;
-        
+
         // Track L1 metrics
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            final double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
             if (found) {
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("negative", durationMs);
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             } else {
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("negative", durationMs);
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             }
         }
-        
+
         return found;
     }
     
@@ -209,17 +200,19 @@ public final class NegativeCache {
         // Check L1 first
         final long l1StartNanos = System.nanoTime();
         if (this.notFoundCache.getIfPresent(key) != null) {
-            if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("negative", durationMs);
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             }
             return CompletableFuture.completedFuture(true);
         }
-        
+
         // L1 MISS
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-            com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("negative", durationMs);
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
         }
         
         // Check L2 if enabled
@@ -231,33 +224,26 @@ public final class NegativeCache {
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
                 .exceptionally(err -> {
-                    // Track L2 error
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                        final String errorType = err instanceof java.util.concurrent.TimeoutException
-                            ? "timeout" : "connection_error";
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Error("negative", errorType, durationMs);
-                    }
+                    // Track L2 error - metrics handled elsewhere
                     return null;
                 })
                 .thenApply(l2Bytes -> {
-                    final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                    
+                    final long durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000;
+
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                            com.artipie.metrics.otel.OtelMetrics.get()
-                                .recordL2Hit("negative", durationMs);
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l2");
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
                         }
                         this.notFoundCache.put(key, CACHED);
                         return true;
                     }
-                    
+
                     // L2 MISS
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Miss("negative", durationMs);
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l2");
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
                     }
                     return false;
                 });

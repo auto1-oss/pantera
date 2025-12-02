@@ -71,6 +71,8 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .eventAction("cache_init")
             .eventOutcome("success")
             .log();
+
+
     }
 
     /**
@@ -85,7 +87,31 @@ public class StoragesCache implements Cleanable<YamlMapping> {
         if (Strings.isNullOrEmpty(type)) {
             throw new ArtipieException("Storage type cannot be null or empty.");
         }
-        return this.cache.get(
+
+        final long startNanos = System.nanoTime();
+        final Storage existing = this.cache.getIfPresent(yaml);
+
+        if (existing != null) {
+            // Cache HIT
+            final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("storage", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheOperationDuration("storage", "l1", "get", durationMs);
+            }
+            return existing;
+        }
+
+        // Cache MISS - create new storage
+        final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("storage", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("storage", "l1", "get", durationMs);
+        }
+
+        final long putStartNanos = System.nanoTime();
+        final Storage storage = this.cache.get(
             yaml,
             key -> {
                 // Direct storage without JfrStorage wrapper
@@ -95,6 +121,15 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                     .newObject(type, new Config.YamlStorageConfig(key));
             }
         );
+
+        // Record PUT latency
+        final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("storage", "l1", "put", putDurationMs);
+        }
+
+        return storage;
     }
 
     /**
@@ -122,7 +157,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
     }
 
     /**
-     * Handle storage eviction - log eviction event.
+     * Handle storage eviction - log eviction event and record metrics.
      * Note: Storage interface doesn't extend AutoCloseable, so we just log.
      * @param key Cache key
      * @param storage Storage instance
@@ -140,6 +175,12 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                 .eventAction("cache_evict")
                 .eventOutcome("success")
                 .log();
+
+            // Record eviction metric
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheEviction("storage", "l1", cause.toString().toLowerCase());
+            }
         }
     }
 }

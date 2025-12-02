@@ -77,13 +77,18 @@ public final class FileProxySlice implements Slice {
     private final FilesCooldownInspector inspector;
 
     /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
      * New files proxy slice.
      * @param clients HTTP clients
      * @param remote Remote URI
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
         this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE);
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown");
     }
 
     /**
@@ -98,7 +103,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
             new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString()
         );
     }
 
@@ -115,7 +120,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
             new FromRemoteCache(asto), Optional.of(events), rname,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString()
         );
     }
 
@@ -125,7 +130,7 @@ public final class FileProxySlice implements Slice {
      */
     FileProxySlice(final Slice remote, final Cache cache) {
         this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE);
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown");
     }
 
     /**
@@ -133,11 +138,29 @@ public final class FileProxySlice implements Slice {
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param cooldown Cooldown service
      */
     public FileProxySlice(
         final Slice remote, final Cache cache,
         final Optional<Queue<ArtifactEvent>> events, final String rname,
         final CooldownService cooldown
+    ) {
+        this(remote, cache, events, rname, cooldown, "unknown");
+    }
+
+    /**
+     * Full constructor with upstream URL for metrics.
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown, final String upstreamUrl
     ) {
         this.remote = remote;
         this.cache = cache;
@@ -145,6 +168,7 @@ public final class FileProxySlice implements Slice {
         this.rname = rname;
         this.cooldown = cooldown;
         this.inspector = new FilesCooldownInspector(remote);
+        this.upstreamUrl = upstreamUrl;
     }
 
     @Override
@@ -171,6 +195,7 @@ public final class FileProxySlice implements Slice {
                         CooldownResponses.forbidden(result.block().orElseThrow())
                     );
                 }
+                final long startTime = System.currentTimeMillis();
                 return this.cache.load(key,
                 new Remote.WithErrorHandling(
                     () -> {
@@ -178,10 +203,12 @@ public final class FileProxySlice implements Slice {
                         this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                             .thenApply(
                                 response -> {
+                                    final long duration = System.currentTimeMillis() - startTime;
                                     final CompletableFuture<Void> term = new CompletableFuture<>();
                                     rshdr.set(response.headers());
 
                                     if (response.status().success()) {
+                                        this.recordProxyMetric("success", duration);
                                         final Flowable<ByteBuffer> body = Flowable.fromPublisher(response.body())
                                             .doOnError(term::completeExceptionally)
                                             .doOnTerminate(() -> term.complete(null));
@@ -209,10 +236,22 @@ public final class FileProxySlice implements Slice {
                                             );
                                         }
                                     } else {
+                                        final String metricResult = response.status().code() == 404 ? "not_found" :
+                                            (response.status().code() >= 500 ? "error" : "client_error");
+                                        this.recordProxyMetric(metricResult, duration);
+                                        if (response.status().code() >= 500) {
+                                            this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
+                                        }
                                         promise.complete(Optional.empty());
                                     }
                                     return term;
-                                });
+                                })
+                            .exceptionally(error -> {
+                                final long duration = System.currentTimeMillis() - startTime;
+                                this.recordProxyMetric("exception", duration);
+                                this.recordUpstreamErrorMetric(error);
+                                throw new java.util.concurrent.CompletionException(error);
+                            });
                         return promise;
                     }
                 ),
@@ -229,5 +268,49 @@ public final class FileProxySlice implements Slice {
                 }
             );
             });
+    }
+
+    /**
+     * Record proxy request metric.
+     */
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    /**
+     * Record upstream error metric.
+     */
+    private void recordUpstreamErrorMetric(final Throwable error) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                String errorType = "unknown";
+                if (error instanceof java.util.concurrent.TimeoutException) {
+                    errorType = "timeout";
+                } else if (error instanceof java.net.ConnectException) {
+                    errorType = "connection";
+                }
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
+            }
+        });
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

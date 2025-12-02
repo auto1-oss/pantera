@@ -116,7 +116,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Duration negativeCacheTtl,
         final boolean negativeCacheEnabled
     ) {
-        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown, storage,
+        this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype, cooldown, storage,
             metadataTtl, negativeCacheTtl, negativeCacheEnabled);
     }
 
@@ -125,11 +125,12 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
+        final String upstreamUrl,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
         final Optional<Storage> storage
     ) {
-        this(remote, cache, events, rname, rtype, cooldown, storage,
+        this(remote, cache, events, rname, upstreamUrl, rtype, cooldown, storage,
             Duration.ofHours(24), Duration.ofHours(24), true);
     }
 
@@ -138,6 +139,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
+        final String upstreamUrl,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
         final Optional<Storage> storage,
@@ -145,7 +147,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Duration negativeCacheTtl,
         final boolean negativeCacheEnabled
     ) {
-        this(remote, cache, events, rname, rtype, cooldown, new MavenCooldownInspector(remote),
+        this(remote, cache, events, rname, upstreamUrl, rtype, cooldown, new MavenCooldownInspector(remote),
             storage, metadataTtl, negativeCacheTtl, negativeCacheEnabled);
     }
 
@@ -154,6 +156,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
+        final String upstreamUrl,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
         final MavenCooldownInspector inspector,
@@ -174,7 +177,7 @@ public final class MavenProxySlice extends Slice.Wrap {
                     // This dramatically improves Maven client performance by eliminating
                     // "Checksum validation failed, no checksums available" errors
                     new ChecksumProxySlice(
-                        new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector,
+                        new CachedProxySlice(remote, cache, events, rname, upstreamUrl, rtype, cooldown, inspector,
                             storage, metadataTtl, negativeCacheTtl, negativeCacheEnabled)
                     )
                 ),

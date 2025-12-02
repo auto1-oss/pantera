@@ -17,6 +17,7 @@ import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
 import com.artipie.asto.log.EcsLogger;
+import com.artipie.asto.metrics.StorageMetricsCollector;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
@@ -82,13 +83,23 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Boolean> exists(final Key key) {
+        final long startNs = System.nanoTime();
         return this.keyPath(key).thenApplyAsync(
             path -> Files.exists(path) && !Files.isDirectory(path)
-        );
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "exists",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
+        final long startNs = System.nanoTime();
         return this.keyPath(prefix).thenApplyAsync(
             path -> {
                 Collection<Key> keys;
@@ -139,7 +150,15 @@ public final class FileStorage implements Storage {
                     .log();
                 return keys;
             }
-        );
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "list",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
@@ -217,6 +236,7 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
+        final long startNs = System.nanoTime();
         // Validate root key is not supported
         if (Key.ROOT.string().equals(key.string())) {
             return new CompletableFutureSupport.Failed<Void>(
@@ -224,7 +244,7 @@ public final class FileStorage implements Storage {
             ).get();
         }
 
-        return this.keyPath(key).thenApplyAsync(
+        final CompletableFuture<Void> result = this.keyPath(key).thenApplyAsync(
             path ->  {
                 // Create temp file in .tmp directory at storage root to avoid filename length issues
                 // Using parent directory could still exceed 255-byte limit if parent path is long
@@ -263,18 +283,49 @@ public final class FileStorage implements Storage {
                 );
             }
         );
+        return result.whenComplete((res, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            final long sizeBytes = content.size().orElse(-1L);
+            if (sizeBytes > 0) {
+                StorageMetricsCollector.record(
+                    "save",
+                    durationNs,
+                    throwable == null,
+                    this.id,
+                    sizeBytes
+                );
+            } else {
+                StorageMetricsCollector.record(
+                    "save",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> move(final Key source, final Key destination) {
+        final long startNs = System.nanoTime();
         return this.keyPath(source).thenCompose(
             src -> this.keyPath(destination).thenApply(dst -> ImmutablePair.of(src, dst))
-        ).thenCompose(pair -> FileStorage.move(pair.getKey(), pair.getValue()));
+        ).thenCompose(pair -> FileStorage.move(pair.getKey(), pair.getValue()))
+        .whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "move",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
     @SuppressWarnings("PMD.ExceptionAsFlowControl")
     public CompletableFuture<Void> delete(final Key key) {
+        final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(
             path -> {
                 if (Files.exists(path) && !Files.isDirectory(path)) {
@@ -288,7 +339,15 @@ public final class FileStorage implements Storage {
                     throw new ValueNotFoundException(key);
                 }
             }
-        );
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "delete",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
@@ -310,6 +369,7 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Content> value(final Key key) {
+        final long startNs = System.nanoTime();
         final CompletableFuture<Content> res;
         if (Key.ROOT.string().equals(key.string())) {
             res = new CompletableFutureSupport.Failed<Content>(
@@ -330,7 +390,35 @@ public final class FileStorage implements Storage {
                 )
             );
         }
-        return res;
+        return res.whenComplete((content, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            if (content != null) {
+                final long sizeBytes = content.size().orElse(-1L);
+                if (sizeBytes > 0) {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id,
+                        sizeBytes
+                    );
+                } else {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id
+                    );
+                }
+            } else {
+                StorageMetricsCollector.record(
+                    "value",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            }
+        });
     }
 
     @Override

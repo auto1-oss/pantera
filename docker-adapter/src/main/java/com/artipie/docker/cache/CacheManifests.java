@@ -72,6 +72,11 @@ public final class CacheManifests implements Manifests {
     private final Optional<DockerProxyCooldownInspector> inspector;
 
     /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -81,12 +86,28 @@ public final class CacheManifests implements Manifests {
     public CacheManifests(String name, Repo origin, Repo cache,
         Optional<Queue<ArtifactEvent>> events, String registryName,
         Optional<DockerProxyCooldownInspector> inspector) {
+        this(name, origin, cache, events, registryName, inspector, "unknown");
+    }
+
+    /**
+     * @param name Repository name.
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events
+     * @param registryName Artipie repository name
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    public CacheManifests(String name, Repo origin, Repo cache,
+        Optional<Queue<ArtifactEvent>> events, String registryName,
+        Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.rname = registryName;
         this.inspector = inspector;
+        this.upstreamUrl = upstreamUrl;
     }
 
     @Override
@@ -96,11 +117,14 @@ public final class CacheManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        final long startTime = System.currentTimeMillis();
         return this.origin.manifests().get(ref).handle(
             (original, throwable) -> {
+                final long duration = System.currentTimeMillis() - startTime;
                 final CompletionStage<Optional<Manifest>> result;
                 if (throwable == null) {
                     if (original.isPresent()) {
+                        this.recordProxyMetric("success", duration);
                         Manifest manifest = original.get();
                         if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
@@ -120,9 +144,12 @@ public final class CacheManifests implements Manifests {
                             result = CompletableFuture.completedFuture(original);
                         }
                     } else {
+                        this.recordProxyMetric("not_found", duration);
                         result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
                     }
                 } else {
+                    this.recordProxyMetric("exception", duration);
+                    this.recordUpstreamErrorMetric(throwable);
                     EcsLogger.error("com.artipie.docker")
                         .message("Failed getting manifest")
                         .eventCategory("repository")
@@ -298,5 +325,49 @@ public final class CacheManifests implements Manifests {
                 .log();
         }
         return Optional.empty();
+    }
+
+    /**
+     * Record proxy request metric.
+     */
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    /**
+     * Record upstream error metric.
+     */
+    private void recordUpstreamErrorMetric(final Throwable error) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                String errorType = "unknown";
+                if (error instanceof java.util.concurrent.TimeoutException) {
+                    errorType = "timeout";
+                } else if (error instanceof java.net.ConnectException) {
+                    errorType = "connection";
+                }
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
+            }
+        });
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

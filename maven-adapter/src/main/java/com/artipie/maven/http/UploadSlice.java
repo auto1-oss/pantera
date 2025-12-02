@@ -118,14 +118,14 @@ public final class UploadSlice implements Slice {
             .orElse(0L);
         
         // Track upload metric
-        this.recordMetric(() -> 
-            com.artipie.metrics.ArtipieMetrics.instance().upload("maven")
+        this.recordMetric(() ->
+            com.artipie.metrics.ArtipieMetrics.instance().upload(this.rname, "maven")
         );
-        
+
         // Track bandwidth (upload)
         if (size > 0) {
-            this.recordMetric(() -> 
-                com.artipie.metrics.ArtipieMetrics.instance().bandwidth("maven", "upload", size)
+            this.recordMetric(() ->
+                com.artipie.metrics.ArtipieMetrics.instance().bandwidth(this.rname, "maven", "upload", size)
             );
         }
         

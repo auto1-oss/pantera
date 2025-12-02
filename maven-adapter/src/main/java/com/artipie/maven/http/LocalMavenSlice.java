@@ -46,12 +46,19 @@ final class LocalMavenSlice implements Slice {
     private final Storage storage;
 
     /**
+     * Repository name.
+     */
+    private final String repoName;
+
+    /**
      * New local {@code GET} slice.
      *
      * @param storage Repository storage
+     * @param repoName Repository name
      */
-    LocalMavenSlice(Storage storage) {
+    LocalMavenSlice(Storage storage, String repoName) {
         this.storage = storage;
+        this.repoName = repoName;
     }
 
     @Override
@@ -76,8 +83,8 @@ final class LocalMavenSlice implements Slice {
                     exists -> {
                         if (exists) {
                             // Track download metric
-                            this.recordMetric(() -> 
-                                com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                            this.recordMetric(() ->
+                                com.artipie.metrics.ArtipieMetrics.instance().download(this.repoName, "maven")
                             );
                             // Use storage-specific optimized content retrieval for 100-1000x faster downloads
                             return StorageArtifactSlice.optimizedValue(storage, artifact)

@@ -81,11 +81,13 @@ public final class CachedCooldownInspector implements CooldownInspector {
             .maximumSize(releaseDateMaxSize)
             .expireAfterWrite(releaseDateTtl)
             .recordStats()
+            .evictionListener(this::onEviction)
             .build();
         this.dependencies = Caffeine.newBuilder()
             .maximumSize(dependencyMaxSize)
             .expireAfterWrite(dependencyTtl)
             .recordStats()
+            .evictionListener(this::onEviction)
             .build();
         this.inflightReleases = new ConcurrentHashMap<>();
         this.inflightDeps = new ConcurrentHashMap<>();
@@ -97,28 +99,57 @@ public final class CachedCooldownInspector implements CooldownInspector {
         final String version
     ) {
         final String key = key(artifact, version);
-        
-        // Fast path: cached result
+
+        // Fast path: cached result with metrics
+        final long getStartNanos = System.nanoTime();
         final Optional<Instant> cached = this.releaseDates.getIfPresent(key);
+        final long getDurationMs = (System.nanoTime() - getStartNanos) / 1_000_000;
+
         if (cached != null) {
+            // Cache HIT
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheHit("cooldown_inspector", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
+            }
             return CompletableFuture.completedFuture(cached);
         }
-        
+
+        // Cache MISS
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheMiss("cooldown_inspector", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
+        }
+
         // Deduplication: check if already fetching
         final CompletableFuture<Optional<Instant>> existing = this.inflightReleases.get(key);
         if (existing != null) {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheDeduplication("cooldown_inspector", "l1");
+            }
             return existing;
         }
-        
+
         // Fetch from delegate
         final CompletableFuture<Optional<Instant>> future = this.delegate.releaseDate(artifact, version)
             .whenComplete((result, error) -> {
                 this.inflightReleases.remove(key);
                 if (error == null && result != null) {
+                    final long putStartNanos = System.nanoTime();
                     this.releaseDates.put(key, result);
+                    final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
+                    }
                 }
             });
-        
+
         this.inflightReleases.put(key, future);
         return future;
     }
@@ -129,28 +160,57 @@ public final class CachedCooldownInspector implements CooldownInspector {
         final String version
     ) {
         final String key = key(artifact, version);
-        
-        // Fast path: cached result
+
+        // Fast path: cached result with metrics
+        final long getStartNanos = System.nanoTime();
         final List<CooldownDependency> cached = this.dependencies.getIfPresent(key);
+        final long getDurationMs = (System.nanoTime() - getStartNanos) / 1_000_000;
+
         if (cached != null) {
+            // Cache HIT
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheHit("cooldown_inspector", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
+            }
             return CompletableFuture.completedFuture(cached);
         }
-        
+
+        // Cache MISS
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheMiss("cooldown_inspector", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
+        }
+
         // Deduplication: check if already fetching
         final CompletableFuture<List<CooldownDependency>> existing = this.inflightDeps.get(key);
         if (existing != null) {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheDeduplication("cooldown_inspector", "l1");
+            }
             return existing;
         }
-        
+
         // Fetch from delegate
         final CompletableFuture<List<CooldownDependency>> future = this.delegate.dependencies(artifact, version)
             .whenComplete((result, error) -> {
                 this.inflightDeps.remove(key);
                 if (error == null && result != null) {
+                    final long putStartNanos = System.nanoTime();
                     this.dependencies.put(key, result);
+                    final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
+                    }
                 }
             });
-        
+
         this.inflightDeps.put(key, future);
         return future;
     }
@@ -163,11 +223,18 @@ public final class CachedCooldownInspector implements CooldownInspector {
         return this.delegate.releaseDatesBatch(deps)
             .whenComplete((results, error) -> {
                 if (error == null && results != null) {
-                    // Cache all batch results
+                    // Cache all batch results with metrics
+                    final long putStartNanos = System.nanoTime();
                     results.forEach((dep, date) -> {
                         final String key = key(dep.artifact(), dep.version());
                         this.releaseDates.put(key, date);
                     });
+                    final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
+                    }
                 }
             });
     }
@@ -197,5 +264,23 @@ public final class CachedCooldownInspector implements CooldownInspector {
 
     private static String key(final String artifact, final String version) {
         return artifact + ":" + version;
+    }
+
+    /**
+     * Handle cache eviction - record metrics.
+     * This listener is used by both releaseDates and dependencies caches.
+     * @param key Cache key
+     * @param value Cached value
+     * @param cause Eviction cause
+     */
+    private void onEviction(
+        final String key,
+        final Object value,
+        final com.github.benmanes.caffeine.cache.RemovalCause cause
+    ) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheEviction("cooldown_inspector", "l1", cause.toString().toLowerCase());
+        }
     }
 }

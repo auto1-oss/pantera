@@ -87,6 +87,11 @@ final class CachedProxySlice implements Slice {
     private final String baseUrl;
 
     /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
      * @param remote Remote slice
      * @param repo Repository
      * @param cache Cache
@@ -95,10 +100,11 @@ final class CachedProxySlice implements Slice {
         this(remote, repo, cache, Optional.empty(), "composer", "php",
             com.artipie.cooldown.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
-            "http://localhost:8080"
+            "http://localhost:8080",
+            "unknown"
         );
     }
-    
+
     /**
      * Full constructor with cooldown support.
      *
@@ -123,6 +129,35 @@ final class CachedProxySlice implements Slice {
         final CooldownInspector inspector,
         final String baseUrl
     ) {
+        this(remote, repo, cache, events, rname, rtype, cooldown, inspector, baseUrl, "unknown");
+    }
+
+    /**
+     * Full constructor with upstream URL for metrics.
+     *
+     * @param remote Remote slice
+     * @param repo Repository
+     * @param cache Cache
+     * @param events Proxy artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param baseUrl Base URL for this Artipie instance
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    CachedProxySlice(
+        final Slice remote,
+        final Repository repo,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final String baseUrl,
+        final String upstreamUrl
+    ) {
         this.remote = remote;
         this.cache = cache;
         this.repo = repo;
@@ -132,6 +167,7 @@ final class CachedProxySlice implements Slice {
         this.cooldown = cooldown;
         this.inspector = inspector;
         this.baseUrl = baseUrl;
+        this.upstreamUrl = upstreamUrl;
     }
 
     @Override
@@ -535,32 +571,94 @@ final class CachedProxySlice implements Slice {
         final RequestLine line,
         final Headers headers
     ) {
+        final long startTime = System.currentTimeMillis();
         return new Remote.WithErrorHandling(
-            () -> this.remote.response(line, Headers.EMPTY, Content.EMPTY)
-                .thenCompose(response -> {
-                    EcsLogger.debug("com.artipie.composer")
-                        .message("Remote response received")
-                        .eventCategory("repository")
-                        .eventAction("remote_fetch")
-                        .field("url.path", line.uri().getPath())
-                        .field("http.response.status_code", response.status().code())
-                        .log();
-                    if (response.status().success()) {
-                        return CompletableFuture.completedFuture(Optional.of(response.body()));
-                    }
-                    // CRITICAL: Consume body to prevent Vert.x request leak
-                    return response.body().asBytesFuture().thenApply(ignored -> {
-                        EcsLogger.warn("com.artipie.composer")
-                            .message("Remote returned non-success status")
-                            .eventCategory("repository")
-                            .eventAction("remote_fetch")
-                            .eventOutcome("failure")
-                            .field("url.path", line.uri().getPath())
-                            .field("http.response.status_code", response.status().code())
-                            .log();
-                        return Optional.empty();
-                    });
-                })
+            () -> {
+                try {
+                    return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+                        .thenCompose(response -> {
+                            final long duration = System.currentTimeMillis() - startTime;
+                            EcsLogger.debug("com.artipie.composer")
+                                .message("Remote response received")
+                                .eventCategory("repository")
+                                .eventAction("remote_fetch")
+                                .field("url.path", line.uri().getPath())
+                                .field("http.response.status_code", response.status().code())
+                                .log();
+                            if (response.status().success()) {
+                                this.recordProxyMetric("success", duration);
+                                return CompletableFuture.completedFuture(Optional.of(response.body()));
+                            }
+                            // CRITICAL: Consume body to prevent Vert.x request leak
+                            return response.body().asBytesFuture().thenApply(ignored -> {
+                                final String result = response.status().code() == 404 ? "not_found" :
+                                    (response.status().code() >= 500 ? "error" : "client_error");
+                                this.recordProxyMetric(result, duration);
+                                if (response.status().code() >= 500) {
+                                    this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
+                                }
+                                EcsLogger.warn("com.artipie.composer")
+                                    .message("Remote returned non-success status")
+                                    .eventCategory("repository")
+                                    .eventAction("remote_fetch")
+                                    .eventOutcome("failure")
+                                    .field("url.path", line.uri().getPath())
+                                    .field("http.response.status_code", response.status().code())
+                                    .log();
+                                return Optional.empty();
+                            });
+                        });
+                } catch (Exception error) {
+                    final long duration = System.currentTimeMillis() - startTime;
+                    this.recordProxyMetric("exception", duration);
+                    this.recordUpstreamErrorMetric(error);
+                    throw error;
+                }
+            }
         ).get();
+    }
+
+    /**
+     * Record proxy request metric.
+     */
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    /**
+     * Record upstream error metric.
+     */
+    private void recordUpstreamErrorMetric(final Throwable error) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                String errorType = "unknown";
+                if (error instanceof java.util.concurrent.TimeoutException) {
+                    errorType = "timeout";
+                } else if (error instanceof java.net.ConnectException) {
+                    errorType = "connection";
+                }
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
+            }
+        });
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

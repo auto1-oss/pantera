@@ -95,6 +95,38 @@ public class ComposerProxySlice extends Slice.Wrap {
         final CooldownInspector inspector,
         final String baseUrl
     ) {
+        this(clients, remote, repository, auth, cache, events, rname, rtype, cooldown, inspector, baseUrl, remote.toString());
+    }
+
+    /**
+     * Full constructor with upstream URL for metrics.
+     * @param clients HTTP clients
+     * @param remote Remote URI
+     * @param repository Repository
+     * @param auth Authenticator
+     * @param cache Repository cache
+     * @param events Proxy artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param baseUrl Base URL for this Artipie instance (for metadata URL rewriting)
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    public ComposerProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Repository repository,
+        final Authenticator auth,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final CooldownInspector inspector,
+        final String baseUrl,
+        final String upstreamUrl
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -127,7 +159,8 @@ public class ComposerProxySlice extends Slice.Wrap {
                         rtype,
                         cooldown,
                         inspector,
-                        baseUrl
+                        baseUrl,
+                        upstreamUrl
                     )
                 ),
                 new RtRulePath(

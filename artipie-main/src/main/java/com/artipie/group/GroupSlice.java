@@ -165,7 +165,18 @@ public final class GroupSlice implements Slice {
         }
 
         recordRequestStart();
-        return queryAllMembersInParallel(line, headers, body);
+        final long requestStartTime = System.currentTimeMillis();
+        return queryAllMembersInParallel(line, headers, body)
+            .whenComplete((resp, err) -> {
+                final long duration = System.currentTimeMillis() - requestStartTime;
+                if (err != null) {
+                    recordGroupRequest("error", duration);
+                } else if (resp.status().success()) {
+                    recordGroupRequest("success", duration);
+                } else {
+                    recordGroupRequest("not_found", duration);
+                }
+            });
     }
 
     /**
@@ -277,6 +288,8 @@ public final class GroupSlice implements Slice {
                 }
                 member.recordSuccess();
                 recordSuccess(member.name(), latency);
+                recordGroupMemberRequest(member.name(), "success");
+                recordGroupMemberLatency(member.name(), "success", latency);
                 result.complete(resp);
             } else {
                 EcsLogger.debug("com.artipie.group")
@@ -317,6 +330,7 @@ public final class GroupSlice implements Slice {
                 .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .log();
+            recordGroupMemberRequest(member.name(), status.code() == 404 ? "not_found" : "error");
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
                 EcsLogger.warn("com.artipie.group")
@@ -400,7 +414,7 @@ public final class GroupSlice implements Slice {
         final com.artipie.metrics.GroupSliceMetrics metrics =
             com.artipie.metrics.GroupSliceMetrics.instance();
         if (metrics != null) {
-            metrics.recordSuccess(this.group, member);
+            metrics.recordSuccess(this.group, member, latency);
             metrics.recordBatch(this.group, this.members.size(), latency);
         }
     }
@@ -410,6 +424,29 @@ public final class GroupSlice implements Slice {
             com.artipie.metrics.GroupSliceMetrics.instance();
         if (metrics != null) {
             metrics.recordNotFound(this.group);
+        }
+    }
+
+    private void recordGroupRequest(final String result, final long duration) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordGroupRequest(this.group, result);
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordGroupResolutionDuration(this.group, duration);
+        }
+    }
+
+    private void recordGroupMemberRequest(final String memberName, final String result) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordGroupMemberRequest(this.group, memberName, result);
+        }
+    }
+
+    private void recordGroupMemberLatency(final String memberName, final String result, final long latencyMs) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordGroupMemberLatency(this.group, memberName, result, latencyMs);
         }
     }
 }

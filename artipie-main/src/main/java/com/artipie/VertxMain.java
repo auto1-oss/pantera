@@ -33,6 +33,9 @@ import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
 import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics;
 import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.config.MeterFilter;
+import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
@@ -135,14 +138,7 @@ public final class VertxMain {
                 .log();
         }
 
-        // Initialize OpenTelemetry metrics (works with Elastic APM Java Agent)
-        com.artipie.metrics.otel.OtelMetrics.initialize();
-        EcsLogger.info("com.artipie")
-            .message("OpenTelemetry metrics initialized")
-            .eventCategory("configuration")
-            .eventAction("metrics_initialize")
-            .eventOutcome("success")
-            .log();
+
 
         final Vertx vertx = VertxMain.vertx(settings.metrics());
         final JWTAuth jwt = JWTAuth.create(
@@ -602,11 +598,29 @@ public final class VertxMain {
             .setMaxWorkerExecuteTime(60000L * 1000000L); // 60 seconds in nanoseconds
         
         if (apm != null || endpoint.isPresent()) {
-            final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions().setEnabled(true);
+            final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions()
+                .setEnabled(true)
+                // Enable comprehensive Vert.x metrics with labels
+                .setJvmMetricsEnabled(true)
+                // Add labels for HTTP metrics (method, status code)
+                // NOTE: HTTP_PATH label removed to avoid high cardinality
+                // Repository-level metrics use artipie_http_requests_total with repo_name label instead
+                .addLabels(io.vertx.micrometer.Label.HTTP_METHOD)
+                .addLabels(io.vertx.micrometer.Label.HTTP_CODE)
+                // Add labels for pool metrics (pool type, pool name)
+                .addLabels(io.vertx.micrometer.Label.POOL_TYPE)
+                .addLabels(io.vertx.micrometer.Label.POOL_NAME)
+                // Add labels for event bus metrics
+                .addLabels(io.vertx.micrometer.Label.EB_ADDRESS)
+                .addLabels(io.vertx.micrometer.Label.EB_SIDE)
+                .addLabels(io.vertx.micrometer.Label.EB_FAILURE);
+
             if (apm != null) {
-                micrometer.setMicrometerRegistry(apm).setJvmMetricsEnabled(true);
+                micrometer.setMicrometerRegistry(apm);
             }
+
             if (endpoint.isPresent()) {
+                // Enable embedded Prometheus server for Vert.x/Micrometer metrics
                 micrometer.setPrometheusOptions(
                     new VertxPrometheusOptions().setEnabled(true)
                         .setStartEmbeddedServer(true)
@@ -617,7 +631,36 @@ public final class VertxMain {
             }
             options.setMetricsOptions(micrometer);
             res = Vertx.vertx(options);
+
+            // CRITICAL FIX: Get MeterRegistry AFTER Vertx.vertx() to avoid NullPointerException
+            // BackendRegistries.getDefaultNow() requires Vertx to be initialized first
             final MeterRegistry registry = BackendRegistries.getDefaultNow();
+
+            // Add common tags to all metrics
+            registry.config().commonTags("job", "artipie");
+
+            // Configure registry to publish histogram buckets for all Timer metrics
+            registry.config().meterFilter(
+                new MeterFilter() {
+                    @Override
+                    public DistributionStatisticConfig configure(Meter.Id id, DistributionStatisticConfig config) {
+                        if (id.getType() == Meter.Type.TIMER) {
+                            return DistributionStatisticConfig.builder()
+                                .percentilesHistogram(true)
+                                .build()
+                                .merge(config);
+                        }
+                        return config;
+                    }
+                }
+            );
+
+            // Initialize MicrometerMetrics with the registry
+            com.artipie.metrics.MicrometerMetrics.initialize(registry);
+
+            // Initialize storage metrics recorder
+            com.artipie.metrics.StorageMetricsRecorder.initialize();
+
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);
                 new JvmMemoryMetrics().bindTo(registry);
@@ -627,7 +670,7 @@ public final class VertxMain {
             }
             if (endpoint.isPresent()) {
                 EcsLogger.info("com.artipie")
-                    .message("Monitoring is enabled, prometheus metrics are available")
+                    .message("Micrometer metrics (JVM, Vert.x, Storage, Cache, Repository) enabled on port " + endpoint.get().getValue())
                     .eventCategory("configuration")
                     .eventAction("metrics_configure")
                     .eventOutcome("success")

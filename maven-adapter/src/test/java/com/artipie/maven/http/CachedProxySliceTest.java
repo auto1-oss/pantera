@@ -84,7 +84,7 @@ final class CachedProxySliceTest {
             (cacheKey, supplier, control) -> CompletableFuture.completedFuture(
                 Optional.of(new Content.From(data))
             ),
-            Optional.of(this.events), "*", "maven-proxy",
+            Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
             NoopCooldownService.INSTANCE,
             noopInspector(),
             Optional.of(storage)
@@ -106,7 +106,7 @@ final class CachedProxySliceTest {
             new CachedProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
                 (key, supplier, control) -> supplier.get(),
-                Optional.of(this.events), "*", "maven-proxy",
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
                 CachedProxySliceTest.NO_STORAGE
@@ -126,7 +126,7 @@ final class CachedProxySliceTest {
                 new SliceSimple(ResponseBuilder.internalError().build()),
                 (key, supplier, control)
                     -> new FailedCompletionStage<>(new RuntimeException("Any error")),
-                Optional.of(this.events), "*", "maven-proxy",
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
                 CachedProxySliceTest.NO_STORAGE
@@ -152,7 +152,7 @@ final class CachedProxySliceTest {
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
                 (key, supplier, control) -> supplier.get(),
-                Optional.of(this.events), "*", "maven-proxy",
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
                 CachedProxySliceTest.NO_STORAGE
@@ -181,7 +181,7 @@ final class CachedProxySliceTest {
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
                 (key, supplier, control) -> supplier.get(),
-                Optional.of(this.events), "*", "maven-proxy",
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
                 NoopCooldownService.INSTANCE,
                 noopInspector(),
                 CachedProxySliceTest.NO_STORAGE

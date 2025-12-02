@@ -150,7 +150,8 @@ public final class DockerProxy implements Slice {
                 proxy,
                 new AstoDocker(cfg.name(), new SubStorage(RegistryRoot.V2, cache)),
                 events,
-                Optional.of(inspector)
+                Optional.of(inspector),
+                remote.uri().toString()  // Pass upstream URL for metrics
             )
         ).orElse(proxy);
     }

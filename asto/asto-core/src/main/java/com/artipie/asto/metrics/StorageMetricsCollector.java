@@ -5,12 +5,21 @@
 package com.artipie.asto.metrics;
 
 /**
- * Storage metrics collector stub.
- * This is a placeholder for future metrics collection functionality.
- * 
+ * Storage metrics collector interface.
+ * This is a placeholder that allows storage implementations to report metrics
+ * without creating a dependency on the metrics implementation.
+ *
+ * The actual metrics collection is implemented at the application level
+ * using OtelMetrics.recordStorageOperation() methods.
+ *
  * @since 1.20.0
  */
 public final class StorageMetricsCollector {
+
+    /**
+     * Metrics recorder instance (optional).
+     */
+    private static volatile MetricsRecorder recorder = null;
 
     /**
      * Private constructor to prevent instantiation.
@@ -20,8 +29,17 @@ public final class StorageMetricsCollector {
     }
 
     /**
+     * Set the metrics recorder implementation.
+     * This should be called during application initialization.
+     *
+     * @param metricsRecorder Metrics recorder implementation
+     */
+    public static void setRecorder(final MetricsRecorder metricsRecorder) {
+        recorder = metricsRecorder;
+    }
+
+    /**
      * Record a storage operation metric (without size tracking).
-     * Currently a no-op stub.
      *
      * @param operation Operation name (e.g., "exists", "list")
      * @param durationNs Duration in nanoseconds
@@ -34,12 +52,14 @@ public final class StorageMetricsCollector {
         final boolean success,
         final String storageId
     ) {
-        // No-op stub - metrics collection not yet implemented
+        final MetricsRecorder rec = recorder;
+        if (rec != null) {
+            rec.recordOperation(operation, durationNs, success, storageId);
+        }
     }
 
     /**
      * Record a storage operation metric (with size tracking).
-     * Currently a no-op stub.
      *
      * @param operation Operation name (e.g., "save", "value", "move")
      * @param durationNs Duration in nanoseconds
@@ -54,7 +74,36 @@ public final class StorageMetricsCollector {
         final String storageId,
         final long sizeBytes
     ) {
-        // No-op stub - metrics collection not yet implemented
+        final MetricsRecorder rec = recorder;
+        if (rec != null) {
+            rec.recordOperation(operation, durationNs, success, storageId, sizeBytes);
+        }
+    }
+
+    /**
+     * Interface for metrics recording implementation.
+     * Implement this interface in artipie-core to bridge to OtelMetrics.
+     */
+    public interface MetricsRecorder {
+        /**
+         * Record operation without size.
+         * @param operation Operation name
+         * @param durationNs Duration in nanoseconds
+         * @param success Success flag
+         * @param storageId Storage identifier
+         */
+        void recordOperation(String operation, long durationNs, boolean success, String storageId);
+
+        /**
+         * Record operation with size.
+         * @param operation Operation name
+         * @param durationNs Duration in nanoseconds
+         * @param success Success flag
+         * @param storageId Storage identifier
+         * @param sizeBytes Size in bytes
+         */
+        void recordOperation(String operation, long durationNs, boolean success,
+                           String storageId, long sizeBytes);
     }
 }
 

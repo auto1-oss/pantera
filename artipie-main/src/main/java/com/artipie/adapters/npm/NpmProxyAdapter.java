@@ -96,7 +96,9 @@ public final class NpmProxyAdapter implements Slice {
                         asto,
                         Duration.ofHours(24),  // 404 cache TTL
                         true,                   // negative caching enabled
-                        cfg.name()              // CRITICAL: Pass repo name for cache isolation
+                        cfg.name(),             // CRITICAL: Pass repo name for cache isolation
+                        remote.uri().toString(), // Upstream URL for metrics
+                        cfg.type()              // Repository type
                     );
                 }
             ).collect(Collectors.toList())

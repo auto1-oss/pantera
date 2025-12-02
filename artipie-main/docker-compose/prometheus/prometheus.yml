@@ -23,20 +23,20 @@ global:
 
 # A scrape configuration containing exactly one endpoint to scrape:
 scrape_configs:
-  # Artipie Vert.x metrics endpoint
-  - job_name: 'artipie-vertx'
+  # Artipie Micrometer metrics endpoint (JVM, Vert.x, HTTP, Storage, Cache, Repository)
+  # All metrics consolidated on single endpoint using Micrometer with Prometheus registry
+  - job_name: 'artipie'
     metrics_path: '/metrics/vertx'
     static_configs:
       - targets: ['artipie:8087']
         labels:
           service: 'artipie'
-          component: 'vertx'
           instance: 'artipie-main'
-    
+
     # Scrape interval for this job (overrides global)
     scrape_interval: 10s
     scrape_timeout: 5s
-    
+
     # Optional: Add basic auth if metrics endpoint is protected
     # basic_auth:
     #   username: 'prometheus'

@@ -122,7 +122,7 @@ public final class MavenSlice extends Slice.Wrap {
                     MethodRule.GET, MethodRule.HEAD
                 ),
                 MavenSlice.createAuthSlice(
-                    new LocalMavenSlice(storage),
+                    new LocalMavenSlice(storage, name),
                     basicAuth,
                     tokenAuth,
                     new OperationControl(

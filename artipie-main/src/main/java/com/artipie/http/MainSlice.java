@@ -47,6 +47,7 @@ public final class MainSlice extends Slice.Wrap {
      * Artipie entry point.
      *
      * @param settings Artipie settings.
+     * @param slices Repository slices.
      */
     public MainSlice(final Settings settings, final RepositorySlices slices) {
         super(MainSlice.buildMainSlice(settings, slices));
@@ -96,7 +97,7 @@ public final class MainSlice extends Slice.Wrap {
                 new RtRulePath(
                     RtRule.FALLBACK,
                     new DockerRoutingSlice(
-                        settings, 
+                        settings,
                         new ApiRoutingSlice(
                             new SliceByPath(slices, settings.prefixes())
                         )

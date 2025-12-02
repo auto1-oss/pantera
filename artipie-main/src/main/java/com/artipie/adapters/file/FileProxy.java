@@ -59,7 +59,8 @@ public final class FileProxy implements Slice {
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.flatMap(ignored -> events),
                     cfg.name(),
-                    cooldown
+                    cooldown,
+                    remote.uri().toString()
                 )
             ).collect(Collectors.toList())
         );

@@ -20,7 +20,7 @@ meta:
       path: /var/artipie/security
   
   cooldown:
-    enabled: true
+    enabled: false
     repo_types:
       maven-proxy:
         enabled: false
@@ -37,7 +37,7 @@ meta:
     pool_min_idle: 10
   
   http_client:
-    proxy_timeout: 60
+    proxy_timeout: 120
     max_connections_per_destination: 512
     max_requests_queued_per_destination: 2048
     idle_timeout: 30000

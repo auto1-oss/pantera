@@ -14,6 +14,7 @@ import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
 import com.artipie.asto.log.EcsLogger;
+import com.artipie.asto.metrics.StorageMetricsCollector;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
@@ -73,17 +74,28 @@ public final class VertxFileStorage implements Storage {
 
     @Override
     public CompletableFuture<Boolean> exists(final Key key) {
+        final long startNs = System.nanoTime();
         return Single.fromCallable(
             () -> {
                 final Path path = this.path(key);
                 return Files.exists(path) && !Files.isDirectory(path);
             }
         ).subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
-            .to(SingleInterop.get()).toCompletableFuture();
+            .to(SingleInterop.get()).toCompletableFuture()
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                StorageMetricsCollector.record(
+                    "exists",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            });
     }
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
+        final long startNs = System.nanoTime();
         return Single.fromCallable(
             () -> {
                 final Path path = this.path(prefix);
@@ -125,11 +137,21 @@ public final class VertxFileStorage implements Storage {
                 return keys;
             })
             .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
-            .to(SingleInterop.get()).toCompletableFuture();
+            .to(SingleInterop.get()).toCompletableFuture()
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                StorageMetricsCollector.record(
+                    "list",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            });
     }
 
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
+        final long startNs = System.nanoTime();
         // Validate root key is not supported
         if (Key.ROOT.string().equals(key.string())) {
             return CompletableFuture.failedFuture(
@@ -176,11 +198,32 @@ public final class VertxFileStorage implements Storage {
             )
             .to(CompletableInterop.await())
             .<Void>thenApply(o -> null)
-            .toCompletableFuture();
+            .toCompletableFuture()
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                final long sizeBytes = content.size().orElse(-1L);
+                if (sizeBytes > 0) {
+                    StorageMetricsCollector.record(
+                        "save",
+                        durationNs,
+                        throwable == null,
+                        this.id,
+                        sizeBytes
+                    );
+                } else {
+                    StorageMetricsCollector.record(
+                        "save",
+                        durationNs,
+                        throwable == null,
+                        this.id
+                    );
+                }
+            });
     }
 
     @Override
     public CompletableFuture<Void> move(final Key source, final Key destination) {
+        final long startNs = System.nanoTime();
         return Single.fromCallable(
             () -> {
                 final Path dest = this.path(destination);
@@ -193,20 +236,40 @@ public final class VertxFileStorage implements Storage {
             )
             .to(CompletableInterop.await())
             .<Void>thenApply(file -> null)
-            .toCompletableFuture();
+            .toCompletableFuture()
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                StorageMetricsCollector.record(
+                    "move",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            });
     }
 
     @Override
     public CompletableFuture<Void> delete(final Key key) {
+        final long startNs = System.nanoTime();
         return new VertxRxFile(this.path(key), this.vertx)
             .delete()
             .to(CompletableInterop.await())
             .toCompletableFuture()
-            .thenCompose(ignored -> CompletableFuture.allOf());
+            .thenCompose(ignored -> CompletableFuture.allOf())
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                StorageMetricsCollector.record(
+                    "delete",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            });
     }
 
     @Override
     public CompletableFuture<Content> value(final Key key) {
+        final long startNs = System.nanoTime();
         final CompletableFuture<Content> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Content>(
@@ -223,7 +286,35 @@ public final class VertxFileStorage implements Storage {
                     )
             );
         }
-        return res;
+        return res.whenComplete((content, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            if (content != null) {
+                final long sizeBytes = content.size().orElse(-1L);
+                if (sizeBytes > 0) {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id,
+                        sizeBytes
+                    );
+                } else {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id
+                    );
+                }
+            } else {
+                StorageMetricsCollector.record(
+                    "value",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            }
+        });
     }
 
     @Override

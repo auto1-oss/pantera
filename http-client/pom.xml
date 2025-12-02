@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.2</version>
+    <version>1.20.3</version>
   </parent>
   <artifactId>http-client</artifactId>
-  <version>1.20.2</version>
+  <version>1.20.3</version>
   <name>Artipie HTTP client</name>
   <url>https://github.com/artipie/http-client</url>
   <properties>
@@ -40,7 +40,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>artipie-core</artifactId>
-      <version>1.20.2</version>
+      <version>1.20.3</version>
     </dependency>
     <!-- Micrometer for Jetty metrics -->
     <dependency>
@@ -101,7 +101,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>1.20.2</version>
+      <version>1.20.3</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

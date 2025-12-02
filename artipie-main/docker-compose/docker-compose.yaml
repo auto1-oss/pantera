@@ -7,7 +7,7 @@ services:
         condition: service_started
       valkey:
         condition: service_healthy
-    image: auto1-artipie:1.20.2
+    image: auto1-artipie:1.20.3
     cpus: 2
     mem_limit: 4gb
     mem_reservation: 4gb
@@ -24,7 +24,7 @@ services:
       - AWS_PROFILE=profile_name
       - AWS_REGION=eu-west-1
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.20.2
+      - ARTIPIE_VERSION=1.20.3
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
       - ELASTIC_APM_ENABLED=false
@@ -44,7 +44,7 @@ services:
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml
-      - ~/Desktop/Support/repo:/var/artipie/repo
+      - ./artipie/prod_repo:/var/artipie/repo
       - ./artipie/security:/var/artipie/security
       - ./artipie/data:/var/artipie/data
       - ./artipie/cache:/var/artipie/cache

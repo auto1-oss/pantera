@@ -7,10 +7,10 @@ package com.artipie.metrics;
 import com.artipie.http.log.EcsLogger;
 
 /**
- * Artipie metrics - Compatibility wrapper for OpenTelemetry.
- * Delegates all calls to OtelMetrics for backward compatibility.
- * 
- * @deprecated Use {@link com.artipie.metrics.otel.OtelMetrics} directly
+ * Artipie metrics - Compatibility wrapper for Micrometer.
+ * Delegates all calls to MicrometerMetrics for backward compatibility.
+ *
+ * @deprecated Use {@link MicrometerMetrics} directly
  * @since 1.18.20
  */
 @Deprecated
@@ -50,24 +50,20 @@ public final class ArtipieMetrics {
     }
     
     public static boolean isEnabled() {
-        return com.artipie.metrics.otel.OtelMetrics.isInitialized();
+        return MicrometerMetrics.isInitialized();
     }
     
     // === Delegating Methods ===
     
     public void cacheHit(final String repoType) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordCacheHit(
-                repoType, repoType, "artifact"
-            );
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordCacheHit(repoType, "l1");
         }
     }
-    
+
     public void cacheMiss(final String repoType) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordCacheMiss(
-                repoType, repoType, "artifact"
-            );
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordCacheMiss(repoType, "l1");
         }
     }
     
@@ -77,18 +73,26 @@ public final class ArtipieMetrics {
     }
     
     public void download(final String repoType) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordDownload(
-                repoType, repoType, "proxy", 0
-            );
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordDownload(repoType, repoType, 0);
         }
     }
-    
+
+    public void download(final String repoName, final String repoType) {
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordDownload(repoName, repoType, 0);
+        }
+    }
+
     public void upload(final String repoType) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordUpload(
-                repoType, repoType, "local", 0
-            );
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordUpload(repoType, repoType, 0);
+        }
+    }
+
+    public void upload(final String repoName, final String repoType) {
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordUpload(repoName, repoType, 0);
         }
     }
     
@@ -103,16 +107,21 @@ public final class ArtipieMetrics {
     }
     
     public void bandwidth(final String repoType, final String direction, final long bytes) {
-        // Bandwidth is calculated from artifact size in OpenTelemetry version
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+        if (MicrometerMetrics.isInitialized()) {
             if ("download".equals(direction)) {
-                com.artipie.metrics.otel.OtelMetrics.get().recordDownload(
-                    repoType, repoType, "proxy", bytes
-                );
+                MicrometerMetrics.getInstance().recordDownload(repoType, repoType, bytes);
             } else if ("upload".equals(direction)) {
-                com.artipie.metrics.otel.OtelMetrics.get().recordUpload(
-                    repoType, repoType, "local", bytes
-                );
+                MicrometerMetrics.getInstance().recordUpload(repoType, repoType, bytes);
+            }
+        }
+    }
+
+    public void bandwidth(final String repoName, final String repoType, final String direction, final long bytes) {
+        if (MicrometerMetrics.isInitialized()) {
+            if ("download".equals(direction)) {
+                MicrometerMetrics.getInstance().recordDownload(repoName, repoType, bytes);
+            } else if ("upload".equals(direction)) {
+                MicrometerMetrics.getInstance().recordUpload(repoName, repoType, bytes);
             }
         }
     }
@@ -134,25 +143,25 @@ public final class ArtipieMetrics {
         // Storage metrics tracked separately in OpenTelemetry
     }
     
-    public void updateUpstreamAvailability(final String upstream, final boolean available) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
+    public void updateUpstreamAvailability(final String repoName, final String upstream, final boolean available) {
+        if (MicrometerMetrics.isInitialized()) {
             if (available) {
-                com.artipie.metrics.otel.OtelMetrics.get().recordUpstreamSuccess(upstream, upstream);
+                MicrometerMetrics.getInstance().recordUpstreamSuccess(upstream);
             } else {
-                com.artipie.metrics.otel.OtelMetrics.get().recordUpstreamError(upstream, upstream, "unavailable");
+                MicrometerMetrics.getInstance().recordUpstreamError(repoName, upstream, "unavailable");
             }
         }
     }
-    
-    public void upstreamFailure(final String upstream, final String errorType) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordUpstreamError(upstream, upstream, errorType);
+
+    public void upstreamFailure(final String repoName, final String upstream, final String errorType) {
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordUpstreamError(repoName, upstream, errorType);
         }
     }
-    
+
     public void upstreamSuccess(final String upstream) {
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            com.artipie.metrics.otel.OtelMetrics.get().recordUpstreamSuccess(upstream, upstream);
+        if (MicrometerMetrics.isInitialized()) {
+            MicrometerMetrics.getInstance().recordUpstreamSuccess(upstream);
         }
     }
     

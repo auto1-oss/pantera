@@ -79,7 +79,8 @@ public final class ComposerProxy implements Slice {
                             cfg.type(),
                             cooldown,
                             new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
-                            baseUrl
+                            baseUrl,
+                            remote.uri().toString()
                         )
                     ).orElseGet(
                         () -> new ComposerProxySlice(
@@ -93,7 +94,8 @@ public final class ComposerProxy implements Slice {
                             cfg.type(),
                             cooldown,
                             new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
-                            baseUrl
+                            baseUrl,
+                            remote.uri().toString()
                         )
                     );
                 }

@@ -6,11 +6,11 @@
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.2</version>
+    <version>1.20.3</version>
   </parent>
 
   <artifactId>artipie-core</artifactId>
-  <version>1.20.2</version>
+  <version>1.20.3</version>
   <packaging>jar</packaging>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
@@ -19,7 +19,7 @@
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.2</version>
+      <version>1.20.3</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -45,31 +45,16 @@
       <artifactId>commons-lang3</artifactId>
       <version>3.14.0</version>
     </dependency>
-    <!-- OpenTelemetry for custom metrics (replaces Micrometer) -->
+    <!-- Micrometer for metrics -->
     <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-api</artifactId>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <version>${micrometer.version}</version>
     </dependency>
     <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-sdk</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-sdk-metrics</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-exporter-otlp</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-sdk-extension-autoconfigure</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.opentelemetry.semconv</groupId>
-      <artifactId>opentelemetry-semconv</artifactId>
-      <version>1.25.0-alpha</version>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <version>${micrometer.version}</version>
     </dependency>
     <dependency>
       <groupId>javax.json</groupId>

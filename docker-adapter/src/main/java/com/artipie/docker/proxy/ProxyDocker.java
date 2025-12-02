@@ -58,6 +58,14 @@ public final class ProxyDocker implements Docker {
         return registryName;
     }
 
+    /**
+     * Get upstream URL.
+     * @return Upstream URL or "unknown" if not set
+     */
+    public String upstreamUrl() {
+        return this.remoteUri != null ? this.remoteUri.toString() : "unknown";
+    }
+
     @Override
     public Repo repo(String name) {
         // Normalize name for Docker Hub

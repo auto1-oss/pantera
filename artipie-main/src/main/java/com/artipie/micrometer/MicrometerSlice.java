@@ -71,6 +71,7 @@ public final class MicrometerSlice implements Slice {
     public CompletableFuture<Response> response(final RequestLine line, final Headers head,
                                                 final Content body) {
         final String method = line.method().value();
+        final long startTime = System.currentTimeMillis();
         final Counter.Builder requestCounter = Counter.builder("artipie.request.counter")
             .description("HTTP requests counter")
             .tag(MicrometerSlice.METHOD, method);
@@ -103,7 +104,18 @@ public final class MicrometerSlice implements Slice {
                         timer.stop(this.registry.timer(name));
                         res = CompletableFuture.failedFuture(err);
                     } else {
+                        final long duration = System.currentTimeMillis() - startTime;
                         timer.stop(this.registry.timer(name, MicrometerSlice.STATUS, resp.status().name()));
+
+                        // Record HTTP request metrics via MicrometerMetrics
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordHttpRequest(
+                                method,
+                                String.valueOf(resp.status().code()),
+                                duration
+                            );
+                        }
+
                         res = CompletableFuture.completedFuture(resp);
                     }
                     return res;

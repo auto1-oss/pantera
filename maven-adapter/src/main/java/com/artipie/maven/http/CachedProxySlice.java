@@ -77,6 +77,11 @@ public final class CachedProxySlice implements Slice {
     private final String rname;
 
     /**
+     * Upstream URL.
+     */
+    private final String upstreamUrl;
+
+    /**
      * Cooldown service.
      */
     private final CooldownService cooldown;
@@ -122,6 +127,7 @@ public final class CachedProxySlice implements Slice {
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param upstreamUrl Upstream URL
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
@@ -129,10 +135,10 @@ public final class CachedProxySlice implements Slice {
      */
     @SuppressWarnings({"PMD.ConstructorOnlyInitializesOrCallOtherConstructors", "PMD.CloseResource", "PMD.ExcessiveParameterList"})
     CachedProxySlice(final Slice client, final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events, final String rname,
+        final Optional<Queue<ProxyArtifactEvent>> events, final String rname, final String upstreamUrl,
         final String rtype, final CooldownService cooldown, final CooldownInspector inspector,
         final Optional<Storage> storage) {
-        this(client, cache, events, rname, rtype, cooldown, inspector, storage,
+        this(client, cache, events, rname, upstreamUrl, rtype, cooldown, inspector, storage,
             Duration.ofHours(24), Duration.ofHours(24), true);
     }
 
@@ -142,6 +148,7 @@ public final class CachedProxySlice implements Slice {
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param upstreamUrl Upstream URL
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
@@ -152,11 +159,11 @@ public final class CachedProxySlice implements Slice {
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     CachedProxySlice(final Slice client, final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events, final String rname,
+        final Optional<Queue<ProxyArtifactEvent>> events, final String rname, final String upstreamUrl,
         final String rtype, final CooldownService cooldown, final CooldownInspector inspector,
         final Optional<Storage> storage, final Duration metadataTtl,
         final Duration negativeCacheTtl, final boolean negativeCacheEnabled) {
-        this(client, cache, events, rname, rtype, cooldown, inspector, storage,
+        this(client, cache, events, rname, upstreamUrl, rtype, cooldown, inspector, storage,
             new MavenCacheConfig(metadataTtl, 10_000, negativeCacheTtl, 50_000, negativeCacheEnabled));
     }
 
@@ -166,21 +173,23 @@ public final class CachedProxySlice implements Slice {
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param upstreamUrl Upstream URL
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
      * @param storage Storage for persisting checksums (optional)
      * @param cacheConfig Cache configuration (TTL, maxSize, etc.)
      */
-    @SuppressWarnings({"PMD.ConstructorOnlyInitializesOrCallOtherConstructors", "PMD.CloseResource"})
+    @SuppressWarnings({"PMD.ConstructorOnlyInitializesOrCallOtherConstructors", "PMD.CloseResource", "PMD.ExcessiveParameterList"})
     CachedProxySlice(final Slice client, final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events, final String rname,
+        final Optional<Queue<ProxyArtifactEvent>> events, final String rname, final String upstreamUrl,
         final String rtype, final CooldownService cooldown, final CooldownInspector inspector,
         final Optional<Storage> storage, final MavenCacheConfig cacheConfig) {
         this.client = client;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
+        this.upstreamUrl = upstreamUrl;
         this.rtype = rtype;
         this.cooldown = cooldown;
         this.inspector = inspector;
@@ -286,19 +295,24 @@ public final class CachedProxySlice implements Slice {
         final Key key,
         final String owner
     ) {
+        final long startTime = System.currentTimeMillis();
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
             .thenCompose((resp) -> {
+                final long duration = System.currentTimeMillis() - startTime;
                 // Track upstream health
                 if (!resp.status().success()) {
                     if (resp.status().code() >= 500) {
                         this.trackUpstreamFailure(new RuntimeException("HTTP " + resp.status().code()));
+                        this.recordProxyMetric("error", duration);
                         // Consume body to prevent Vert.x request leak
                         return resp.body().asBytesFuture()
                             .handle((bytes, err) -> ResponseBuilder.notFound().build());
                     } else {
-                        this.recordMetric(() -> 
+                        this.recordMetric(() ->
                             com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
                         );
+                        final String result = resp.status().code() == 404 ? "not_found" : "client_error";
+                        this.recordProxyMetric(result, duration);
                         // Cache 404 responses to avoid repeated upstream requests
                         // CRITICAL: Never cache checksum 404s - we generate checksums locally
                         // Caching checksum 404s breaks Maven validation when artifact is later cached
@@ -306,7 +320,7 @@ public final class CachedProxySlice implements Slice {
                             // CRITICAL: Consume body BEFORE caching to complete request cycle
                             return resp.body().asBytesFuture().thenApply(bytes -> {
                                 this.negativeCache.cacheNotFound(key);
-                                this.recordMetric(() -> 
+                                this.recordMetric(() ->
                                     com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven-negative")
                                 );
                                 return ResponseBuilder.notFound().build();
@@ -317,13 +331,14 @@ public final class CachedProxySlice implements Slice {
                             .handle((bytes, err) -> ResponseBuilder.notFound().build());
                     }
                 }
-                this.recordMetric(() -> 
+                this.recordMetric(() ->
                     com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
                 );
+                this.recordProxyMetric("success", duration);
                 this.enqueueFromHeaders(resp.headers(), key, owner);
                 // Track download
-                this.recordMetric(() -> 
-                    com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                this.recordMetric(() ->
+                    com.artipie.metrics.ArtipieMetrics.instance().download(this.rname, this.rtype)
                 );
                 return CompletableFuture.completedFuture(
                     ResponseBuilder.ok()
@@ -333,9 +348,36 @@ public final class CachedProxySlice implements Slice {
                 );
             })
             .exceptionally(error -> {
+                final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
+                this.recordProxyMetric("exception", duration);
+                this.recordUpstreamErrorMetric(error);
                 throw new java.util.concurrent.CompletionException(error);
             });
+    }
+
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    private void recordUpstreamErrorMetric(final Throwable error) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                String errorType = "unknown";
+                if (error instanceof TimeoutException) {
+                    errorType = "timeout";
+                } else if (error instanceof ConnectException) {
+                    errorType = "connection";
+                }
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
+            }
+        });
     }
 
     private CompletableFuture<Response> fetchAndCache(
@@ -345,11 +387,15 @@ public final class CachedProxySlice implements Slice {
         final CachedArtifactMetadataStore store
     ) {
         // Request deduplication: if same key is already being fetched, reuse that future
+        final long startTime = System.currentTimeMillis();
         return this.inFlight.computeIfAbsent(key, k ->
             this.client.response(line, Headers.EMPTY, Content.EMPTY)
-                .thenCompose(resp -> this.handleUpstreamResponse(resp, key, owner, store))
+                .thenCompose(resp -> this.handleUpstreamResponse(resp, key, owner, store, startTime))
                 .exceptionally(error -> {
+                    final long duration = System.currentTimeMillis() - startTime;
                     this.trackUpstreamFailure(error);
+                    this.recordProxyMetric("exception", duration);
+                    this.recordUpstreamErrorMetric(error);
                     throw new java.util.concurrent.CompletionException(error);
                 })
                 .whenComplete((result, error) -> this.inFlight.remove(k))
@@ -360,38 +406,44 @@ public final class CachedProxySlice implements Slice {
         final Response resp,
         final Key key,
         final String owner,
-        final CachedArtifactMetadataStore store
+        final CachedArtifactMetadataStore store,
+        final long startTime
     ) {
+        final long duration = System.currentTimeMillis() - startTime;
         if (!resp.status().success()) {
-            return this.handleUpstreamError(resp, key);
+            return this.handleUpstreamError(resp, key, duration);
         }
-        this.recordMetric(() -> 
+        this.recordMetric(() ->
             com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
         );
+        this.recordProxyMetric("success", duration);
         final DigestingContent digesting = new DigestingContent(resp.body());
         this.enqueueFromHeaders(resp.headers(), key, owner);
-        this.recordMetric(() -> 
+        this.recordMetric(() ->
             com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven")
         );
-        this.recordMetric(() -> 
-            com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+        this.recordMetric(() ->
+            com.artipie.metrics.ArtipieMetrics.instance().download(this.rname, this.rtype)
         );
         return this.cacheAndBuildResponse(key, digesting, resp.headers(), store);
     }
 
-    private CompletableFuture<Response> handleUpstreamError(final Response resp, final Key key) {
+    private CompletableFuture<Response> handleUpstreamError(final Response resp, final Key key, final long duration) {
         if (resp.status().code() >= 500) {
             this.trackUpstreamFailure(new RuntimeException("HTTP " + resp.status().code()));
+            this.recordProxyMetric("error", duration);
         } else {
-            this.recordMetric(() -> 
+            this.recordMetric(() ->
                 com.artipie.metrics.ArtipieMetrics.instance().upstreamSuccess(this.rname)
             );
+            final String result = resp.status().code() == 404 ? "not_found" : "client_error";
+            this.recordProxyMetric(result, duration);
         }
         return resp.body().asBytesFuture()
             .thenApply(bytes -> {
                 if (resp.status().code() == 404 && !isChecksumFile(key.string())) {
                     this.negativeCache.cacheNotFound(key);
-                    this.recordMetric(() -> 
+                    this.recordMetric(() ->
                         com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven-negative")
                     );
                 }
@@ -416,8 +468,8 @@ public final class CachedProxySlice implements Slice {
             return digesting.result()
                 .thenCompose(digests -> {
                     final long size = digests.size();
-                    this.recordMetric(() -> 
-                        com.artipie.metrics.ArtipieMetrics.instance().bandwidth("maven", "download", size)
+                    this.recordMetric(() ->
+                        com.artipie.metrics.ArtipieMetrics.instance().bandwidth(this.rname, this.rtype, "download", size)
                     );
                     return store.save(key, respHeaders, digests);
                 })
@@ -533,11 +585,11 @@ public final class CachedProxySlice implements Slice {
             cached -> {
                 if (cached.isPresent()) {
                     // Cache hit - track metrics
-                    this.recordMetric(() -> 
+                    this.recordMetric(() ->
                         com.artipie.metrics.ArtipieMetrics.instance().cacheHit("maven")
                     );
-                    this.recordMetric(() -> 
-                        com.artipie.metrics.ArtipieMetrics.instance().download("maven")
+                    this.recordMetric(() ->
+                        com.artipie.metrics.ArtipieMetrics.instance().download(this.rname, this.rtype)
                     );
                     // Fast path: serve cached content immediately with async metadata loading
                     return store.load(key).thenApply(
@@ -710,8 +762,8 @@ public final class CachedProxySlice implements Slice {
         } else {
             errorType = "unknown";
         }
-        this.recordMetric(() -> 
-            com.artipie.metrics.ArtipieMetrics.instance().upstreamFailure(this.rname, errorType)
+        this.recordMetric(() ->
+            com.artipie.metrics.ArtipieMetrics.instance().upstreamFailure(this.rname, this.upstreamUrl, errorType)
         );
     }
 

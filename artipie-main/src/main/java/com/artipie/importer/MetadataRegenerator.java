@@ -246,6 +246,7 @@ public final class MetadataRegenerator {
         // CRITICAL: Lock maven-metadata.xml during update
         // Different artifacts (0.12.11 vs 0.3.0) are locked separately but both update this file
         // Use lock WITHOUT retry to avoid long delays that cause 504 timeouts
+        final long startTime = System.currentTimeMillis();
         return this.storage.exclusively(
             metadataKey,
             lockedStorage -> this.storage.list(baseKey)
@@ -261,7 +262,14 @@ public final class MetadataRegenerator {
                 .thenCompose(versions -> writeMavenMetadata(baseKey, groupId, artifactId, versions))
                 .thenCompose(nothing -> this.generateMavenChecksums(artifactKey))
                 .thenCompose(nothing -> this.generateAllVersionChecksums(versionKey))
-        );
+        ).whenComplete((result, error) -> {
+            final long duration = System.currentTimeMillis() - startTime;
+            if (error != null) {
+                recordMetadataOperation("regenerate_failed", duration);
+            } else {
+                recordMetadataOperation("regenerate", duration);
+            }
+        });
     }
 
     /**
@@ -1005,5 +1013,14 @@ public final class MetadataRegenerator {
     private String resolveRepositoryUrl(final String relative) {
         final String clean = relative.startsWith("/") ? relative : "/" + relative;
         return this.baseUrl.map(url -> url + clean).orElse(clean);
+    }
+
+    private void recordMetadataOperation(final String operation, final long duration) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataOperation(this.repoName, this.repoType, operation);
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataGenerationDuration(this.repoName, this.repoType, duration);
+        }
     }
 }

@@ -203,34 +203,42 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // Always use HTTP/1.1 or HTTP/2 transport
         final HttpClient result = new HttpClient();
         
-        // CRITICAL FIX: Configure ByteBufferPool with explicit size limits
-        // Prevents unbounded pool growth that triggers O(n) eviction in Jetty 12.x
-        // The default ArrayByteBufferPool has no memory limits and can grow to
-        // tens of thousands of entries, causing 150s+ event loop thread blocks.
+        // ByteBufferPool configuration for high-traffic production workloads
+        // 
+        // CRITICAL: Jetty 12.x has O(n) eviction that causes 100% CPU spikes
+        // when the pool has too many buffers. The fix is to:
+        // 1. Limit maxBucketSize to cap buffers per size class
+        // 2. Set reasonable memory limits
         //
-        // Limits chosen based on:
-        // - max_connections_per_destination: 256 (reduced from 2048)
-        // - typical_upstream_count: ~20 destinations
-        // - buffers_per_connection: ~2-3 (request + response)
-        // - total_estimate: 256 * 20 * 3 = 15,360 buffers
-        // - memory_per_buffer: ~32KB average
-        // - total_memory: ~480MB, set limit to 512MB for headroom
+        // Sizing for production (15 CPU, 4GB direct, 16GB heap, 1000 req/s):
+        // - maxBucketSize=1024: handles 1000+ concurrent requests with buffer reuse
+        // - With 64 buckets, max ~64K buffers total (still fast O(n) eviction)
+        // - Eviction of 64K buffers takes <100ms vs 150s+ for 500K buffers
+        //
+        // Trade-off:
+        // - Lower value (256): more direct allocations, more GC pressure
+        // - Higher value (1024): better reuse, but larger O(n) scan if eviction needed
+        // - 1024 is sweet spot for 1000 req/s workloads
+        final int maxBucketSize = 1024;  // Handles 1000 req/s with good buffer reuse
+        final long maxDirectMemory = 2L * 1024L * 1024L * 1024L;  // 2GB (50% of 4GB budget)
+        final long maxHeapMemory = 1L * 1024L * 1024L * 1024L;    // 1GB (6% of 16GB heap)
         final ArrayByteBufferPool bufferPool = new ArrayByteBufferPool(
-            -1,   // minCapacity: use default (0)
-            -1,   // factor: use default (1024)
-            -1,   // maxCapacity: use default (unbounded buffer sizes OK)
-            -1,   // maxBucketSize: use default (unbounded bucket sizes OK)
-            512L * 1024L * 1024L,  // maxHeapMemory: 512MB hard limit
-            512L * 1024L * 1024L   // maxDirectMemory: 512MB hard limit
+            -1,           // minCapacity: use default (0)
+            -1,           // factor: use default (1024) - bucket size increment
+            -1,           // maxCapacity: use default (unbounded individual buffer sizes OK)
+            maxBucketSize,// maxBucketSize: LIMIT buffers per bucket to prevent O(n) eviction!
+            maxHeapMemory,
+            maxDirectMemory
         );
         result.setByteBufferPool(bufferPool);
         
         EcsLogger.info("com.artipie.http.client")
-            .message("Configured Jetty ByteBufferPool with memory limits")
+            .message("Configured Jetty ByteBufferPool with bounded buckets")
             .eventCategory("http")
             .eventAction("http_client_init")
-            .field("buffer_pool.max_heap_memory_mb", 512)
-            .field("buffer_pool.max_direct_memory_mb", 512)
+            .field("buffer_pool.max_bucket_size", maxBucketSize)
+            .field("buffer_pool.max_heap_memory_mb", maxHeapMemory / (1024 * 1024))
+            .field("buffer_pool.max_direct_memory_mb", maxDirectMemory / (1024 * 1024))
             .log();
         
         final SslContextFactory.Client factory = new SslContextFactory.Client();

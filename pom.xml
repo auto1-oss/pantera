@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.20.2</version>
+  <version>1.20.3</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -81,7 +81,7 @@ SOFTWARE.
     <!-- Tests enabled by default; set -Dmaven.test.skip=true to skip locally -->
     <header.license>LICENSE.header</header.license>
     <junit-platform.version>5.10.0</junit-platform.version>
-    <vertx.version>4.5.21</vertx.version>
+    <vertx.version>4.5.22</vertx.version>
     <guava.version>33.0.0-jre</guava.version>
     <javax.json.version>1.1.4</javax.json.version>
     <jetty.version>12.1.4</jetty.version>
@@ -92,7 +92,6 @@ SOFTWARE.
     <httpcore5-h2.version>5.2.4</httpcore5-h2.version>
     <fasterxml.jackson.version>2.16.2</fasterxml.jackson.version>
     <micrometer.version>1.12.1</micrometer.version>
-    <opentelemetry.version>1.56.0</opentelemetry.version>
     <testcontainers.version>2.0.2</testcontainers.version>
   </properties>
   <developers>
@@ -141,13 +140,6 @@ SOFTWARE.
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
         <version>${junit-platform.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-      <dependency>
-        <groupId>io.opentelemetry</groupId>
-        <artifactId>opentelemetry-bom</artifactId>
-        <version>${opentelemetry.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -290,7 +282,7 @@ SOFTWARE.
     <dependency>
       <groupId>io.vertx</groupId>
       <artifactId>vertx-maven-service-factory</artifactId>
-      <version>4.5.1</version>
+      <version>4.5.22</version>
       <scope>test</scope>
     </dependency>
     <dependency>

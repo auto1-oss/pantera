@@ -812,10 +812,16 @@ public class RepositorySlices {
         Optional<Filters> opt = settings.caches()
             .filtersCache()
             .filters(cfg.name(), cfg.repoYaml());
-        Slice res = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
+        Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
+
+        // Wrap with repository metrics to add repo_name and repo_type labels
+        final Slice withMetrics = new com.artipie.http.slice.RepoMetricsSlice(
+            filtered, cfg.name(), cfg.type()
+        );
+
         return cfg.contentLengthMax()
-            .<Slice>map(limit -> new ContentLengthRestriction(res, limit))
-            .orElse(res);
+            .<Slice>map(limit -> new ContentLengthRestriction(withMetrics, limit))
+            .orElse(withMetrics);
     }
 
     private Authentication authentication() {

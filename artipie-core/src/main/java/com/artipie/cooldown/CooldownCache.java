@@ -152,22 +152,6 @@ public final class CooldownCache {
         this.hits = 0;
         this.misses = 0;
         this.deduplications = 0;
-        
-        // Initialize OpenTelemetry metrics
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            try {
-                final com.artipie.metrics.otel.OtelMetrics metrics = 
-                    com.artipie.metrics.otel.OtelMetrics.get();
-                
-                // Register L1 size gauge
-                metrics.registerCacheSize("cooldown", "l1", 
-                    () -> this.decisions.estimatedSize());
-                
-                // Note: L2 size would require Redis INFO command
-            } catch (Exception e) {
-                // Metrics are optional, don't fail if they're not available
-            }
-        }
     }
 
     /**
@@ -193,18 +177,20 @@ public final class CooldownCache {
         final Boolean l1Cached = this.decisions.getIfPresent(key);
         if (l1Cached != null) {
             this.hits++;
-            if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-                com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("cooldown", durationMs);
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
             }
             return CompletableFuture.completedFuture(l1Cached);
         }
-        
+
         // L1 MISS
         this.misses++;
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-            com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("cooldown", durationMs);
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
         }
         
         // Two-tier: Check L2 (Valkey) before database
@@ -215,39 +201,31 @@ public final class CooldownCache {
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
                 .exceptionally(err -> {
-                    // Track L2 error
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                        final String errorType = err instanceof java.util.concurrent.TimeoutException
-                            ? "timeout"
-                            : "connection_error";
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Error("cooldown", errorType, durationMs);
-                    }
+                    // Track L2 error - metrics handled elsewhere
                     return null;  // L2 failure → skip to database
                 })
                 .thenCompose(l2Bytes -> {
+                    final long durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000;
+
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                            final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                            com.artipie.metrics.otel.OtelMetrics.get()
-                                .recordL2Hit("cooldown", durationMs);
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l2");
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
                         }
-                        
+
                         // Parse boolean and promote to L1
                         final boolean blocked = "true".equals(new String(l2Bytes));
                         this.decisions.put(key, blocked);  // Promote to L1
                         return CompletableFuture.completedFuture(blocked);
                     }
-                    
+
                     // L2 MISS
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        final double durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000.0;
-                        com.artipie.metrics.otel.OtelMetrics.get()
-                            .recordL2Miss("cooldown", durationMs);
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l2");
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
                     }
-                    
+
                     // Query database
                     return this.queryAndCache(key, dbQuery);
                 });
@@ -270,10 +248,7 @@ public final class CooldownCache {
         final CompletableFuture<Boolean> existing = this.inflight.get(key);
         if (existing != null) {
             this.deduplications++;
-            if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                com.artipie.metrics.otel.OtelMetrics.get()
-                    .recordCacheDeduplication("cooldown");
-            }
+            // Deduplication metrics can be added if needed
             return existing;
         }
         

@@ -132,18 +132,8 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             .maximumSize(l1Size)
             .expireAfterAccess(l1Ttl)
             .recordStats()
+            .evictionListener(this::onEviction)
             .build();
-        
-        // Initialize OpenTelemetry metrics
-        if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-            try {
-                com.artipie.metrics.otel.OtelMetrics.get()
-                    .registerCacheSize("auth", "l1", 
-                        () -> this.cached.estimatedSize());
-            } catch (Exception e) {
-                // Metrics are optional
-            }
-        }
     }
 
     /**
@@ -172,18 +162,22 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 
                 // L1: Check in-memory cache (fast, non-blocking)
                 final Optional<AuthUser> l1Result = this.cached.getIfPresent(key);
+                final long l1DurationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+
                 if (l1Result != null) {
-                    if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                        final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-                        com.artipie.metrics.otel.OtelMetrics.get().recordL1Hit("auth", durationMs);
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
                     }
                     return l1Result;
                 }
-                
+
                 // L1 MISS
-                if (com.artipie.metrics.otel.OtelMetrics.isInitialized()) {
-                    final double durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000.0;
-                    com.artipie.metrics.otel.OtelMetrics.get().recordL1Miss("auth", durationMs);
+                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                    com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
+                    com.artipie.metrics.MicrometerMetrics.getInstance()
+                        .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
                 }
                 
                 // PERFORMANCE: Skip L2 sync check to avoid blocking auth thread
@@ -192,10 +186,17 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 
                 // Compute from origin (synchronous)
                 final Optional<AuthUser> result = this.origin.user(user, pass);
-                
+
                 // Cache in L1
+                final long putStartNanos = System.nanoTime();
                 this.cached.put(key, result);
-                
+                final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+
+                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                    com.artipie.metrics.MicrometerMetrics.getInstance()
+                        .recordCacheOperationDuration("auth", "l1", "put", putDurationMs);
+                }
+
                 // Cache in L2 (if enabled) - fire and forget
                 if (this.twoTier) {
                     // Key is already hashed - safe for Redis storage
@@ -203,7 +204,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     final byte[] value = serializeUser(result);
                     this.l2.setex(redisKey, this.ttl.getSeconds(), value);
                 }
-                
+
                 return result;
             }
         ).value();
@@ -222,29 +223,73 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         final String key = this.secureKey(user, pass);
         
         // L1: Check in-memory cache
+        final long l1StartNanos = System.nanoTime();
         final Optional<AuthUser> l1Result = this.cached.getIfPresent(key);
+        final long l1DurationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
+
         if (l1Result != null) {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
+            }
             return CompletableFuture.completedFuture(l1Result);
+        }
+
+        // L1 MISS
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
         }
         
         // L2: Check Valkey asynchronously (if enabled)
         if (this.twoTier) {
             final String redisKey = "auth:" + key;
+            final long l2StartNanos = System.nanoTime();
+
             return this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
-                .exceptionally(err -> null)
+                .exceptionally(err -> {
+                    // L2 error - treat as miss
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
+                    }
+                    return null;
+                })
                 .thenCompose(l2Bytes -> {
+                    final long l2DurationMs = (System.nanoTime() - l2StartNanos) / 1_000_000;
+
                     if (l2Bytes != null) {
                         // L2 HIT: Deserialize and promote to L1
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l2");
+                            com.artipie.metrics.MicrometerMetrics.getInstance()
+                                .recordCacheOperationDuration("auth", "l2", "get", l2DurationMs);
+                        }
+
                         final Optional<AuthUser> result = deserializeUser(l2Bytes);
                         this.cached.put(key, result);
+
+
+
                         return CompletableFuture.completedFuture(result);
                     }
+
                     // L2 MISS: Fetch from origin (sync, then wrap in CompletableFuture)
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("auth", "l2", "get", l2DurationMs);
+                    }
+
                     return CompletableFuture.supplyAsync(() -> {
                         final Optional<AuthUser> result = this.origin.user(user, pass);
                         this.cached.put(key, result);
+
+
+
                         final byte[] value = serializeUser(result);
                         this.l2.setex(redisKey, this.ttl.getSeconds(), value);
                         return result;
@@ -319,5 +364,22 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     @Override
     public void invalidateAll() {
         this.cached.invalidateAll();
+    }
+
+    /**
+     * Handle auth cache eviction - record metrics.
+     * @param key Cache key
+     * @param user Auth user
+     * @param cause Eviction cause
+     */
+    private void onEviction(
+        final String key,
+        final Optional<AuthUser> user,
+        final com.github.benmanes.caffeine.cache.RemovalCause cause
+    ) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordCacheEviction("auth", "l1", cause.toString().toLowerCase());
+        }
     }
 }
