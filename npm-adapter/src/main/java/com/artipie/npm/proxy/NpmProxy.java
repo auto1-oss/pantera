@@ -85,14 +85,9 @@ public class NpmProxy {
      * @return Package metadata or empty
      */
     public Maybe<NpmPackage.Metadata> getPackageMetadataOnly(final String name) {
-        // Check if package exists in storage
+        // First try storage; on cache miss, fetch from remote, save, and return metadata
         return this.storage.getPackageMetadata(name).switchIfEmpty(
-            Maybe.defer(() -> {
-                // Not in storage - fetch from remote, save, then reload metadata
-                return this.remotePackageAndSave(name).flatMap(
-                    saved -> this.storage.getPackageMetadata(name)
-                );
-            })
+            Maybe.defer(() -> this.remotePackageMetadataAndSave(name))
         );
     }
 
@@ -166,9 +161,13 @@ public class NpmProxy {
     }
 
     /**
-     * Get package from remote repository, save it to storage, and return completion signal.
-     * CRITICAL MEMORY FIX: Does NOT return the NpmPackage object to avoid holding 200MB+ in memory.
-     * Callers should reload from storage using streaming API.
+     * Get package from remote repository, save it to storage, and return a
+     * completion signal.
+     *
+     * <p>Does not return the {@link NpmPackage} instance itself to avoid
+     * keeping large package contents in memory; callers should reload from
+     * storage using a streaming API.</p>
+     *
      * @param name Package name
      * @return Completion signal (true if saved, empty if not found)
      */
@@ -179,6 +178,27 @@ public class NpmProxy {
         }
         return pckg.flatMap(
             pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE))
+        );
+    }
+
+    /**
+     * Get package from remote repository, save it to storage, and return
+     * metadata only.
+     *
+     * <p>Used by {@link #getPackageMetadataOnly(String)} to avoid an extra
+     * metadata read from storage after a cache miss while still persisting the
+     * full package state.</p>
+     *
+     * @param name Package name
+     * @return Package metadata or empty if not found
+     */
+    private Maybe<NpmPackage.Metadata> remotePackageMetadataAndSave(final String name) {
+        final Maybe<NpmPackage> pckg = this.remote.loadPackage(name);
+        if (pckg == null) {
+            return Maybe.empty();
+        }
+        return pckg.flatMap(
+            pkg -> this.storage.save(pkg).andThen(Maybe.just(pkg.meta()))
         );
     }
 }

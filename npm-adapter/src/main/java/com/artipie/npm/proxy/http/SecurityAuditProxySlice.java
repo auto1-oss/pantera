@@ -43,7 +43,7 @@ final class SecurityAuditProxySlice implements Slice {
     ) {
         final RequestLine upstreamLine = upstream(line);
 
-        EcsLogger.debug("com.artipie.npm")
+        EcsLogger.info("com.artipie.npm")
             .message("NPM Audit Proxy - Streaming request (repo: " + this.repo + ")")
             .eventCategory("repository")
             .eventAction("audit_proxy")
@@ -51,52 +51,60 @@ final class SecurityAuditProxySlice implements Slice {
             .field("url.path", upstreamLine.uri().getPath())
             .log();
 
-        // OPTIMIZATION: Stream body without buffering (98% memory reduction)
-        // Use chunked transfer encoding instead of Content-Length
-        // This allows streaming large audit payloads without loading into memory
+        // Materialize the body first, then create fresh Content for upstream.
+        // The body may have already been partially consumed by logging/routing code,
+        // and Content.From(byte[]) creates a one-shot Flowable that can only be read once.
+        return body.asBytesFuture().thenCompose(bodyBytes -> {
+            // Build clean headers for upstream - only forward safe client headers
+            // Filter out ALL internal/proxy headers that upstream registries reject
+            final java.util.List<Header> cleanList = new java.util.ArrayList<>();
+            boolean hasContentEncoding = false;
 
-
-        // Build clean headers for upstream - only forward client headers, not internal ones
-        // Remove: Host, authorization, artipie_login, X-Real-IP, X-Forwarded-*, Connection, Content-Length
-        final Headers clean = new Headers();
-
-        // Forward only safe client headers
-        for (final Header header : headers) {
-            final String name = header.getKey().toLowerCase();
-            // Skip internal/proxy headers that Cloudflare rejects
-            if (!name.equals("host")
-                && !name.equals("authorization")
-                && !name.equals("artipie_login")
-                && !name.startsWith("x-real-")
-                && !name.startsWith("x-forwarded-")
-                && !name.equals("connection")
-                && !name.equals("content-length")) {  // Remove Content-Length - use chunked
-                clean.add(header);
+            for (final Header header : headers) {
+                final String name = header.getKey().toLowerCase();
+                // Skip ALL internal/proxy headers
+                if (name.equals("host")
+                    || name.equals("authorization")
+                    || name.equals("artipie_login")
+                    || name.startsWith("x-real")      // x-real-ip, etc.
+                    || name.startsWith("x-forwarded") // x-forwarded-for, x-forwarded-proto
+                    || name.startsWith("x-fullpath")  // internal artipie header
+                    || name.startsWith("x-original")  // x-original-path
+                    || name.equals("connection")
+                    || name.equals("transfer-encoding") // Will set our own
+                    || name.equals("content-length")) { // Will use actual body length
+                    continue;
+                }
+                if (name.equals("content-encoding")) {
+                    hasContentEncoding = true;
+                }
+                cleanList.add(header);
             }
-        }
 
-        // Ensure User-Agent (Cloudflare bot detection)
-        if (clean.values("User-Agent").isEmpty() && clean.values("user-agent").isEmpty()) {
-            clean.add("User-Agent", "npm/11.5.1 node/v24.7.0 darwin arm64");
-        }
+            final Headers clean = new Headers(cleanList);
 
-        // Ensure Accept header
-        if (clean.values("Accept").isEmpty()) {
-            clean.add("Accept", "application/json");
-        }
+            // Ensure User-Agent (Cloudflare bot detection)
+            if (clean.values("User-Agent").isEmpty() && clean.values("user-agent").isEmpty()) {
+                clean.add("User-Agent", "npm/11.5.1 node/v24.7.0 darwin arm64");
+            }
 
-        // Ensure Content-Type for POST requests
-        if (clean.values("Content-Type").isEmpty() && clean.values("content-type").isEmpty()) {
-            clean.add("Content-Type", "application/json");
-        }
+            // Ensure Accept header
+            if (clean.values("Accept").isEmpty()) {
+                clean.add("Accept", "application/json");
+            }
 
-        // Use chunked transfer encoding - no Content-Length needed
-        // HTTP client will handle chunking automatically
-        clean.add("Transfer-Encoding", "chunked");
+            // Ensure Content-Type for POST requests
+            if (clean.values("Content-Type").isEmpty() && clean.values("content-type").isEmpty()) {
+                clean.add("Content-Type", "application/json");
+            }
 
-        // Stream body directly - NO buffering! Memory usage: ~4KB instead of full body size
-        // UriClientSlice will add the correct Host header automatically
-        return this.remote.response(upstreamLine, clean, body);
+            // Always use actual body length for Content-Length
+            clean.add("Content-Length", String.valueOf(bodyBytes.length));
+
+            // Create fresh Content from materialized bytes
+            // UriClientSlice will add the correct Host header automatically
+            return this.remote.response(upstreamLine, clean, new Content.From(bodyBytes));
+        });
     }
 
     private RequestLine upstream(final RequestLine original) {

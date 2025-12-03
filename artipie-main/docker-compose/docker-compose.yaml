@@ -7,10 +7,12 @@ services:
         condition: service_started
       valkey:
         condition: service_healthy
-    image: auto1-artipie:1.20.3
-    cpus: 2
-    mem_limit: 4gb
-    mem_reservation: 4gb
+    image: auto1-artipie:1.20.6
+    # PERFORMANCE: Increased from 2 CPUs to 4 for better parallel request handling
+    # NPM install with 2300+ packages requires significant parallelism
+    cpus: 4
+    mem_limit: 6gb
+    mem_reservation: 6gb
     container_name: artipie
     restart: unless-stopped
     environment:
@@ -24,7 +26,7 @@ services:
       - AWS_PROFILE=profile_name
       - AWS_REGION=eu-west-1
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.20.3
+      - ARTIPIE_VERSION=1.20.6
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
       - ELASTIC_APM_ENABLED=false
@@ -40,7 +42,8 @@ services:
       - ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME=false
       - ELASTIC_APM_SPAN_COMPRESSION_ENABLED=true
       - ELASTIC_APM_CAPTURE_JMX_METRICS=object_name[*:type=*,name=*] attribute[*]
-      - JVM_ARGS=-Xms2g -Xmx3g -XX:+UseG1GC -XX:G1ReservePercent=10 -XX:MaxGCPauseMillis=200 -XX:MaxDirectMemorySize=512m -XX:ParallelGCThreads=2 -XX:ConcGCThreads=1 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled -XX:+UseContainerSupport -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/artipie/logs/heapdump.hprof -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=50M -Djava.io.tmpdir=/var/artipie/cache/tmp -Dvertx.cacheDirBase=/var/artipie/cache/tmp -Dio.netty.leakDetection.level=simple -XX:InitiatingHeapOccupancyPercent=45 -XX:+AlwaysPreTouch -Dvertx.max.worker.execute.time=120000000000 -Dartipie.filesystem.io.threads=4
+      # PERFORMANCE: Increased heap to 4GB, more GC threads for 4 CPUs, increased filesystem IO threads
+      - JVM_ARGS=-Xms3g -Xmx4g -XX:+UseG1GC -XX:G1ReservePercent=10 -XX:MaxGCPauseMillis=200 -XX:MaxDirectMemorySize=1g -XX:ParallelGCThreads=4 -XX:ConcGCThreads=2 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled -XX:+UseContainerSupport -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/artipie/logs/heapdump.hprof -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=50M -Djava.io.tmpdir=/var/artipie/cache/tmp -Dvertx.cacheDirBase=/var/artipie/cache/tmp -Dio.netty.leakDetection.level=simple -XX:InitiatingHeapOccupancyPercent=45 -XX:+AlwaysPreTouch -Dvertx.max.worker.execute.time=120000000000 -Dartipie.filesystem.io.threads=8
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml

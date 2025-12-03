@@ -187,6 +187,15 @@ public final class RestApi extends AbstractVerticle {
         router.route("/*").subRouter(userRb.createRouter());
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
+        // CRITICAL: Add simple health endpoint BEFORE StaticHandler
+        // This avoids StaticHandler's file-serving leak for health checks
+        router.get("/api/health").handler(ctx -> {
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end("{\"status\":\"ok\"}");
+        });
+        
         router.route("/api/*").handler(
             StaticHandler.create("swagger-ui")
                 .setIndexPage("index.html")

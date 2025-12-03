@@ -9,6 +9,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.log.LogSanitizer;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
@@ -21,13 +22,11 @@ import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.log.LogSanitizer;
-
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -88,12 +87,25 @@ final class JettyClientSlice implements Slice {
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
-        final List<Content.Chunk> buffers = new ArrayList<>();  // Better cache locality than LinkedList
+        final List<ByteBuffer> buffers = new ArrayList<>();  // Better cache locality than LinkedList
         if (line.method() != RqMethod.HEAD) {
             final AsyncRequestContent async = new AsyncRequestContent();
-            Flowable.fromPublisher(body).doOnComplete(async::close).forEach(
-                buf -> async.write(buf, Callback.NOOP)
-            );
+            Flowable.fromPublisher(body)
+                .doOnError(async::fail)
+                .doOnCancel(
+                    () -> async.fail(new CancellationException("Request body cancelled"))
+                )
+                .doFinally(async::close)
+                .subscribe(
+                    buf -> async.write(buf, Callback.NOOP),
+                    throwable -> EcsLogger.error("com.artipie.http.client")
+                        .message("Failed to stream HTTP request body")
+                        .eventCategory("http")
+                        .eventAction("http_request_body")
+                        .eventOutcome("failure")
+                        .error(throwable)
+                        .log()
+                );
             request.body(async);
         }
         request.onResponseContentSource(
@@ -121,12 +133,7 @@ final class JettyClientSlice implements Slice {
                     if (result.getFailure() == null) {
                         RsStatus status = RsStatus.byCode(result.getResponse().getStatus());
                         Flowable<ByteBuffer> content = Flowable.fromIterable(buffers)
-                            .map(chunk -> {
-                                    final ByteBuffer item = chunk.getByteBuffer();
-                                    chunk.release();
-                                    return item;
-                                }
-                            );
+                            .map(ByteBuffer::asReadOnlyBuffer);
                         final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
                             toHeaders(result.getResponse().getHeaders())
                         );
@@ -216,7 +223,7 @@ final class JettyClientSlice implements Slice {
         /**
          * Content chunks.
          */
-        private final List<Content.Chunk> chunks;
+        private final List<ByteBuffer> chunks;
 
         /**
          * Ctor.
@@ -227,7 +234,7 @@ final class JettyClientSlice implements Slice {
         private Demander(
             final Content.Source source,
             final org.eclipse.jetty.client.Response response,
-            final List<Content.Chunk> chunks
+            final List<ByteBuffer> chunks
         ) {
             this.source = source;
             this.response = response;
@@ -297,8 +304,13 @@ final class JettyClientSlice implements Slice {
                         }
                     }
                 }
-                chunk.retain();
-                this.chunks.add(chunk);
+                final ByteBuffer stored;
+                try {
+                    stored = JettyClientSlice.copyChunk(chunk);
+                } finally {
+                    chunk.release();
+                }
+                this.chunks.add(stored);
                 if (chunk.isLast()) {
                     return;
                 }
@@ -314,5 +326,19 @@ final class JettyClientSlice implements Slice {
                 .log();
             this.response.abort(new IllegalStateException("Too many chunks - possible infinite loop"));
         }
+    }
+
+    private static ByteBuffer copyChunk(final Content.Chunk chunk) {
+        final ByteBuffer original = chunk.getByteBuffer();
+        if (original.hasArray() && original.arrayOffset() == 0 && original.position() == 0
+            && original.remaining() == original.capacity()) {
+            // Fast-path: reuse backing array when buffer fully represents it
+            return ByteBuffer.wrap(original.array()).asReadOnlyBuffer();
+        }
+        final ByteBuffer slice = original.slice();
+        final ByteBuffer copy = ByteBuffer.allocate(slice.remaining());
+        copy.put(slice);
+        copy.flip();
+        return copy;
     }
 }

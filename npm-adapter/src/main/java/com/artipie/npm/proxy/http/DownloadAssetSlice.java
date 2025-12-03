@@ -147,6 +147,8 @@ public final class DownloadAssetSlice implements Slice {
                     if(Strings.isNullOrEmpty(lastModified)){
                         lastModified = new DateTimeNowStr().value();
                     }
+                    // Stream content directly - no buffering needed.
+                    // MicrometerSlice fix ensures response bodies aren't double-subscribed.
                     return ResponseBuilder.ok()
                         .header(ContentType.mime(mime))
                         .header("Last-Modified", lastModified)

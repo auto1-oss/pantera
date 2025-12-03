@@ -536,13 +536,14 @@ public class RepositorySlices {
                         ),
                         npmProxySlice
                     ),
-                    // Block login/adduser/whoami/auth - proxy is read-only
+                    // Block login/adduser/whoami - proxy is read-only
+                    // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
+                    // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
                     new com.artipie.http.rt.RtRulePath(
                         new com.artipie.http.rt.RtRule.Any(
                             new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
                             new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*"),
-                            new com.artipie.http.rt.RtRule.ByPath(".*/auth(/.*)?")
+                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
                         ),
                         new com.artipie.http.slice.SliceSimple(
                             com.artipie.http.ResponseBuilder.forbidden()
@@ -571,24 +572,36 @@ public class RepositorySlices {
                     this::slice, cfg.name(), cfg.members(), port, depth,
                     cfg.groupMemberTimeout().orElse(120L)
                 );
+                // Create audit slice that aggregates results from ALL members
+                // This is critical for vulnerability scanning - local repos return {},
+                // but proxy repos return actual vulnerabilities from upstream
+                // CRITICAL: Pass member NAMES so GroupAuditSlice can rewrite paths!
+                final java.util.List<String> auditMemberNames = cfg.members();
+                final java.util.List<Slice> auditMemberSlices = auditMemberNames.stream()
+                    .map(name -> this.slice(new Key.From(name), port, 0))
+                    .collect(java.util.stream.Collectors.toList());
+                final Slice npmGroupAuditSlice = new com.artipie.npm.http.audit.GroupAuditSlice(
+                    auditMemberNames, auditMemberSlices
+                );
                 // npm-group: audit anonymous, user management blocked, all other operations require auth
                 slice = trimPathSlice(
                     new com.artipie.http.rt.SliceRoute(
-                        // Audit - anonymous
+                        // Audit - anonymous, uses GroupAuditSlice to aggregate from all members
                         new com.artipie.http.rt.RtRulePath(
                             new com.artipie.http.rt.RtRule.All(
                                 com.artipie.http.rt.MethodRule.POST,
                                 new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
                             ),
-                            npmGroupSlice
+                            npmGroupAuditSlice
                         ),
-                        // Block login/adduser/whoami/auth - group is read-only
+                        // Block login/adduser/whoami - group is read-only
+                        // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
+                        // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
                         new com.artipie.http.rt.RtRulePath(
                             new com.artipie.http.rt.RtRule.Any(
                                 new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
                                 new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                                new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*"),
-                                new com.artipie.http.rt.RtRule.ByPath(".*/auth(/.*)?")
+                                new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
                             ),
                             new com.artipie.http.slice.SliceSimple(
                                 com.artipie.http.ResponseBuilder.forbidden()

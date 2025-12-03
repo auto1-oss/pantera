@@ -51,9 +51,9 @@ public final class HttpNpmRemote implements NpmRemote {
                 pair -> pair.getKey().asStringFuture().thenApply(
                     str -> {
                         // Transform to cached format (strip upstream URLs)
-                        // NOTE: This creates JsonObject temporarily, but it's released after .toString()
-                        // The memory issue is NOT here - it's in the RxJava chain holding references
-                        final String cachedContent = new CachedContent(str, name).value().toString();
+                        // PERFORMANCE: Use valueString() instead of value().toString()
+                        // This avoids an extra JSON parse/serialize cycle
+                        final String cachedContent = new CachedContent(str, name).valueString();
                         return new NpmPackage(
                             name,
                             cachedContent,
@@ -65,14 +65,30 @@ public final class HttpNpmRemote implements NpmRemote {
             ).toCompletableFuture()
         ).onErrorResumeNext(
             throwable -> {
+                // Distinguish between true 404s and transient errors so the
+                // negative cache only stores real "not found" responses.
+                // Other errors (timeouts, connection issues) are propagated so
+                // they are not cached as 404.
+                if (HttpNpmRemote.isNotFoundError(throwable)) {
+                    EcsLogger.debug("com.artipie.npm")
+                        .message("Package not found upstream (404)")
+                        .eventCategory("repository")
+                        .eventAction("get_package")
+                        .eventOutcome("not_found")
+                        .field("package.name", name)
+                        .log();
+                    return Maybe.empty();
+                }
+                // For transient errors, log and re-throw to prevent negative cache poisoning
                 EcsLogger.error("com.artipie.npm")
                     .message("Error occurred when process get package call")
                     .eventCategory("repository")
                     .eventAction("get_package")
                     .eventOutcome("failure")
+                    .field("package.name", name)
                     .error(throwable)
                     .log();
-                return Maybe.empty();
+                return Maybe.error(throwable);
             }
         );
     }
@@ -90,6 +106,19 @@ public final class HttpNpmRemote implements NpmRemote {
             )
         ).onErrorResumeNext(
             throwable -> {
+                // Distinguish between true 404s and transient errors so the
+                // negative cache only stores real "not found" responses.
+                if (HttpNpmRemote.isNotFoundError(throwable)) {
+                    EcsLogger.debug("com.artipie.npm")
+                        .message("Asset not found upstream (404)")
+                        .eventCategory("repository")
+                        .eventAction("get_asset")
+                        .eventOutcome("not_found")
+                        .field("package.path", path)
+                        .log();
+                    return Maybe.empty();
+                }
+                // For transient errors, log and re-throw to prevent negative cache poisoning
                 EcsLogger.error("com.artipie.npm")
                     .message("Error occurred when process get asset call")
                     .eventCategory("repository")
@@ -98,7 +127,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     .field("package.path", path)
                     .error(throwable)
                     .log();
-                return Maybe.empty();
+                return Maybe.error(throwable);
             }
         );
     }
@@ -123,7 +152,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     new ImmutablePair<>(response.body(), response.headers())
                 );
             }
-            // CRITICAL: Must consume error response body to prevent Vert.x request leak
+            // Consume error response body to prevent Vert.x request leak
             return response.body().asBytesFuture().thenCompose(ignored ->
                 CompletableFuture.failedFuture(new ArtipieHttpException(response.status()))
             );
@@ -158,5 +187,27 @@ public final class HttpNpmRemote implements NpmRemote {
             res = hdr.get(0);
         }
         return res;
+    }
+
+    /**
+     * Check if the error represents a true 404 Not Found response from upstream.
+     * This is used to distinguish between actual "package not found" vs transient errors
+     * (timeouts, connection errors, etc.) that should NOT be cached in negative cache.
+     *
+     * @param throwable The error to check
+     * @return True if this is a 404 Not Found error, false for other errors
+     */
+    private static boolean isNotFoundError(final Throwable throwable) {
+        Throwable cause = throwable;
+        // Unwrap CompletionException if present
+        if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        // Check if it's an ArtipieHttpException with 404 status
+        if (cause instanceof ArtipieHttpException) {
+            final ArtipieHttpException httpEx = (ArtipieHttpException) cause;
+            return httpEx.status().code() == 404;
+        }
+        return false;
     }
 }

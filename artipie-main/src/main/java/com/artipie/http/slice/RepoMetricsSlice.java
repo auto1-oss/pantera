@@ -13,7 +13,6 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.metrics.MicrometerMetrics;
 import io.reactivex.Flowable;
 
-import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -98,29 +97,31 @@ public final class RepoMetricsSlice implements Slice {
                     }
                 }
 
-                // Wrap response body to count download bytes
-                // CRITICAL: Use buffer.remaining() to avoid consuming the buffer
-                final AtomicLong responseBytes = new AtomicLong(0);
-                final Content wrappedResponseBody = new Content.From(
-                    response.body().size(),
-                    Flowable.fromPublisher(response.body())
-                        .doOnNext(buffer -> responseBytes.addAndGet(buffer.remaining()))
-                        .doOnComplete(() -> {
-                            // Record download traffic when response completes
-                            if (MicrometerMetrics.isInitialized()) {
-                                final long respBytes = responseBytes.get();
-                                if (respBytes > 0 && isSuccessStatus(response.status())) {
+                // CRITICAL FIX: Do NOT wrap response body with Flowable.
+                // Response bodies from storage are often Content.OneTime which can only
+                // be subscribed once. Wrapping causes double subscription.
+                // Use Content-Length header for download size tracking instead.
+                if (MicrometerMetrics.isInitialized() && isSuccessStatus(response.status())) {
+                    response.headers().values("Content-Length").stream()
+                        .findFirst()
+                        .ifPresent(contentLength -> {
+                            try {
+                                final long respBytes = Long.parseLong(contentLength);
+                                if (respBytes > 0) {
                                     MicrometerMetrics.getInstance().recordRepoBytesDownloaded(
                                         RepoMetricsSlice.this.repoName,
                                         RepoMetricsSlice.this.repoType,
                                         respBytes
                                     );
                                 }
+                            } catch (NumberFormatException ignored) {
+                                // Skip if Content-Length is invalid
                             }
-                        })
-                );
+                        });
+                }
 
-                return new Response(response.status(), response.headers(), wrappedResponseBody);
+                // Pass response through unchanged - no body wrapping
+                return response;
             });
     }
 

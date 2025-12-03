@@ -11,6 +11,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
+import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.cache.CachedArtifactMetadataStore;
 import com.artipie.http.cache.NegativeCache;
@@ -18,8 +19,10 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * NPM proxy slice with negative and metadata caching.
@@ -59,6 +62,14 @@ public final class CachedNpmProxySlice implements Slice {
      * Repository type.
      */
     private final String repoType;
+
+    /**
+     * In-flight requests map for deduplication.
+     * Maps request key to a future that completes with BUFFERED response data.
+     * This prevents thundering herd while allowing each caller to get a fresh
+     * Content instance (avoiding OneTimePublisher multiple subscription errors).
+     */
+    private final Map<Key, CompletableFuture<BufferedResponse>> inFlight;
 
     /**
      * Ctor with default caching (24h TTL, enabled).
@@ -141,6 +152,7 @@ public final class CachedNpmProxySlice implements Slice {
             repoName  // CRITICAL: Include repo name
         );
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
+        this.inFlight = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -187,8 +199,9 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Check if path is a special endpoint that shouldn't be cached.
-     * Examples: /-/whoami, /-/npm/v1/security/, /-/v1/search
+     * Checks if path is a special endpoint that shouldn't be cached.
+     * @param path Request path
+     * @return True if path is a special endpoint (whoami, security, search, user, auth)
      */
     private boolean isSpecialEndpoint(final String path) {
         return path.startsWith("/-/whoami")
@@ -199,7 +212,9 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Check if path represents cacheable content (tarballs, package.json).
+     * Checks if path represents cacheable content.
+     * @param path Request path
+     * @return True if path is a tarball or package.json
      */
     private boolean isCacheable(final String path) {
         return path.endsWith(".tgz")
@@ -208,7 +223,12 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Serve from cache or fetch if not cached.
+     * Serves from metadata cache or fetches if not cached.
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @param key Cache key
+     * @return Response future
      */
     private CompletableFuture<Response> serveCached(
         final RequestLine line,
@@ -237,7 +257,14 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Fetch from origin and cache the result.
+     * Fetches from origin and caches the result with request deduplication.
+     * <p>Response bodies are buffered so each caller gets a fresh Content instance,
+     * preventing OneTimePublisher multiple subscription errors.</p>
+     * @param line Request line
+     * @param headers Request headers
+     * @param body Request body
+     * @param key Cache key
+     * @return Response future
      */
     private CompletableFuture<Response> fetchAndCache(
         final RequestLine line,
@@ -245,9 +272,33 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
+        final CompletableFuture<BufferedResponse> pending = this.inFlight.get(key);
+        if (pending != null) {
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM proxy: joining in-flight request")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .log();
+            return pending.thenApply(BufferedResponse::toFreshResponse);
+        }
+
         final long startTime = System.currentTimeMillis();
+        final CompletableFuture<BufferedResponse> newRequest = new CompletableFuture<>();
+        
+        final CompletableFuture<BufferedResponse> existing = this.inFlight.putIfAbsent(key, newRequest);
+        if (existing != null) {
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM proxy: lost race, joining other request")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("package.name", key.string())
+                .log();
+            return existing.thenApply(BufferedResponse::toFreshResponse);
+        }
+
         EcsLogger.debug("com.artipie.npm")
-            .message("NPM proxy: fetching upstream")
+            .message("NPM proxy: fetching upstream (new request)")
             .eventCategory("repository")
             .eventAction("proxy_request")
             .field("package.name", key.string())
@@ -255,7 +306,6 @@ public final class CachedNpmProxySlice implements Slice {
         return this.origin.response(line, headers, body)
             .thenCompose(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
-                // Check for 404 status
                 if (response.status().code() == 404) {
                     EcsLogger.debug("com.artipie.npm")
                         .message("NPM proxy: caching 404")
@@ -263,26 +313,42 @@ public final class CachedNpmProxySlice implements Slice {
                         .eventAction("proxy_request")
                         .field("package.name", key.string())
                         .log();
-                    // Cache 404 to avoid repeated upstream requests
                     this.negativeCache.cacheNotFound(key);
                     this.recordProxyMetric("not_found", duration);
-                    return CompletableFuture.completedFuture(response);
+                    final BufferedResponse buffered404 = new BufferedResponse(
+                        response.status(), response.headers(), new byte[0]
+                    );
+                    newRequest.complete(buffered404);
+                    return CompletableFuture.completedFuture(buffered404.toFreshResponse());
                 }
 
                 if (response.status().success()) {
                     this.recordProxyMetric("success", duration);
-                    if (this.metadata.isPresent() && this.isCacheable(key.string())) {
-                        // Cache successful response metadata
-                        EcsLogger.debug("com.artipie.npm")
-                            .message("NPM proxy: caching metadata")
-                            .eventCategory("repository")
-                            .eventAction("proxy_request")
-                            .field("package.name", key.string())
-                            .log();
-                        // Note: Full metadata caching with body digests would require
-                        // consuming the response body, which is complex.
-                        // For now, just cache the 404s (most impactful).
-                    }
+                    return response.body().asBytesFuture()
+                        .thenApply(bodyBytes -> {
+                            final BufferedResponse buffered = new BufferedResponse(
+                                response.status(), response.headers(), bodyBytes
+                            );
+                            newRequest.complete(buffered);
+                            return buffered.toFreshResponse();
+                        })
+                        .exceptionally(err -> {
+                            EcsLogger.warn("com.artipie.npm")
+                                .message("NPM proxy: body read failed")
+                                .eventCategory("repository")
+                                .eventAction("proxy_request")
+                                .field("package.name", key.string())
+                                .error(err)
+                                .log();
+                            final Response errorResp = ResponseBuilder.unavailable()
+                                .textBody("Upstream read error - please retry")
+                                .build();
+                            final BufferedResponse bufferedErr = new BufferedResponse(
+                                errorResp.status(), errorResp.headers(), new byte[0]
+                            );
+                            newRequest.complete(bufferedErr);
+                            return errorResp;
+                        });
                 } else if (response.status().code() >= 500) {
                     this.recordProxyMetric("error", duration);
                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
@@ -290,18 +356,53 @@ public final class CachedNpmProxySlice implements Slice {
                     this.recordProxyMetric("client_error", duration);
                 }
 
-                return CompletableFuture.completedFuture(response);
+                return response.body().asBytesFuture()
+                    .thenApply(bodyBytes -> {
+                        final BufferedResponse buffered = new BufferedResponse(
+                            response.status(), response.headers(), bodyBytes
+                        );
+                        newRequest.complete(buffered);
+                        return buffered.toFreshResponse();
+                    })
+                    .exceptionally(err -> {
+                        final Response errorResp = ResponseBuilder.unavailable()
+                            .textBody("Upstream read error")
+                            .build();
+                        final BufferedResponse bufferedErr = new BufferedResponse(
+                            errorResp.status(), errorResp.headers(), new byte[0]
+                        );
+                        newRequest.complete(bufferedErr);
+                        return errorResp;
+                    });
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.recordProxyMetric("exception", duration);
                 this.recordUpstreamErrorMetric(error);
-                throw new java.util.concurrent.CompletionException(error);
+                EcsLogger.warn("com.artipie.npm")
+                    .message("NPM proxy: upstream request failed")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .error(error)
+                    .log();
+                final Response errorResp = ResponseBuilder.unavailable()
+                    .textBody("Upstream error - please retry")
+                    .build();
+                final BufferedResponse bufferedErr = new BufferedResponse(
+                    errorResp.status(), errorResp.headers(), new byte[0]
+                );
+                newRequest.complete(bufferedErr);
+                return errorResp;
+            })
+            .whenComplete((result, error) -> {
+                this.inFlight.remove(key);
             });
     }
 
     /**
-     * Record proxy request metric.
+     * Records proxy request metric.
+     * @param result Request result (success, not_found, error, etc.)
+     * @param duration Request duration in milliseconds
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
@@ -313,7 +414,8 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Record upstream error metric.
+     * Records upstream error metric.
+     * @param error The error that occurred
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
@@ -331,7 +433,8 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Record metric safely (only if metrics are enabled).
+     * Records metric safely, ignoring errors.
+     * @param metric Metric recording action
      */
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
     private void recordMetric(final Runnable metric) {
@@ -341,6 +444,51 @@ public final class CachedNpmProxySlice implements Slice {
             }
         } catch (final Exception ex) {
             // Ignore metric errors - don't fail requests
+        }
+    }
+
+    /**
+     * Buffered response data for request deduplication.
+     * <p>Stores response status, headers, and body bytes so each caller
+     * can receive a fresh Response with new Content instance.</p>
+     */
+    private static final class BufferedResponse {
+        /**
+         * Response status.
+         */
+        private final RsStatus status;
+
+        /**
+         * Response headers.
+         */
+        private final Headers headers;
+
+        /**
+         * Buffered response body bytes.
+         */
+        private final byte[] body;
+
+        /**
+         * Ctor.
+         * @param status Response status
+         * @param headers Response headers
+         * @param body Buffered body bytes
+         */
+        BufferedResponse(final RsStatus status, final Headers headers, final byte[] body) {
+            this.status = status;
+            this.headers = headers;
+            this.body = body;
+        }
+
+        /**
+         * Creates a fresh Response with new Content from buffered data.
+         * @return New Response instance with fresh Content
+         */
+        Response toFreshResponse() {
+            return ResponseBuilder.from(this.status)
+                .headers(this.headers)
+                .body(this.body.length > 0 ? new Content.From(this.body) : Content.EMPTY)
+                .build();
         }
     }
 }

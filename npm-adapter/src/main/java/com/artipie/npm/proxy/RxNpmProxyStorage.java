@@ -39,16 +39,21 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     @Override
     public Completable save(final NpmPackage pkg) {
         final Key key = new Key.From(pkg.name(), "meta.json");
+        final Key metaKey = new Key.From(pkg.name(), "meta.meta");
+        // Save metadata FIRST, then data. This ensures readers always see
+        // metadata when data exists (they check metadata to validate).
+        // Sequential saves are safer than parallel - parallel can still leave
+        // partial state visible to readers.
         return Completable.concatArray(
             this.storage.save(
-                key,
-                new Content.From(pkg.content().getBytes(StandardCharsets.UTF_8))
-            ),
-            this.storage.save(
-                new Key.From(pkg.name(), "meta.meta"),
+                metaKey,
                 new Content.From(
                     pkg.meta().json().encode().getBytes(StandardCharsets.UTF_8)
                 )
+            ),
+            this.storage.save(
+                key,
+                new Content.From(pkg.content().getBytes(StandardCharsets.UTF_8))
             )
         );
     }
@@ -56,18 +61,21 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     @Override
     public Completable save(final NpmAsset asset) {
         final Key key = new Key.From(asset.path());
+        final Key metaKey = new Key.From(String.format("%s.meta", asset.path()));
+        // Save metadata FIRST, then data. This ensures that when a reader sees
+        // the tgz file, the .meta file already exists. This prevents validation
+        // failures where the background processor tries to read metadata that
+        // doesn't exist yet.
         return Completable.concatArray(
             this.storage.save(
-                key,
-                new Content.From(asset.dataPublisher())
-            ),
-            this.storage.save(
-                new Key.From(
-                    String.format("%s.meta", asset.path())
-                ),
+                metaKey,
                 new Content.From(
                     asset.meta().json().encode().getBytes(StandardCharsets.UTF_8)
                 )
+            ),
+            this.storage.save(
+                key,
+                new Content.From(asset.dataPublisher())
             )
         );
     }

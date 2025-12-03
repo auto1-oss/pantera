@@ -16,7 +16,20 @@ import java.util.Optional;
 import java.util.stream.StreamSupport;
 
 /**
- * Http client settings.
+ * Http client settings for Jetty-based HTTP client.
+ * 
+ * <p>Default values are tuned for production workloads targeting 1000+ req/s:</p>
+ * <ul>
+ *   <li>{@code connectTimeout}: 15 seconds - reasonable for most networks</li>
+ *   <li>{@code idleTimeout}: 30 seconds - prevents connection accumulation</li>
+ *   <li>{@code connectionAcquireTimeout}: 30 seconds - fail fast under back-pressure</li>
+ *   <li>{@code maxConnectionsPerDestination}: 64 - balanced for typical proxy scenarios</li>
+ *   <li>{@code maxRequestsQueuedPerDestination}: 256 - prevents unbounded queuing</li>
+ * </ul>
+ * 
+ * <p>These defaults prevent "pseudo-leaks" where requests queue indefinitely
+ * under back-pressure, making it appear as if connections are leaking.</p>
+ * 
  * @since 0.2
  */
 public class HttpClientSettings {
@@ -135,12 +148,19 @@ public class HttpClientSettings {
     /**
      * Max time, in milliseconds, a connection can take to connect to destination.
      * Zero means infinite wait time.
+     * Default: 15000ms (15 seconds)
      */
     private long connectTimeout;
 
     /**
      * The max time, in milliseconds, a connection can be idle (no incoming or outgoing traffic).
      * Zero means infinite wait time.
+     * 
+     * <p><b>Important:</b> Setting this to 0 (infinite) can cause connections to accumulate
+     * indefinitely, appearing as a connection leak. A reasonable default (30 seconds)
+     * ensures idle connections are cleaned up.</p>
+     * 
+     * Default: 30000ms (30 seconds)
      */
     private long idleTimeout;
 
@@ -153,36 +173,124 @@ public class HttpClientSettings {
     /**
      * Maximum time in milliseconds to wait for a pooled connection.
      * Zero means wait indefinitely.
+     * 
+     * <p><b>Important:</b> Long timeouts (e.g., 2 minutes) can cause requests to queue
+     * for extended periods under back-pressure, appearing as stuck requests.
+     * A shorter timeout (30 seconds) allows faster failure and retry.</p>
+     * 
+     * Default: 30000ms (30 seconds)
      */
     private long connectionAcquireTimeout;
 
     /**
      * Max connections per destination (upstream host).
-     * Default is 512.
+     * 
+     * <p>Higher values allow more parallelism but consume more resources.
+     * For proxy scenarios with many upstream hosts, lower values (64) are usually sufficient.
+     * For single high-throughput upstream, consider increasing to 128-256.</p>
+     * 
+     * Default: 64
      */
     private int maxConnectionsPerDestination;
 
     /**
      * Max queued requests per destination.
-     * Default is 2048.
+     * 
+     * <p>When the connection pool is exhausted, requests queue up to this limit.
+     * Very high values (2048+) can cause memory pressure and long latencies.
+     * Lower values (256) cause faster failure under back-pressure.</p>
+     * 
+     * Default: 256
      */
     private int maxRequestsQueuedPerDestination;
+
+    /**
+     * Default connect timeout in milliseconds.
+     */
+    public static final long DEFAULT_CONNECT_TIMEOUT = 15_000L;
+
+    /**
+     * Default idle timeout in milliseconds.
+     * Non-zero to prevent connection accumulation.
+     */
+    public static final long DEFAULT_IDLE_TIMEOUT = 30_000L;
+
+    /**
+     * Default connection acquire timeout in milliseconds.
+     * Shorter than before to fail fast under back-pressure.
+     */
+    public static final long DEFAULT_CONNECTION_ACQUIRE_TIMEOUT = 30_000L;
+
+    /**
+     * Default max connections per destination.
+     * Balanced for typical proxy scenarios.
+     */
+    public static final int DEFAULT_MAX_CONNECTIONS_PER_DESTINATION = 64;
+
+    /**
+     * Default max queued requests per destination.
+     * Lower than before to prevent unbounded queuing.
+     */
+    public static final int DEFAULT_MAX_REQUESTS_QUEUED_PER_DESTINATION = 256;
+
+    /**
+     * Default proxy timeout in seconds.
+     */
+    public static final long DEFAULT_PROXY_TIMEOUT = 60L;
 
     public HttpClientSettings() {
         this.trustAll = false;
         this.followRedirects = true;
-        this.connectTimeout = 15_000L;
-        this.idleTimeout = 0L;
+        this.connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+        this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
         this.http3 = false;
-        this.proxyTimeout = 60L;  // Default 1 minute
-        this.connectionAcquireTimeout = 120_000L; // Default 2 minutes
-        this.maxConnectionsPerDestination = 512;
-        this.maxRequestsQueuedPerDestination = 2048;
+        this.proxyTimeout = DEFAULT_PROXY_TIMEOUT;
+        this.connectionAcquireTimeout = DEFAULT_CONNECTION_ACQUIRE_TIMEOUT;
+        this.maxConnectionsPerDestination = DEFAULT_MAX_CONNECTIONS_PER_DESTINATION;
+        this.maxRequestsQueuedPerDestination = DEFAULT_MAX_REQUESTS_QUEUED_PER_DESTINATION;
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
         proxySettingsFromSystem("https")
             .ifPresent(this::addProxy);
+    }
+
+    /**
+     * Create settings optimized for high-throughput single-upstream scenarios.
+     * Use this when proxying to a single high-capacity upstream server.
+     * 
+     * <p>Increases connection limits for better parallelism:</p>
+     * <ul>
+     *   <li>maxConnectionsPerDestination: 128</li>
+     *   <li>maxRequestsQueuedPerDestination: 512</li>
+     * </ul>
+     * 
+     * @return Settings optimized for high throughput
+     */
+    public static HttpClientSettings forHighThroughput() {
+        return new HttpClientSettings()
+            .setMaxConnectionsPerDestination(128)
+            .setMaxRequestsQueuedPerDestination(512);
+    }
+
+    /**
+     * Create settings optimized for many-upstream proxy scenarios.
+     * Use this when proxying to many different upstream servers (e.g., group repositories).
+     * 
+     * <p>Uses conservative connection limits to prevent resource exhaustion:</p>
+     * <ul>
+     *   <li>maxConnectionsPerDestination: 32</li>
+     *   <li>maxRequestsQueuedPerDestination: 128</li>
+     *   <li>idleTimeout: 15 seconds (faster cleanup)</li>
+     * </ul>
+     * 
+     * @return Settings optimized for many upstreams
+     */
+    public static HttpClientSettings forManyUpstreams() {
+        return new HttpClientSettings()
+            .setMaxConnectionsPerDestination(32)
+            .setMaxRequestsQueuedPerDestination(128)
+            .setIdleTimeout(15_000L);
     }
 
     public HttpClientSettings addProxy(ProxySettings ps) {

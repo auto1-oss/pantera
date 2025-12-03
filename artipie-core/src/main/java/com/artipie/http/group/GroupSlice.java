@@ -49,9 +49,10 @@ public final class GroupSlice implements Slice {
     public CompletableFuture<Response> response(
         RequestLine line, Headers headers, Content body
     ) {
-        // PARALLEL RACE STRATEGY:
-        // Try all repositories simultaneously, return first successful response (non-404)
-        // This is 3-10× faster than sequential when artifact is in last repo
+        // Parallel race strategy:
+        // try all repositories simultaneously and return the first successful
+        // response (non-404). This reduces latency when the artifact is only
+        // available in later repositories.
         
         if (this.targets.isEmpty()) {
             // Consume request body to prevent Vert.x request leak
@@ -60,11 +61,11 @@ public final class GroupSlice implements Slice {
             );
         }
 
-        // CRITICAL: Consume the original request body to prevent memory leak
-        // Then use Content.EMPTY for all parallel member requests to avoid OneTimePublisher errors
-        // For GET/HEAD requests, body is typically empty anyway
-        // For POST requests (e.g., npm audit), the body can only be consumed once, so we consume it
-        // here and pass empty to members (they don't need the request body for search/audit)
+        // Consume the original request body once and create fresh
+        // {@link Content} instances for each member. This is required for
+        // POST requests (such as npm audit), where the body must be forwarded
+        // to all members. For GET/HEAD requests the body is typically empty,
+        // so the additional buffering is negligible.
         return body.asBytesFuture().thenCompose(requestBytes -> {
             // Create a result future
             final CompletableFuture<Response> result = new CompletableFuture<>();
@@ -78,8 +79,12 @@ public final class GroupSlice implements Slice {
                 final int index = i;
                 final Slice target = this.targets.get(i);
                 
-                // Use Content.EMPTY to avoid OneTimePublisher double-consumption
-                target.response(line, headers, Content.EMPTY)
+                // Create a fresh Content instance for each member from buffered bytes
+                final Content memberBody = requestBytes.length == 0
+                    ? Content.EMPTY
+                    : new Content.From(requestBytes);
+
+                target.response(line, headers, memberBody)
                 .thenCompose(res -> {
                     // If result already completed (someone else won), consume and discard
                     if (result.isDone()) {
@@ -89,7 +94,8 @@ public final class GroupSlice implements Slice {
                             .eventAction("group_race")
                             .eventOutcome("late")
                             .log();
-                        // CRITICAL: Must consume body even if race lost to prevent Vert.x request leak
+                        // Consume body even if this response lost the race to
+                        // avoid leaking underlying HTTP resources.
                         return res.body().asBytesFuture().thenApply(ignored -> null);
                     }
 
@@ -100,7 +106,7 @@ public final class GroupSlice implements Slice {
                             .eventAction("group_race")
                             .eventOutcome("not_found")
                             .log();
-                        // CRITICAL: Must consume 404 body to prevent Vert.x request leak
+                        // Consume 404 response bodies as well to avoid leaks.
                         return res.body().asBytesFuture().thenApply(ignored -> {
                             if (failedCount.incrementAndGet() == this.targets.size()) {
                                 // All repos returned 404, return 404

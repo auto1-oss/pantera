@@ -40,16 +40,22 @@ class MicrometerSliceTest {
     @Test
     void addsSummaryToRegistry() {
         final String path = "/same/path";
+        // Response body metrics now use Content-Length header instead of wrapping body stream.
+        // This avoids double-subscription issues with Content.OneTime from storage.
         assertResponse(
-            ResponseBuilder.ok().body(Flowable.fromArray(
-                ByteBuffer.wrap("Hello ".getBytes(StandardCharsets.UTF_8)),
-                ByteBuffer.wrap("world!".getBytes(StandardCharsets.UTF_8))
-            )).build(),
+            ResponseBuilder.ok()
+                .header("Content-Length", "12")
+                .body(Flowable.fromArray(
+                    ByteBuffer.wrap("Hello ".getBytes(StandardCharsets.UTF_8)),
+                    ByteBuffer.wrap("world!".getBytes(StandardCharsets.UTF_8))
+                )).build(),
             new RequestLine(RqMethod.GET, path),
             RsStatus.OK
         );
         assertResponse(
-            ResponseBuilder.ok().body("abc".getBytes(StandardCharsets.UTF_8)).build(),
+            ResponseBuilder.ok()
+                .header("Content-Length", "3")
+                .body("abc".getBytes(StandardCharsets.UTF_8)).build(),
             new RequestLine(RqMethod.GET, path),
             RsStatus.OK
         );
@@ -66,7 +72,8 @@ class MicrometerSliceTest {
             Matchers.containsString("artipie.request.counter(COUNTER)[method='POST', status='CONTINUE']; count=1.0"),
             Matchers.containsString("artipie.request.counter(COUNTER)[method='GET', status='OK']; count=2.0"),
             Matchers.containsString("artipie.response.body.size(DISTRIBUTION_SUMMARY)[method='POST']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
-            Matchers.containsString("artipie.response.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=3.0, total=15.0 bytes, max=6.0 bytes"),
+            // Response body size now tracked via Content-Length header: 12 + 3 = 15 bytes total, 2 responses
+            Matchers.containsString("artipie.response.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=2.0, total=15.0 bytes, max=12.0 bytes"),
             Matchers.containsString("artipie.slice.response(TIMER)[status='OK']; count=2.0, total_time"),
             Matchers.containsString("artipie.slice.response(TIMER)[status='CONTINUE']; count=1.0, total_time")
         ).forEach(m -> MatcherAssert.assertThat(actual, m));

@@ -10,11 +10,15 @@ import java.util.regex.Pattern;
 /**
  * Cached package content representation.
  *
+ * <p>PERFORMANCE OPTIMIZATION: Pre-compiles the regex pattern in constructor
+ * instead of on every transformRef call. For packages with many versions,
+ * this prevents thousands of redundant pattern compilations.</p>
+ *
  * @since 0.1
  */
 public final class CachedContent extends TransformedContent {
     /**
-     * Regexp pattern for asset links.
+     * Regexp pattern template for asset links.
      */
     private static final String REF_PATTERN = "^(.+)/(%s/-/.+)$";
 
@@ -24,6 +28,12 @@ public final class CachedContent extends TransformedContent {
     private final String pkg;
 
     /**
+     * Pre-compiled pattern for this package.
+     * Compiled once in constructor, reused for all transformRef calls.
+     */
+    private final Pattern compiledPattern;
+
+    /**
      * Ctor.
      * @param content Package content to be transformed
      * @param pkg Package name
@@ -31,20 +41,18 @@ public final class CachedContent extends TransformedContent {
     public CachedContent(final String content, final String pkg) {
         super(content);
         this.pkg = pkg;
+        // Pre-compile pattern once instead of on every transformRef call
+        this.compiledPattern = Pattern.compile(
+            String.format(CachedContent.REF_PATTERN, Pattern.quote(pkg))
+        );
     }
 
     @Override
     String transformRef(final String ref) {
-        final Pattern pattern = Pattern.compile(
-            String.format(CachedContent.REF_PATTERN, this.pkg)
-        );
-        final Matcher matcher = pattern.matcher(ref);
-        final String newref;
+        final Matcher matcher = this.compiledPattern.matcher(ref);
         if (matcher.matches()) {
-            newref = String.format("/%s", matcher.group(2));
-        } else {
-            newref = ref;
+            return String.format("/%s", matcher.group(2));
         }
-        return newref;
+        return ref;
     }
 }

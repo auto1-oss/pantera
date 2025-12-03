@@ -59,8 +59,9 @@ public final class NpmProxyAdapter implements Slice {
         final Optional<Storage> asto = cfg.storageOpt();
         final Optional<URL> baseUrl = Optional.of(cfg.url());
         
-        // Support multiple remotes with GroupSlice (like maven-proxy)
-        // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in priority order
+        // Support multiple remotes with GroupSlice (similar to maven-proxy).
+        // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
+        // priority order.
         this.slice = new GroupSlice(
             cfg.remotes().stream().map(
                 remote -> {
@@ -94,11 +95,11 @@ public final class NpmProxyAdapter implements Slice {
                     return new CachedNpmProxySlice(
                         npmProxySlice,
                         asto,
-                        Duration.ofHours(24),  // 404 cache TTL
+                        Duration.ofHours(24),   // 404 cache TTL
                         true,                   // negative caching enabled
-                        cfg.name(),             // CRITICAL: Pass repo name for cache isolation
-                        remote.uri().toString(), // Upstream URL for metrics
-                        cfg.type()              // Repository type
+                        cfg.name(),             // repo name for cache isolation
+                        remote.uri().toString(),// upstream URL for metrics
+                        cfg.type()              // repository type
                     );
                 }
             ).collect(Collectors.toList())

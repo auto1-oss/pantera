@@ -150,6 +150,53 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         return this.clnt;
     }
 
+    /**
+     * Get buffer pool statistics for monitoring and testing.
+     * This exposes internal Jetty buffer pool metrics to detect leaks.
+     * @return Buffer pool statistics, or null if pool is not an ArrayByteBufferPool.
+     */
+    public BufferPoolStats getBufferPoolStats() {
+        if (this.clnt.getByteBufferPool() instanceof ArrayByteBufferPool pool) {
+            return new BufferPoolStats(
+                pool.getHeapByteBufferCount(),
+                pool.getDirectByteBufferCount(),
+                pool.getHeapMemory(),
+                pool.getDirectMemory()
+            );
+        }
+        return null;
+    }
+
+    /**
+     * Buffer pool statistics for monitoring and leak detection.
+     * @param heapBufferCount Number of heap buffers in the pool
+     * @param directBufferCount Number of direct buffers in the pool
+     * @param heapMemory Total heap memory used by buffers (bytes)
+     * @param directMemory Total direct memory used by buffers (bytes)
+     */
+    public record BufferPoolStats(
+        long heapBufferCount,
+        long directBufferCount,
+        long heapMemory,
+        long directMemory
+    ) {
+        /**
+         * Total buffer count (heap + direct).
+         * @return Total number of buffers
+         */
+        public long totalBufferCount() {
+            return heapBufferCount + directBufferCount;
+        }
+
+        /**
+         * Total memory used (heap + direct).
+         * @return Total memory in bytes
+         */
+        public long totalMemory() {
+            return heapMemory + directMemory;
+        }
+    }
+
     @Override
     public Slice http(final String host) {
         return this.slice(false, host, JettyClientSlices.HTTP_PORT);

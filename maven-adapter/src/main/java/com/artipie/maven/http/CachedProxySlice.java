@@ -318,13 +318,15 @@ public final class CachedProxySlice implements Slice {
                         // Caching checksum 404s breaks Maven validation when artifact is later cached
                         if (resp.status().code() == 404 && !isChecksumFile(key.string())) {
                             // CRITICAL: Consume body BEFORE caching to complete request cycle
-                            return resp.body().asBytesFuture().thenApply(bytes -> {
-                                this.negativeCache.cacheNotFound(key);
-                                this.recordMetric(() ->
-                                    com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven-negative")
-                                );
-                                return ResponseBuilder.notFound().build();
-                            });
+                            return resp.body().asBytesFuture()
+                                .thenApply(bytes -> {
+                                    this.negativeCache.cacheNotFound(key);
+                                    this.recordMetric(() ->
+                                        com.artipie.metrics.ArtipieMetrics.instance().cacheMiss("maven-negative")
+                                    );
+                                    return ResponseBuilder.notFound().build();
+                                })
+                                .exceptionally(err -> ResponseBuilder.notFound().build());
                         }
                         // Other non-success responses - consume body
                         return resp.body().asBytesFuture()
@@ -448,7 +450,8 @@ public final class CachedProxySlice implements Slice {
                     );
                 }
                 return ResponseBuilder.notFound().build();
-            });
+            })
+            .exceptionally(err -> ResponseBuilder.notFound().build());
     }
 
     private CompletableFuture<Response> cacheAndBuildResponse(
@@ -734,16 +737,20 @@ public final class CachedProxySlice implements Slice {
      */
     private CompletableFuture<Response> handleRootPath(final RequestLine line) {
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenApply(resp -> {
+            .thenCompose(resp -> {
                 if (resp.status().success()) {
                     this.addEventToQueue(new KeyFromPath("/index.html"),
                         com.artipie.scheduling.ArtifactEvent.DEF_OWNER);
-                    return ResponseBuilder.ok()
-                        .headers(resp.headers())
-                        .body(resp.body())
-                        .build();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .headers(resp.headers())
+                            .body(resp.body())
+                            .build()
+                    );
                 }
-                return ResponseBuilder.notFound().build();
+                // Consume body to prevent potential leak
+                return resp.body().asBytesFuture()
+                    .thenApply(ignored -> ResponseBuilder.notFound().build());
             });
     }
 

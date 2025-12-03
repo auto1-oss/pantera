@@ -91,10 +91,22 @@ public final class MicrometerSlice implements Slice {
             .thenCompose(response -> {
                 requestCounter.tag(MicrometerSlice.STATUS, response.status().name())
                     .register(MicrometerSlice.this.registry).increment();
-                return ResponseBuilder.from(response.status())
-                    .headers(response.headers())
-                    .body(new MicrometerPublisher(response.body(), responseBody))
-                    .completedFuture();
+                // CRITICAL FIX: Do NOT wrap response body with MicrometerPublisher.
+                // Response bodies from storage are often Content.OneTime which can only
+                // be subscribed once. Wrapping causes double subscription: once by
+                // MicrometerPublisher for metrics, once by Vert.x for sending response.
+                // Use Content-Length header for response size tracking instead.
+                response.headers().values("Content-Length").stream()
+                    .findFirst()
+                    .ifPresent(contentLength -> {
+                        try {
+                            responseBody.record(Long.parseLong(contentLength));
+                        } catch (NumberFormatException ignored) {
+                            // Skip if Content-Length is invalid
+                        }
+                    });
+                // Pass response through unchanged - no body wrapping
+                return CompletableFuture.completedFuture(response);
             }).handle(
                 (resp, err) -> {
                     CompletableFuture<Response> res;
