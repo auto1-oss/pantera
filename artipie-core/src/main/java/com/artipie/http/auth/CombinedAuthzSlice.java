@@ -17,6 +17,10 @@ import com.artipie.http.rq.RqHeaders;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Slice with combined basic and bearer token authentication.
@@ -29,6 +33,29 @@ public final class CombinedAuthzSlice implements Slice {
      * Header for artipie login.
      */
     public static final String LOGIN_HDR = "artipie_login";
+
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String AUTH_POOL_NAME = "artipie.auth.combined";
+
+    /**
+     * Thread pool for blocking authentication operations.
+     * This offloads potentially slow operations (like Okta MFA) from the event loop.
+     * Pool name: {@value #AUTH_POOL_NAME} (visible in thread dumps and metrics).
+     */
+    private static final ExecutorService AUTH_EXECUTOR = Executors.newCachedThreadPool(
+        new ThreadFactory() {
+            private final AtomicInteger counter = new AtomicInteger(0);
+            @Override
+            public Thread newThread(final Runnable runnable) {
+                final Thread thread = new Thread(runnable);
+                thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
+                thread.setDaemon(true);
+                return thread;
+            }
+        }
+    );
 
     /**
      * Origin.
@@ -166,19 +193,28 @@ public final class CombinedAuthzSlice implements Slice {
 
     /**
      * Authenticate using Basic authentication.
+     * Runs on a dedicated thread pool to avoid blocking the event loop,
+     * especially important when authentication involves external IdP calls (e.g., Okta with MFA).
      *
      * @param auth Authorization header.
      * @return Authentication result.
      */
     private CompletionStage<AuthScheme.Result> authenticateBasic(final Authorization auth) {
         final Authorization.Basic basic = new Authorization.Basic(auth.credentials());
-        final Optional<AuthUser> user = this.basicAuth.user(basic.username(), basic.password());
-        return CompletableFuture.completedFuture(
-            AuthScheme.result(
-                user,
-                String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
-                    BasicAuthScheme.NAME, BearerAuthScheme.NAME)
-            )
+        // Offload to worker thread to prevent blocking event loop
+        // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
+        return CompletableFuture.supplyAsync(
+            () -> {
+                final Optional<AuthUser> user = this.basicAuth.user(
+                    basic.username(), basic.password()
+                );
+                return AuthScheme.result(
+                    user,
+                    String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                        BasicAuthScheme.NAME, BearerAuthScheme.NAME)
+                );
+            },
+            AUTH_EXECUTOR
         );
     }
 

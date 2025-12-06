@@ -238,7 +238,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
     private static ExecutorService createLoader() {
         return Executors.newSingleThreadExecutor(
             runnable -> {
-                final Thread thread = new Thread(runnable, "repo-refresh-loader");
+                final Thread thread = new Thread(runnable, "artipie.repo.loader");
                 thread.setDaemon(true);
                 return thread;
             }

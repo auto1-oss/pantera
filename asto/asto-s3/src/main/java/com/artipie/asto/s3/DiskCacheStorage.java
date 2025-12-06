@@ -57,14 +57,20 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
     enum Policy { LRU, LFU }
 
     /**
+     * Pool name for metrics identification.
+     */
+    static final String POOL_NAME = "artipie.asto.s3.cache";
+
+    /**
      * Shared executor service for all cache cleanup tasks.
      * Uses bounded thread pool to prevent thread proliferation.
+     * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
      */
     private static final ScheduledExecutorService SHARED_CLEANER = 
         Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 4),
             r -> {
-                final Thread t = new Thread(r, "shared-disk-cache-cleaner");
+                final Thread t = new Thread(r, POOL_NAME + ".cleaner");
                 t.setDaemon(true);
                 t.setPriority(Thread.MIN_PRIORITY);
                 return t;

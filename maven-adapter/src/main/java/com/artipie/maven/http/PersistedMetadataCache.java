@@ -101,7 +101,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         // Schedule periodic snapshots
         final ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
             final Thread thread = new Thread(r);
-            thread.setName("metadata-cache-snapshot");
+            thread.setName("artipie.maven.cache.snapshot");
             thread.setDaemon(true);
             return thread;
         });

@@ -11,8 +11,10 @@ import com.artipie.cache.CacheConfig;
 import com.artipie.cache.ValkeyConnection;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.AuthUser;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.misc.ArtipieProperties;
 import com.artipie.misc.Property;
+import com.artipie.settings.JwtSettings;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -75,7 +77,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      * @param origin Origin authentication
      */
     public CachedUsers(final Authentication origin) {
-        this(origin, (ValkeyConnection) null);
+        this(origin, (ValkeyConnection) null, null);
     }
     
     /**
@@ -84,14 +86,41 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
      * @param valkey Valkey connection for L2 cache
      */
     public CachedUsers(final Authentication origin, final ValkeyConnection valkey) {
+        this(origin, valkey, null);
+    }
+
+    /**
+     * Ctor with Valkey connection and JWT settings.
+     * Note: JWT-as-password bypasses the cache entirely (validated via exp claim),
+     * so this cache only applies to direct Basic Auth with IdP passwords.
+     * @param origin Origin authentication
+     * @param valkey Valkey connection for L2 cache (optional)
+     * @param jwtSettings JWT settings (kept for backward compat, not used for cache TTL)
+     */
+    public CachedUsers(
+        final Authentication origin,
+        final ValkeyConnection valkey,
+        final JwtSettings jwtSettings
+    ) {
         this.origin = origin;
         this.twoTier = (valkey != null);
         this.l2 = this.twoTier ? valkey.async() : null;
+        
+        // TTL from property - applies only to direct Basic Auth (IdP passwords)
+        // JWT-as-password bypasses cache entirely and uses token's own exp claim
         this.ttl = Duration.ofMillis(
             new Property(ArtipieProperties.AUTH_TIMEOUT).asLongOrDefault(300_000L)
         );
         
-        // L1: Hot data cache
+        EcsLogger.info("com.artipie.settings.cache")
+            .message("Auth cache initialized - JWT-as-password bypasses cache")
+            .eventCategory("cache")
+            .eventAction("init")
+            .field("basic_auth_ttl_seconds", this.ttl.toSeconds())
+            .field("jwt_expiry_seconds", jwtSettings != null ? jwtSettings.expirySeconds() : -1)
+            .log();
+        
+        // L1: Hot data cache for direct Basic Auth only
         final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : this.ttl;
         final int l1Size = this.twoTier ? 1000 : 10_000;
         
@@ -156,6 +185,14 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     public Optional<AuthUser> user(final String user, final String pass) {
         return new UncheckedIOScalar<>(
             () -> {
+                // JWT-as-password: Skip cache, validate directly.
+                // JWT tokens have their own expiry (exp claim), caching would
+                // override that expiry. Also, JWT validation is O(1) - no need to cache.
+                if (looksLikeJwt(pass)) {
+                    // JWT tokens bypass cache - validated directly using exp claim
+                    return this.origin.user(user, pass);
+                }
+                
                 // SECURITY: Use hashed key to prevent password exposure
                 final String key = this.secureKey(user, pass);
                 final long l1StartNanos = System.nanoTime();
@@ -345,6 +382,30 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         System.arraycopy(bytes, 1, nameBytes, 0, nameBytes.length);
         final String name = new String(nameBytes, StandardCharsets.UTF_8);
         return Optional.of(new AuthUser(name, "cached"));
+    }
+
+    /**
+     * Check if password looks like a JWT token.
+     * JWT tokens have format: header.payload.signature (base64url encoded).
+     * @param password Password to check
+     * @return True if it looks like a JWT
+     */
+    private static boolean looksLikeJwt(final String password) {
+        if (password == null || password.length() < 20) {
+            return false;
+        }
+        // JWT always starts with "eyJ" (base64 of '{"')
+        // and has exactly 2 dots separating 3 parts
+        if (!password.startsWith("eyJ")) {
+            return false;
+        }
+        int dots = 0;
+        for (int i = 0; i < password.length(); i++) {
+            if (password.charAt(i) == '.') {
+                dots++;
+            }
+        }
+        return dots == 2;
     }
 
     @Override

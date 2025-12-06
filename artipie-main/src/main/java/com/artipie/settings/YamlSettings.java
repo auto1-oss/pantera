@@ -144,6 +144,11 @@ public final class YamlSettings implements Settings {
     private final Duration httpServerRequestTimeout;
 
     /**
+     * JWT token settings.
+     */
+    private final JwtSettings jwtSettings;
+
+    /**
      * Path to artipie.yaml config file.
      */
     private final Path configFilePath;
@@ -174,10 +179,12 @@ public final class YamlSettings implements Settings {
             throw new IllegalStateException("Invalid settings: not empty `meta` section is expected");
         }
         this.httpClientSettings = HttpClientSettings.from(this.meta.yamlMapping("http_client"));
+        // Parse JWT settings first - needed for auth cache TTL capping
+        this.jwtSettings = JwtSettings.fromYaml(this.meta());
         final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
         // Initialize global cache config for all adapters
         GlobalCacheConfig.initialize(valkey);
-        final CachedUsers auth = YamlSettings.initAuth(this.meta(), valkey);
+        final CachedUsers auth = YamlSettings.initAuth(this.meta(), valkey, this.jwtSettings);
         this.security = new ArtipieSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse()
         );
@@ -283,6 +290,11 @@ public final class YamlSettings implements Settings {
     @Override
     public PrefixesConfig prefixes() {
         return this.prefixesConfig;
+    }
+
+    @Override
+    public JwtSettings jwtSettings() {
+        return this.jwtSettings;
     }
 
     @Override
@@ -481,11 +493,13 @@ public final class YamlSettings implements Settings {
      * {@link AuthFromEnv} is used.
      * @param settings Yaml settings
      * @param valkey Optional Valkey connection for L2 cache
+     * @param jwtSettings JWT settings for cache TTL capping
      * @return Authentication
      */
     private static CachedUsers initAuth(
         final YamlMapping settings,
-        final Optional<ValkeyConnection> valkey
+        final Optional<ValkeyConnection> valkey,
+        final JwtSettings jwtSettings
     ) {
         Authentication res;
         final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
@@ -507,16 +521,18 @@ public final class YamlSettings implements Settings {
                 res = new Authentication.Joined(res, auth);
             }
         }
-        // Create CachedUsers with Valkey connection if available
+        // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {
             EcsLogger.info("com.artipie.settings")
-                .message("Initializing auth cache with Valkey L2 cache (type: valkey)")
+                .message("Initializing auth cache with Valkey L2 cache and JWT TTL cap")
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
+                .field("jwt_expires", jwtSettings.expires())
+                .field("jwt_expiry_seconds", jwtSettings.expirySeconds())
                 .log();
-            return new CachedUsers(res, valkey.get());
+            return new CachedUsers(res, valkey.get(), jwtSettings);
         } else {
-            return new CachedUsers(res);
+            return new CachedUsers(res, null, jwtSettings);
         }
     }
 

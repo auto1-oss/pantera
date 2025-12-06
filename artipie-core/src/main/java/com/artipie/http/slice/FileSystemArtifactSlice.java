@@ -79,10 +79,15 @@ public final class FileSystemArtifactSlice implements Slice {
      *
      * @since 1.19.2
      */
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.io.filesystem";
+
     private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
         FileSystemIoConfig.instance().threads(),
         new ThreadFactoryBuilder()
-            .setNameFormat("filesystem-io-%d")
+            .setNameFormat(POOL_NAME + ".worker-%d")
             .setDaemon(true)
             .build()
     );

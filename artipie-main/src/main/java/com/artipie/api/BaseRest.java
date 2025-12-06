@@ -36,26 +36,49 @@ abstract class BaseRest {
      */
     protected Handler<RoutingContext> errorHandler(final int code) {
         return context -> {
+            final int status;
             if (context.failure() instanceof HttpException) {
-                context.response()
-                    .setStatusMessage(context.failure().getMessage())
-                    .setStatusCode(((HttpException) context.failure()).getStatusCode())
-                    .end();
+                status = ((HttpException) context.failure()).getStatusCode();
             } else {
-                context.response()
-                    .setStatusMessage(context.failure().getMessage())
-                    .setStatusCode(code)
-                    .end();
+                status = code;
             }
-            EcsLogger.error("com.artipie.api")
+            // Sanitize message - HTTP status messages can't contain control chars
+            final String msg = sanitizeStatusMessage(context.failure().getMessage());
+            context.response()
+                .setStatusMessage(msg)
+                .setStatusCode(status)
+                .end();
+            EcsLogger.warn("com.artipie.api")
                 .message("REST API request failed")
                 .eventCategory("api")
                 .eventAction("request_handling")
                 .eventOutcome("failure")
-                .field("http.response.status_code", code)
+                .field("http.response.status_code", status)
                 .error(context.failure())
                 .log();
         };
+    }
+
+    /**
+     * Sanitize message for use as HTTP status message.
+     * HTTP status messages cannot contain control characters like CR/LF.
+     * @param message Original message
+     * @return Sanitized message safe for HTTP status line
+     */
+    private static String sanitizeStatusMessage(final String message) {
+        if (message == null) {
+            return "Error";
+        }
+        // Replace control characters and limit length
+        String sanitized = message
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .replaceAll("\\p{Cntrl}", " ");
+        // Limit to reasonable length for status message
+        if (sanitized.length() > 100) {
+            sanitized = sanitized.substring(0, 100) + "...";
+        }
+        return sanitized;
     }
 
     /**

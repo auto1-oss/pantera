@@ -20,7 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class CooldownSupport {
 
     /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.cooldown";
+
+    /**
      * Dedicated executor for cooldown operations to avoid exhausting common pool.
+     * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
      */
     private static final ExecutorService COOLDOWN_EXECUTOR = Executors.newFixedThreadPool(
         Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -28,7 +34,7 @@ public final class CooldownSupport {
             private final AtomicInteger counter = new AtomicInteger(0);
             @Override
             public Thread newThread(Runnable r) {
-                Thread thread = new Thread(r, "cooldown-" + counter.getAndIncrement());
+                Thread thread = new Thread(r, POOL_NAME + ".worker-" + counter.getAndIncrement());
                 thread.setDaemon(true);
                 return thread;
             }

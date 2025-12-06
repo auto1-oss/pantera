@@ -19,6 +19,8 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.cqfn.rio.file.File;
 
 /**
@@ -31,6 +33,25 @@ import org.cqfn.rio.file.File;
  * @since 0.12
  */
 public class RxFile {
+
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.asto.rxfile";
+
+    /**
+     * Shared thread factory for all RxFile instances.
+     */
+    private static final ThreadFactory THREAD_FACTORY = new ThreadFactory() {
+        private final AtomicInteger counter = new AtomicInteger(0);
+        @Override
+        public Thread newThread(final Runnable runnable) {
+            final Thread thread = new Thread(runnable);
+            thread.setName(POOL_NAME + ".worker-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        }
+    };
 
     /**
      * The file location of file system.
@@ -48,7 +69,7 @@ public class RxFile {
      */
     public RxFile(final Path file) {
         this.file = file;
-        this.exec = Executors.newCachedThreadPool();
+        this.exec = Executors.newCachedThreadPool(THREAD_FACTORY);
     }
 
     /**

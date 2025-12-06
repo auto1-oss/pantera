@@ -141,13 +141,14 @@ public final class VertxMain {
 
 
         final Vertx vertx = VertxMain.vertx(settings.metrics());
+        final com.artipie.settings.JwtSettings jwtSettings = settings.jwtSettings();
         final JWTAuth jwt = JWTAuth.create(
             vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("some secret")
+                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
             )
         );
         final Repositories repos = new MapRepositories(settings);
-        final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt));
+        final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt, jwtSettings));
         if (settings.metrics().http()) {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());

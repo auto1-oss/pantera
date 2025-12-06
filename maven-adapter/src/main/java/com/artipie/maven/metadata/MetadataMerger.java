@@ -57,14 +57,19 @@ import java.util.concurrent.Semaphore;
 public final class MetadataMerger {
 
     /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.maven.merger";
+
+    /**
      * Dedicated thread pool for metadata merging operations.
      * Sized to half of available processors to avoid saturating the system.
-     * Named threads for better observability in thread dumps.
+     * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
      */
     private static final ExecutorService MERGE_EXECUTOR = Executors.newFixedThreadPool(
         Math.max(4, Runtime.getRuntime().availableProcessors() / 2),
         new ThreadFactoryBuilder()
-            .setNameFormat("metadata-merger-%d")
+            .setNameFormat(POOL_NAME + ".worker-%d")
             .setDaemon(true)
             .build()
     );

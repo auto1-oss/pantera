@@ -136,4 +136,12 @@ public interface Settings extends AutoCloseable {
      * @return Path to config file
      */
     java.nio.file.Path configPath();
+
+    /**
+     * JWT token settings.
+     * @return JWT settings
+     */
+    default JwtSettings jwtSettings() {
+        return new JwtSettings();
+    }
 }

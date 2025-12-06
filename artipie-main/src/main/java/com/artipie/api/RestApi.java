@@ -242,7 +242,7 @@ public final class RestApi extends AbstractVerticle {
      * @param builders Router builders to add token auth to
      */
     private void addJwtAuth(final RouterBuilder token, final RouterBuilder... builders) {
-        new AuthTokenRest(new JwtTokens(this.jwt), this.security.authentication()).init(token);
+        new AuthTokenRest(new JwtTokens(this.jwt, this.settings.jwtSettings()), this.security.authentication()).init(token);
         Arrays.stream(builders).forEach(
             item -> item.securityHandler(RestApi.SECURITY_SCHEME, JWTAuthHandler.create(this.jwt))
         );
