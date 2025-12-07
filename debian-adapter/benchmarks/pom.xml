@@ -27,11 +27,11 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.6</version>
+    <version>1.20.7</version>
     <relativePath>/../../pom.xml</relativePath>
   </parent>
   <artifactId>debian-bench</artifactId>
-  <version>1.20.6</version>
+  <version>1.20.7</version>
   <packaging>jar</packaging>
   <properties>
     <jmh.version>1.29</jmh.version>
@@ -41,7 +41,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>debian-adapter</artifactId>
-      <version>1.20.6</version>
+      <version>1.20.7</version>
       <scope>compile</scope>
     </dependency>
     <dependency>

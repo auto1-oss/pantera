@@ -24,6 +24,7 @@ import com.artipie.cooldown.CooldownRequest;
 import com.artipie.cooldown.CooldownResponses;
 import com.artipie.cooldown.CooldownResult;
 import com.artipie.cooldown.CooldownService;
+import com.artipie.http.log.EcsLogger;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -97,16 +98,29 @@ public final class DownloadAssetSlice implements Slice {
                                                 final Content body) {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenCompose(ignored -> {
-            final String tgz = this.path.value(line.uri().getPath());
+            // URL-decode path to handle scoped packages like @authn8%2fmcp-server -> @authn8/mcp-server
+            final String rawPath = this.path.value(line.uri().getPath());
+            final String tgz = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
             final Optional<CooldownRequest> request = this.cooldownRequest(tgz, rqheaders);
             if (request.isEmpty()) {
                 return this.serveAsset(tgz, rqheaders);
             }
-            return this.cooldown.evaluate(request.get(), this.inspector)
+            final CooldownRequest req = request.get();
+            return this.cooldown.evaluate(req, this.inspector)
                 .thenCompose(result -> {
                     if (result.blocked()) {
+                        final var block = result.block().orElseThrow();
+                        EcsLogger.info("com.artipie.npm")
+                            .message("Asset download blocked by cooldown")
+                            .eventCategory("cooldown")
+                            .eventAction("asset_blocked")
+                            .field("package.name", req.artifact())
+                            .field("package.version", req.version())
+                            .field("block.reason", block.reason().toString())
+                            .field("block.blockedUntil", block.blockedUntil().toString())
+                            .log();
                         return CompletableFuture.completedFuture(
-                            CooldownResponses.forbidden(result.block().orElseThrow())
+                            CooldownResponses.forbidden(block)
                         );
                     }
                     return this.serveAsset(tgz, rqheaders);

@@ -19,6 +19,7 @@ import com.artipie.http.slice.SliceSimple;
 import com.artipie.npm.proxy.NpmProxy;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.metadata.CooldownMetadataService;
 
 import java.net.URL;
 import java.util.Optional;
@@ -42,14 +43,15 @@ public final class NpmProxySlice implements Slice {
      * @param repoName Repository name
      * @param repoType Repository type
      * @param cooldown Cooldown service
+     * @param cooldownMetadata Cooldown metadata filtering service
      * @param remote Remote slice for security audit endpoints
      */
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
         final String repoName, final String repoType, final CooldownService cooldown,
-        final com.artipie.http.Slice remote
+        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote
     ) {
-        this(path, npm, packages, repoName, repoType, cooldown, remote, Optional.empty());
+        this(path, npm, packages, repoName, repoType, cooldown, cooldownMetadata, remote, Optional.empty());
     }
 
     /**
@@ -60,13 +62,15 @@ public final class NpmProxySlice implements Slice {
      * @param repoName Repository name
      * @param repoType Repository type
      * @param cooldown Cooldown service
+     * @param cooldownMetadata Cooldown metadata filtering service
      * @param remote Remote slice for security audit endpoints
      * @param baseUrl Base URL for the repository (from configuration)
      */
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
         final String repoName, final String repoType, final CooldownService cooldown,
-        final com.artipie.http.Slice remote, final Optional<URL> baseUrl
+        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote,
+        final Optional<URL> baseUrl
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
@@ -81,7 +85,7 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadPackageSlice(npm, ppath, baseUrl)
+                    new DownloadPackageSlice(npm, ppath, baseUrl, cooldownMetadata, repoType, repoName)
                 )
             ),
             new RtRulePath(

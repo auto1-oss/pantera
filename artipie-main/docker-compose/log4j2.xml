@@ -39,12 +39,12 @@
         <!-- ============================================ -->
         
         <!-- Main Artipie packages - Set to INFO for production, DEBUG for troubleshooting -->
-        <Logger name="com.artipie" level="DEBUG" additivity="false">
+        <Logger name="com.artipie" level="INFO" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
         
         <!-- Security and authentication events - Keep at DEBUG to track auth issues -->
-        <Logger name="security" level="DEBUG" additivity="false">
+        <Logger name="security" level="INFO" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
         
@@ -52,7 +52,8 @@
         <Logger name="com.artipie.asto" level="INFO"/>
         
         <!-- HTTP client operations -->
-        <Logger name="com.artipie.http.client" level="DEBUG"/>
+        <Logger name="com.artipie.http.client" level="INFO"/>
+        <Logger name="com.artipie.scheduling" level="INFO" />
         
         <!-- Repository adapters - Uncomment specific adapters for debugging -->
         <!-- <Logger name="com.artipie.maven" level="DEBUG"/> -->
@@ -115,7 +116,7 @@
         <!-- ROOT LOGGER (catches everything else)        -->
         <!-- ============================================ -->
         
-        <Root level="DEBUG">
+        <Root level="INFO">
             <AppenderRef ref="AsyncConsole"/>
         </Root>
     </Loggers>

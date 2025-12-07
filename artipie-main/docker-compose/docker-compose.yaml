@@ -7,7 +7,7 @@ services:
         condition: service_started
       valkey:
         condition: service_healthy
-    image: auto1-artipie:1.20.6
+    image: auto1-artipie:${ARTIPIE_VERSION}
     # PERFORMANCE: Increased from 2 CPUs to 4 for better parallel request handling
     # NPM install with 2300+ packages requires significant parallelism
     cpus: 4
@@ -16,34 +16,42 @@ services:
     container_name: artipie
     restart: unless-stopped
     environment:
-      - ARTIPIE_USER_NAME=artipie
-      - ARTIPIE_USER_PASS=artipie
-      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+      - ARTIPIE_USER_NAME=${ARTIPIE_USER_NAME}
+      - ARTIPIE_USER_PASS=${ARTIPIE_USER_PASS}
+      - ARTIPIE_CONFIG=${ARTIPIE_CONFIG}
       - HOME=/home/
-      - AWS_CONFIG_FILE=/home/.aws/config
-      - AWS_SHARED_CREDENTIALS_FILE=/home/.aws/credentials
-      - AWS_SDK_LOAD_CONFIG=1
-      - AWS_PROFILE=profile_name
-      - AWS_REGION=eu-west-1
+      - AWS_CONFIG_FILE=${AWS_CONFIG_FILE}
+      - AWS_SHARED_CREDENTIALS_FILE=${AWS_SHARED_CREDENTIALS_FILE}
+      - AWS_SDK_LOAD_CONFIG=${AWS_SDK_LOAD_CONFIG}
+      - AWS_PROFILE=${AWS_PROFILE}
+      - AWS_REGION=${AWS_REGION}
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=1.20.6
+      - ARTIPIE_VERSION=${ARTIPIE_VERSION}
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/artipie/log4j2.xml
-      - ELASTIC_APM_ENABLED=false
-      - ELASTIC_APM_ENVIRONMENT=development
-      - ELASTIC_APM_SERVER_URL=http://apm:8200
-      - ELASTIC_APM_SERVICE_NAME=artipie
-      - ELASTIC_APM_SERVICE_VERSION=1.19.1
-      - ELASTIC_APM_LOG_LEVEL=INFO
-      - ELASTIC_APM_LOG_FORMAT_SOUT=JSON
-      - ELASTIC_APM_TRANSACTION_MAX_SPANS=1000
-      - ELASTIC_APM_ENABLE_EXPERIMENTAL_INSTRUMENTATIONS=true
-      - ELASTIC_APM_CAPTURE_BODY=errors
-      - ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME=false
-      - ELASTIC_APM_SPAN_COMPRESSION_ENABLED=true
-      - ELASTIC_APM_CAPTURE_JMX_METRICS=object_name[*:type=*,name=*] attribute[*]
-      # PERFORMANCE: Increased heap to 4GB, more GC threads for 4 CPUs, increased filesystem IO threads
-      - JVM_ARGS=-Xms3g -Xmx4g -XX:+UseG1GC -XX:G1ReservePercent=10 -XX:MaxGCPauseMillis=200 -XX:MaxDirectMemorySize=1g -XX:ParallelGCThreads=4 -XX:ConcGCThreads=2 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled -XX:+UseContainerSupport -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/artipie/logs/heapdump.hprof -Xlog:gc*:file=/var/artipie/logs/gc.log:time,uptime:filecount=5,filesize=50M -Djava.io.tmpdir=/var/artipie/cache/tmp -Dvertx.cacheDirBase=/var/artipie/cache/tmp -Dio.netty.leakDetection.level=simple -XX:InitiatingHeapOccupancyPercent=45 -XX:+AlwaysPreTouch -Dvertx.max.worker.execute.time=120000000000 -Dartipie.filesystem.io.threads=8
+      - ELASTIC_APM_ENABLED=${ELASTIC_APM_ENABLED}
+      - ELASTIC_APM_ENVIRONMENT=${ELASTIC_APM_ENVIRONMENT}
+      - ELASTIC_APM_SERVER_URL=${ELASTIC_APM_SERVER_URL}
+      - ELASTIC_APM_SERVICE_NAME=${ELASTIC_APM_SERVICE_NAME}
+      - ELASTIC_APM_SERVICE_VERSION=${ELASTIC_APM_SERVICE_VERSION}
+      - ELASTIC_APM_LOG_LEVEL=${ELASTIC_APM_LOG_LEVEL}
+      - ELASTIC_APM_LOG_FORMAT_SOUT=${ELASTIC_APM_LOG_FORMAT_SOUT}
+      - ELASTIC_APM_TRANSACTION_MAX_SPANS=${ELASTIC_APM_TRANSACTION_MAX_SPANS}
+      - ELASTIC_APM_ENABLE_EXPERIMENTAL_INSTRUMENTATIONS=${ELASTIC_APM_ENABLE_EXPERIMENTAL_INSTRUMENTATIONS}
+      - ELASTIC_APM_CAPTURE_BODY=${ELASTIC_APM_CAPTURE_BODY}
+      - ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME=${ELASTIC_APM_USE_PATH_AS_TRANSACTION_NAME}
+      - ELASTIC_APM_SPAN_COMPRESSION_ENABLED=${ELASTIC_APM_SPAN_COMPRESSION_ENABLED}
+      - ELASTIC_APM_CAPTURE_JMX_METRICS=${ELASTIC_APM_CAPTURE_JMX_METRICS}
+      - JVM_ARGS=${JVM_ARGS}
+      - OKTA_ISSUER=${OKTA_ISSUER}
+      - OKTA_CLIENT_ID=${OKTA_CLIENT_ID}
+      - OKTA_CLIENT_SECRET=${OKTA_CLIENT_SECRET}
+      - OKTA_REDIRECT_URI=${OKTA_REDIRECT_URI}
+      # Artipie application secrets (used in artipie.yml)
+      - JWT_SECRET=${JWT_SECRET}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - ./artipie/artipie.yml:/etc/artipie/artipie.yml
       - ./log4j2.xml:/etc/artipie/log4j2.xml
@@ -51,6 +59,7 @@ services:
       - ./artipie/security:/var/artipie/security
       - ./artipie/data:/var/artipie/data
       - ./artipie/cache:/var/artipie/cache
+      - ./artipie/cache/log:/var/artipie/logs/
       - ~/.aws:/home/.aws
     networks:
       - artipie-net
@@ -86,15 +95,15 @@ services:
     - --import-realm
     restart: unless-stopped
     environment:
-      - KC_DB=postgres
-      - KC_DB_URL=jdbc:postgresql://artipie-db:5432/keycloak
-      - KC_DB_USERNAME=artipie
-      - KC_DB_PASSWORD=artipie
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_HOSTNAME_STRICT=false
-      - KC_HOSTNAME_STRICT_HTTPS=false
-      - KC_HTTP_ENABLED=true
+      - KC_DB=${KC_DB}
+      - KC_DB_URL=${KC_DB_URL}
+      - KC_DB_USERNAME=${KC_DB_USERNAME}
+      - KC_DB_PASSWORD=${KC_DB_PASSWORD}
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      - KC_HOSTNAME_STRICT=${KC_HOSTNAME_STRICT}
+      - KC_HOSTNAME_STRICT_HTTPS=${KC_HOSTNAME_STRICT_HTTPS}
+      - KC_HTTP_ENABLED=${KC_HTTP_ENABLED}
     ports:
       - "8080:8080"
     volumes:
@@ -111,8 +120,8 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=artipie
-      - POSTGRES_PASSWORD=artipie
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
@@ -176,11 +185,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://localhost:3000
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=${GF_USERS_ALLOW_SIGN_UP}
+      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL}
+      - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/var/lib/grafana/dashboards

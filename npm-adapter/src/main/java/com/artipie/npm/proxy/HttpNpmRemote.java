@@ -21,6 +21,8 @@ import io.reactivex.Maybe;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.concurrent.CompletableFuture;
@@ -143,8 +145,11 @@ public final class HttpNpmRemote implements NpmRemote {
      * @return Completable action with content and headers
      */
     private CompletableFuture<Pair<Content, Headers>> performRemoteRequest(final String name) {
+        // URL-encode the package name for scoped packages like @authn8/mcp-server -> @authn8%2fmcp-server
+        // The npm registry expects the slash within scoped package names to be URL-encoded
+        final String encodedName = encodePackageName(name);
         return this.origin.response(
-            new RequestLine(RqMethod.GET, String.format("/%s", name)),
+            new RequestLine(RqMethod.GET, String.format("/%s", encodedName)),
             Headers.EMPTY, Content.EMPTY
         ).thenCompose(response -> {
             if (response.status().success()) {
@@ -187,6 +192,26 @@ public final class HttpNpmRemote implements NpmRemote {
             res = hdr.get(0);
         }
         return res;
+    }
+
+    /**
+     * URL-encode package name for upstream requests.
+     * For scoped packages like @authn8/mcp-server, encodes slash as %2F.
+     * The @ symbol is kept as-is since it's valid in URLs.
+     *
+     * @param name Package name (e.g., "lodash" or "@authn8/mcp-server")
+     * @return URL-encoded package name for upstream request
+     */
+    private static String encodePackageName(final String name) {
+        if (name.startsWith("@") && name.contains("/")) {
+            // Scoped package: @scope/name -> @scope%2Fname
+            final int slashIndex = name.indexOf('/');
+            final String scope = name.substring(0, slashIndex);
+            final String pkgName = name.substring(slashIndex + 1);
+            return scope + "%2F" + pkgName;
+        }
+        // Non-scoped package: return as-is
+        return name;
     }
 
     /**

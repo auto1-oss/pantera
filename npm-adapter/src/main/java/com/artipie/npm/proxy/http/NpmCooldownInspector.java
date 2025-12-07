@@ -99,21 +99,25 @@ final class NpmCooldownInspector implements CooldownInspector,
         final String version
     ) {
         return this.metadata(artifact).thenApply(
-            meta -> meta.flatMap(json -> {
+            meta -> {
+                if (meta.isEmpty()) {
+                    return Optional.<Instant>empty();
+                }
+                final JsonObject json = meta.get();
                 final JsonObject times = json.getJsonObject("time");
                 if (times == null) {
-                    return Optional.empty();
+                    return Optional.<Instant>empty();
                 }
                 final String value = times.getString(version, null);
                 if (value == null) {
-                    return Optional.empty();
+                    return Optional.<Instant>empty();
                 }
                 try {
                     return Optional.of(Instant.parse(value));
-                } catch (final Exception ignored) {
-                    return Optional.empty();
+                } catch (final Exception e) {
+                    return Optional.<Instant>empty();
                 }
-            })
+            }
         );
     }
 

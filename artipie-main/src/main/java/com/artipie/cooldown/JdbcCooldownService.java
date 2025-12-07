@@ -61,6 +61,15 @@ final class JdbcCooldownService implements CooldownService {
         this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
     }
 
+    /**
+     * Get the cooldown cache instance.
+     * Used by CooldownMetadataServiceImpl for cache sharing.
+     * @return CooldownCache instance
+     */
+    public CooldownCache cache() {
+        return this.cache;
+    }
+
     @Override
     public CompletableFuture<CooldownResult> evaluate(
         final CooldownRequest request,
@@ -68,6 +77,15 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Check if cooldown is enabled for this repository type
         if (!this.settings.enabledFor(request.repoType())) {
+            EcsLogger.debug("com.artipie.cooldown")
+                .message("Cooldown disabled for repo type - allowing")
+                .eventCategory("cooldown")
+                .eventAction("evaluate")
+                .eventOutcome("allowed")
+                .field("repository.type", request.repoType())
+                .field("package.name", request.artifact())
+                .field("package.version", request.version())
+                .log();
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
         
@@ -84,6 +102,16 @@ final class JdbcCooldownService implements CooldownService {
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
         
+        EcsLogger.debug("com.artipie.cooldown")
+            .message("Evaluating cooldown for artifact")
+            .eventCategory("cooldown")
+            .eventAction("evaluate")
+            .field("repository.type", request.repoType())
+            .field("repository.name", request.repoName())
+            .field("package.name", request.artifact())
+            .field("package.version", request.version())
+            .log();
+        
         // Use cache (3-tier: L1 -> L2 -> Database)
         return this.cache.isBlocked(
             request.repoName(),
@@ -92,14 +120,39 @@ final class JdbcCooldownService implements CooldownService {
             () -> this.evaluateFromDatabase(request, inspector)
         ).thenCompose(blocked -> {
             if (blocked) {
+                EcsLogger.info("com.artipie.cooldown")
+                    .message("Artifact BLOCKED by cooldown (cache/db)")
+                    .eventCategory("cooldown")
+                    .eventAction("evaluate")
+                    .eventOutcome("blocked")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .log();
                 // Blocked: Fetch full block details from database (async)
                 return this.getBlockResult(request);
             } else {
+                EcsLogger.debug("com.artipie.cooldown")
+                    .message("Artifact ALLOWED by cooldown")
+                    .eventCategory("cooldown")
+                    .eventAction("evaluate")
+                    .eventOutcome("allowed")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
         }).whenComplete((result, error) -> {
             if (error != null) {
                 this.circuitBreaker.recordFailure();
+                EcsLogger.error("com.artipie.cooldown")
+                    .message("Cooldown evaluation failed")
+                    .eventCategory("cooldown")
+                    .eventAction("evaluate")
+                    .eventOutcome("failure")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .field("error.message", error.getMessage())
+                    .log();
             } else {
                 this.circuitBreaker.recordSuccess();
             }
@@ -203,9 +256,49 @@ final class JdbcCooldownService implements CooldownService {
                 request.artifact(),
                 request.version()
             );
-            if (record.isPresent() && record.get().status() == BlockStatus.ACTIVE) {
-                final List<DbBlockRecord> deps = this.repository.dependenciesOf(record.get().id());
-                return CooldownResult.blocked(this.toCooldownBlock(record.get(), deps));
+            if (record.isPresent()) {
+                final DbBlockRecord rec = record.get();
+                EcsLogger.info("com.artipie.cooldown")
+                    .message("Block record found in database")
+                    .eventCategory("cooldown")
+                    .eventAction("block_lookup")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .field("block.status", rec.status().name())
+                    .field("block.reason", rec.reason().name())
+                    .field("block.blockedAt", rec.blockedAt().toString())
+                    .field("block.blockedUntil", rec.blockedUntil().toString())
+                    .log();
+                
+                if (rec.status() == BlockStatus.ACTIVE) {
+                    // Check if block has expired
+                    final Instant now = Instant.now();
+                    if (rec.blockedUntil().isBefore(now)) {
+                        EcsLogger.info("com.artipie.cooldown")
+                            .message("Block has EXPIRED - allowing artifact")
+                            .eventCategory("cooldown")
+                            .eventAction("block_expired")
+                            .field("package.name", request.artifact())
+                            .field("package.version", request.version())
+                            .field("block.blockedUntil", rec.blockedUntil().toString())
+                            .log();
+                        // Expire the block
+                        this.expire(rec, now);
+                        // Update cache to allowed
+                        this.cache.put(request.repoName(), request.artifact(), request.version(), false);
+                        return CooldownResult.allowed();
+                    }
+                    final List<DbBlockRecord> deps = this.repository.dependenciesOf(rec.id());
+                    return CooldownResult.blocked(this.toCooldownBlock(rec, deps));
+                }
+            } else {
+                EcsLogger.warn("com.artipie.cooldown")
+                    .message("Cache said blocked but no DB record found - allowing")
+                    .eventCategory("cooldown")
+                    .eventAction("block_lookup")
+                    .field("package.name", request.artifact())
+                    .field("package.version", request.version())
+                    .log();
             }
             return CooldownResult.allowed();
         }, this.executor);
@@ -319,6 +412,20 @@ final class JdbcCooldownService implements CooldownService {
         // Use per-repo-type minimum allowed age
         final Duration fresh = this.settings.minimumAllowedAgeFor(request.repoType());
         final Instant date = release.get();
+        
+        // Debug logging to diagnose blocking decisions
+        EcsLogger.info("com.artipie.cooldown")
+            .message("Evaluating freshness")
+            .eventCategory("cooldown")
+            .eventAction("freshness_check")
+            .field("package.name", request.artifact())
+            .field("package.version", request.version())
+            .field("release.date", date.toString())
+            .field("cooldown.period", fresh.toString())
+            .field("release.plus.cooldown", date.plus(fresh).toString())
+            .field("request.time", now.toString())
+            .field("is.fresh", date.plus(fresh).isAfter(now))
+            .log();
 
         if (date.plus(fresh).isAfter(now)
             && !fresh.isZero() && !fresh.isNegative()) {

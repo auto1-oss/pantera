@@ -3,14 +3,39 @@ meta:
     type: fs
     path: /var/artipie/repo
   
+  # JWT token settings
+  jwt:
+    # Set to true for tokens that expire, false for permanent tokens
+    expires: true
+    # Token lifetime in seconds (default: 86400 = 24 hours)
+    expiry-seconds: 86400
+    # Secret key for signing tokens (use env var in production)
+    secret: ${JWT_SECRET}
+  
   credentials:
-    - type: env
-    - type: artipie
+    # - type: env
+    # - type: artipie
     - type: keycloak
       url: "http://keycloak:8080"
       realm: artipie
-      "client-id": artipie
-      "client-password": T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ
+      client-id: artipie
+      client-password: ${KEYCLOAK_CLIENT_SECRET}
+      user-domains:
+        - "local"
+
+    - type: jwt-password
+
+    - type: okta
+      issuer: ${OKTA_ISSUER}
+      client-id: ${OKTA_CLIENT_ID}
+      client-secret: ${OKTA_CLIENT_SECRET}
+      redirect-uri: ${OKTA_REDIRECT_URI}
+      scope: "openid email profile groups"
+      groups-claim: "groups"
+      group-roles:
+        "artipie_readers": "reader"
+      user-domains:
+        - "auto1.local"
   
   policy:
     type: artipie
@@ -20,19 +45,20 @@ meta:
       path: /var/artipie/security
   
   cooldown:
+    # Global default: disabled. Only enable for specific repo types below.
     enabled: false
-    repo_types:
-      maven-proxy:
-        enabled: false
     # Use duration strings: m = minutes, h = hours, d = days
     minimum_allowed_age: 7d
+    repo_types:
+      npm-proxy:
+        enabled: true
   
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432
     postgres_database: artifacts
-    postgres_user: artipie
-    postgres_password: artipie
+    postgres_user: ${POSTGRES_USER}
+    postgres_password: ${POSTGRES_PASSWORD}
     pool_max_size: 50
     pool_min_idle: 10
   
@@ -119,3 +145,13 @@ meta:
         l1Ttl: 24h
         l2MaxSize: 1000000
         l2Ttl: 72h
+
+    cooldown-metadata:
+      ttl: 30d
+      maxSize: 50000
+      valkey:
+        enabled: true
+        l1MaxSize: 50000
+        l1Ttl: 30d
+        l2MaxSize: 500000
+        l2Ttl: 30d

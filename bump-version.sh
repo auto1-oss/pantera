@@ -53,15 +53,17 @@ else
     sed -i "s|auto1-artipie:$OLD_VERSION|auto1-artipie:$NEW_VERSION|" artipie-main/docker-compose/docker-compose.yaml
 fi
 
-# 3. Update docker-compose environment variable
-echo "3. Updating docker-compose.yaml (ARTIPIE_VERSION)..."
+# 3. Update docker-compose environment variable (now in .env file)
+echo "3. Updating .env and .env.example (ARTIPIE_VERSION)..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/docker-compose.yaml
+    sed -i '' "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/.env
+    sed -i '' "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/.env.example
 else
-    sed -i "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/docker-compose.yaml
+    sed -i "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/.env
+    sed -i "s|ARTIPIE_VERSION=$OLD_VERSION|ARTIPIE_VERSION=$NEW_VERSION|" artipie-main/docker-compose/.env.example
 fi
 
-echo "   ✅ Updated docker-compose.yaml"
+echo "   ✅ Updated .env and .env.example"
 
 # 4. Update Dockerfile ARTIPIE_VERSION
 echo "4. Updating Dockerfile (ARTIPIE_VERSION)..."
@@ -78,7 +80,8 @@ echo ""
 echo "Changes made:"
 echo "  - All 33 Maven modules: $OLD_VERSION → $NEW_VERSION"
 echo "  - docker-compose.yaml: image tag updated"
-echo "  - docker-compose.yaml: ARTIPIE_VERSION updated"
+echo "  - .env: ARTIPIE_VERSION updated"
+echo "  - .env.example: ARTIPIE_VERSION updated"
 echo "  - Dockerfile: ARTIPIE_VERSION updated"
 echo ""
 echo "Verification:"
@@ -97,5 +100,6 @@ echo "  7. Tag:             git tag v$NEW_VERSION"
 echo "  8. Push:            git push && git push --tags"
 echo ""
 echo "To revert changes:"
-echo "  git checkout pom.xml */pom.xml artipie-main/docker-compose/docker-compose.yaml artipie-main/Dockerfile"
+echo "  git checkout pom.xml */pom.xml artipie-main/docker-compose/docker-compose.yaml artipie-main/docker-compose/.env.example artipie-main/Dockerfile"
+echo "  # Note: .env is gitignored - manually update ARTIPIE_VERSION if needed"
 echo ""

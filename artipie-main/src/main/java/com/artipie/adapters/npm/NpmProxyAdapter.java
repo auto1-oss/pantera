@@ -7,6 +7,7 @@ package com.artipie.adapters.npm;
 import com.artipie.asto.Content;
 import com.artipie.asto.Storage;
 import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.metadata.CooldownMetadataService;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
@@ -49,12 +50,14 @@ public final class NpmProxyAdapter implements Slice {
      * @param cfg Repository configuration
      * @param queue Proxy artifact events queue
      * @param cooldown Cooldown service
+     * @param cooldownMetadata Cooldown metadata filtering service
      */
     public NpmProxyAdapter(
         final ClientSlices client,
         final RepoConfig cfg,
         final Optional<Queue<ProxyArtifactEvent>> queue,
-        final CooldownService cooldown
+        final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         final Optional<URL> baseUrl = Optional.of(cfg.url());
@@ -87,6 +90,7 @@ public final class NpmProxyAdapter implements Slice {
                         cfg.name(),
                         cfg.type(),
                         cooldown,
+                        cooldownMetadata,
                         remoteSlice,  // For security audit pass-through
                         baseUrl
                     );

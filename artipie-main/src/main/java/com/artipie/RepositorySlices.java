@@ -128,6 +128,11 @@ public class RepositorySlices {
     private final CooldownService cooldown;
 
     /**
+     * Cooldown metadata filtering service.
+     */
+    private final com.artipie.cooldown.metadata.CooldownMetadataService cooldownMetadata;
+
+    /**
      * Shared Jetty HTTP clients keyed by settings signature.
      */
     private final SharedJettyClients sharedClients;
@@ -146,6 +151,7 @@ public class RepositorySlices {
         this.repos = repos;
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
+        this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
         this.sharedClients = new SharedJettyClients();
         this.slices = CacheBuilder.newBuilder()
             .removalListener(
@@ -521,7 +527,8 @@ public class RepositorySlices {
                         clientSlices,
                         cfg,
                         settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                        this.cooldown
+                        this.cooldown,
+                        this.cooldownMetadata
                     ),
                     settings.httpClientSettings().proxyTimeout()
                 );

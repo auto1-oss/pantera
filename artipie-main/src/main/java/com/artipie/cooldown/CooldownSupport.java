@@ -6,6 +6,10 @@ package com.artipie.cooldown;
 
 import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.metadata.CooldownMetadataService;
+import com.artipie.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.artipie.cooldown.metadata.FilteredMetadataCache;
+import com.artipie.cooldown.metadata.NoopCooldownMetadataService;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.settings.Settings;
 import java.util.concurrent.Executor;
@@ -72,5 +76,48 @@ public final class CooldownSupport {
                     .log();
                 return NoopCooldownService.INSTANCE;
             });
+    }
+
+    /**
+     * Create a CooldownMetadataService for filtering package metadata.
+     *
+     * @param cooldownService The cooldown service for evaluations
+     * @param settings Application settings
+     * @return Metadata service (Noop if cooldown disabled)
+     */
+    public static CooldownMetadataService createMetadataService(
+        final CooldownService cooldownService,
+        final Settings settings
+    ) {
+        if (cooldownService instanceof NoopCooldownService) {
+            return NoopCooldownMetadataService.INSTANCE;
+        }
+        // Get cooldown settings and cache from the JdbcCooldownService
+        if (!(cooldownService instanceof JdbcCooldownService)) {
+            return NoopCooldownMetadataService.INSTANCE;
+        }
+        final JdbcCooldownService jdbc = (JdbcCooldownService) cooldownService;
+        
+        // Create metadata cache with Valkey L2 if available
+        final FilteredMetadataCache metadataCache = 
+            com.artipie.cache.GlobalCacheConfig.valkeyConnection()
+                .map(FilteredMetadataCache::new)
+                .orElseGet(FilteredMetadataCache::new);
+        
+        EcsLogger.info("com.artipie.cooldown")
+            .message("Created CooldownMetadataService with L2=" + 
+                (com.artipie.cache.GlobalCacheConfig.valkeyConnection().isPresent() ? "Valkey" : "none"))
+            .eventCategory("configuration")
+            .eventAction("metadata_service_init")
+            .log();
+        
+        return new CooldownMetadataServiceImpl(
+            cooldownService,
+            settings.cooldown(),
+            jdbc.cache(),
+            metadataCache,
+            COOLDOWN_EXECUTOR,
+            50 // max versions to evaluate
+        );
     }
 }
