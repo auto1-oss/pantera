@@ -74,12 +74,13 @@ public final class NpmProxyAdapter implements Slice {
                         GenericAuthenticator.create(client, remote.username(), remote.pwd())
                     );
                     
-                    // Create NpmProxy for this remote
+                    // Create NpmProxy for this remote with 12h metadata TTL
                     final NpmProxy npmProxy = new NpmProxy(
                         asto.orElseThrow(() -> new IllegalStateException(
                             "npm-proxy requires storage to be set"
                         )),
-                        remoteSlice
+                        remoteSlice,
+                        NpmProxy.DEFAULT_METADATA_TTL
                     );
                     
                     // Wrap with NpmProxySlice

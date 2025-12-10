@@ -4,6 +4,7 @@
  */
 package com.artipie.http;
 
+import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
@@ -43,7 +44,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Cache cache
     ) {
         this(
-            clients, remote, auth, cache, Optional.empty(), "*",
+            clients, remote, auth, cache, Optional.empty(), Optional.empty(), "*",
             "go-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
     }
@@ -61,7 +62,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Authenticator authenticator
     ) {
         this(
-            client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
+            client, uri, authenticator, Cache.NOP, Optional.empty(), Optional.empty(), "*",
             "go-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
     }
@@ -88,24 +89,53 @@ public final class GoProxySlice extends Slice.Wrap {
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown
     ) {
-        this(remote(clients, remote, auth), cache, events, rname, rtype, cooldown);
+        this(clients, remote, auth, cache, events, Optional.empty(), rname, rtype, cooldown);
     }
 
-    GoProxySlice(
-        final Slice remote,
+    /**
+     * New Go proxy slice with cache and storage for TTL-based metadata caching.
+     *
+     * @param clients HTTP clients
+     * @param remote Remote URI
+     * @param auth Authenticator
+     * @param cache Repository cache
+     * @param events Artifact events queue
+     * @param storage Optional storage for TTL-based metadata cache
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     */
+    public GoProxySlice(
+        final ClientSlices clients,
+        final URI remote,
+        final Authenticator auth,
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
+        final Optional<Storage> storage,
         final String rname,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown
     ) {
-        this(remote, cache, events, rname, rtype, cooldown, new GoCooldownInspector(remote));
+        this(remote(clients, remote, auth), cache, events, storage, rname, rtype, cooldown);
     }
 
     GoProxySlice(
         final Slice remote,
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
+        final Optional<Storage> storage,
+        final String rname,
+        final String rtype,
+        final com.artipie.cooldown.CooldownService cooldown
+    ) {
+        this(remote, cache, events, storage, rname, rtype, cooldown, new GoCooldownInspector(remote));
+    }
+
+    GoProxySlice(
+        final Slice remote,
+        final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final Optional<Storage> storage,
         final String rname,
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
@@ -119,7 +149,7 @@ public final class GoProxySlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.GET,
-                    new CachedProxySlice(remote, cache, events, rname, rtype, cooldown, inspector)
+                    new CachedProxySlice(remote, cache, events, storage, rname, rtype, cooldown, inspector)
                 ),
                 new RtRulePath(
                     RtRule.FALLBACK,

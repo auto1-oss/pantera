@@ -14,13 +14,23 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Caches 404 (Not Found) responses to avoid repeated upstream requests for missing artifacts.
- * This is critical for proxy repositories to avoid hammering upstream (Maven Central) with
- * requests for artifacts that don't exist (e.g., optional dependencies).
- * 
- * Performance impact: Eliminates 100% of repeated 404 requests, reducing load on both
- * Artipie and upstream repositories.
- * 
+ * Maven Proxy Negative Cache - Caches 404 (Not Found) responses from upstream to avoid repeated
+ * requests for missing artifacts. This is critical for proxy repositories to avoid hammering
+ * upstream (Maven Central) with requests for artifacts that don't exist (e.g., optional dependencies).
+ *
+ * <p>Key format: {@code negative:maven-proxy:{repoName}:{path}}</p>
+ *
+ * <p>Two-tier architecture:</p>
+ * <ul>
+ *   <li>L1 (Caffeine): Fast in-memory cache</li>
+ *   <li>L2 (Valkey/Redis): Distributed cache for multi-node deployments</li>
+ * </ul>
+ *
+ * <p>Performance impact: Eliminates 100% of repeated 404 requests, reducing load on both
+ * Artipie and upstream repositories.</p>
+ *
+ * <p>Distinct from Group Negative Cache which caches per-member 404s within a group.</p>
+ *
  * @since 0.11
  */
 public final class NegativeCache {
@@ -204,8 +214,8 @@ public final class NegativeCache {
         
         // Check L2 if enabled
         if (this.twoTier) {
-            final String redisKey = "maven:negative:" + this.repoName + ":" + key.string();
-            
+            final String redisKey = "negative:maven-proxy:" + this.repoName + ":" + key.string();
+
             return this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
@@ -256,7 +266,7 @@ public final class NegativeCache {
         
         // Cache in L2 (if enabled)
         if (this.twoTier) {
-            final String redisKey = "maven:negative:" + this.repoName + ":" + key.string();
+            final String redisKey = "negative:maven-proxy:" + this.repoName + ":" + key.string();
             final byte[] value = {1};  // Sentinel value
             final long seconds = this.ttl.getSeconds();
             this.l2.setex(redisKey, seconds, value);
@@ -275,24 +285,24 @@ public final class NegativeCache {
         
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String redisKey = "maven:negative:" + this.repoName + ":" + key.string();
+            final String redisKey = "negative:maven-proxy:" + this.repoName + ":" + key.string();
             this.l2.del(redisKey);
         }
     }
-    
+
     /**
      * Invalidate all entries matching a prefix pattern.
      * Thread-safe - Caffeine handles synchronization.
-     * 
+     *
      * @param prefix Key prefix to match
      */
     public void invalidatePrefix(final String prefix) {
         // Invalidate L1
         this.notFoundCache.asMap().keySet().removeIf(key -> key.string().startsWith(prefix));
-        
+
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String scanPattern = "maven:negative:" + this.repoName + ":" + prefix + "*";
+            final String scanPattern = "negative:maven-proxy:" + this.repoName + ":" + prefix + "*";
             this.l2.keys(scanPattern).thenAccept(keys -> {
                 if (keys != null && !keys.isEmpty()) {
                     this.l2.del(keys.toArray(new String[0]));
@@ -300,7 +310,7 @@ public final class NegativeCache {
             });
         }
     }
-    
+
     /**
      * Clear entire cache.
      * Thread-safe - Caffeine handles synchronization.
@@ -308,10 +318,10 @@ public final class NegativeCache {
     public void clear() {
         // Clear L1
         this.notFoundCache.invalidateAll();
-        
+
         // Clear L2 (if enabled)
         if (this.twoTier) {
-            this.l2.keys("maven:negative:" + this.repoName + ":*").thenAccept(keys -> {
+            this.l2.keys("negative:maven-proxy:" + this.repoName + ":*").thenAccept(keys -> {
                 if (keys != null && !keys.isEmpty()) {
                     this.l2.del(keys.toArray(new String[0]));
                 }

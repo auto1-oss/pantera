@@ -172,10 +172,11 @@ final class CachedProxySlice implements Slice {
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadata.isPresent() && !Objects.equals(this.cache, Cache.NOP);
         this.negativeCache = new NegativeCache(
-            negativeCacheTtl, 
-            negativeCacheEnabled, 
+            negativeCacheTtl,
+            negativeCacheEnabled,
             50_000,  // default max size
             null,    // use global Valkey config
+            rtype,   // Repository type for cache key namespacing
             rname    // CRITICAL: Include repo name for cache isolation
         );
     }

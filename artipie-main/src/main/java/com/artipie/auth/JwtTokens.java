@@ -63,4 +63,14 @@ public final class JwtTokens implements Tokens {
             this.options
         );
     }
+
+    @Override
+    public String generate(final AuthUser user, final boolean permanent) {
+        final JWTOptions opts = permanent ? new JWTOptions() : this.options;
+        return this.provider.generateToken(
+            new JsonObject().put(AuthTokenRest.SUB, user.name())
+                .put(AuthTokenRest.CONTEXT, user.authContext()),
+            opts
+        );
+    }
 }

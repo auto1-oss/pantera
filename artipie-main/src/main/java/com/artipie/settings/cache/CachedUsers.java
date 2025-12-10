@@ -224,22 +224,26 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 // Compute from origin (synchronous)
                 final Optional<AuthUser> result = this.origin.user(user, pass);
 
-                // Cache in L1
-                final long putStartNanos = System.nanoTime();
-                this.cached.put(key, result);
-                final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
+                // Only cache successful auth - don't cache failures
+                // This prevents caching MFA failures that might succeed on retry
+                if (result.isPresent()) {
+                    // Cache in L1
+                    final long putStartNanos = System.nanoTime();
+                    this.cached.put(key, result);
+                    final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
 
-                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                    com.artipie.metrics.MicrometerMetrics.getInstance()
-                        .recordCacheOperationDuration("auth", "l1", "put", putDurationMs);
-                }
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                            .recordCacheOperationDuration("auth", "l1", "put", putDurationMs);
+                    }
 
-                // Cache in L2 (if enabled) - fire and forget
-                if (this.twoTier) {
-                    // Key is already hashed - safe for Redis storage
-                    final String redisKey = "auth:" + key;
-                    final byte[] value = serializeUser(result);
-                    this.l2.setex(redisKey, this.ttl.getSeconds(), value);
+                    // Cache in L2 (if enabled) - fire and forget
+                    if (this.twoTier) {
+                        // Key is already hashed - safe for Redis storage
+                        final String redisKey = "auth:" + key;
+                        final byte[] value = serializeUser(result);
+                        this.l2.setex(redisKey, this.ttl.getSeconds(), value);
+                    }
                 }
 
                 return result;
@@ -323,21 +327,24 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
 
                     return CompletableFuture.supplyAsync(() -> {
                         final Optional<AuthUser> result = this.origin.user(user, pass);
-                        this.cached.put(key, result);
-
-
-
-                        final byte[] value = serializeUser(result);
-                        this.l2.setex(redisKey, this.ttl.getSeconds(), value);
+                        // Only cache successful auth
+                        if (result.isPresent()) {
+                            this.cached.put(key, result);
+                            final byte[] value = serializeUser(result);
+                            this.l2.setex(redisKey, this.ttl.getSeconds(), value);
+                        }
                         return result;
                     });
                 });
         }
-        
+
         // No L2: Fetch from origin (sync, then wrap in CompletableFuture)
         return CompletableFuture.supplyAsync(() -> {
             final Optional<AuthUser> result = this.origin.user(user, pass);
-            this.cached.put(key, result);
+            // Only cache successful auth
+            if (result.isPresent()) {
+                this.cached.put(key, result);
+            }
             return result;
         });
     }

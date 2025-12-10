@@ -13,6 +13,7 @@ import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.slice.KeyFromPath;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -61,6 +62,11 @@ public final class GroupSlice implements Slice {
      * Timeout for member requests.
      */
     private final Duration timeout;
+
+    /**
+     * Negative cache for member 404s.
+     */
+    private final GroupNegativeCache negativeCache;
 
     /**
      * Constructor (maintains old API for drop-in compatibility).
@@ -118,10 +124,11 @@ public final class GroupSlice implements Slice {
     ) {
         this.group = Objects.requireNonNull(group, "group");
         this.timeout = Duration.ofSeconds(timeoutSeconds);
-        
+        this.negativeCache = new GroupNegativeCache(group);
+
         // Deduplicate members (simple flattening for now)
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
-        
+
         // Create MemberSlice wrappers with circuit breakers
         this.members = flatMembers.stream()
             .map(name -> new MemberSlice(
@@ -192,6 +199,8 @@ public final class GroupSlice implements Slice {
         // CRITICAL: Consume incoming body ONCE before parallel queries
         // For POST requests (npm audit), we need to preserve the body bytes
         // and create new Content instances for each member
+        final Key pathKey = new KeyFromPath(line.uri().getPath());
+
         return body.asBytesFuture().thenCompose(requestBytes -> {
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
@@ -205,7 +214,7 @@ public final class GroupSlice implements Slice {
                         if (err != null) {
                             handleMemberFailure(member, err, completed, pending, result);
                         } else {
-                            handleMemberResponse(member, resp, completed, pending, result, startTime);
+                            handleMemberResponse(member, resp, completed, pending, result, startTime, pathKey);
                         }
                     });
             }
@@ -229,32 +238,53 @@ public final class GroupSlice implements Slice {
         final Headers headers,
         final byte[] requestBytes
     ) {
-        if (member.isCircuitOpen()) {
-            EcsLogger.warn("com.artipie.group")
-                .message("Member circuit OPEN, skipping")
-                .eventCategory("repository")
-                .eventAction("group_query")
-                .eventOutcome("failure")
-                .field("repository.name", this.group)
-                .field("member.name", member.name())
-                .log();
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.unavailable().build()
-            );
-        }
+        final Key pathKey = new KeyFromPath(line.uri().getPath());
 
-        // Create new Content instance from buffered bytes for each member
-        // This allows parallel requests with POST body (e.g., npm audit)
-        final Content memberBody = requestBytes.length > 0
-            ? new Content.From(requestBytes)
-            : Content.EMPTY;
+        // Check negative cache FIRST (L1 then L2 if miss)
+        return this.negativeCache.isNotFoundAsync(member.name(), pathKey)
+            .thenCompose(isNotFound -> {
+                if (isNotFound) {
+                    EcsLogger.debug("com.artipie.group")
+                        .message("Member negative cache HIT")
+                        .eventCategory("repository")
+                        .eventAction("group_query")
+                        .eventOutcome("cache_hit")
+                        .field("repository.name", this.group)
+                        .field("member.name", member.name())
+                        .field("url.path", pathKey.string())
+                        .log();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.notFound().build()
+                    );
+                }
 
-        final RequestLine rewritten = member.rewritePath(line);
-        return member.slice().response(
-            rewritten,
-            dropFullPathHeader(headers),
-            memberBody
-        );
+                if (member.isCircuitOpen()) {
+                    EcsLogger.warn("com.artipie.group")
+                        .message("Member circuit OPEN, skipping")
+                        .eventCategory("repository")
+                        .eventAction("group_query")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group)
+                        .field("member.name", member.name())
+                        .log();
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable().build()
+                    );
+                }
+
+                // Create new Content instance from buffered bytes for each member
+                // This allows parallel requests with POST body (e.g., npm audit)
+                final Content memberBody = requestBytes.length > 0
+                    ? new Content.From(requestBytes)
+                    : Content.EMPTY;
+
+                final RequestLine rewritten = member.rewritePath(line);
+                return member.slice().response(
+                    rewritten,
+                    dropFullPathHeader(headers),
+                    memberBody
+                );
+            });
     }
 
     /**
@@ -266,7 +296,8 @@ public final class GroupSlice implements Slice {
         final AtomicBoolean completed,
         final AtomicInteger pending,
         final CompletableFuture<Response> result,
-        final long startTime
+        final long startTime,
+        final Key pathKey
     ) {
         final RsStatus status = resp.status();
 
@@ -319,8 +350,33 @@ public final class GroupSlice implements Slice {
             } else {
                 drainBody(member.name(), resp.body());
             }
+        } else if (status == RsStatus.NOT_FOUND) {
+            // 404: Cache in negative cache and try next member
+            this.negativeCache.cacheNotFound(member.name(), pathKey);
+            EcsLogger.debug("com.artipie.group")
+                .message("Member returned 404, cached in negative cache")
+                .eventCategory("repository")
+                .eventAction("group_query")
+                .eventOutcome("not_found")
+                .field("repository.name", this.group)
+                .field("member.name", member.name())
+                .field("url.path", pathKey.string())
+                .log();
+            recordGroupMemberRequest(member.name(), "not_found");
+            drainBody(member.name(), resp.body());
+            if (pending.decrementAndGet() == 0 && !completed.get()) {
+                EcsLogger.warn("com.artipie.group")
+                    .message("All members exhausted, returning 404")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .log();
+                recordNotFound();
+                result.complete(ResponseBuilder.notFound().build());
+            }
         } else {
-            // Other errors (404, 500, etc.): try next member
+            // Other errors (500, etc.): try next member (don't cache)
             EcsLogger.warn("com.artipie.group")
                 .message("Member returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("repository")
@@ -330,7 +386,7 @@ public final class GroupSlice implements Slice {
                 .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .log();
-            recordGroupMemberRequest(member.name(), status.code() == 404 ? "not_found" : "error");
+            recordGroupMemberRequest(member.name(), "error");
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
                 EcsLogger.warn("com.artipie.group")

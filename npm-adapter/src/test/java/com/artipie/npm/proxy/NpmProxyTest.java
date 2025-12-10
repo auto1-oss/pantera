@@ -172,7 +172,8 @@ public final class NpmProxyTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        this.npm = new NpmProxy(this.storage, this.remote);
+        // Use 1-hour TTL for tests (shorter than default 12h for faster testing)
+        this.npm = new NpmProxy(this.storage, this.remote, java.time.Duration.ofHours(1));
         Mockito.doNothing().when(this.remote).close();
     }
 
@@ -249,6 +250,88 @@ public final class NpmProxyTest {
             );
             Mockito.verify(NpmProxyTest.this.storage).getPackage(name);
             Mockito.verify(NpmProxyTest.this.remote).loadPackage(name);
+        }
+
+        @Test
+        public void getsMetadataOnlyRefreshesWhenStale() throws IOException {
+            final String name = "asdas";
+            // Original metadata is 2 hours old (exceeds 1h TTL)
+            final NpmPackage.Metadata stale = new NpmPackage.Metadata(
+                NpmProxyTest.LAST_MODIFIED,
+                OffsetDateTime.now().minus(2, ChronoUnit.HOURS)
+            );
+            final NpmPackage refreshed = defaultPackage(OffsetDateTime.now());
+            Mockito.doReturn(Maybe.just(stale))
+                .when(NpmProxyTest.this.storage).getPackageMetadata(name);
+            Mockito.doReturn(Maybe.just(refreshed))
+                .when(NpmProxyTest.this.remote).loadPackage(name);
+            Mockito.when(
+                NpmProxyTest.this.storage.save(refreshed)
+            ).thenReturn(Completable.complete());
+            final NpmPackage.Metadata result =
+                NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet();
+            MatcherAssert.assertThat(
+                "Should return refreshed metadata",
+                result.lastRefreshed(),
+                new IsSame<>(refreshed.meta().lastRefreshed())
+            );
+            Mockito.verify(NpmProxyTest.this.storage).getPackageMetadata(name);
+            Mockito.verify(NpmProxyTest.this.remote).loadPackage(name);
+            Mockito.verify(NpmProxyTest.this.storage).save(refreshed);
+        }
+
+        @Test
+        public void getsMetadataOnlyFallsBackToStaleOnRemoteFailure() throws IOException {
+            final String name = "asdas";
+            // Original metadata is 2 hours old (exceeds 1h TTL)
+            final NpmPackage.Metadata stale = new NpmPackage.Metadata(
+                NpmProxyTest.LAST_MODIFIED,
+                OffsetDateTime.now().minus(2, ChronoUnit.HOURS)
+            );
+            Mockito.doReturn(Maybe.just(stale))
+                .when(NpmProxyTest.this.storage).getPackageMetadata(name);
+            // Remote returns empty (failure/not found)
+            Mockito.when(
+                NpmProxyTest.this.remote.loadPackage(name)
+            ).thenReturn(Maybe.empty());
+            final NpmPackage.Metadata result =
+                NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet();
+            MatcherAssert.assertThat(
+                "Should fall back to stale metadata when remote fails",
+                result,
+                new IsSame<>(stale)
+            );
+            Mockito.verify(NpmProxyTest.this.storage).getPackageMetadata(name);
+            Mockito.verify(NpmProxyTest.this.remote).loadPackage(name);
+        }
+    }
+
+    /**
+     * Tests with fresh metadata (TTL not exceeded).
+     * @since 0.2
+     */
+    @Nested
+    class MetadataStillFresh {
+        @Test
+        public void getsMetadataOnlyFromCacheWithoutRemoteCall() throws IOException {
+            final String name = "asdas";
+            // Fresh metadata (30 minutes old, within 1h TTL)
+            final NpmPackage.Metadata fresh = new NpmPackage.Metadata(
+                NpmProxyTest.LAST_MODIFIED,
+                OffsetDateTime.now().minus(30, ChronoUnit.MINUTES)
+            );
+            Mockito.doReturn(Maybe.just(fresh))
+                .when(NpmProxyTest.this.storage).getPackageMetadata(name);
+            final NpmPackage.Metadata result =
+                NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet();
+            MatcherAssert.assertThat(
+                "Should return cached metadata without calling remote",
+                result,
+                new IsSame<>(fresh)
+            );
+            Mockito.verify(NpmProxyTest.this.storage).getPackageMetadata(name);
+            // Remote should NOT be called when cache is fresh
+            Mockito.verify(NpmProxyTest.this.remote, Mockito.never()).loadPackage(name);
         }
     }
 }

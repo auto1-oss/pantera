@@ -14,12 +14,21 @@ import com.artipie.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 
 /**
  * NPM Proxy.
  * @since 0.1
  */
 public class NpmProxy {
+
+    /**
+     * Default metadata TTL (12 hours).
+     * Metadata (package.json with version lists) should be refreshed periodically
+     * to pick up new package versions from upstream.
+     */
+    public static final Duration DEFAULT_METADATA_TTL = Duration.ofHours(12);
 
     /**
      * The storage.
@@ -32,6 +41,11 @@ public class NpmProxy {
     private final NpmRemote remote;
 
     /**
+     * Metadata TTL - how long before cached metadata is considered stale.
+     */
+    private final Duration metadataTtl;
+
+    /**
      * Ctor.
      * @param remote Uri remote
      * @param storage Adapter storage
@@ -40,7 +54,8 @@ public class NpmProxy {
     public NpmProxy(final URI remote, final Storage storage, final ClientSlices client) {
         this(
             new RxNpmProxyStorage(new RxStorageWrapper(storage)),
-            new HttpNpmRemote(new UriClientSlice(client, remote))
+            new HttpNpmRemote(new UriClientSlice(client, remote)),
+            DEFAULT_METADATA_TTL
         );
     }
 
@@ -52,7 +67,22 @@ public class NpmProxy {
     public NpmProxy(final Storage storage, final Slice client) {
         this(
             new RxNpmProxyStorage(new RxStorageWrapper(storage)),
-            new HttpNpmRemote(client)
+            new HttpNpmRemote(client),
+            DEFAULT_METADATA_TTL
+        );
+    }
+
+    /**
+     * Ctor with configurable metadata TTL.
+     * @param storage Adapter storage
+     * @param client Client slice
+     * @param metadataTtl Metadata TTL duration
+     */
+    public NpmProxy(final Storage storage, final Slice client, final Duration metadataTtl) {
+        this(
+            new RxNpmProxyStorage(new RxStorageWrapper(storage)),
+            new HttpNpmRemote(client),
+            metadataTtl
         );
     }
 
@@ -62,8 +92,19 @@ public class NpmProxy {
      * @param remote Remote repository client
      */
     NpmProxy(final NpmProxyStorage storage, final NpmRemote remote) {
+        this(storage, remote, DEFAULT_METADATA_TTL);
+    }
+
+    /**
+     * Default-scoped ctor with TTL (for tests).
+     * @param storage NPM storage
+     * @param remote Remote repository client
+     * @param metadataTtl Metadata TTL duration
+     */
+    NpmProxy(final NpmProxyStorage storage, final NpmRemote remote, final Duration metadataTtl) {
         this.storage = storage;
         this.remote = remote;
+        this.metadataTtl = metadataTtl;
     }
 
     /**
@@ -80,34 +121,60 @@ public class NpmProxy {
     /**
      * Retrieve package metadata only (without loading full content into memory).
      * This is memory-efficient for large packages.
-     * Ensures package is fetched from remote if not cached.
+     * Checks TTL and refreshes from remote if stale.
      * @param name Package name
      * @return Package metadata or empty
      */
     public Maybe<NpmPackage.Metadata> getPackageMetadataOnly(final String name) {
-        // First try storage; on cache miss, fetch from remote, save, and return metadata
-        return this.storage.getPackageMetadata(name).switchIfEmpty(
-            Maybe.defer(() -> this.remotePackageMetadataAndSave(name))
-        );
+        return this.storage.getPackageMetadata(name)
+            .flatMap(metadata -> {
+                if (this.isStale(metadata.lastRefreshed())) {
+                    // TTL expired - try to refresh from upstream
+                    // If refresh fails, fall back to stale cached metadata
+                    return this.remotePackageMetadataAndSave(name)
+                        .switchIfEmpty(Maybe.just(metadata));
+                }
+                // Still fresh - return cached immediately
+                return Maybe.just(metadata);
+            })
+            .switchIfEmpty(Maybe.defer(() -> this.remotePackageMetadataAndSave(name)));
     }
 
     /**
      * Retrieve package content as reactive stream (without loading into memory).
      * This is memory-efficient for large packages.
-     * Ensures package is fetched from remote if not cached.
+     * Checks TTL and refreshes from remote if stale.
      * @param name Package name
      * @return Package content as reactive Content or empty
      */
     public Maybe<com.artipie.asto.Content> getPackageContentStream(final String name) {
-        // Check if package exists in storage
-        return this.storage.getPackageContent(name).switchIfEmpty(
-            Maybe.defer(() -> {
+        return this.storage.getPackageMetadata(name)
+            .flatMap(metadata -> {
+                if (this.isStale(metadata.lastRefreshed())) {
+                    // TTL expired - try to refresh from upstream
+                    return this.remotePackageAndSave(name)
+                        .flatMap(saved -> this.storage.getPackageContent(name))
+                        .switchIfEmpty(this.storage.getPackageContent(name));
+                }
+                // Still fresh - return cached content
+                return this.storage.getPackageContent(name);
+            })
+            .switchIfEmpty(Maybe.defer(() -> {
                 // Not in storage - fetch from remote, save, then reload content stream
                 return this.remotePackageAndSave(name).flatMap(
                     saved -> this.storage.getPackageContent(name)
                 );
-            })
-        );
+            }));
+    }
+
+    /**
+     * Check if cached metadata is stale based on TTL.
+     * @param lastRefreshed When the metadata was last refreshed
+     * @return True if metadata is stale and should be refreshed
+     */
+    private boolean isStale(final OffsetDateTime lastRefreshed) {
+        final Duration age = Duration.between(lastRefreshed, OffsetDateTime.now());
+        return age.compareTo(this.metadataTtl) > 0;
     }
 
     /**

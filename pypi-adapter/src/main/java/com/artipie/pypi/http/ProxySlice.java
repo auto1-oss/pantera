@@ -152,11 +152,23 @@ final class ProxySlice implements Slice {
     private final com.github.benmanes.caffeine.cache.Cache<String, URI> mirrors;
 
     /**
-     * Ctor.
-     * @param origin Origin
+     * Cache control for index pages (metadata).
+     * Uses TTL-based validation to refresh stale index pages from upstream.
+     */
+    private final CacheControl indexCacheControl;
+
+    /**
+     * Ctor with default 12h metadata TTL.
+     * @param clients HTTP clients
+     * @param auth Authenticator
+     * @param origin Origin slice
+     * @param backend Backend storage
      * @param cache Cache
      * @param events Artifact events queue
      * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
      */
     ProxySlice(final ClientSlices clients, final Authenticator auth,
         final Slice origin, final Storage backend, final Cache cache,
@@ -165,6 +177,32 @@ final class ProxySlice implements Slice {
         final String rtype,
         final CooldownService cooldown,
         final PyProxyCooldownInspector inspector) {
+        this(clients, auth, origin, backend, cache, events, rname, rtype,
+            cooldown, inspector, CacheTimeControl.DEFAULT_TTL);
+    }
+
+    /**
+     * Ctor with configurable metadata TTL.
+     * @param clients HTTP clients
+     * @param auth Authenticator
+     * @param origin Origin slice
+     * @param backend Backend storage
+     * @param cache Cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param inspector Cooldown inspector
+     * @param metadataTtl TTL for index page cache
+     */
+    ProxySlice(final ClientSlices clients, final Authenticator auth,
+        final Slice origin, final Storage backend, final Cache cache,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final String rname,
+        final String rtype,
+        final CooldownService cooldown,
+        final PyProxyCooldownInspector inspector,
+        final Duration metadataTtl) {
         this.origin = origin;
         this.clients = clients;
         this.auth = auth;
@@ -179,6 +217,7 @@ final class ProxySlice implements Slice {
             .expireAfterWrite(Duration.ofHours(1))
             .build();
         this.storage = new BlockingStorage(backend);
+        this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
     }
 
     @Override
@@ -325,7 +364,7 @@ final class ProxySlice implements Slice {
                     });
                 }
             ),
-            CacheControl.Standard.ALWAYS
+            this.indexCacheControl
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
@@ -340,7 +379,7 @@ final class ProxySlice implements Slice {
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
     }
-    
+
     private CompletableFuture<Response> serveArtifact(
         final RequestLine line, final Headers rqheaders, final ArtifactCoordinates info, final String user
     ) {

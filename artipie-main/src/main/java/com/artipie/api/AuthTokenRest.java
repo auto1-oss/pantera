@@ -67,6 +67,7 @@ public final class AuthTokenRest extends BaseRest {
         final String mfa = body.getString("mfa_code");
         final String name = body.getString("name");
         final String pass = body.getString("pass");
+        final boolean permanent = body.getBoolean("permanent", false);
         // Offload to worker thread to avoid blocking the event loop (MFA push polling)
         routing.vertx().<Optional<AuthUser>>executeBlocking(
             () -> {
@@ -82,8 +83,11 @@ public final class AuthTokenRest extends BaseRest {
             if (ar.succeeded()) {
                 final Optional<AuthUser> user = ar.result();
                 if (user.isPresent()) {
+                    final String token = permanent
+                        ? this.tokens.generate(user.get(), true)
+                        : this.tokens.generate(user.get());
                     routing.response().setStatusCode(HttpStatus.OK_200).end(
-                        new JsonObject().put("token", this.tokens.generate(user.get())).encode()
+                        new JsonObject().put("token", token).encode()
                     );
                 } else {
                     routing.response().setStatusCode(HttpStatus.UNAUTHORIZED_401).send();

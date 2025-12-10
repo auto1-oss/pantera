@@ -70,43 +70,48 @@ public final class NegativeCache {
     private final Duration ttl;
     
     /**
+     * Repository type for cache key namespacing.
+     */
+    private final String repoType;
+
+    /**
      * Repository name for cache key isolation.
      * Prevents cache collisions in group repositories.
      */
     private final String repoName;
-    
+
     /**
      * Create negative cache with default 24h TTL and 50K max size (enabled).
      */
     public NegativeCache() {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, null, "default");
+        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, null, "unknown", "default");
     }
-    
+
     /**
      * Create negative cache with Valkey connection (two-tier).
      * @param valkey Valkey connection for L2 cache
      */
     public NegativeCache(final ValkeyConnection valkey) {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, valkey, "default");
+        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, valkey, "unknown", "default");
     }
-    
+
     /**
      * Create negative cache with custom TTL and default max size.
      * @param ttl Time-to-live for cached 404s
      */
     public NegativeCache(final Duration ttl) {
-        this(ttl, true, DEFAULT_MAX_SIZE, null, "default");
+        this(ttl, true, DEFAULT_MAX_SIZE, null, "unknown", "default");
     }
-    
+
     /**
      * Create negative cache with custom TTL and enable flag.
      * @param ttl Time-to-live for cached 404s
      * @param enabled Whether negative caching is enabled
      */
     public NegativeCache(final Duration ttl, final boolean enabled) {
-        this(ttl, enabled, DEFAULT_MAX_SIZE, null, "default");
+        this(ttl, enabled, DEFAULT_MAX_SIZE, null, "unknown", "default");
     }
-    
+
     /**
      * Create negative cache with custom TTL, enable flag, and max size.
      * @param ttl Time-to-live for cached 404s
@@ -115,9 +120,9 @@ public final class NegativeCache {
      * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
      */
     public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey) {
-        this(ttl, enabled, maxSize, valkey, "default");
+        this(ttl, enabled, maxSize, valkey, "unknown", "default");
     }
-    
+
     /**
      * Create negative cache with custom TTL, enable flag, max size, and repository name.
      * @param ttl Time-to-live for cached 404s
@@ -127,23 +132,37 @@ public final class NegativeCache {
      * @param repoName Repository name for cache key isolation
      */
     public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey, final String repoName) {
+        this(ttl, enabled, maxSize, valkey, "unknown", repoName);
+    }
+
+    /**
+     * Create negative cache with custom TTL, enable flag, max size, repo type, and repository name.
+     * @param ttl Time-to-live for cached 404s
+     * @param enabled Whether negative caching is enabled
+     * @param maxSize Maximum number of entries (Window TinyLFU eviction)
+     * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
+     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
+     * @param repoName Repository name for cache key isolation
+     */
+    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey, final String repoType, final String repoName) {
         // Check global config if no explicit valkey passed
-        final ValkeyConnection actualValkey = (valkey != null) 
-            ? valkey 
+        final ValkeyConnection actualValkey = (valkey != null)
+            ? valkey
             : com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
-        
+
         this.enabled = enabled;
         this.twoTier = (actualValkey != null);
         this.l2 = this.twoTier ? actualValkey.async() : null;
         this.ttl = ttl;
+        this.repoType = repoType != null ? repoType : "unknown";
         this.repoName = repoName != null ? repoName : "default";
-        
+
         // L1: Hot data cache
         // If two-tier: Smaller cache with short TTL, L2 has the long TTL
         // If single-tier: Full cache with configured TTL
         final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : ttl;
         final int l1Size = this.twoTier ? Math.max(1000, maxSize / 10) : maxSize;
-        
+
         this.notFoundCache = Caffeine.newBuilder()
             .maximumSize(l1Size)
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
@@ -217,9 +236,9 @@ public final class NegativeCache {
         
         // Check L2 if enabled
         if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoName + ":" + key.string();
+            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
             final long l2StartNanos = System.nanoTime();
-            
+
             return this.l2.get(redisKey)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
@@ -268,7 +287,7 @@ public final class NegativeCache {
         
         // Cache in L2 (if enabled)
         if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoName + ":" + key.string();
+            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
             final byte[] value = new byte[]{1};  // Sentinel value
             final long seconds = this.ttl.getSeconds();
             this.l2.setex(redisKey, seconds, value);
@@ -287,24 +306,24 @@ public final class NegativeCache {
         
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String redisKey = "negative:" + this.repoName + ":" + key.string();
+            final String redisKey = "negative:" + this.repoType + ":" + this.repoName + ":" + key.string();
             this.l2.del(redisKey);
         }
     }
-    
+
     /**
      * Invalidate all entries matching a prefix pattern.
      * Thread-safe - Caffeine handles synchronization.
-     * 
+     *
      * @param prefix Key prefix to match
      */
     public void invalidatePrefix(final String prefix) {
         // Invalidate L1
         this.notFoundCache.asMap().keySet().removeIf(key -> key.string().startsWith(prefix));
-        
+
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String scanPattern = "negative:" + this.repoName + ":" + prefix + "*";
+            final String scanPattern = "negative:" + this.repoType + ":" + this.repoName + ":" + prefix + "*";
             this.l2.keys(scanPattern).thenAccept(keys -> {
                 if (keys != null && !keys.isEmpty()) {
                     this.l2.del(keys.toArray(new String[0]));
@@ -312,7 +331,7 @@ public final class NegativeCache {
             });
         }
     }
-    
+
     /**
      * Clear entire cache.
      * Thread-safe - Caffeine handles synchronization.
@@ -320,10 +339,10 @@ public final class NegativeCache {
     public void clear() {
         // Clear L1
         this.notFoundCache.invalidateAll();
-        
+
         // Clear L2 (if enabled) - scan and delete all negative cache keys
         if (this.twoTier) {
-            this.l2.keys("negative:" + this.repoName + ":*").thenAccept(keys -> {
+            this.l2.keys("negative:" + this.repoType + ":" + this.repoName + ":*").thenAccept(keys -> {
                 if (keys != null && !keys.isEmpty()) {
                     this.l2.del(keys.toArray(new String[0]));
                 }

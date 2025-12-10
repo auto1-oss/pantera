@@ -37,11 +37,11 @@ final class CacheTimeControl implements CacheControl {
     private final Storage storage;
 
     /**
-     * Ctor with default value for time of expiration.
+     * Ctor with default value for time of expiration (12 hours).
      * @param storage Storage
      */
     CacheTimeControl(final Storage storage) {
-        this(storage, Duration.ofMinutes(10));
+        this(storage, Duration.ofHours(12));
     }
 
     /**

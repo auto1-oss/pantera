@@ -18,9 +18,10 @@ public final class VersionComparators {
 
     /**
      * Pattern for semantic versioning: major.minor.patch[-prerelease][+build].
+     * Prerelease and build metadata can contain alphanumeric, hyphens, and dots.
      */
     private static final Pattern SEMVER = Pattern.compile(
-        "^v?(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?(?:-([\\w.]+))?(?:\\+([\\w.]+))?$"
+        "^v?(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?(?:-([\\w.\\-]+))?(?:\\+([\\w.\\-]+))?$"
     );
 
     /**

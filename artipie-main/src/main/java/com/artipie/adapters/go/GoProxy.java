@@ -53,7 +53,7 @@ public final class GoProxy implements Slice {
         final CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        
+
         // Support multiple remotes with GroupSlice (like maven-proxy)
         // Each remote gets its own GoProxySlice, evaluated in priority order
         this.slice = new GroupSlice(
@@ -65,6 +65,7 @@ public final class GoProxy implements Slice {
                     GenericAuthenticator.create(client, remote.username(), remote.pwd()),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     events,
+                    asto,  // Pass storage for TTL-based metadata caching
                     cfg.name(),
                     cfg.type(),
                     cooldown

@@ -73,37 +73,37 @@ final class CachedUsersTest {
     }
 
     @Test
-    void cachesWhenNotAuthenticated() {
+    void doesNotCacheFailedAuth() {
         MatcherAssert.assertThat(
             "David was not authenticated on the first call",
             this.users.user("David", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "olga was not authenticated on the first call",
+            "Olga was not authenticated on the first call",
             this.users.user("Olga", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "Cache size should be 2",
+            "Cache size should be 0 - failed auth should not be cached",
             this.cache.estimatedSize(),
-            new IsEqual<>(2L)
+            new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
             "David was not authenticated on the second call",
             this.users.user("David", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "olga was not authenticated on the second call",
+            "Olga was not authenticated on the second call",
             this.users.user("Olga", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "Cache size should be 2",
+            "Cache size should still be 0",
             this.cache.estimatedSize(),
-            new IsEqual<>(2L)
+            new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
-            "Authenticate method should be called twice",
+            "Authenticate method should be called 4 times (no caching for failures)",
             this.auth.cnt.get(),
-            new IsEqual<>(2)
+            new IsEqual<>(4)
         );
     }
 

@@ -55,6 +55,7 @@ class GoProxySliceTest {
             mockRemote,
             Cache.NOP,
             Optional.empty(),
+            Optional.empty(),
             "test-repo",
             "go-proxy",
             com.artipie.cooldown.NoopCooldownService.INSTANCE
@@ -84,11 +85,12 @@ class GoProxySliceTest {
             mockRemote,
             Cache.NOP,
             Optional.empty(),
+            Optional.empty(),
             "test-repo",
             "go-proxy",
             com.artipie.cooldown.NoopCooldownService.INSTANCE
         );
-        
+
         MatcherAssert.assertThat(
             slice,
             new SliceHasResponse(

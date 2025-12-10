@@ -26,9 +26,9 @@ import java.util.concurrent.TimeUnit;
 public class MetadataCache {
     
     /**
-     * Default TTL for metadata cache (24 hours).
+     * Default TTL for metadata cache (12 hours).
      */
-    protected static final Duration DEFAULT_TTL = Duration.ofHours(24);
+    protected static final Duration DEFAULT_TTL = Duration.ofHours(12);
     
     /**
      * Default maximum cache size (10,000 entries).
@@ -64,7 +64,7 @@ public class MetadataCache {
     private final String repoName;
     
     /**
-     * Create metadata cache with default 24h TTL and 10K max size.
+     * Create metadata cache with default 12h TTL and 10K max size.
      */
     public MetadataCache() {
         this(DEFAULT_TTL, DEFAULT_MAX_SIZE, null, "default");

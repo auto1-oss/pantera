@@ -12,15 +12,12 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.artipie.http.log.EcsLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -28,34 +25,23 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Maven-specific group slice with metadata merging support.
  * Extends basic GroupSlice behavior with Maven metadata aggregation.
- * 
+ *
  * <p>For maven-metadata.xml requests:
  * <ul>
  *   <li>Fetches metadata from ALL members (not just first)</li>
  *   <li>Merges all metadata files using external MetadataMerger</li>
- *   <li>Caches merged result (5 minute TTL)</li>
+ *   <li>Caches merged result (12 hour TTL, L1+L2)</li>
  *   <li>Returns merged metadata to client</li>
  * </ul>
- * 
+ *
  * <p>For all other requests:
  * <ul>
  *   <li>Returns first successful response (standard group behavior)</li>
  * </ul>
- * 
+ *
  * @since 1.0
  */
 public final class MavenGroupSlice implements Slice {
-
-    /**
-     * Metadata cache for merged results.
-     * Short TTL because metadata changes frequently during deployments.
-     */
-    private static final Cache<String, byte[]> METADATA_CACHE = Caffeine.newBuilder()
-        .maximumSize(1000)
-        .expireAfterWrite(Duration.ofMinutes(5))
-        .recordStats()
-        .evictionListener(MavenGroupSlice::onEviction)
-        .build();
 
     /**
      * Delegate group slice for non-metadata requests.
@@ -88,6 +74,11 @@ public final class MavenGroupSlice implements Slice {
     private final int depth;
 
     /**
+     * Two-tier metadata cache (L1: Caffeine, L2: Valkey).
+     */
+    private final GroupMetadataCache metadataCache;
+
+    /**
      * Constructor.
      * @param delegate Delegate group slice
      * @param group Group repository name
@@ -110,6 +101,7 @@ public final class MavenGroupSlice implements Slice {
         this.resolver = resolver;
         this.port = port;
         this.depth = depth;
+        this.metadataCache = new GroupMetadataCache(group);
     }
 
     @Override
@@ -205,47 +197,32 @@ public final class MavenGroupSlice implements Slice {
         final Content body,
         final String path
     ) {
-        final String cacheKey = this.group + ":" + path;
+        final String cacheKey = path;
 
-        // Check cache first with metrics
-        final long cacheStartNanos = System.nanoTime();
-        final byte[] cached = METADATA_CACHE.getIfPresent(cacheKey);
-        final long cacheDurationMs = (System.nanoTime() - cacheStartNanos) / 1_000_000;
-
-        if (cached != null) {
-            // Cache HIT
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("metadata", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
-                    .recordCacheOperationDuration("metadata", "l1", "get", cacheDurationMs);
+        // Check two-tier cache (L1 then L2 if miss)
+        return this.metadataCache.get(cacheKey).thenCompose(cached -> {
+            if (cached.isPresent()) {
+                // Cache HIT (L1 or L2)
+                EcsLogger.debug("com.artipie.maven")
+                    .message("Returning cached merged metadata (cache hit)")
+                    .eventCategory("repository")
+                    .eventAction("metadata_merge")
+                    .eventOutcome("success")
+                    .field("repository.name", this.group)
+                    .field("url.path", path)
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header("Content-Type", "application/xml")
+                        .body(cached.get())
+                        .build()
+                );
             }
 
-            EcsLogger.debug("com.artipie.maven")
-                .message("Returning cached merged metadata (cache hit)")
-                .eventCategory("repository")
-                .eventAction("metadata_merge")
-                .eventOutcome("success")
-                .field("repository.name", this.group)
-                .field("url.path", path)
-                .log();
-            return CompletableFuture.completedFuture(
-                ResponseBuilder.ok()
-                    .header("Content-Type", "application/xml")
-                    .body(cached)
-                    .build()
-            );
-        }
-
-        // Cache MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("metadata", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
-                .recordCacheOperationDuration("metadata", "l1", "get", cacheDurationMs);
-        }
-
-        // CRITICAL: Consume original body to prevent OneTimePublisher errors
-        // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
-        return body.asBytesFuture().thenCompose(requestBytes -> {
+            // Cache MISS - fetch and merge from members
+            // CRITICAL: Consume original body to prevent OneTimePublisher errors
+            // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
+            return body.asBytesFuture().thenCompose(requestBytes -> {
             // Track merge duration for slow request logging
             final long mergeStartTime = System.currentTimeMillis();
 
@@ -322,15 +299,8 @@ public final class MavenGroupSlice implements Slice {
                     .thenApply(mergedBytes -> {
                         final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
 
-                        // Cache the merged result with PUT latency tracking
-                        final long putStartNanos = System.nanoTime();
-                        METADATA_CACHE.put(cacheKey, mergedBytes);
-                        final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
-
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance()
-                                .recordCacheOperationDuration("metadata", "l1", "put", putDurationMs);
-                        }
+                        // Cache the merged result (L1 + L2)
+                        MavenGroupSlice.this.metadataCache.put(cacheKey, mergedBytes);
 
                         // Record metadata merge metrics
                         recordMetadataOperation("merge", mergeDuration);
@@ -370,7 +340,8 @@ public final class MavenGroupSlice implements Slice {
                     .textBody("Failed to merge metadata: " + cause.getMessage())
                     .build();
             });
-        }); // Close thenCompose lambda for body consumption
+            }); // Close thenCompose lambda for body consumption
+        }); // Close metadataCache.get() thenCompose
     }
 
     /**
@@ -513,20 +484,4 @@ public final class MavenGroupSlice implements Slice {
         }
     }
 
-    /**
-     * Handle metadata cache eviction - record metrics.
-     * @param key Cache key
-     * @param metadata Metadata bytes
-     * @param cause Eviction cause
-     */
-    private static void onEviction(
-        final String key,
-        final byte[] metadata,
-        final com.github.benmanes.caffeine.cache.RemovalCause cause
-    ) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
-                .recordCacheEviction("metadata", "l1", cause.toString().toLowerCase());
-        }
-    }
 }

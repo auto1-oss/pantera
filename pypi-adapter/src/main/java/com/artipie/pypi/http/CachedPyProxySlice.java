@@ -138,6 +138,7 @@ public final class CachedPyProxySlice implements Slice {
             negativeCacheEnabled,
             50_000,  // default max size
             null,     // use global Valkey config
+            repoType, // Repository type for cache key namespacing
             repoName  // CRITICAL: Include repo name
         );
         this.metadata = storage.map(CachedArtifactMetadataStore::new);

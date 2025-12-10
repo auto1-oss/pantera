@@ -6,6 +6,7 @@ package com.artipie.http;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.DigestVerification;
@@ -106,11 +107,17 @@ final class CachedProxySlice implements Slice {
     private final String rtype;
 
     /**
-     * Wraps origin slice with caching layer.
+     * Optional storage for TTL-based metadata cache.
+     */
+    private final Optional<Storage> storage;
+
+    /**
+     * Wraps origin slice with caching layer and default 12h metadata TTL.
      *
      * @param client Client slice
      * @param cache Cache
      * @param events Artifact events
+     * @param storage Optional storage for TTL-based metadata cache
      * @param rname Repository name
      * @param rtype Repository type
      * @param cooldown Cooldown service
@@ -120,6 +127,7 @@ final class CachedProxySlice implements Slice {
         final Slice client,
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
+        final Optional<Storage> storage,
         final String rname,
         final String rtype,
         final CooldownService cooldown,
@@ -128,6 +136,7 @@ final class CachedProxySlice implements Slice {
         this.client = client;
         this.cache = cache;
         this.events = events;
+        this.storage = storage;
         this.rname = rname;
         this.rtype = rtype;
         this.cooldown = cooldown;
@@ -278,14 +287,7 @@ final class CachedProxySlice implements Slice {
                             return promise;
                         }
                     ),
-                    new CacheControl.All(
-                        StreamSupport.stream(
-                                head.orElse(Headers.EMPTY).spliterator(),
-                                false
-                            ).map(Header::new)
-                            .map(CachedProxySlice::checksumControl)
-                            .toList()
-                    )
+                    this.cacheControlFor(key, head.orElse(Headers.EMPTY))
                 ).handle(
                     (content, throwable) -> {
                         if (throwable == null && content.isPresent()) {
@@ -416,6 +418,43 @@ final class CachedProxySlice implements Slice {
                 .field("package.release_date", release.map(Object::toString).orElse("unknown"))
                 .log();
         });
+    }
+
+    /**
+     * Determine cache control strategy for the given key.
+     * Uses TTL-based control for metadata paths (list, @latest),
+     * checksum-based control for artifacts.
+     *
+     * @param key Cache key
+     * @param head Headers from HEAD request
+     * @return Cache control strategy
+     */
+    private CacheControl cacheControlFor(final Key key, final Headers head) {
+        final String path = key.string();
+        // Metadata paths need TTL-based expiration to pick up new versions
+        if (this.isMetadataPath(path)) {
+            return this.storage
+                .map(sto -> (CacheControl) new CacheTimeControl(sto))
+                .orElse(CacheControl.Standard.ALWAYS);
+        }
+        // Artifacts use checksum-based validation
+        return new CacheControl.All(
+            StreamSupport.stream(head.spliterator(), false)
+                .map(Header::new)
+                .map(CachedProxySlice::checksumControl)
+                .toList()
+        );
+    }
+
+    /**
+     * Check if path is a metadata path that needs TTL-based caching.
+     * Metadata paths: @v/list (version list), @latest (latest version info)
+     *
+     * @param path Request path
+     * @return true if metadata path
+     */
+    private boolean isMetadataPath(final String path) {
+        return path.endsWith("/@v/list") || path.endsWith("/@latest");
     }
 
     private static CacheControl checksumControl(final Header header) {
