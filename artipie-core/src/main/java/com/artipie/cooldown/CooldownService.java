@@ -57,4 +57,17 @@ public interface CooldownService {
      * @return Future with active blocks list
      */
     CompletableFuture<List<CooldownBlock>> activeBlocks(String repoType, String repoName);
+
+    /**
+     * Mark a package as "all versions blocked".
+     * Called when all versions of a package are blocked during metadata filtering.
+     * Persists to database and updates metrics.
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param artifact Artifact/package name
+     */
+    default void markAllBlocked(String repoType, String repoName, String artifact) {
+        // Default no-op for NoopCooldownService
+    }
 }

@@ -19,6 +19,7 @@ import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
@@ -299,7 +300,7 @@ public final class ConanSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     new BearerAuthzSlice(
-                        new SliceDownload(storage),
+                        new StorageArtifactSlice(storage),
                         tokens.auth(),
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)

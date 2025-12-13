@@ -146,6 +146,7 @@ public final class FileSystemArtifactSlice implements Slice {
 
                 return ResponseBuilder.ok()
                     .header("Content-Length", String.valueOf(fileSize))
+                    .header("Accept-Ranges", "bytes")
                     .body(fileContent)
                     .build();
 

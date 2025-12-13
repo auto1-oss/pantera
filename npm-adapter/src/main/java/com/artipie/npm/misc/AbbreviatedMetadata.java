@@ -88,6 +88,13 @@ public final class AbbreviatedMetadata {
         final String modified = this.extractModifiedTime();
         builder.add("modified", modified);
         
+        // CRITICAL: Include full 'time' object for pnpm compatibility
+        // pnpm's time-based resolution mode requires version timestamps
+        // See: https://pnpm.io/settings#registrysupportstimefield
+        if (this.full.containsKey("time")) {
+            builder.add("time", this.full.getJsonObject("time"));
+        }
+        
         // Add dist-tags
         if (this.full.containsKey("dist-tags")) {
             builder.add("dist-tags", this.full.getJsonObject("dist-tags"));

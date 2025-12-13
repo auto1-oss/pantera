@@ -34,6 +34,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class CachedNpmProxySlice implements Slice {
 
     /**
+     * Maximum response size to buffer for request deduplication (5MB).
+     * Larger responses (e.g., typescript metadata ~30MB) are streamed directly
+     * to prevent OOM. Request deduplication is skipped for large responses.
+     */
+    private static final int MAX_BUFFER_SIZE = 5 * 1024 * 1024;
+
+    /**
      * Origin slice (NpmProxySlice).
      */
     private final Slice origin;
@@ -89,9 +96,12 @@ public final class CachedNpmProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedNpmProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -106,10 +116,13 @@ public final class CachedNpmProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
      * @param repoName Repository name for cache key isolation
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedNpmProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -125,12 +138,15 @@ public final class CachedNpmProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
      * @param repoName Repository name for cache key isolation
      * @param upstreamUrl Upstream URL
      * @param repoType Repository type
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedNpmProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -144,14 +160,9 @@ public final class CachedNpmProxySlice implements Slice {
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
-        this.negativeCache = new NegativeCache(
-            negativeCacheTtl,
-            negativeCacheEnabled,
-            50_000,  // default max size
-            null,     // use global Valkey config
-            repoType, // Repository type for cache key namespacing
-            repoName  // CRITICAL: Include repo name
-        );
+        // Use unified NegativeCacheConfig for consistent settings across all adapters
+        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
+        this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         this.inFlight = new ConcurrentHashMap<>();
     }
@@ -170,6 +181,7 @@ public final class CachedNpmProxySlice implements Slice {
                 .message("NPM proxy: bypassing cache for special endpoint")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
                 .field("url.path", path)
                 .log();
             return this.origin.response(line, headers, body);
@@ -183,6 +195,7 @@ public final class CachedNpmProxySlice implements Slice {
                 .message("NPM package cached as 404 (negative cache hit)")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
                 .field("package.name", key.string())
                 .log();
             return CompletableFuture.completedFuture(
@@ -243,6 +256,7 @@ public final class CachedNpmProxySlice implements Slice {
                     .message("NPM proxy: serving from metadata cache")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
+                    .field("repository.name", this.repoName)
                     .field("package.name", key.string())
                     .log();
                 // Metadata exists - serve cached with headers
@@ -279,6 +293,7 @@ public final class CachedNpmProxySlice implements Slice {
                 .message("NPM proxy: joining in-flight request")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
                 .field("package.name", key.string())
                 .log();
             return pending.thenApply(BufferedResponse::toFreshResponse);
@@ -293,6 +308,7 @@ public final class CachedNpmProxySlice implements Slice {
                 .message("NPM proxy: lost race, joining other request")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
                 .field("package.name", key.string())
                 .log();
             return existing.thenApply(BufferedResponse::toFreshResponse);
@@ -302,7 +318,9 @@ public final class CachedNpmProxySlice implements Slice {
             .message("NPM proxy: fetching upstream (new request)")
             .eventCategory("repository")
             .eventAction("proxy_request")
+            .field("repository.name", this.repoName)
             .field("package.name", key.string())
+            .field("url.original", this.upstreamUrl)
             .log();
         return this.origin.response(line, headers, body)
             .thenCompose(response -> {
@@ -312,6 +330,8 @@ public final class CachedNpmProxySlice implements Slice {
                         .message("NPM proxy: caching 404")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
+                        .eventOutcome("not_found")
+                        .field("repository.name", this.repoName)
                         .field("package.name", key.string())
                         .log();
                     this.negativeCache.cacheNotFound(key);
@@ -325,8 +345,51 @@ public final class CachedNpmProxySlice implements Slice {
 
                 if (response.status().success()) {
                     this.recordProxyMetric("success", duration);
+                    // Check Content-Length to avoid buffering huge responses (OOM prevention)
+                    final long contentLength = response.headers().asList().stream()
+                        .filter(h -> "Content-Length".equalsIgnoreCase(h.getKey()))
+                        .map(h -> {
+                            try {
+                                return Long.parseLong(h.getValue());
+                            } catch (NumberFormatException e) {
+                                return -1L;
+                            }
+                        })
+                        .findFirst()
+                        .orElse(-1L);
+                    
+                    // Skip buffering for large responses to prevent OOM
+                    if (contentLength > MAX_BUFFER_SIZE) {
+                        EcsLogger.debug("com.artipie.npm")
+                            .message("NPM proxy: streaming large response without buffering")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .field("repository.name", this.repoName)
+                            .field("package.name", key.string())
+                            .field("http.response.body.bytes", contentLength)
+                            .log();
+                        // Complete in-flight with empty buffer so other waiters don't hang
+                        // They will make their own requests
+                        newRequest.complete(new BufferedResponse(
+                            RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, new byte[0]
+                        ));
+                        // Return streaming response directly
+                        return CompletableFuture.completedFuture(response);
+                    }
+                    
                     return response.body().asBytesFuture()
                         .thenApply(bodyBytes -> {
+                            // Double-check size after reading (in case Content-Length was missing)
+                            if (bodyBytes.length > MAX_BUFFER_SIZE) {
+                                EcsLogger.warn("com.artipie.npm")
+                                    .message("NPM proxy: response exceeded buffer limit")
+                                    .eventCategory("repository")
+                                    .eventAction("proxy_request")
+                                    .field("repository.name", this.repoName)
+                                    .field("package.name", key.string())
+                                    .field("http.response.body.bytes", bodyBytes.length)
+                                    .log();
+                            }
                             final BufferedResponse buffered = new BufferedResponse(
                                 response.status(), response.headers(), bodyBytes
                             );
@@ -338,6 +401,8 @@ public final class CachedNpmProxySlice implements Slice {
                                 .message("NPM proxy: body read failed")
                                 .eventCategory("repository")
                                 .eventAction("proxy_request")
+                                .eventOutcome("failure")
+                                .field("repository.name", this.repoName)
                                 .field("package.name", key.string())
                                 .error(err)
                                 .log();
@@ -384,6 +449,10 @@ public final class CachedNpmProxySlice implements Slice {
                     .message("NPM proxy: upstream request failed")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", key.string())
+                    .field("url.upstream", this.upstreamUrl)
                     .error(error)
                     .log();
                 final Response errorResp = ResponseBuilder.unavailable()

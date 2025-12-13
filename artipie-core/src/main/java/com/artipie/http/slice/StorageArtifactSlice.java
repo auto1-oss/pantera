@@ -101,6 +101,7 @@ public final class StorageArtifactSlice implements Slice {
         
         // FileStorage: Use direct NIO for maximum performance
         // IMPORTANT: Pass original storage (with SubStorage prefix) to maintain repo scoping
+        // Wrap with RangeSlice to support multi-connection downloads (Chrome, download managers, Maven)
         if (unwrapped instanceof FileStorage) {
             EcsLogger.debug("com.artipie.http")
                 .message("Using FileSystemArtifactSlice for direct NIO access (detected: " + unwrapped.getClass().getSimpleName() + ", wrapper: " + this.storage.getClass().getSimpleName() + ")")
@@ -109,7 +110,8 @@ public final class StorageArtifactSlice implements Slice {
                 .eventOutcome("success")
                 .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
-            return new FileSystemArtifactSlice(this.storage);
+            // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
+            return new RangeSlice(new FileSystemArtifactSlice(this.storage));
         }
 
         // S3 and other storage types: Use generic abstraction
@@ -121,7 +123,8 @@ public final class StorageArtifactSlice implements Slice {
             .eventAction("artifact_slice_select")
             .eventOutcome("success")
             .log();
-        return new GenericArtifactSlice(this.storage);
+        // Wrap with RangeSlice for HTTP Range request support (resumable/parallel downloads)
+        return new RangeSlice(new GenericArtifactSlice(this.storage));
     }
 
     /**
@@ -235,11 +238,16 @@ public final class StorageArtifactSlice implements Slice {
                     );
                 }
 
-                return this.storage.value(key).thenApply(content ->
-                    ResponseBuilder.ok()
-                        .body(content)
-                        .build()
-                );
+                return this.storage.value(key).thenApply(content -> {
+                    final ResponseBuilder builder = ResponseBuilder.ok()
+                        .header("Accept-Ranges", "bytes")
+                        .body(content);
+                    // Add Content-Length if size is known
+                    content.size().ifPresent(size -> 
+                        builder.header("Content-Length", String.valueOf(size))
+                    );
+                    return builder.build();
+                });
             }).exceptionally(throwable -> {
                 EcsLogger.error("com.artipie.http")
                     .message("Failed to serve artifact at key: " + key.string())

@@ -78,9 +78,12 @@ public final class CachedPyProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -95,10 +98,13 @@ public final class CachedPyProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
      * @param repoName Repository name for cache key isolation
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -114,12 +120,15 @@ public final class CachedPyProxySlice implements Slice {
      *
      * @param origin Origin slice
      * @param storage Storage for metadata cache (optional)
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
      * @param repoName Repository name for cache key isolation
      * @param upstreamUrl Upstream URL
      * @param repoType Repository type
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
+    @Deprecated
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public CachedPyProxySlice(
         final Slice origin,
         final Optional<Storage> storage,
@@ -133,14 +142,9 @@ public final class CachedPyProxySlice implements Slice {
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
-        this.negativeCache = new NegativeCache(
-            negativeCacheTtl,
-            negativeCacheEnabled,
-            50_000,  // default max size
-            null,     // use global Valkey config
-            repoType, // Repository type for cache key namespacing
-            repoName  // CRITICAL: Include repo name
-        );
+        // Use unified NegativeCacheConfig for consistent settings across all adapters
+        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
+        this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
     }
 

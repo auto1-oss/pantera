@@ -5,6 +5,8 @@
 package com.artipie.http.cache;
 
 import com.artipie.asto.Key;
+import com.artipie.cache.GlobalCacheConfig;
+import com.artipie.cache.NegativeCacheConfig;
 import com.artipie.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -81,35 +83,81 @@ public final class NegativeCache {
     private final String repoName;
 
     /**
-     * Create negative cache with default 24h TTL and 50K max size (enabled).
+     * Create negative cache using unified NegativeCacheConfig.
+     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
+     * @param repoName Repository name for cache key isolation
      */
+    public NegativeCache(final String repoType, final String repoName) {
+        this(repoType, repoName, NegativeCacheConfig.getInstance());
+    }
+
+    /**
+     * Create negative cache with explicit config.
+     * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
+     * @param repoName Repository name for cache key isolation
+     * @param config Unified negative cache configuration
+     */
+    public NegativeCache(final String repoType, final String repoName, final NegativeCacheConfig config) {
+        this(
+            config.l2Ttl(),
+            true,
+            config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
+            config.isValkeyEnabled() ? config.l1Ttl() : config.ttl(),
+            GlobalCacheConfig.valkeyConnection()
+                .filter(v -> config.isValkeyEnabled())
+                .map(ValkeyConnection::async)
+                .orElse(null),
+            repoType,
+            repoName
+        );
+    }
+
+    /**
+     * Create negative cache with default 24h TTL and 50K max size (enabled).
+     * @deprecated Use {@link #NegativeCache(String, String)} instead
+     */
+    @Deprecated
     public NegativeCache() {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, null, "unknown", "default");
+        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, DEFAULT_TTL, null, "unknown", "default");
     }
 
     /**
      * Create negative cache with Valkey connection (two-tier).
      * @param valkey Valkey connection for L2 cache
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
+    @Deprecated
     public NegativeCache(final ValkeyConnection valkey) {
-        this(DEFAULT_TTL, true, DEFAULT_MAX_SIZE, valkey, "unknown", "default");
+        this(
+            DEFAULT_TTL,
+            true,
+            valkey != null ? Math.max(1000, DEFAULT_MAX_SIZE / 10) : DEFAULT_MAX_SIZE,
+            valkey != null ? Duration.ofMinutes(5) : DEFAULT_TTL,
+            valkey != null ? valkey.async() : null,
+            "unknown",
+            "default"
+        );
     }
 
     /**
      * Create negative cache with custom TTL and default max size.
      * @param ttl Time-to-live for cached 404s
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
+    @Deprecated
     public NegativeCache(final Duration ttl) {
-        this(ttl, true, DEFAULT_MAX_SIZE, null, "unknown", "default");
+        this(ttl, true, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
     }
 
     /**
      * Create negative cache with custom TTL and enable flag.
      * @param ttl Time-to-live for cached 404s
      * @param enabled Whether negative caching is enabled
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
+    @Deprecated
     public NegativeCache(final Duration ttl, final boolean enabled) {
-        this(ttl, enabled, DEFAULT_MAX_SIZE, null, "unknown", "default");
+        this(ttl, enabled, DEFAULT_MAX_SIZE, ttl, null, "unknown", "default");
     }
 
     /**
@@ -118,9 +166,20 @@ public final class NegativeCache {
      * @param enabled Whether negative caching is enabled
      * @param maxSize Maximum number of entries (Window TinyLFU eviction)
      * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey) {
-        this(ttl, enabled, maxSize, valkey, "unknown", "default");
+    @Deprecated
+    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
+            final ValkeyConnection valkey) {
+        this(
+            ttl,
+            enabled,
+            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
+            valkey != null ? Duration.ofMinutes(5) : ttl,
+            valkey != null ? valkey.async() : null,
+            "unknown",
+            "default"
+        );
     }
 
     /**
@@ -130,9 +189,20 @@ public final class NegativeCache {
      * @param maxSize Maximum number of entries (Window TinyLFU eviction)
      * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
      * @param repoName Repository name for cache key isolation
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey, final String repoName) {
-        this(ttl, enabled, maxSize, valkey, "unknown", repoName);
+    @Deprecated
+    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
+            final ValkeyConnection valkey, final String repoName) {
+        this(
+            ttl,
+            enabled,
+            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
+            valkey != null ? Duration.ofMinutes(5) : ttl,
+            valkey != null ? valkey.async() : null,
+            "unknown",
+            repoName
+        );
     }
 
     /**
@@ -143,28 +213,44 @@ public final class NegativeCache {
      * @param valkey Valkey connection for L2 cache (null uses GlobalCacheConfig)
      * @param repoType Repository type for cache key namespacing (e.g., "npm", "pypi", "go")
      * @param repoName Repository name for cache key isolation
+     * @deprecated Use {@link #NegativeCache(String, String, NegativeCacheConfig)} instead
      */
-    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize, final ValkeyConnection valkey, final String repoType, final String repoName) {
-        // Check global config if no explicit valkey passed
-        final ValkeyConnection actualValkey = (valkey != null)
-            ? valkey
-            : com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+    @Deprecated
+    public NegativeCache(final Duration ttl, final boolean enabled, final int maxSize,
+            final ValkeyConnection valkey, final String repoType, final String repoName) {
+        this(
+            ttl,
+            enabled,
+            valkey != null ? Math.max(1000, maxSize / 10) : maxSize,
+            valkey != null ? Duration.ofMinutes(5) : ttl,
+            valkey != null ? valkey.async() : null,
+            repoType,
+            repoName
+        );
+    }
 
+    /**
+     * Primary constructor - all other constructors delegate to this one.
+     * @param ttl TTL for L2 cache
+     * @param enabled Whether negative caching is enabled
+     * @param l1MaxSize Maximum size for L1 cache
+     * @param l1Ttl TTL for L1 cache
+     * @param l2Commands Redis commands for L2 cache (null for single-tier)
+     * @param repoType Repository type for cache key namespacing
+     * @param repoName Repository name for cache key isolation
+     */
+    @SuppressWarnings("PMD.NullAssignment")
+    private NegativeCache(final Duration ttl, final boolean enabled, final int l1MaxSize,
+            final Duration l1Ttl, final RedisAsyncCommands<String, byte[]> l2Commands,
+            final String repoType, final String repoName) {
         this.enabled = enabled;
-        this.twoTier = (actualValkey != null);
-        this.l2 = this.twoTier ? actualValkey.async() : null;
+        this.twoTier = l2Commands != null;
+        this.l2 = l2Commands;
         this.ttl = ttl;
         this.repoType = repoType != null ? repoType : "unknown";
         this.repoName = repoName != null ? repoName : "default";
-
-        // L1: Hot data cache
-        // If two-tier: Smaller cache with short TTL, L2 has the long TTL
-        // If single-tier: Full cache with configured TTL
-        final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : ttl;
-        final int l1Size = this.twoTier ? Math.max(1000, maxSize / 10) : maxSize;
-
         this.notFoundCache = Caffeine.newBuilder()
-            .maximumSize(l1Size)
+            .maximumSize(l1MaxSize)
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();

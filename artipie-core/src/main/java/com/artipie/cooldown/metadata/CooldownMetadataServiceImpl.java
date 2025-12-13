@@ -11,6 +11,7 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownSettings;
 import com.artipie.cooldown.metrics.CooldownMetrics;
 import com.artipie.http.log.EcsLogger;
+import org.slf4j.MDC;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -221,18 +222,76 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(rawMetadata, this.maxTtl);
             }
 
-            // Step 2: Preload release dates if available
+            // Step 2: Get release dates from metadata (if available)
+            final Map<String, Instant> releaseDates;
+            if (parser instanceof ReleaseDateProvider) {
+                @SuppressWarnings("unchecked")
+                final ReleaseDateProvider<T> provider = (ReleaseDateProvider<T>) parser;
+                releaseDates = provider.releaseDates(parsed);
+            } else {
+                releaseDates = Collections.emptyMap();
+            }
+
+            // Step 2b: Preload release dates into inspector for later use
             this.preloadReleaseDates(parser, parsed, inspectorOpt);
 
-            // Step 3: Sort versions and select latest N for evaluation
-            final Comparator<String> comparator = this.versionComparators
-                .getOrDefault(repoType.toLowerCase(), VersionComparators.semver());
-            final List<String> sortedVersions = new ArrayList<>(allVersions);
-            sortedVersions.sort(comparator.reversed()); // Newest first
-
-            final List<String> versionsToEvaluate = sortedVersions.stream()
-                .limit(this.maxVersionsToEvaluate)
-                .collect(Collectors.toList());
+            // Step 3: Select versions to evaluate based on RELEASE DATE, not semver
+            // Only versions released within the cooldown period could possibly be blocked
+            final Duration cooldownPeriod = this.settings.minimumAllowedAge();
+            final Instant cutoffTime = Instant.now().minus(cooldownPeriod);
+            
+            final List<String> versionsToEvaluate;
+            final List<String> sortedVersions;
+            
+            if (!releaseDates.isEmpty()) {
+                // RELEASE DATE BASED: Sort by release date, then binary search for cutoff
+                // O(n log n) sort + O(log n) binary search - more efficient than O(n) filter
+                sortedVersions = new ArrayList<>(allVersions);
+                sortedVersions.sort((v1, v2) -> {
+                    final Instant d1 = releaseDates.getOrDefault(v1, Instant.EPOCH);
+                    final Instant d2 = releaseDates.getOrDefault(v2, Instant.EPOCH);
+                    return d2.compareTo(d1); // Newest first (descending by date)
+                });
+                
+                // Binary search: find first version older than cutoff
+                // Since sorted newest-first, we find first index where releaseDate <= cutoffTime
+                int cutoffIndex = Collections.binarySearch(
+                    sortedVersions,
+                    null, // dummy search key
+                    (v1, v2) -> {
+                        // v1 is from list, v2 is our dummy (null)
+                        // We want to find where releaseDate crosses cutoffTime
+                        if (v1 == null) {
+                            return 0; // dummy comparison
+                        }
+                        final Instant d1 = releaseDates.getOrDefault(v1, Instant.EPOCH);
+                        // Return negative if d1 > cutoff (keep searching right)
+                        // Return positive if d1 <= cutoff (found boundary)
+                        return d1.isAfter(cutoffTime) ? -1 : 1;
+                    }
+                );
+                // binarySearch returns -(insertionPoint + 1) when not found
+                // insertionPoint is where cutoff would be inserted to maintain order
+                if (cutoffIndex < 0) {
+                    cutoffIndex = -(cutoffIndex + 1);
+                }
+                
+                // Take all versions from index 0 to cutoffIndex (exclusive) - these are newer than cutoff
+                versionsToEvaluate = cutoffIndex > 0 
+                    ? sortedVersions.subList(0, cutoffIndex)
+                    : Collections.emptyList();
+            } else {
+                // FALLBACK: No release dates available, use semver-based limit
+                // This is less accurate but better than nothing
+                final Comparator<String> comparator = this.versionComparators
+                    .getOrDefault(repoType.toLowerCase(), VersionComparators.semver());
+                sortedVersions = new ArrayList<>(allVersions);
+                sortedVersions.sort(comparator.reversed()); // Newest first by semver
+                
+                versionsToEvaluate = sortedVersions.stream()
+                    .limit(this.maxVersionsToEvaluate)
+                    .collect(Collectors.toList());
+            }
 
             EcsLogger.debug("com.artipie.cooldown.metadata")
                 .message("Evaluating cooldown for versions")
@@ -298,25 +357,13 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     .field("versions.blocked", blockedVersions.size())
                     .log();
 
-                // Record blocked/allowed metrics
-                if (CooldownMetrics.isAvailable()) {
-                    final CooldownMetrics metrics = CooldownMetrics.getInstance();
-                    for (int i = 0; i < blockedVersions.size(); i++) {
-                        metrics.recordVersionBlocked(ctx.repoType, ctx.repoName);
-                    }
-                    final int allowedCount = ctx.allVersions.size() - blockedVersions.size();
-                    for (int i = 0; i < allowedCount; i++) {
-                        metrics.recordVersionAllowed(ctx.repoType, ctx.repoName);
-                    }
-                }
+                // Note: Blocked versions gauge is updated by JdbcCooldownService on block/unblock
+                // We don't increment counters here as that would count evaluations, not actual blocks
 
                 // Step 6: Check if all versions are blocked
                 if (blockedVersions.size() == ctx.allVersions.size()) {
-                    if (CooldownMetrics.isAvailable()) {
-                        CooldownMetrics.getInstance().recordAllVersionsBlocked(
-                            ctx.repoType, ctx.repoName, ctx.packageName
-                        );
-                    }
+                    // Mark as all-blocked in database and update gauge metric
+                    this.cooldown.markAllBlocked(ctx.repoType, ctx.repoName, ctx.packageName);
                     throw new AllVersionsBlockedException(ctx.packageName, blockedVersions);
                 }
 
@@ -404,12 +451,17 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             // No inspector - can't evaluate, allow by default
             return CompletableFuture.completedFuture(new VersionBlockResult(version, false, null));
         }
+        // Get real user from MDC (set by auth middleware), fallback to "metadata-filter"
+        String requester = MDC.get("user.name");
+        if (requester == null || requester.isEmpty()) {
+            requester = "metadata-filter";
+        }
         final CooldownRequest request = new CooldownRequest(
             repoType,
             repoName,
             packageName,
             version,
-            "metadata-filter",
+            requester,
             Instant.now()
         );
         return this.cooldown.evaluate(request, inspectorOpt.get())
@@ -498,17 +550,17 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
     }
 
     /**
-     * Find the most recent unblocked version by release date.
+     * Find the most recent unblocked STABLE version by release date.
      * This respects package author's intent - if they set a lower semver version as latest
      * (e.g., deprecating a major version branch), we fallback to the next most recently
-     * released version, not the highest semver.
+     * released STABLE version, not a prerelease.
      *
      * @param parser Metadata parser (must implement ReleaseDateProvider)
      * @param parsed Parsed metadata
-     * @param allVersions All available versions
+     * @param allVersions All available versions (sorted by semver desc)
      * @param blockedVersions Set of blocked versions to exclude
      * @param <T> Metadata type
-     * @return Most recent unblocked version by release date, or empty if none found
+     * @return Most recent unblocked stable version by release date, or empty if none found
      */
     @SuppressWarnings("unchecked")
     private <T> Optional<String> findLatestByReleaseDate(
@@ -519,25 +571,34 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
     ) {
         // Get release dates if parser supports it
         if (!(parser instanceof ReleaseDateProvider)) {
-            // Fallback to first unblocked version (original behavior)
+            // Fallback to first unblocked STABLE version
             return allVersions.stream()
                 .filter(ver -> !blockedVersions.contains(ver))
-                .findFirst();
+                .filter(ver -> !isPrerelease(ver))
+                .findFirst()
+                .or(() -> allVersions.stream()
+                    .filter(ver -> !blockedVersions.contains(ver))
+                    .findFirst()); // If no stable, use any unblocked
         }
         
         final ReleaseDateProvider<T> dateProvider = (ReleaseDateProvider<T>) parser;
         final Map<String, Instant> releaseDates = dateProvider.releaseDates(parsed);
         
         if (releaseDates.isEmpty()) {
-            // No release dates available - fallback to first unblocked version
+            // No release dates available - fallback to first unblocked STABLE version
             return allVersions.stream()
                 .filter(ver -> !blockedVersions.contains(ver))
-                .findFirst();
+                .filter(ver -> !isPrerelease(ver))
+                .findFirst()
+                .or(() -> allVersions.stream()
+                    .filter(ver -> !blockedVersions.contains(ver))
+                    .findFirst()); // If no stable, use any unblocked
         }
         
-        // Sort unblocked versions by release date (most recent first)
-        return allVersions.stream()
+        // Sort unblocked STABLE versions by release date (most recent first)
+        final Optional<String> stableLatest = allVersions.stream()
             .filter(ver -> !blockedVersions.contains(ver))
+            .filter(ver -> !isPrerelease(ver))
             .filter(ver -> releaseDates.containsKey(ver))
             .sorted((v1, v2) -> {
                 final Instant d1 = releaseDates.get(v1);
@@ -545,6 +606,34 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 return d2.compareTo(d1); // Descending (most recent first)
             })
             .findFirst();
+        
+        if (stableLatest.isPresent()) {
+            return stableLatest;
+        }
+        
+        // No stable versions - fallback to any unblocked version by release date
+        return allVersions.stream()
+            .filter(ver -> !blockedVersions.contains(ver))
+            .filter(ver -> releaseDates.containsKey(ver))
+            .sorted((v1, v2) -> {
+                final Instant d1 = releaseDates.get(v1);
+                final Instant d2 = releaseDates.get(v2);
+                return d2.compareTo(d1);
+            })
+            .findFirst();
+    }
+    
+    /**
+     * Check if version is a prerelease (alpha, beta, rc, canary, etc.).
+     *
+     * @param version Version string
+     * @return true if prerelease
+     */
+    private static boolean isPrerelease(final String version) {
+        final String v = version.toLowerCase(java.util.Locale.ROOT);
+        return v.contains("-") || v.contains("alpha") || v.contains("beta")
+            || v.contains("rc") || v.contains("canary") || v.contains("next")
+            || v.contains("dev") || v.contains("snapshot");
     }
 
     /**

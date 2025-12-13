@@ -20,6 +20,7 @@ import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceWithHeaders;
 import com.artipie.scheduling.ArtifactEvent;
@@ -175,7 +176,7 @@ public final class GoSlice implements Slice {
         String name
     ) {
         return GoSlice.createAuthSlice(
-            new SliceWithHeaders(new SliceDownload(storage), Headers.from(contentType)),
+            new SliceWithHeaders(new StorageArtifactSlice(storage), Headers.from(contentType)),
             basicAuth,
             tokenAuth,
             new OperationControl(policy, new AdapterBasicPermission(name, Action.Standard.READ))

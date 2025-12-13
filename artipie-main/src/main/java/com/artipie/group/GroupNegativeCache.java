@@ -6,6 +6,7 @@ package com.artipie.group;
 
 import com.artipie.asto.Key;
 import com.artipie.cache.GlobalCacheConfig;
+import com.artipie.cache.NegativeCacheConfig;
 import com.artipie.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -18,28 +19,20 @@ import java.util.concurrent.TimeUnit;
 /**
  * Negative cache for group repositories.
  * Caches 404 responses per member to avoid repeated queries for missing artifacts.
- * 
+ *
  * <p>Key format: {@code negative:group:{group_name}:{member_name}:{path}}</p>
- * 
+ *
  * <p>Two-tier architecture:</p>
  * <ul>
  *   <li>L1 (Caffeine): Fast in-memory cache, short TTL</li>
  *   <li>L2 (Valkey/Redis): Distributed cache, full TTL</li>
  * </ul>
  *
+ * <p>Configuration is read from unified {@link NegativeCacheConfig}.</p>
+ *
  * @since 1.0
  */
 public final class GroupNegativeCache {
-
-    /**
-     * Default TTL for negative cache (24 hours).
-     */
-    private static final Duration DEFAULT_TTL = Duration.ofHours(24);
-
-    /**
-     * Default maximum cache size (100,000 entries).
-     */
-    private static final int DEFAULT_MAX_SIZE = 100_000;
 
     /**
      * Sentinel value for cache entries.
@@ -64,7 +57,7 @@ public final class GroupNegativeCache {
     /**
      * Cache TTL for L2.
      */
-    private final Duration ttl;
+    private final Duration l2Ttl;
 
     /**
      * Group repository name.
@@ -77,43 +70,31 @@ public final class GroupNegativeCache {
     private final boolean enabled;
 
     /**
-     * Create group negative cache with defaults.
+     * Create group negative cache using unified NegativeCacheConfig.
      * @param groupName Group repository name
      */
     public GroupNegativeCache(final String groupName) {
-        this(groupName, DEFAULT_TTL, true, DEFAULT_MAX_SIZE, null);
+        this(groupName, NegativeCacheConfig.getInstance());
     }
 
     /**
-     * Create group negative cache with custom parameters.
+     * Create group negative cache with explicit config.
      * @param groupName Group repository name
-     * @param ttl Time-to-live for cached 404s
-     * @param enabled Whether negative caching is enabled
-     * @param maxSize Maximum L1 cache size
-     * @param valkey Optional Valkey connection for L2
+     * @param config Negative cache configuration
      */
-    public GroupNegativeCache(
-        final String groupName,
-        final Duration ttl,
-        final boolean enabled,
-        final int maxSize,
-        final ValkeyConnection valkey
-    ) {
+    public GroupNegativeCache(final String groupName, final NegativeCacheConfig config) {
         this.groupName = groupName;
-        this.ttl = ttl;
-        this.enabled = enabled;
+        this.enabled = true;
 
-        // Check global config if no explicit valkey passed
-        final ValkeyConnection actualValkey = (valkey != null)
-            ? valkey
-            : GlobalCacheConfig.valkeyConnection().orElse(null);
-
-        this.twoTier = (actualValkey != null);
+        // Check global valkey connection
+        final ValkeyConnection actualValkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        this.twoTier = config.isValkeyEnabled() && (actualValkey != null);
         this.l2 = this.twoTier ? actualValkey.async() : null;
+        this.l2Ttl = config.l2Ttl();
 
-        // L1 cache configuration
-        final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : ttl;
-        final int l1Size = this.twoTier ? Math.max(1000, maxSize / 10) : maxSize;
+        // L1 cache configuration from unified config
+        final Duration l1Ttl = this.twoTier ? config.l1Ttl() : config.ttl();
+        final int l1Size = this.twoTier ? config.l1MaxSize() : config.maxSize();
 
         this.l1Cache = Caffeine.newBuilder()
             .maximumSize(l1Size)
@@ -255,7 +236,7 @@ public final class GroupNegativeCache {
         // Cache in L2 (if enabled)
         if (this.twoTier) {
             final byte[] value = new byte[]{1};  // Sentinel value
-            this.l2.setex(key, this.ttl.getSeconds(), value);
+            this.l2.setex(key, this.l2Ttl.getSeconds(), value);
         }
     }
 

@@ -334,23 +334,33 @@ public final class ArtifactDbFactory {
                     "   blocked_until BIGINT NOT NULL,",
                     "   unblocked_at BIGINT,",
                     "   unblocked_by VARCHAR,",
-                    "   parent_block_id BIGINT,",
-                    "   CONSTRAINT cooldown_parent_fk FOREIGN KEY (parent_block_id)",
-                    "       REFERENCES artifact_cooldowns(id) ON DELETE CASCADE,",
+                    "   installed_by VARCHAR,",
                     "   CONSTRAINT cooldown_artifact_unique UNIQUE (repo_name, artifact, version)",
                     ");"
                 )
             );
+            // Migration: Add installed_by column if table already exists without it
             statement.executeUpdate(
-                String.join(
-                    "\n",
-                    "CREATE TABLE IF NOT EXISTS artifact_cooldown_attempts(",
-                    "   id BIGSERIAL PRIMARY KEY,",
-                    "   block_id BIGINT NOT NULL REFERENCES artifact_cooldowns(id) ON DELETE CASCADE,",
-                    "   requested_by VARCHAR NOT NULL,",
-                    "   attempted_at BIGINT NOT NULL",
-                    ");"
-                )
+                "ALTER TABLE artifact_cooldowns ADD COLUMN IF NOT EXISTS installed_by VARCHAR"
+            );
+            // Migration: Drop parent_block_id if exists (no longer used)
+            try {
+                statement.executeUpdate(
+                    "ALTER TABLE artifact_cooldowns DROP CONSTRAINT IF EXISTS cooldown_parent_fk"
+                );
+            } catch (SQLException ignored) {
+                // Constraint may not exist
+            }
+            try {
+                statement.executeUpdate(
+                    "ALTER TABLE artifact_cooldowns DROP COLUMN IF EXISTS parent_block_id"
+                );
+            } catch (SQLException ignored) {
+                // Column may not exist
+            }
+            // Migration: Drop artifact_cooldown_attempts table (no longer used)
+            statement.executeUpdate(
+                "DROP TABLE IF EXISTS artifact_cooldown_attempts"
             );
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_cooldowns_repo_artifact ON artifact_cooldowns(repo_name, artifact, version)"

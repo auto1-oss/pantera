@@ -12,6 +12,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
+import com.artipie.http.log.EcsLogEvent;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.slice.KeyFromPath;
 
@@ -20,9 +21,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.MDC;
 
 /**
  * High-performance group/virtual repository slice.
@@ -67,6 +71,51 @@ public final class GroupSlice implements Slice {
      * Negative cache for member 404s.
      */
     private final GroupNegativeCache negativeCache;
+
+    /**
+     * Request context for enhanced logging (client IP, username, trace ID, package).
+     * @param clientIp Client IP address from X-Forwarded-For or X-Real-IP
+     * @param username Username from Authorization header (optional)
+     * @param traceId Trace ID from MDC for distributed tracing
+     * @param packageName Package/artifact being requested
+     */
+    private record RequestContext(String clientIp, String username, String traceId, String packageName) {
+        /**
+         * Extract request context from headers and path.
+         * @param headers Request headers
+         * @param path Request path (package name)
+         * @return RequestContext with extracted values
+         */
+        static RequestContext from(final Headers headers, final String path) {
+            final String clientIp = EcsLogEvent.extractClientIp(headers, "unknown");
+            // Try MDC first (set by auth middleware after authentication)
+            // then fall back to header extraction (Basic auth only)
+            // Don't default to "anonymous" - leave null if no user is authenticated
+            String username = MDC.get("user.name");
+            if (username == null || username.isEmpty()) {
+                username = EcsLogEvent.extractUsername(headers).orElse(null);
+            }
+            final String traceId = MDC.get("trace.id");
+            return new RequestContext(clientIp, username, traceId != null ? traceId : "none", path);
+        }
+
+        /**
+         * Add context fields to an EcsLogger builder.
+         * @param logger Logger builder to enhance
+         * @return Enhanced logger builder
+         */
+        EcsLogger addTo(final EcsLogger logger) {
+            EcsLogger result = logger
+                .field("client.ip", this.clientIp)
+                .field("trace.id", this.traceId)
+                .field("package.name", this.packageName);
+            // Only add user.name if authenticated (not null)
+            if (this.username != null) {
+                result = result.field("user.name", this.username);
+            }
+            return result;
+        }
+    }
 
     /**
      * Constructor (maintains old API for drop-in compatibility).
@@ -171,9 +220,12 @@ public final class GroupSlice implements Slice {
             );
         }
 
+        // Extract request context for enhanced logging
+        final RequestContext ctx = RequestContext.from(headers, path);
+
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
-        return queryAllMembersInParallel(line, headers, body)
+        return queryAllMembersInParallel(line, headers, body, ctx)
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - requestStartTime;
                 if (err != null) {
@@ -192,7 +244,8 @@ public final class GroupSlice implements Slice {
     private CompletableFuture<Response> queryAllMembersInParallel(
         final RequestLine line,
         final Headers headers,
-        final Content body
+        final Content body,
+        final RequestContext ctx
     ) {
         final long startTime = System.currentTimeMillis();
 
@@ -208,13 +261,13 @@ public final class GroupSlice implements Slice {
 
             // Start ALL members in parallel
             for (MemberSlice member : this.members) {
-                queryMember(member, line, headers, requestBytes)
+                queryMember(member, line, headers, requestBytes, ctx)
                     .orTimeout(this.timeout.getSeconds(), java.util.concurrent.TimeUnit.SECONDS)
                     .whenComplete((resp, err) -> {
                         if (err != null) {
-                            handleMemberFailure(member, err, completed, pending, result);
+                            handleMemberFailure(member, err, completed, pending, result, ctx);
                         } else {
-                            handleMemberResponse(member, resp, completed, pending, result, startTime, pathKey);
+                            handleMemberResponse(member, resp, completed, pending, result, startTime, pathKey, ctx);
                         }
                     });
             }
@@ -230,13 +283,15 @@ public final class GroupSlice implements Slice {
      * @param line Request line
      * @param headers Request headers
      * @param requestBytes Request body bytes (may be empty for GET/HEAD)
+     * @param ctx Request context for logging
      * @return Response future
      */
     private CompletableFuture<Response> queryMember(
         final MemberSlice member,
         final RequestLine line,
         final Headers headers,
-        final byte[] requestBytes
+        final byte[] requestBytes,
+        final RequestContext ctx
     ) {
         final Key pathKey = new KeyFromPath(line.uri().getPath());
 
@@ -244,14 +299,14 @@ public final class GroupSlice implements Slice {
         return this.negativeCache.isNotFoundAsync(member.name(), pathKey)
             .thenCompose(isNotFound -> {
                 if (isNotFound) {
-                    EcsLogger.debug("com.artipie.group")
+                    ctx.addTo(EcsLogger.debug("com.artipie.group")
                         .message("Member negative cache HIT")
                         .eventCategory("repository")
                         .eventAction("group_query")
                         .eventOutcome("cache_hit")
                         .field("repository.name", this.group)
                         .field("member.name", member.name())
-                        .field("url.path", pathKey.string())
+                        .field("url.path", pathKey.string()))
                         .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.notFound().build()
@@ -259,13 +314,13 @@ public final class GroupSlice implements Slice {
                 }
 
                 if (member.isCircuitOpen()) {
-                    EcsLogger.warn("com.artipie.group")
+                    ctx.addTo(EcsLogger.warn("com.artipie.group")
                         .message("Member circuit OPEN, skipping")
                         .eventCategory("repository")
                         .eventAction("group_query")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
-                        .field("member.name", member.name())
+                        .field("member.name", member.name()))
                         .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.unavailable().build()
@@ -297,7 +352,8 @@ public final class GroupSlice implements Slice {
         final AtomicInteger pending,
         final CompletableFuture<Response> result,
         final long startTime,
-        final Key pathKey
+        final Key pathKey,
+        final RequestContext ctx
     ) {
         final RsStatus status = resp.status();
 
@@ -307,14 +363,14 @@ public final class GroupSlice implements Slice {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
                 if (latency > 1000) {
-                    EcsLogger.warn("com.artipie.group")
+                    ctx.addTo(EcsLogger.warn("com.artipie.group")
                         .message("Slow member response")
                         .eventCategory("repository")
                         .eventAction("group_query")
                         .eventOutcome("success")
                         .field("repository.name", this.group)
                         .field("member.name", member.name())
-                        .duration(latency)
+                        .duration(latency))
                         .log();
                 }
                 member.recordSuccess();
@@ -323,27 +379,27 @@ public final class GroupSlice implements Slice {
                 recordGroupMemberLatency(member.name(), "success", latency);
                 result.complete(resp);
             } else {
-                EcsLogger.debug("com.artipie.group")
+                ctx.addTo(EcsLogger.debug("com.artipie.group")
                     .message("Member returned success but another member already won")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .field("repository.name", this.group)
                     .field("member.name", member.name())
-                    .field("http.response.status_code", status.code())
+                    .field("http.response.status_code", status.code()))
                     .log();
                 drainBody(member.name(), resp.body());
             }
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
-                EcsLogger.info("com.artipie.group")
+                ctx.addTo(EcsLogger.info("com.artipie.group")
                     .message("Member returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .eventOutcome("success")
                     .field("repository.name", this.group)
                     .field("member.name", member.name())
-                    .field("http.response.status_code", 403)
+                    .field("http.response.status_code", 403))
                     .log();
                 member.recordSuccess(); // Not a failure - valid response
                 result.complete(resp);
@@ -353,35 +409,35 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: Cache in negative cache and try next member
             this.negativeCache.cacheNotFound(member.name(), pathKey);
-            EcsLogger.debug("com.artipie.group")
+            ctx.addTo(EcsLogger.debug("com.artipie.group")
                 .message("Member returned 404, cached in negative cache")
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("not_found")
                 .field("repository.name", this.group)
                 .field("member.name", member.name())
-                .field("url.path", pathKey.string())
+                .field("url.path", pathKey.string()))
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
-                EcsLogger.warn("com.artipie.group")
+                ctx.addTo(EcsLogger.warn("com.artipie.group")
                     .message("All members exhausted, returning 404")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .eventOutcome("failure")
-                    .field("repository.name", this.group)
+                    .field("repository.name", this.group))
                     .log();
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
             }
         } else {
             // Other errors (500, etc.): try next member (don't cache)
-            EcsLogger.warn("com.artipie.group")
+            ctx.addTo(EcsLogger.warn("com.artipie.group")
                 .message("Member returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("repository")
                 .eventAction("group_query")
-                .eventOutcome("failure")
+                .eventOutcome("failure"))
                 .field("repository.name", this.group)
                 .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
@@ -389,12 +445,12 @@ public final class GroupSlice implements Slice {
             recordGroupMemberRequest(member.name(), "error");
             drainBody(member.name(), resp.body());
             if (pending.decrementAndGet() == 0 && !completed.get()) {
-                EcsLogger.warn("com.artipie.group")
+                ctx.addTo(EcsLogger.warn("com.artipie.group")
                     .message("All members exhausted, returning 404")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .eventOutcome("failure")
-                    .field("repository.name", this.group)
+                    .field("repository.name", this.group))
                     .log();
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
@@ -410,16 +466,17 @@ public final class GroupSlice implements Slice {
         final Throwable err,
         final AtomicBoolean completed,
         final AtomicInteger pending,
-        final CompletableFuture<Response> result
+        final CompletableFuture<Response> result,
+        final RequestContext ctx
     ) {
-        EcsLogger.warn("com.artipie.group")
+        ctx.addTo(EcsLogger.warn("com.artipie.group")
             .message("Member query failed")
             .eventCategory("repository")
             .eventAction("group_query")
             .eventOutcome("failure")
             .field("repository.name", this.group)
             .field("member.name", member.name())
-            .field("error.message", err.getMessage())
+            .field("error.message", err.getMessage()))
             .log();
         member.recordFailure();
 
@@ -431,19 +488,41 @@ public final class GroupSlice implements Slice {
 
     /**
      * Drain response body to prevent leak.
+     * Uses streaming discard to avoid OOM on large responses (e.g., npm typescript ~30MB).
      */
     private void drainBody(final String memberName, final Content body) {
-        body.asBytesFuture().whenComplete((bytes, err) -> {
-            if (err != null) {
+        // Use streaming subscriber that discards bytes without accumulating
+        // This prevents OOM when draining large npm package metadata
+        body.subscribe(new org.reactivestreams.Subscriber<>() {
+            private org.reactivestreams.Subscription subscription;
+
+            @Override
+            public void onSubscribe(final org.reactivestreams.Subscription sub) {
+                this.subscription = sub;
+                sub.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(final java.nio.ByteBuffer item) {
+                // Discard bytes - don't accumulate
+            }
+
+            @Override
+            public void onError(final Throwable err) {
                 EcsLogger.warn("com.artipie.group")
                     .message("Failed to drain response body")
                     .eventCategory("repository")
                     .eventAction("body_drain")
                     .eventOutcome("failure")
-                    .field("repository.name", this.group)
+                    .field("repository.name", GroupSlice.this.group)
                     .field("member.name", memberName)
                     .field("error.message", err.getMessage())
                     .log();
+            }
+
+            @Override
+            public void onComplete() {
+                // Body fully drained
             }
         });
     }

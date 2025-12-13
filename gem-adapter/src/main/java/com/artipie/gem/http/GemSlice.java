@@ -18,6 +18,7 @@ import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
@@ -121,7 +122,7 @@ public final class GemSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     GemSlice.createAuthSlice(
-                        new SliceDownload(storage),
+                        new StorageArtifactSlice(storage),
                         basicAuth,
                         tokenAuth,
                         new OperationControl(

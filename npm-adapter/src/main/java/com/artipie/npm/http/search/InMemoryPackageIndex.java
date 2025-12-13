@@ -103,10 +103,11 @@ public final class InMemoryPackageIndex implements PackageIndex {
         final CacheConfig config = CacheConfig.from(serverYaml, "npm-search");
         this.twoTier = (actualValkey != null && config.valkeyEnabled());
         this.l2 = this.twoTier ? actualValkey.async() : null;
-        this.ttl = config.ttl();
+        // Use l2Ttl for L2 storage, main ttl for single-tier
+        this.ttl = this.twoTier ? config.l2Ttl() : config.ttl();
         
-        // L1: Hot data cache
-        final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : config.ttl();
+        // L1: Hot data cache - use configured TTLs
+        final Duration l1Ttl = this.twoTier ? config.l1Ttl() : config.ttl();
         final int l1Size = this.twoTier ? config.l1MaxSize() : config.maxSize();
         
         this.packages = Caffeine.newBuilder()

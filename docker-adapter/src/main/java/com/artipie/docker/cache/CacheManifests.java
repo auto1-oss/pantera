@@ -17,6 +17,7 @@ import com.artipie.docker.misc.JoinedTagsSource;
 import com.artipie.docker.misc.Pagination;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
+import org.slf4j.MDC;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -138,6 +139,8 @@ public final class CacheManifests implements Manifests {
                                 .eventCategory("repository")
                                 .eventAction("manifest_cache")
                                 .eventOutcome("failure")
+                                .field("repository.name", this.rname)
+                                .field("container.image.name", this.name)
                                 .field("container.image.hash.all", ref.digest())
                                 .field("file.type", manifest.mediaType())
                                 .log();
@@ -155,7 +158,10 @@ public final class CacheManifests implements Manifests {
                         .eventCategory("repository")
                         .eventAction("manifest_get")
                         .eventOutcome("failure")
+                        .field("repository.name", this.rname)
+                        .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
+                        .field("url.upstream", this.upstreamUrl)
                         .error(throwable)
                         .log();
                     result = this.cache.manifests().get(ref);
@@ -190,6 +196,8 @@ public final class CacheManifests implements Manifests {
                             .eventCategory("repository")
                             .eventAction("manifest_cache")
                             .eventOutcome("failure")
+                            .field("repository.name", this.rname)
+                            .field("container.image.name", this.name)
                             .field("container.image.hash.all", ref.digest())
                             .error(ex)
                             .log();
@@ -221,6 +229,7 @@ public final class CacheManifests implements Manifests {
                         .eventCategory("repository")
                         .eventAction("manifest_cache")
                         .eventOutcome("failure")
+                        .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
                         .field("error.message", ex.getMessage())
@@ -248,13 +257,23 @@ public final class CacheManifests implements Manifests {
                 );
                 this.events.ifPresent(queue -> {
                     final long created = System.currentTimeMillis();
+                    // Get owner: 1. From inspector cache, 2. From MDC (set by auth), 3. Default
+                    String owner = this.inspector
+                        .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
+                        .orElse(null);
+                    if (owner == null || owner.isEmpty()) {
+                        final String mdcUser = MDC.get("user.name");
+                        if (mdcUser != null && !mdcUser.isEmpty() && !"anonymous".equals(mdcUser)) {
+                            owner = mdcUser;
+                        } else {
+                            owner = ArtifactEvent.DEF_OWNER;
+                        }
+                    }
                     queue.add(
                         new ArtifactEvent(
                             CacheManifests.REPO_TYPE,
                             this.rname,
-                            this.inspector
-                                .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
-                                .orElse(ArtifactEvent.DEF_OWNER),
+                            owner,
                             this.name,
                             ref.digest(),
                             manifest.isManifestList()
@@ -321,6 +340,8 @@ public final class CacheManifests implements Manifests {
                 .message("Unable to parse manifest config `created` field")
                 .eventCategory("repository")
                 .eventAction("manifest_cache")
+                .field("repository.name", this.rname)
+                .field("container.image.name", this.name)
                 .field("error.message", ex.getMessage())
                 .log();
         }

@@ -7,6 +7,8 @@ package com.artipie.http.headers;
 import com.artipie.http.Headers;
 import com.artipie.http.auth.AuthzSlice;
 import com.artipie.scheduling.ArtifactEvent;
+import org.slf4j.MDC;
+
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Optional;
@@ -36,14 +38,26 @@ public final class Login extends Header {
     }
 
     private static String resolve(final Headers headers) {
+        // 1. Try artipie_login header (set by AuthzSlice after successful auth)
         return headers.find(AuthzSlice.LOGIN_HDR)
             .stream()
             .findFirst()
             .map(Header::getValue)
             .filter(Login::isMeaningful)
-            .orElseGet(
-                () -> authorizationUser(headers).orElse(ArtifactEvent.DEF_OWNER)
-            );
+            .orElseGet(() -> {
+                // 2. Try Basic auth header extraction
+                final Optional<String> fromAuth = authorizationUser(headers);
+                if (fromAuth.isPresent()) {
+                    return fromAuth.get();
+                }
+                // 3. Try MDC (set by AuthzSlice for Bearer/JWT users)
+                final String mdcUser = MDC.get("user.name");
+                if (mdcUser != null && !mdcUser.isEmpty() && !"anonymous".equals(mdcUser)) {
+                    return mdcUser;
+                }
+                // 4. Default fallback
+                return ArtifactEvent.DEF_OWNER;
+            });
     }
 
     private static Optional<String> authorizationUser(final Headers headers) {

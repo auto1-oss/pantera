@@ -297,7 +297,7 @@ final class FilteredMetadataCacheTest {
         
         // Test cache behavior with manual invalidation (which is the reliable path)
         final FilteredMetadataCache cache = new FilteredMetadataCache(
-            1000, Duration.ofHours(24), null
+            1000, Duration.ofHours(24), Duration.ofHours(24), null
         );
         
         final AtomicInteger loadCount = new AtomicInteger(0);

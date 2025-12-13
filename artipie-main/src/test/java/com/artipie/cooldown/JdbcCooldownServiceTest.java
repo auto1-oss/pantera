@@ -89,7 +89,7 @@ final class JdbcCooldownServiceTest {
     }
 
     @Test
-    void blocksFreshReleaseWithinWindow() throws Exception {
+    void blocksFreshReleaseWithinWindow() {
         final CooldownRequest request =
             new CooldownRequest("npm-proxy", "npm", "left-pad", "1.1.0", "bob", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
@@ -100,23 +100,19 @@ final class JdbcCooldownServiceTest {
 
             @Override
             public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
-                return CompletableFuture.completedFuture(List.of(new CooldownDependency("dependency", "1.0.0")));
+                return CompletableFuture.completedFuture(List.of());
             }
         };
         final CooldownResult result = this.service.evaluate(request, inspector).join();
         MatcherAssert.assertThat(result.blocked(), Matchers.is(true));
         MatcherAssert.assertThat(result.block().get().reason(), Matchers.is(CooldownReason.FRESH_RELEASE));
         
-        // Dependencies are inserted asynchronously - wait for background processing
-        Thread.sleep(500);
-        
-        // Verify dependencies were saved in DB by querying for this specific artifact
+        // Verify block exists in DB
         final List<CooldownBlock> blocks = this.service.activeBlocks(request.repoType(), request.repoName()).join();
         final List<CooldownBlock> leftPadBlocks = blocks.stream()
             .filter(b -> "left-pad".equals(b.artifact()))
             .collect(java.util.stream.Collectors.toList());
         MatcherAssert.assertThat("Block for left-pad should exist", leftPadBlocks, Matchers.hasSize(1));
-        MatcherAssert.assertThat("Dependencies should be saved", leftPadBlocks.get(0).dependencies(), Matchers.hasSize(1));
     }
 
     @Test
@@ -161,7 +157,7 @@ final class JdbcCooldownServiceTest {
     }
 
     @Test
-    void unblockAllReleasesDependencies() {
+    void unblockAllReleasesForUser() {
         final CooldownRequest request =
             new CooldownRequest("npm-proxy", "npm", "main", "1.0.0", "eve", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
@@ -172,21 +168,16 @@ final class JdbcCooldownServiceTest {
 
             @Override
             public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
-                return CompletableFuture.completedFuture(List.of(
-                    new CooldownDependency("dep-a", "1.0.0"),
-                    new CooldownDependency("dep-b", "2.0.0")
-                ));
+                return CompletableFuture.completedFuture(List.of());
             }
         };
         this.service.evaluate(request, inspector).join();
         this.service.unblockAll("npm-proxy", "npm", "eve").join();
         MatcherAssert.assertThat(this.status("npm", "main", "1.0.0"), Matchers.is("INACTIVE"));
-        MatcherAssert.assertThat(this.status("npm", "dep-a", "1.0.0"), Matchers.is("INACTIVE"));
-        MatcherAssert.assertThat(this.status("npm", "dep-b", "2.0.0"), Matchers.is("INACTIVE"));
     }
 
     @Test
-    void storesSystemAsBlockerAndTracksRequester() {
+    void storesSystemAsBlocker() {
         final CooldownRequest request =
             new CooldownRequest("maven-proxy", "central", "com.test.blocked", "3.0.0", "carol", Instant.now());
         final CooldownInspector inspector = new CooldownInspector() {
@@ -204,11 +195,6 @@ final class JdbcCooldownServiceTest {
         MatcherAssert.assertThat(
             this.blockedBy("central", "com.test.blocked", "3.0.0"),
             Matchers.is("system")
-        );
-        final long id = this.blockId("central", "com.test.blocked", "3.0.0");
-        MatcherAssert.assertThat(
-            this.requesters(id),
-            Matchers.contains("carol")
         );
     }
 
@@ -305,28 +291,11 @@ final class JdbcCooldownServiceTest {
         }
     }
 
-    private List<String> requesters(final long blockId) {
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(
-                "SELECT requested_by FROM artifact_cooldown_attempts WHERE block_id = ? ORDER BY attempted_at"
-            )) {
-            stmt.setLong(1, blockId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                final List<String> result = new ArrayList<>();
-                while (rs.next()) {
-                    result.add(rs.getString(1));
-                }
-                return result;
-            }
-        } catch (final SQLException err) {
-            throw new IllegalStateException(err);
-        }
-    }
 
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
-                "TRUNCATE TABLE artifact_cooldown_attempts, artifact_cooldowns, artifacts RESTART IDENTITY"
+                "TRUNCATE TABLE artifact_cooldowns, artifacts RESTART IDENTITY"
             )) {
             stmt.executeUpdate();
         } catch (final SQLException err) {

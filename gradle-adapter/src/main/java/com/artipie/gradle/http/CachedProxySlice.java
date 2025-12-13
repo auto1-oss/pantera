@@ -147,9 +147,11 @@ final class CachedProxySlice implements Slice {
      * @param inspector Cooldown inspector
      * @param storage Storage for persisting checksums (optional)
      * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
+    @Deprecated
+    @SuppressWarnings({"PMD.ExcessiveParameterList", "PMD.UnusedFormalParameter"})
     CachedProxySlice(
         final Slice client,
         final Cache cache,
@@ -171,14 +173,9 @@ final class CachedProxySlice implements Slice {
         this.inspector = inspector;
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadata.isPresent() && !Objects.equals(this.cache, Cache.NOP);
-        this.negativeCache = new NegativeCache(
-            negativeCacheTtl,
-            negativeCacheEnabled,
-            50_000,  // default max size
-            null,    // use global Valkey config
-            rtype,   // Repository type for cache key namespacing
-            rname    // CRITICAL: Include repo name for cache isolation
-        );
+        // Use unified NegativeCacheConfig for consistent settings across all adapters
+        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
+        this.negativeCache = new NegativeCache(rtype, rname);
     }
 
     @Override

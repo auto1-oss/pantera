@@ -67,6 +67,11 @@ public final class CooldownMetrics {
     private final Map<String, AtomicLong> activeBlocksGauges;
 
     /**
+     * All-blocked packages count (packages where ALL versions are blocked).
+     */
+    private final AtomicLong allBlockedPackages;
+
+    /**
      * Cache size supplier (set by FilteredMetadataCache).
      */
     private volatile Supplier<Long> cacheSizeSupplier;
@@ -79,11 +84,24 @@ public final class CooldownMetrics {
     private CooldownMetrics(final MeterRegistry registry) {
         this.registry = registry;
         this.activeBlocksGauges = new ConcurrentHashMap<>();
+        this.allBlockedPackages = new AtomicLong(0);
         this.cacheSizeSupplier = () -> 0L;
 
-        // Register cache size gauge
+        // Register cache size gauge - uses 'this' reference to prevent GC
         Gauge.builder("artipie.cooldown.cache.size", this, m -> m.cacheSizeSupplier.get().doubleValue())
             .description("Current cooldown metadata cache size")
+            .register(registry);
+
+        // Register global active_blocks gauge - always emits, computes total from per-repo gauges
+        // Uses 'this' reference to prevent GC and ensure gauge is never stale
+        Gauge.builder("artipie.cooldown.active_blocks", this, CooldownMetrics::computeTotalActiveBlocks)
+            .description("Total active cooldown blocks across all repositories")
+            .register(registry);
+
+        // Register all_blocked gauge - tracks packages where ALL versions are blocked
+        // Persisted in database, loaded on startup, always emits current value
+        Gauge.builder("artipie.cooldown.all_blocked", this.allBlockedPackages, AtomicLong::doubleValue)
+            .description("Number of packages where all versions are blocked")
             .register(registry);
     }
 
@@ -177,23 +195,29 @@ public final class CooldownMetrics {
     }
 
     /**
-     * Record all versions blocked event.
+     * Set all-blocked packages count (loaded from database on startup).
      *
-     * @param repoType Repository type
-     * @param repoName Repository name
-     * @param packageName Package name
+     * @param count Current count of packages with all versions blocked
      */
-    public void recordAllVersionsBlocked(
-        final String repoType,
-        final String repoName,
-        final String packageName
-    ) {
-        Counter.builder("artipie.cooldown.all_blocked")
-            .description("Events where all versions of a package were blocked")
-            .tag("repo_type", repoType)
-            .tag("repo_name", repoName)
-            .register(this.registry)
-            .increment();
+    public void setAllBlockedPackages(final long count) {
+        this.allBlockedPackages.set(count);
+    }
+
+    /**
+     * Increment all-blocked packages count (called when all versions become blocked).
+     */
+    public void incrementAllBlocked() {
+        this.allBlockedPackages.incrementAndGet();
+    }
+
+    /**
+     * Decrement all-blocked packages count (called when a package is unblocked).
+     */
+    public void decrementAllBlocked() {
+        final long current = this.allBlockedPackages.decrementAndGet();
+        if (current < 0) {
+            this.allBlockedPackages.set(0);
+        }
     }
 
     /**
@@ -214,7 +238,7 @@ public final class CooldownMetrics {
     // ==================== Gauges ====================
 
     /**
-     * Update active blocks count for a repository.
+     * Update active blocks count for a repository (used on startup to load from DB).
      *
      * @param repoType Repository type
      * @param repoName Repository name
@@ -222,15 +246,62 @@ public final class CooldownMetrics {
      */
     public void updateActiveBlocks(final String repoType, final String repoName, final long count) {
         final String key = repoType + ":" + repoName;
-        this.activeBlocksGauges.computeIfAbsent(key, k -> {
-            final AtomicLong gauge = new AtomicLong(0);
-            Gauge.builder("artipie.cooldown.active_blocks", gauge, AtomicLong::doubleValue)
-                .description("Number of active cooldown blocks")
+        this.getOrCreateRepoGauge(repoType, repoName, key).set(count);
+    }
+
+    /**
+     * Increment active blocks for a repository (O(1), no DB query).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    public void incrementActiveBlocks(final String repoType, final String repoName) {
+        final String key = repoType + ":" + repoName;
+        this.getOrCreateRepoGauge(repoType, repoName, key).incrementAndGet();
+    }
+
+    /**
+     * Decrement active blocks for a repository (O(1), no DB query).
+     *
+     * @param repoType Repository type
+     * @param repoName Repository name
+     */
+    public void decrementActiveBlocks(final String repoType, final String repoName) {
+        final String key = repoType + ":" + repoName;
+        final AtomicLong gauge = this.activeBlocksGauges.get(key);
+        if (gauge != null) {
+            final long val = gauge.decrementAndGet();
+            if (val < 0) {
+                gauge.set(0);
+            }
+        }
+    }
+
+    /**
+     * Get or create per-repo gauge.
+     */
+    private AtomicLong getOrCreateRepoGauge(final String repoType, final String repoName, final String key) {
+        return this.activeBlocksGauges.computeIfAbsent(key, k -> {
+            final AtomicLong newGauge = new AtomicLong(0);
+            Gauge.builder("artipie.cooldown.active_blocks.repo", newGauge, AtomicLong::doubleValue)
+                .description("Number of active cooldown blocks per repository")
                 .tag("repo_type", repoType)
                 .tag("repo_name", repoName)
                 .register(this.registry);
-            return gauge;
-        }).set(count);
+            return newGauge;
+        });
+    }
+
+    /**
+     * Compute total active blocks across all repositories.
+     * Called by Micrometer on each scrape - ensures gauge always emits.
+     *
+     * @return Total active blocks count
+     */
+    private double computeTotalActiveBlocks() {
+        return this.activeBlocksGauges.values().stream()
+            .mapToLong(AtomicLong::get)
+            .sum();
     }
 
     // ==================== Timers ====================

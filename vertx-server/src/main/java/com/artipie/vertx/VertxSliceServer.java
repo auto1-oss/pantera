@@ -689,11 +689,41 @@ public final class VertxSliceServer implements Closeable {
                 // CRITICAL: Must execute on Vert.x event loop thread for thread safety
                 // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
                 // This is especially critical for large file downloads (>200MB)
-                vpb.subscribe(
-                    buffer -> {
+                // 
+                // BACKPRESSURE: Use writeQueueFull() and drainHandler() to prevent buffer bloat.
+                // Without backpressure, chunks accumulate faster than they can be sent,
+                // causing memory pressure and slow downloads (82 KB/s vs 500 Mbps).
+                vpb.subscribe(new org.reactivestreams.Subscriber<Buffer>() {
+                    private org.reactivestreams.Subscription subscription;
+                    private volatile boolean completed = false;
+                    
+                    @Override
+                    public void onSubscribe(org.reactivestreams.Subscription s) {
+                        this.subscription = s;
+                        // Request first chunk
+                        s.request(1);
+                    }
+                    
+                    @Override
+                    public void onNext(Buffer buffer) {
                         response.write(buffer);
-                    },
-                    error -> {
+                        // Backpressure: only request more if write queue is not full
+                        if (response.writeQueueFull()) {
+                            // Pause upstream, resume when drained
+                            response.drainHandler(v -> {
+                                if (!completed) {
+                                    subscription.request(1);
+                                }
+                            });
+                        } else {
+                            // Queue not full, request next chunk immediately
+                            subscription.request(1);
+                        }
+                    }
+                    
+                    @Override
+                    public void onError(Throwable error) {
+                        completed = true;
                         EcsLogger.error("com.artipie.vertx")
                             .message("Error writing response body")
                             .eventCategory("http")
@@ -702,8 +732,11 @@ public final class VertxSliceServer implements Closeable {
                             .error(error)
                             .log();
                         terminator.fail(error);
-                    },
-                    () -> {
+                    }
+                    
+                    @Override
+                    public void onComplete() {
+                        completed = true;
                         EcsLogger.debug("com.artipie.vertx")
                             .message("Response body fully written")
                             .eventCategory("http")
@@ -713,7 +746,7 @@ public final class VertxSliceServer implements Closeable {
                             .log();
                         terminator.end();
                     }
-                );
+                });
             }
         } else {
             response.setChunked(true);
@@ -801,7 +834,11 @@ public final class VertxSliceServer implements Closeable {
             final String host = remote == null ? "unknown" : remote.host();
             final int port = remote == null ? -1 : remote.port();
             final String clientIp = EcsLogEvent.extractClientIp(headers, host);
-            final Optional<String> username = EcsLogEvent.extractUsername(headers);
+            // Try MDC first (set by auth middleware), then fall back to header extraction
+            final String mdcUser = org.slf4j.MDC.get("user.name");
+            final Optional<String> username = (mdcUser != null && !mdcUser.isEmpty())
+                ? Optional.of(mdcUser)
+                : EcsLogEvent.extractUsername(headers);
             final String userAgent = headers.values("user-agent").stream().findFirst().orElse(null);
             final Map<String, String> snapshot = captureHeaders(headers);
             return new RequestLogContext(host, port, clientIp, userAgent, username, snapshot);

@@ -21,6 +21,7 @@ import com.artipie.cache.StoragesCache;
 import com.artipie.cache.ValkeyConnection;
 import com.artipie.cooldown.CooldownSettings;
 import com.artipie.cooldown.YamlCooldownSettings;
+import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.artipie.db.ArtifactDbFactory;
 import com.artipie.db.DbConsumer;
 import com.artipie.http.auth.AuthLoader;
@@ -184,6 +185,10 @@ public final class YamlSettings implements Settings {
         final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
         // Initialize global cache config for all adapters
         GlobalCacheConfig.initialize(valkey);
+        // Initialize unified negative cache config
+        com.artipie.cache.NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
+        // Initialize cooldown metadata cache config
+        FilteredMetadataCacheConfig.initialize(this.meta().yamlMapping("caches"));
         final CachedUsers auth = YamlSettings.initAuth(this.meta(), valkey, this.jwtSettings);
         this.security = new ArtipieSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse()

@@ -79,7 +79,13 @@ final class NpmCooldownIntegrationTest {
         // Block version 3.0.0
         this.cooldownService.blockVersion("lodash", "3.0.0");
 
-        final String rawJson = """
+        // Use recent dates so versions fall within cooldown evaluation window
+        final java.time.Instant now = java.time.Instant.now();
+        final String date1 = now.minus(java.time.Duration.ofDays(30)).toString();  // old, outside cooldown
+        final String date2 = now.minus(java.time.Duration.ofDays(14)).toString();  // old, outside cooldown  
+        final String date3 = now.minus(java.time.Duration.ofDays(1)).toString();   // recent, within cooldown
+        
+        final String rawJson = String.format("""
             {
                 "name": "lodash",
                 "dist-tags": { "latest": "3.0.0" },
@@ -89,12 +95,12 @@ final class NpmCooldownIntegrationTest {
                     "3.0.0": { "name": "lodash", "version": "3.0.0" }
                 },
                 "time": {
-                    "1.0.0": "2020-01-01T00:00:00.000Z",
-                    "2.0.0": "2021-01-01T00:00:00.000Z",
-                    "3.0.0": "2023-01-01T00:00:00.000Z"
+                    "1.0.0": "%s",
+                    "2.0.0": "%s",
+                    "3.0.0": "%s"
                 }
             }
-            """;
+            """, date1, date2, date3);
 
         final byte[] result = this.service.filterMetadata(
             "npm",

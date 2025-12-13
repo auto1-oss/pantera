@@ -154,17 +154,20 @@ public final class CachedProxySlice implements Slice {
      * @param inspector Cooldown inspector
      * @param storage Storage for persisting checksums (optional)
      * @param metadataTtl TTL for metadata cache
-     * @param negativeCacheTtl TTL for negative cache
-     * @param negativeCacheEnabled Whether negative caching is enabled
+     * @param negativeCacheTtl TTL for negative cache (ignored - uses unified NegativeCacheConfig)
+     * @param negativeCacheEnabled Whether negative caching is enabled (ignored - uses unified NegativeCacheConfig)
+     * @deprecated Use constructor without negative cache params - negative cache now uses unified NegativeCacheConfig
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
+    @Deprecated
+    @SuppressWarnings({"PMD.ExcessiveParameterList", "PMD.UnusedFormalParameter"})
     CachedProxySlice(final Slice client, final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events, final String rname, final String upstreamUrl,
         final String rtype, final CooldownService cooldown, final CooldownInspector inspector,
         final Optional<Storage> storage, final Duration metadataTtl,
         final Duration negativeCacheTtl, final boolean negativeCacheEnabled) {
+        // negativeCacheTtl and negativeCacheEnabled are now ignored - use unified NegativeCacheConfig
         this(client, cache, events, rname, upstreamUrl, rtype, cooldown, inspector, storage,
-            new MavenCacheConfig(metadataTtl, 10_000, negativeCacheTtl, 50_000, negativeCacheEnabled));
+            new MavenCacheConfig(metadataTtl, 10_000));
     }
 
     /**
@@ -204,13 +207,9 @@ public final class CachedProxySlice implements Slice {
             valkeyConn,
             rname
         );
-        this.negativeCache = new NegativeCache(
-            cacheConfig.negativeTtl(),
-            cacheConfig.negativeEnabled(),
-            cacheConfig.negativeMaxSize(),
-            valkeyConn,
-            rname
-        );
+        // Use unified NegativeCacheConfig for consistent settings across all adapters
+        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
+        this.negativeCache = new NegativeCache(rname);
     }
 
     /**

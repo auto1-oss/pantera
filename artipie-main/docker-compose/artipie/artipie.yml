@@ -91,27 +91,29 @@ meta:
       host: valkey
       port: 6379
       timeout: 100ms
+
     cooldown:
       ttl: 24h
-      maxSize: 100000
+      maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 100000
+        l1MaxSize: 1000
         l1Ttl: 24h
         l2MaxSize: 5000000
         l2Ttl: 7d
+
     negative:
       ttl: 24h
-      maxSize: 50000
+      maxSize: 5000
       valkey:
         enabled: true
-        l1MaxSize: 50000
+        l1MaxSize: 5000
         l1Ttl: 24h
         l2MaxSize: 5000000
         l2Ttl: 7d
     auth:
       ttl: 5m
-      maxSize: 10000
+      maxSize: 1000
       valkey:
         enabled: true
         l1MaxSize: 1000
@@ -120,38 +122,30 @@ meta:
         l2Ttl: 5m
     maven-metadata:
       ttl: 24h
-      maxSize: 10000
+      maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 10000
+        l1MaxSize: 1000
         l1Ttl: 24h
         l2MaxSize: 1000000
         l2Ttl: 72h
-    maven-negative:
-      ttl: 24h
-      maxSize: 50000
-      valkey:
-        enabled: true
-        l1MaxSize: 50000
-        l1Ttl: 24h
-        l2MaxSize: 5000000
-        l2Ttl: 72h
+
     npm-search:
       ttl: 24h
-      maxSize: 50000
+      maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 50000
+        l1MaxSize: 1000
         l1Ttl: 24h
         l2MaxSize: 1000000
         l2Ttl: 72h
 
     cooldown-metadata:
       ttl: 30d
-      maxSize: 50000
+      maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 50000
+        l1MaxSize: 1000
         l1Ttl: 30d
         l2MaxSize: 500000
         l2Ttl: 30d

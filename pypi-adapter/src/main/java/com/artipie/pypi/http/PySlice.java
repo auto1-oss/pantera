@@ -20,6 +20,7 @@ import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceWithHeaders;
 import com.artipie.scheduling.ArtifactEvent;
@@ -80,7 +81,7 @@ public final class PySlice extends Slice.Wrap {
                     ),
                     PySlice.createAuthSlice(
                         new SliceWithHeaders(
-                            new SliceDownload(storage),
+                            new StorageArtifactSlice(storage),
                             Headers.from(ContentType.mime("application/octet-stream"))
                         ),
                         basicAuth,

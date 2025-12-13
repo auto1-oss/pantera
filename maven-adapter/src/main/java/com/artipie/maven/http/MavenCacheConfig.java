@@ -8,47 +8,23 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import java.time.Duration;
 
 /**
- * Maven cache configuration for metadata and negative caching.
- * Supports global cache profiles (preferred) and Maven-specific profiles (legacy).
+ * Maven cache configuration for metadata caching.
+ * Negative cache settings are managed globally via NegativeCacheConfig.
  * 
- * <p>Preferred configuration (global profiles, reusable by all proxy types):
+ * <p>Configuration in artipie.yml:
  * <pre>
- * # Global settings in _server.yaml
- * cache:
- *   profiles:
- *     # Default profile for most repositories
- *     default:
- *       metadata:
- *         ttl: 24h
- *         maxSize: 10000
- *       negative:
- *         enabled: true
- *         ttl: 24h
- *         maxSize: 50000
- *     
- *     # Profile for stable repositories (Maven Central, npmjs.org, PyPI, etc.)
- *     stable-public:
- *       metadata:
- *         ttl: 7d
- *         maxSize: 15000
- *       negative:
- *         enabled: true
- *         ttl: 1d
- *         maxSize: 75000
- *     
- *     # Profile for volatile repositories (snapshots, pre-releases)
- *     snapshots:
- *       metadata:
- *         ttl: 5m
- *         maxSize: 25000
- *       negative:
- *         enabled: false
+ * # Global negative cache settings (applies to all adapters)
+ * caches:
+ *   negative:
+ *     ttl: 24h
+ *     maxSize: 50000
+ *     valkey:
+ *       enabled: true
  * 
- * # Repository references profile by name
+ * # Metadata cache is per-repository
  * repo:
  *   type: maven-proxy
  *   url: https://repo.maven.apache.org/maven2
- *   cacheProfile: stable    # Reference global profile
  * </pre>
  * 
  * @since 0.11
@@ -65,20 +41,6 @@ public final class MavenCacheConfig {
      */
     private static final int DEFAULT_METADATA_MAX_SIZE = 10_000;
     
-    /**
-     * Default negative cache TTL (24 hours).
-     */
-    private static final Duration DEFAULT_NEGATIVE_TTL = Duration.ofHours(24);
-    
-    /**
-     * Default negative cache max size (50,000 entries).
-     */
-    private static final int DEFAULT_NEGATIVE_MAX_SIZE = 50_000;
-    
-    /**
-     * Default negative cache enabled.
-     */
-    private static final boolean DEFAULT_NEGATIVE_ENABLED = true;
     
     /**
      * Metadata cache TTL.
@@ -90,58 +52,27 @@ public final class MavenCacheConfig {
      */
     private final int metadataMaxSize;
     
-    /**
-     * Negative cache TTL.
-     */
-    private final Duration negativeTtl;
-    
-    /**
-     * Negative cache max size.
-     */
-    private final int negativeMaxSize;
-    
-    /**
-     * Whether negative caching is enabled.
-     */
-    private final boolean negativeEnabled;
     
     /**
      * Create config with all defaults.
      */
     public MavenCacheConfig() {
-        this(
-            DEFAULT_METADATA_TTL,
-            DEFAULT_METADATA_MAX_SIZE,
-            DEFAULT_NEGATIVE_TTL,
-            DEFAULT_NEGATIVE_MAX_SIZE,
-            DEFAULT_NEGATIVE_ENABLED
-        );
+        this(DEFAULT_METADATA_TTL, DEFAULT_METADATA_MAX_SIZE);
     }
     
     /**
      * Create config with specific values.
      * @param metadataTtl Metadata TTL
      * @param metadataMaxSize Metadata max size
-     * @param negativeTtl Negative cache TTL
-     * @param negativeMaxSize Negative cache max size
-     * @param negativeEnabled Whether negative cache is enabled
      */
-    public MavenCacheConfig(
-        final Duration metadataTtl,
-        final int metadataMaxSize,
-        final Duration negativeTtl,
-        final int negativeMaxSize,
-        final boolean negativeEnabled
-    ) {
+    public MavenCacheConfig(final Duration metadataTtl, final int metadataMaxSize) {
         this.metadataTtl = metadataTtl;
         this.metadataMaxSize = metadataMaxSize;
-        this.negativeTtl = negativeTtl;
-        this.negativeMaxSize = negativeMaxSize;
-        this.negativeEnabled = negativeEnabled;
     }
     
     /**
      * Parse cache profile from YAML.
+     * Note: Negative cache settings are now managed globally via NegativeCacheConfig.
      * @param profile YAML mapping for a specific profile
      * @return Cache config
      */
@@ -151,7 +82,7 @@ public final class MavenCacheConfig {
             return new MavenCacheConfig();
         }
         
-        // Parse metadata config
+        // Parse metadata config only - negative cache uses unified NegativeCacheConfig
         final Duration metadataTtl;
         final int metadataMaxSize;
         final YamlMapping metadata = profile.yamlMapping("metadata");
@@ -169,37 +100,7 @@ public final class MavenCacheConfig {
             metadataMaxSize = DEFAULT_METADATA_MAX_SIZE;
         }
         
-        // Parse negative cache config
-        final Duration negativeTtl;
-        final int negativeMaxSize;
-        final boolean negativeEnabled;
-        final YamlMapping negative = profile.yamlMapping("negative");
-        if (negative != null) {
-            negativeEnabled = parseBoolean(
-                negative.string("enabled"),
-                DEFAULT_NEGATIVE_ENABLED
-            );
-            negativeTtl = parseDuration(
-                negative.string("ttl"),
-                DEFAULT_NEGATIVE_TTL
-            );
-            negativeMaxSize = parseInt(
-                negative.string("maxSize"),
-                DEFAULT_NEGATIVE_MAX_SIZE
-            );
-        } else {
-            negativeEnabled = DEFAULT_NEGATIVE_ENABLED;
-            negativeTtl = DEFAULT_NEGATIVE_TTL;
-            negativeMaxSize = DEFAULT_NEGATIVE_MAX_SIZE;
-        }
-        
-        return new MavenCacheConfig(
-            metadataTtl,
-            metadataMaxSize,
-            negativeTtl,
-            negativeMaxSize,
-            negativeEnabled
-        );
+        return new MavenCacheConfig(metadataTtl, metadataMaxSize);
     }
     
     /**
@@ -350,31 +251,6 @@ public final class MavenCacheConfig {
         }
     }
     
-    /**
-     * Parse boolean string.
-     * @param value Boolean string
-     * @param defaultValue Default if parsing fails
-     * @return Parsed boolean
-     */
-    @SuppressWarnings({"PMD.UseLocaleWithCaseConversions", "PMD.SystemPrintln"})
-    private static boolean parseBoolean(final String value, final boolean defaultValue) {
-        if (value == null || value.isEmpty()) {
-            return defaultValue;
-        }
-        
-        final String lower = value.trim().toLowerCase();
-        if ("true".equals(lower) || "yes".equals(lower) || "1".equals(lower)) {
-            return true;
-        } else if ("false".equals(lower) || "no".equals(lower) || "0".equals(lower)) {
-            return false;
-        } else {
-            System.err.printf(
-                "[MavenCacheConfig] Failed to parse boolean '%s', using default: %b%n",
-                value, defaultValue
-            );
-            return defaultValue;
-        }
-    }
     
     /**
      * Get metadata cache TTL.
@@ -392,39 +268,12 @@ public final class MavenCacheConfig {
         return this.metadataMaxSize;
     }
     
-    /**
-     * Get negative cache TTL.
-     * @return Negative TTL
-     */
-    public Duration negativeTtl() {
-        return this.negativeTtl;
-    }
-    
-    /**
-     * Get negative cache max size.
-     * @return Negative max size
-     */
-    public int negativeMaxSize() {
-        return this.negativeMaxSize;
-    }
-    
-    /**
-     * Check if negative caching is enabled.
-     * @return True if enabled
-     */
-    public boolean negativeEnabled() {
-        return this.negativeEnabled;
-    }
-    
     @Override
     public String toString() {
         return String.format(
-            "MavenCacheConfig{metadata: ttl=%s, max=%d; negative: enabled=%b, ttl=%s, max=%d}",
+            "MavenCacheConfig{metadata: ttl=%s, max=%d}",
             this.metadataTtl,
-            this.metadataMaxSize,
-            this.negativeEnabled,
-            this.negativeTtl,
-            this.negativeMaxSize
+            this.metadataMaxSize
         );
     }
 }

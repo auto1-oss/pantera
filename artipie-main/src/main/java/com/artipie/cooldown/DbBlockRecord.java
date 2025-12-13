@@ -22,7 +22,7 @@ final class DbBlockRecord {
     private final Instant blockedUntil;
     private final Optional<Instant> unblockedAt;
     private final Optional<String> unblockedBy;
-    private final Optional<Long> parentId;
+    private final Optional<String> installedBy;
 
     DbBlockRecord(
         final long id,
@@ -37,7 +37,7 @@ final class DbBlockRecord {
         final Instant blockedUntil,
         final Optional<Instant> unblockedAt,
         final Optional<String> unblockedBy,
-        final Optional<Long> parentId
+        final Optional<String> installedBy
     ) {
         this.id = id;
         this.repoType = repoType;
@@ -51,7 +51,7 @@ final class DbBlockRecord {
         this.blockedUntil = blockedUntil;
         this.unblockedAt = unblockedAt;
         this.unblockedBy = unblockedBy;
-        this.parentId = parentId;
+        this.installedBy = installedBy;
     }
 
     long id() {
@@ -102,7 +102,7 @@ final class DbBlockRecord {
         return this.unblockedBy;
     }
 
-    Optional<Long> parentId() {
-        return this.parentId;
+    Optional<String> installedBy() {
+        return this.installedBy;
     }
 }

@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>L1 (in-memory): Fast access, limited size, dynamic TTL per entry</li>
  *   <li>L2 (Valkey/Redis): Shared across instances, larger capacity</li>
+ *   <li>L2-only mode: Set l1MaxSize=0 in config to disable L1 (for large metadata)</li>
  * </ul>
  *
  * <p>TTL Strategy:</p>
@@ -36,6 +37,20 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  *
  * <p>Cache key format: {@code metadata:{repoType}:{repoName}:{packageName}}</p>
+ * 
+ * <p>Configuration via YAML (artipie.yaml):</p>
+ * <pre>
+ * meta:
+ *   caches:
+ *     cooldown-metadata:
+ *       ttl: 24h
+ *       maxSize: 5000
+ *       valkey:
+ *         enabled: true
+ *         l1MaxSize: 500   # 0 for L2-only mode
+ *         l1Ttl: 5m
+ *         l2Ttl: 24h
+ * </pre>
  *
  * @since 1.0
  */
@@ -59,8 +74,14 @@ public final class FilteredMetadataCache {
 
     /**
      * L1 cache (in-memory) with per-entry dynamic TTL.
+     * May be null in L2-only mode.
      */
     private final Cache<String, CacheEntry> l1Cache;
+
+    /**
+     * Whether L2-only mode is enabled (no L1 cache).
+     */
+    private final boolean l2OnlyMode;
 
     /**
      * L2 cache connection (Valkey/Redis), may be null.
@@ -68,9 +89,14 @@ public final class FilteredMetadataCache {
     private final ValkeyConnection l2Connection;
 
     /**
-     * Maximum TTL for entries with no blocked versions.
+     * L1 cache TTL (max TTL for in-memory entries).
      */
-    private final Duration maxTtl;
+    private final Duration l1Ttl;
+
+    /**
+     * L2 cache TTL (max TTL for Valkey entries).
+     */
+    private final Duration l2Ttl;
 
     /**
      * In-flight requests to prevent stampede.
@@ -88,7 +114,7 @@ public final class FilteredMetadataCache {
      * Constructor with defaults.
      */
     public FilteredMetadataCache() {
-        this(DEFAULT_L1_SIZE, DEFAULT_MAX_TTL, null);
+        this(DEFAULT_L1_SIZE, DEFAULT_MAX_TTL, DEFAULT_MAX_TTL, null);
     }
 
     /**
@@ -97,47 +123,76 @@ public final class FilteredMetadataCache {
      * @param valkey Valkey connection for L2 cache
      */
     public FilteredMetadataCache(final ValkeyConnection valkey) {
-        this(DEFAULT_L1_SIZE, DEFAULT_MAX_TTL, valkey);
+        this(DEFAULT_L1_SIZE, DEFAULT_MAX_TTL, DEFAULT_MAX_TTL, valkey);
+    }
+
+    /**
+     * Constructor from configuration.
+     *
+     * @param config Cache configuration
+     * @param valkey Valkey connection for L2 cache (null for single-tier)
+     */
+    public FilteredMetadataCache(
+        final FilteredMetadataCacheConfig config,
+        final ValkeyConnection valkey
+    ) {
+        this(
+            config.isValkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
+            config.isValkeyEnabled() ? config.l1Ttl() : config.ttl(),
+            config.isValkeyEnabled() ? config.l2Ttl() : config.ttl(),
+            valkey
+        );
     }
 
     /**
      * Full constructor.
      *
-     * @param l1Size Maximum L1 cache size
-     * @param maxTtl Maximum TTL for entries with no blocked versions
+     * @param l1Size Maximum L1 cache size (0 for L2-only mode)
+     * @param l1Ttl L1 cache TTL
+     * @param l2Ttl L2 cache TTL
      * @param valkey Valkey connection (null for single-tier)
      */
     public FilteredMetadataCache(
         final int l1Size,
-        final Duration maxTtl,
+        final Duration l1Ttl,
+        final Duration l2Ttl,
         final ValkeyConnection valkey
     ) {
+        // L2-only mode: l1Size == 0 AND valkey is available
+        this.l2OnlyMode = (l1Size == 0 && valkey != null);
+        
         // L1 cache with dynamic per-entry expiration based on blockedUntil
-        // Use scheduler for more timely eviction of expired entries
-        this.l1Cache = Caffeine.newBuilder()
-            .maximumSize(l1Size)
-            .scheduler(com.github.benmanes.caffeine.cache.Scheduler.systemScheduler())
-            .expireAfter(new Expiry<String, CacheEntry>() {
-                @Override
-                public long expireAfterCreate(String key, CacheEntry entry, long currentTime) {
-                    return entry.ttlNanos();
-                }
+        // Skip L1 cache creation in L2-only mode
+        if (this.l2OnlyMode) {
+            this.l1Cache = null;
+        } else {
+            // Use scheduler for more timely eviction of expired entries
+            this.l1Cache = Caffeine.newBuilder()
+                .maximumSize(l1Size > 0 ? l1Size : DEFAULT_L1_SIZE)
+                .scheduler(com.github.benmanes.caffeine.cache.Scheduler.systemScheduler())
+                .expireAfter(new Expiry<String, CacheEntry>() {
+                    @Override
+                    public long expireAfterCreate(String key, CacheEntry entry, long currentTime) {
+                        return entry.ttlNanos();
+                    }
 
-                @Override
-                public long expireAfterUpdate(String key, CacheEntry entry, long currentTime, long currentDuration) {
-                    return entry.ttlNanos();
-                }
+                    @Override
+                    public long expireAfterUpdate(String key, CacheEntry entry, long currentTime, long currentDuration) {
+                        return entry.ttlNanos();
+                    }
 
-                @Override
-                public long expireAfterRead(String key, CacheEntry entry, long currentTime, long currentDuration) {
-                    // Recalculate remaining TTL on read to handle time-based expiry
-                    return entry.ttlNanos();
-                }
-            })
-            .recordStats()
-            .build();
+                    @Override
+                    public long expireAfterRead(String key, CacheEntry entry, long currentTime, long currentDuration) {
+                        // Recalculate remaining TTL on read to handle time-based expiry
+                        return entry.ttlNanos();
+                    }
+                })
+                .recordStats()
+                .build();
+        }
         this.l2Connection = valkey;
-        this.maxTtl = maxTtl;
+        this.l1Ttl = l1Ttl;
+        this.l2Ttl = l2Ttl;
         this.inflight = new ConcurrentHashMap<>();
         this.l1Hits = 0;
         this.l2Hits = 0;
@@ -166,19 +221,21 @@ public final class FilteredMetadataCache {
     ) {
         final String key = cacheKey(repoType, repoName, packageName);
 
-        // L1 check - also verify entry hasn't expired
-        final CacheEntry l1Cached = this.l1Cache.getIfPresent(key);
-        if (l1Cached != null) {
-            // Check if entry has expired (blockedUntil has passed)
-            if (l1Cached.isExpired()) {
-                // Entry expired - invalidate and reload
-                this.l1Cache.invalidate(key);
-            } else {
-                this.l1Hits++;
-                if (CooldownMetrics.isAvailable()) {
-                    CooldownMetrics.getInstance().recordCacheHit("l1");
+        // L1 check - skip in L2-only mode
+        if (!this.l2OnlyMode && this.l1Cache != null) {
+            final CacheEntry l1Cached = this.l1Cache.getIfPresent(key);
+            if (l1Cached != null) {
+                // Check if entry has expired (blockedUntil has passed)
+                if (l1Cached.isExpired()) {
+                    // Entry expired - invalidate and reload
+                    this.l1Cache.invalidate(key);
+                } else {
+                    this.l1Hits++;
+                    if (CooldownMetrics.isAvailable()) {
+                        CooldownMetrics.getInstance().recordCacheHit("l1");
+                    }
+                    return CompletableFuture.completedFuture(l1Cached.data());
                 }
-                return CompletableFuture.completedFuture(l1Cached.data());
             }
         }
 
@@ -194,10 +251,12 @@ public final class FilteredMetadataCache {
                         if (CooldownMetrics.isAvailable()) {
                             CooldownMetrics.getInstance().recordCacheHit("l2");
                         }
-                        // Promote to L1 with remaining TTL from L2
-                        // Note: L2 doesn't store TTL info, so use max TTL for promoted entries
-                        final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.maxTtl);
-                        this.l1Cache.put(key, entry);
+                        // Promote to L1 with remaining TTL from L2 (skip in L2-only mode)
+                        if (!this.l2OnlyMode && this.l1Cache != null) {
+                            // Note: L2 doesn't store TTL info, so use L1 TTL for promoted entries
+                            final CacheEntry entry = new CacheEntry(l2Bytes, Optional.empty(), this.l1Ttl);
+                            this.l1Cache.put(key, entry);
+                        }
                         return CompletableFuture.completedFuture(l2Bytes);
                     }
                     // Miss - load and cache
@@ -236,11 +295,19 @@ public final class FilteredMetadataCache {
             .whenComplete((entry, error) -> {
                 this.inflight.remove(key);
                 if (error == null && entry != null) {
-                    // Cache in L1 with dynamic TTL
-                    this.l1Cache.put(key, entry);
-                    // Cache in L2 with dynamic TTL
+                    // Cache in L1 with L1 TTL (skip in L2-only mode)
+                    if (!this.l2OnlyMode && this.l1Cache != null) {
+                        // Wrap entry with L1 TTL for proper expiration
+                        final CacheEntry l1Entry = new CacheEntry(
+                            entry.data(),
+                            entry.earliestBlockedUntil(),
+                            this.l1Ttl
+                        );
+                        this.l1Cache.put(key, l1Entry);
+                    }
+                    // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
                     if (this.l2Connection != null) {
-                        final long ttlSeconds = entry.ttlSeconds();
+                        final long ttlSeconds = this.calculateL2Ttl(entry);
                         if (ttlSeconds > 0) {
                             this.l2Connection.async().setex(key, ttlSeconds, entry.data());
                         }
@@ -266,7 +333,9 @@ public final class FilteredMetadataCache {
         final String packageName
     ) {
         final String key = cacheKey(repoType, repoName, packageName);
-        this.l1Cache.invalidate(key);
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidate(key);
+        }
         this.inflight.remove(key);
         if (this.l2Connection != null) {
             this.l2Connection.async().del(key);
@@ -282,13 +351,15 @@ public final class FilteredMetadataCache {
     public void invalidateAll(final String repoType, final String repoName) {
         final String prefix = "metadata:" + repoType + ":" + repoName + ":";
 
-        // L1: Invalidate matching keys
-        this.l1Cache.asMap().keySet().stream()
-            .filter(key -> key.startsWith(prefix))
-            .forEach(key -> {
-                this.l1Cache.invalidate(key);
-                this.inflight.remove(key);
-            });
+        // L1: Invalidate matching keys (skip in L2-only mode)
+        if (this.l1Cache != null) {
+            this.l1Cache.asMap().keySet().stream()
+                .filter(key -> key.startsWith(prefix))
+                .forEach(key -> {
+                    this.l1Cache.invalidate(key);
+                    this.inflight.remove(key);
+                });
+        }
 
         // Also clear any inflight requests for this repo
         this.inflight.keySet().stream()
@@ -310,7 +381,9 @@ public final class FilteredMetadataCache {
      * Clear all caches.
      */
     public void clear() {
-        this.l1Cache.invalidateAll();
+        if (this.l1Cache != null) {
+            this.l1Cache.invalidateAll();
+        }
         this.inflight.clear();
         this.l1Hits = 0;
         this.l2Hits = 0;
@@ -325,12 +398,22 @@ public final class FilteredMetadataCache {
     public String stats() {
         final long total = this.l1Hits + this.l2Hits + this.misses;
         if (total == 0) {
-            return "FilteredMetadataCache[empty]";
+            return this.l2OnlyMode 
+                ? "FilteredMetadataCache[L2-only, empty]"
+                : "FilteredMetadataCache[empty]";
         }
         final double hitRate = 100.0 * (this.l1Hits + this.l2Hits) / total;
+        if (this.l2OnlyMode) {
+            return String.format(
+                "FilteredMetadataCache[L2-only, l2Hits=%d, misses=%d, hitRate=%.1f%%]",
+                this.l2Hits,
+                this.misses,
+                hitRate
+            );
+        }
         return String.format(
             "FilteredMetadataCache[size=%d, l1Hits=%d, l2Hits=%d, misses=%d, hitRate=%.1f%%]",
-            this.l1Cache.estimatedSize(),
+            this.l1Cache != null ? this.l1Cache.estimatedSize() : 0,
             this.l1Hits,
             this.l2Hits,
             this.misses,
@@ -344,7 +427,16 @@ public final class FilteredMetadataCache {
      * @return Number of cached entries in L1
      */
     public long size() {
-        return this.l1Cache.estimatedSize();
+        return this.l1Cache != null ? this.l1Cache.estimatedSize() : 0;
+    }
+
+    /**
+     * Check if running in L2-only mode.
+     *
+     * @return True if L2-only mode is enabled
+     */
+    public boolean isL2OnlyMode() {
+        return this.l2OnlyMode;
     }
 
     /**
@@ -353,7 +445,9 @@ public final class FilteredMetadataCache {
      * Primarily useful for testing.
      */
     public void cleanUp() {
-        this.l1Cache.cleanUp();
+        if (this.l1Cache != null) {
+            this.l1Cache.cleanUp();
+        }
     }
 
     /**
@@ -365,6 +459,27 @@ public final class FilteredMetadataCache {
         final String packageName
     ) {
         return String.format("metadata:%s:%s:%s", repoType, repoName, packageName);
+    }
+
+    /**
+     * Calculate L2 TTL for a cache entry.
+     * Uses the configured l2Ttl, but caps it by blockedUntil if present.
+     *
+     * @param entry Cache entry
+     * @return TTL in seconds for L2 cache
+     */
+    private long calculateL2Ttl(final CacheEntry entry) {
+        if (entry.earliestBlockedUntil().isPresent()) {
+            // If versions are blocked, TTL = min(l2Ttl, time until earliest block expires)
+            final Duration remaining = Duration.between(Instant.now(), entry.earliestBlockedUntil().get());
+            if (remaining.isNegative() || remaining.isZero()) {
+                return MIN_TTL.getSeconds();
+            }
+            // Use the smaller of remaining time and configured l2Ttl
+            return Math.min(remaining.getSeconds(), this.l2Ttl.getSeconds());
+        }
+        // No blocked versions - use configured l2Ttl
+        return this.l2Ttl.getSeconds();
     }
 
     /**

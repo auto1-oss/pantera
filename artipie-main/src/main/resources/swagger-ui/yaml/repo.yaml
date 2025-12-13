@@ -276,6 +276,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/repository/{rname}/artifacts:
+    delete:
+      summary: Delete artifact from repository
+      description: |
+        Delete an artifact (package) from the repository storage.
+        This works for all repository types including Maven, Gradle, Composer, etc.
+        For NPM packages, the path should be the package name (e.g., "@scope/package" or "package").
+        For Maven artifacts, use the groupId/artifactId/version path (e.g., "com/example/mylib/1.0.0").
+      operationId: deleteArtifact
+      tags:
+        - repository
+      parameters:
+        - name: rname
+          in: path
+          required: true
+          description: Name of the repository
+          schema:
+            type: string
+      requestBody:
+        description: Artifact to delete
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactDeleteRequest'
+        required: true
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '204':
+          description: Artifact deleted successfully
+        '400':
+          description: Invalid request (missing path)
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Repository or artifact not found
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/repository/{rname}/storages:
     get:
       summary: Get repository storage aliases
@@ -544,6 +586,19 @@ components:
           type: string
         version:
           type: string
+    ArtifactDeleteRequest:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+          description: |
+            Path to the artifact within the repository storage.
+            Examples:
+            - Maven: "com/example/mylib/1.0.0" (deletes entire version directory)
+            - NPM: "@scope/package" or "package" (deletes package directory)
+            - Composer: "vendor/package" (deletes package directory)
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"

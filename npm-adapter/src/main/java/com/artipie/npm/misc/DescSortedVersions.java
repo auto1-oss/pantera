@@ -121,9 +121,11 @@ public final class DescSortedVersions {
                 final Semver sem = entry.getValue();
                 if (sem == null) {
                     // Invalid semver - check string for prerelease indicators
-                    final String v = entry.getKey();
+                    final String v = entry.getKey().toLowerCase(java.util.Locale.ROOT);
                     return !(v.contains("-") || v.contains("alpha") 
-                        || v.contains("beta") || v.contains("rc"));
+                        || v.contains("beta") || v.contains("rc")
+                        || v.contains("canary") || v.contains("next")
+                        || v.contains("dev") || v.contains("snapshot"));
                 }
                 final String[] suffixes = sem.getSuffixTokens();
                 return suffixes == null || suffixes.length == 0;
@@ -163,8 +165,11 @@ public final class DescSortedVersions {
             return suffixes != null && suffixes.length > 0;
         } catch (SemverException e) {
             // If not valid semver, check for common prerelease indicators
-            return version.contains("-") || version.contains("alpha")
-                || version.contains("beta") || version.contains("rc");
+            final String v = version.toLowerCase(java.util.Locale.ROOT);
+            return v.contains("-") || v.contains("alpha")
+                || v.contains("beta") || v.contains("rc")
+                || v.contains("canary") || v.contains("next")
+                || v.contains("dev") || v.contains("snapshot");
         }
     }
 

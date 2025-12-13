@@ -33,7 +33,7 @@ final class CooldownRepository {
     ) {
         final String sql =
             "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, parent_block_id "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
                 + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? "
                 + "AND artifact = ? AND version = ?";
         try (Connection conn = this.dataSource.getConnection();
@@ -62,11 +62,11 @@ final class CooldownRepository {
         final Instant blockedAt,
         final Instant blockedUntil,
         final String blockedBy,
-        final Optional<Long> parentId
+        final Optional<String> installedBy
     ) {
         final String sql =
             "INSERT INTO artifact_cooldowns(" +
-                "repo_type, repo_name, artifact, version, reason, status, blocked_by, blocked_at, blocked_until, parent_block_id"
+                "repo_type, repo_name, artifact, version, reason, status, blocked_by, blocked_at, blocked_until, installed_by"
                 + ") VALUES (?,?,?,?,?,?,?,?,?,?)";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
@@ -79,10 +79,10 @@ final class CooldownRepository {
             stmt.setString(7, blockedBy);
             stmt.setLong(8, blockedAt.toEpochMilli());
             stmt.setLong(9, blockedUntil.toEpochMilli());
-            if (parentId.isPresent()) {
-                stmt.setLong(10, parentId.get());
+            if (installedBy.isPresent()) {
+                stmt.setString(10, installedBy.get());
             } else {
-                stmt.setNull(10, java.sql.Types.BIGINT);
+                stmt.setNull(10, java.sql.Types.VARCHAR);
             }
             stmt.executeUpdate();
             try (ResultSet keys = stmt.getGeneratedKeys()) {
@@ -101,66 +101,13 @@ final class CooldownRepository {
                         blockedUntil,
                         Optional.empty(),
                         Optional.empty(),
-                        parentId
+                        installedBy
                     );
                 }
                 throw new IllegalStateException("No id returned for cooldown block");
             }
         } catch (final SQLException err) {
             throw new IllegalStateException("Failed to insert cooldown block", err);
-        }
-    }
-
-    void insertDependencies(
-        final String repoType,
-        final String repoName,
-        final List<CooldownDependency> dependencies,
-        final CooldownReason reason,
-        final Instant blockedAt,
-        final Instant blockedUntil,
-        final String blockedBy,
-        final long parentId
-    ) {
-        if (dependencies.isEmpty()) {
-            return;
-        }
-        final String sql =
-            "INSERT INTO artifact_cooldowns(" +
-                "repo_type, repo_name, artifact, version, reason, status, blocked_by, blocked_at, blocked_until, parent_block_id"
-                + ") VALUES (?,?,?,?,?,?,?,?,?,?) "
-                + "ON CONFLICT (repo_name, artifact, version) DO NOTHING";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            for (CooldownDependency dependency : dependencies) {
-                stmt.setString(1, repoType);
-                stmt.setString(2, repoName);
-                stmt.setString(3, dependency.artifact());
-                stmt.setString(4, dependency.version());
-                stmt.setString(5, reason.name());
-                stmt.setString(6, BlockStatus.ACTIVE.name());
-                stmt.setString(7, blockedBy);
-                stmt.setLong(8, blockedAt.toEpochMilli());
-                stmt.setLong(9, blockedUntil.toEpochMilli());
-                stmt.setLong(10, parentId);
-                stmt.addBatch();
-            }
-            stmt.executeBatch();
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to insert dependency blocks", err);
-        }
-    }
-
-    void recordAttempt(final long blockId, final String requestedBy, final Instant attemptedAt) {
-        final String sql =
-            "INSERT INTO artifact_cooldown_attempts(block_id, requested_by, attempted_at) VALUES (?,?,?)";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, blockId);
-            stmt.setString(2, requestedBy);
-            stmt.setLong(3, attemptedAt.toEpochMilli());
-            stmt.executeUpdate();
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to record cooldown attempt", err);
         }
     }
 
@@ -192,30 +139,10 @@ final class CooldownRepository {
         }
     }
 
-    List<DbBlockRecord> dependenciesOf(final long parentId) {
-        final String sql =
-            "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, parent_block_id "
-                + "FROM artifact_cooldowns WHERE parent_block_id = ?";
-        try (Connection conn = this.dataSource.getConnection();
-            PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, parentId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                final List<DbBlockRecord> result = new ArrayList<>();
-                while (rs.next()) {
-                    result.add(readRecord(rs));
-                }
-                return result;
-            }
-        } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to query dependencies", err);
-        }
-    }
-
     List<DbBlockRecord> findActiveForRepo(final String repoType, final String repoName) {
         final String sql =
             "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, parent_block_id "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
                 + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -231,6 +158,167 @@ final class CooldownRepository {
             }
         } catch (final SQLException err) {
             throw new IllegalStateException("Failed to query active cooldowns", err);
+        }
+    }
+
+    /**
+     * Count active blocks for a repository.
+     * Efficient query for metrics - only counts, doesn't load records.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @return Count of active blocks
+     */
+    long countActiveBlocks(final String repoType, final String repoName) {
+        final String sql =
+            "SELECT COUNT(*) FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, repoName);
+            stmt.setString(3, BlockStatus.ACTIVE.name());
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+                return 0;
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to count active cooldowns", err);
+        }
+    }
+
+    /**
+     * Count all active blocks across all repositories.
+     * Used for startup metrics initialization.
+     * @return Map of repoType:repoName -> count
+     */
+    java.util.Map<String, Long> countAllActiveBlocks() {
+        final String sql =
+            "SELECT repo_type, repo_name, COUNT(*) as cnt FROM artifact_cooldowns "
+                + "WHERE status = ? GROUP BY repo_type, repo_name";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, BlockStatus.ACTIVE.name());
+            try (ResultSet rs = stmt.executeQuery()) {
+                final java.util.Map<String, Long> result = new java.util.HashMap<>();
+                while (rs.next()) {
+                    final String key = rs.getString("repo_type") + ":" + rs.getString("repo_name");
+                    result.put(key, rs.getLong("cnt"));
+                }
+                return result;
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to count all active cooldowns", err);
+        }
+    }
+
+    /**
+     * Count packages where ALL versions are blocked.
+     * A package is "all blocked" if it has active blocks and no unblocked versions.
+     * This is tracked via all_blocked status in the database.
+     * @return Count of packages with all versions blocked
+     */
+    long countAllBlockedPackages() {
+        final String sql =
+            "SELECT COUNT(DISTINCT repo_type || ':' || repo_name || ':' || artifact) "
+                + "FROM artifact_cooldowns WHERE status = 'ALL_BLOCKED'";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+                return 0;
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to count all-blocked packages", err);
+        }
+    }
+
+    /**
+     * Mark a package as "all versions blocked".
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param artifact Artifact/package name
+     * @return true if a new record was inserted, false if already marked
+     */
+    boolean markAllBlocked(final String repoType, final String repoName, final String artifact) {
+        // First check if already marked
+        final String checkSql =
+            "SELECT id FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? "
+                + "AND artifact = ? AND status = 'ALL_BLOCKED'";
+        final String insertSql =
+            "INSERT INTO artifact_cooldowns(repo_type, repo_name, artifact, version, reason, status, "
+                + "blocked_by, blocked_at, blocked_until) VALUES (?, ?, ?, 'ALL', 'ALL_BLOCKED', 'ALL_BLOCKED', "
+                + "'system', ?, ?)";
+        try (Connection conn = this.dataSource.getConnection()) {
+            // Check if already exists
+            try (PreparedStatement check = conn.prepareStatement(checkSql)) {
+                check.setString(1, repoType);
+                check.setString(2, repoName);
+                check.setString(3, artifact);
+                try (ResultSet rs = check.executeQuery()) {
+                    if (rs.next()) {
+                        return false; // Already marked
+                    }
+                }
+            }
+            // Insert marker
+            try (PreparedStatement insert = conn.prepareStatement(insertSql)) {
+                insert.setString(1, repoType);
+                insert.setString(2, repoName);
+                insert.setString(3, artifact);
+                final long now = Instant.now().toEpochMilli();
+                insert.setLong(4, now);
+                insert.setLong(5, Long.MAX_VALUE); // Never expires automatically
+                insert.executeUpdate();
+                return true; // New record inserted
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to mark package as all-blocked", err);
+        }
+    }
+
+    /**
+     * Unmark a package as "all versions blocked".
+     * Called when a version is unblocked.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param artifact Artifact/package name
+     * @return true if a record was deleted (package was all-blocked)
+     */
+    boolean unmarkAllBlocked(final String repoType, final String repoName, final String artifact) {
+        final String sql =
+            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? "
+                + "AND artifact = ? AND status = 'ALL_BLOCKED'";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, repoName);
+            stmt.setString(3, artifact);
+            return stmt.executeUpdate() > 0;
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to unmark package as all-blocked", err);
+        }
+    }
+
+    /**
+     * Unmark all all-blocked packages for a repository.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @return Number of packages unmarked
+     */
+    int unmarkAllBlockedForRepo(final String repoType, final String repoName) {
+        final String sql =
+            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? "
+                + "AND status = 'ALL_BLOCKED'";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, repoName);
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to unmark all-blocked packages for repo", err);
         }
     }
 
@@ -276,8 +364,10 @@ final class CooldownRepository {
         final Optional<String> unblockedBy = rs.wasNull()
             ? Optional.empty()
             : Optional.of(unblockedByRaw);
-        final long parentRaw = rs.getLong("parent_block_id");
-        final Optional<Long> parent = rs.wasNull() ? Optional.empty() : Optional.of(parentRaw);
+        final String installedByRaw = rs.getString("installed_by");
+        final Optional<String> installedBy = rs.wasNull()
+            ? Optional.empty()
+            : Optional.of(installedByRaw);
         return new DbBlockRecord(
             id,
             repoType,
@@ -291,7 +381,7 @@ final class CooldownRepository {
             blockedUntil,
             unblockedAt,
             unblockedBy,
-            parent
+            installedBy
         );
     }
 }

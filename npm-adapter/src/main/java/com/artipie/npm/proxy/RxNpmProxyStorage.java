@@ -7,6 +7,8 @@ package com.artipie.npm.proxy;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.rx.RxStorage;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.npm.misc.AbbreviatedMetadata;
 import com.artipie.npm.proxy.model.NpmAsset;
 import com.artipie.npm.proxy.model.NpmPackage;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -15,6 +17,8 @@ import io.reactivex.Maybe;
 import io.reactivex.Single;
 import io.vertx.core.json.JsonObject;
 
+import javax.json.Json;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -40,10 +44,16 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
     public Completable save(final NpmPackage pkg) {
         final Key key = new Key.From(pkg.name(), "meta.json");
         final Key metaKey = new Key.From(pkg.name(), "meta.meta");
+        final Key abbreviatedKey = new Key.From(pkg.name(), "meta.abbreviated.json");
         // Save metadata FIRST, then data. This ensures readers always see
         // metadata when data exists (they check metadata to validate).
         // Sequential saves are safer than parallel - parallel can still leave
         // partial state visible to readers.
+        //
+        // MEMORY OPTIMIZATION: Pre-compute and save abbreviated metadata
+        // This allows serving abbreviated requests without loading full metadata
+        final byte[] fullContent = pkg.content().getBytes(StandardCharsets.UTF_8);
+        final byte[] abbreviatedContent = this.generateAbbreviated(pkg.name(), pkg.content());
         return Completable.concatArray(
             this.storage.save(
                 metaKey,
@@ -53,9 +63,51 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             ),
             this.storage.save(
                 key,
-                new Content.From(pkg.content().getBytes(StandardCharsets.UTF_8))
+                new Content.From(fullContent)
+            ),
+            this.storage.save(
+                abbreviatedKey,
+                new Content.From(abbreviatedContent)
             )
         );
+    }
+
+    /**
+     * Generate abbreviated metadata from full content.
+     * Includes time field for pnpm compatibility.
+     * @param packageName Package name for logging context
+     * @param fullContent Full package JSON content
+     * @return Abbreviated JSON bytes
+     */
+    private byte[] generateAbbreviated(final String packageName, final String fullContent) {
+        try {
+            final javax.json.JsonObject fullJson = Json.createReader(
+                new StringReader(fullContent)
+            ).readObject();
+            final javax.json.JsonObject abbreviated = new AbbreviatedMetadata(fullJson).generate();
+            final byte[] result = abbreviated.toString().getBytes(StandardCharsets.UTF_8);
+            EcsLogger.debug("com.artipie.npm")
+                .message("Generated abbreviated metadata")
+                .eventCategory("cache")
+                .eventAction("generate_abbreviated")
+                .eventOutcome("success")
+                .field("package.name", packageName)
+                .field("abbreviated.size", result.length)
+                .field("full.size", fullContent.length())
+                .log();
+            return result;
+        } catch (final Exception e) {
+            EcsLogger.error("com.artipie.npm")
+                .message("Failed to generate abbreviated metadata")
+                .eventCategory("cache")
+                .eventAction("generate_abbreviated")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .field("full.size", fullContent.length())
+                .error(e)
+                .log();
+            return new byte[0];
+        }
     }
 
     @Override
@@ -124,6 +176,26 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 // Convert Single<Content> to Maybe<Content>
                 return this.storage.value(new Key.From(name, "meta.json")).toMaybe();
             });
+    }
+
+    @Override
+    public Maybe<Content> getAbbreviatedContent(final String name) {
+        final Key abbreviatedKey = new Key.From(name, "meta.abbreviated.json");
+        return this.storage.exists(abbreviatedKey)
+            .flatMapMaybe(exists -> {
+                if (!exists) {
+                    return Maybe.empty();
+                }
+                // Return abbreviated Content directly - NO loading into memory!
+                // This is the memory-efficient path for npm install requests
+                return this.storage.value(abbreviatedKey).toMaybe();
+            });
+    }
+
+    @Override
+    public Maybe<Boolean> hasAbbreviatedContent(final String name) {
+        final Key abbreviatedKey = new Key.From(name, "meta.abbreviated.json");
+        return this.storage.exists(abbreviatedKey).toMaybe();
     }
 
     /**

@@ -25,6 +25,7 @@ import com.artipie.http.slice.HeadSlice;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.http.slice.SliceDelete;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceUpload;
 import com.artipie.http.slice.SliceWithHeaders;
@@ -161,7 +162,7 @@ public final class FilesSlice extends Slice.Wrap {
                                 RtRule.FALLBACK,
                                 new SliceWithHeaders(
                                     new FileMetaSlice(
-                                        new SliceDownload(storage),
+                                        new StorageArtifactSlice(storage),
                                         storage
                                     ),
                                     Headers.from(ContentType.mime(FilesSlice.OCTET_STREAM))

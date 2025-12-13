@@ -18,6 +18,7 @@ import com.artipie.npm.proxy.json.ClientContent;
 import com.artipie.npm.misc.AbbreviatedMetadata;
 import com.artipie.npm.misc.MetadataETag;
 import com.artipie.npm.misc.MetadataEnhancer;
+import com.artipie.npm.misc.StreamingJsonTransformer;
 import com.artipie.cooldown.metadata.CooldownMetadataService;
 import com.artipie.cooldown.metadata.AllVersionsBlockedException;
 import com.artipie.http.log.EcsLogger;
@@ -128,86 +129,248 @@ public final class DownloadPackageSlice implements Slice {
             final String rawPath = this.path.value(line.uri().getPath());
             final String packageName = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
 
-            // CRITICAL MEMORY FIX: Fully reactive processing - NO blocking!
-            // This allows GC to clean up intermediate objects immediately after use
-            return this.npm.getPackageMetadataOnly(packageName)
-                .flatMap(metadata ->
-                    this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
-                        // Process content stream reactively
-                        new Concatenation(contentStream)
-                            .single()
-                            .map(ByteBuffer::array)
-                            .toMaybe()
-                            .flatMap(rawBytes -> {
-                                // Apply cooldown filtering if available
-                                if (this.cooldownMetadata != null && this.repoType != null) {
-                                    // Create a fresh MetadataAwareInspector for this request
-                                    // This inspector will have dates preloaded from the metadata
-                                    final NpmCooldownInspector inspector = new NpmCooldownInspector();
-                                    // Handle cooldown filtering - use handle() instead of exceptionally()
-                                    // because Maybe.fromFuture(null) becomes empty and skips flatMap
-                                    final CompletableFuture<Response> filterFuture = 
-                                        this.cooldownMetadata.filterMetadata(
-                                            this.repoType,
-                                            this.repoName,
-                                            packageName,
-                                            rawBytes,
-                                            new NpmMetadataParser(),
-                                            new NpmMetadataFilter(),
-                                            new NpmMetadataRewriter(),
-                                            Optional.of(inspector)
-                                        ).handle((filtered, ex) -> {
-                                            if (ex != null) {
-                                                // Check for AllVersionsBlockedException
-                                                Throwable cause = ex;
-                                                while (cause != null) {
-                                                    if (cause instanceof AllVersionsBlockedException) {
-                                                        EcsLogger.info("com.artipie.npm")
-                                                            .message("All versions blocked by cooldown")
-                                                            .eventCategory("cooldown")
-                                                            .eventAction("all_versions_blocked")
-                                                            .field("package.name", packageName)
-                                                            .log();
-                                                        final String json = String.format(
-                                                            "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
-                                                            packageName, packageName
-                                                        );
-                                                        return ResponseBuilder.forbidden()
-                                                            .jsonBody(json)
-                                                            .build();
-                                                    }
-                                                    cause = cause.getCause();
-                                                }
-                                                // Other error - fall back to unfiltered
-                                                EcsLogger.warn("com.artipie.npm")
-                                                    .message("Cooldown filter error - falling back to unfiltered")
-                                                    .eventCategory("cooldown")
-                                                    .eventAction("filter_error")
-                                                    .field("package.name", packageName)
-                                                    .error(ex)
-                                                    .log();
-                                                return this.buildResponse(rawBytes, metadata, headers, abbreviated, clientETag);
-                                            }
-                                            // Success - build response with filtered metadata
-                                            return this.buildResponse(filtered, metadata, headers, abbreviated, clientETag);
-                                        });
-                                    return io.reactivex.Maybe.fromFuture(filterFuture);
-                                }
-                                // No cooldown filtering - process normally
-                                return io.reactivex.Maybe.just(
-                                    this.buildResponse(rawBytes, metadata, headers, abbreviated, clientETag)
-                                );
-                            })
-                    )
-                )
-                .toSingle(ResponseBuilder.notFound().build())
-                .to(SingleInterop.get())
-                .toCompletableFuture();
+            // MEMORY OPTIMIZATION: Use different paths for abbreviated vs full requests
+            if (abbreviated) {
+                // FAST PATH: Serve pre-computed abbreviated metadata directly
+                // This avoids loading/parsing full metadata (38MB → 3MB, no JSON parsing)
+                return this.serveAbbreviated(packageName, headers, clientETag);
+            } else {
+                // FULL PATH: Load and process full metadata
+                return this.serveFull(packageName, headers, clientETag);
+            }
         });
     }
 
     /**
+     * Serve abbreviated metadata using pre-computed cached version.
+     * MEMORY OPTIMIZATION: ~90% memory reduction for npm install requests.
+     * 
+     * COOLDOWN: If cooldown is enabled, we must apply filtering even to abbreviated
+     * metadata. This requires loading abbreviated bytes and filtering, but still
+     * avoids full JSON parsing since abbreviated is much smaller (~3MB vs 38MB).
+     */
+    private CompletableFuture<Response> serveAbbreviated(
+        final String packageName,
+        final Headers headers,
+        final Optional<String> clientETag
+    ) {
+        return this.npm.getPackageMetadataOnly(packageName)
+            .flatMap(metadata ->
+                // Try to get pre-computed abbreviated content first
+                this.npm.getAbbreviatedContentStream(packageName)
+                    .flatMap(abbreviatedStream ->
+                        new Concatenation(abbreviatedStream)
+                            .single()
+                            .map(ByteBuffer::array)
+                            .toMaybe()
+                            .flatMap(abbreviatedBytes -> {
+                                // COOLDOWN: Apply filtering if enabled
+                                if (this.cooldownMetadata != null && this.repoType != null) {
+                                    return this.applyAbbreviatedCooldown(
+                                        abbreviatedBytes, packageName, metadata, headers, clientETag
+                                    );
+                                }
+                                // No cooldown - serve directly
+                                return io.reactivex.Maybe.just(
+                                    this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
+                                );
+                            })
+                    )
+                    // Fall back to full metadata if abbreviated not available
+                    .switchIfEmpty(io.reactivex.Maybe.defer(() ->
+                        this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
+                            new Concatenation(contentStream)
+                                .single()
+                                .map(ByteBuffer::array)
+                                .toMaybe()
+                                .map(rawBytes -> 
+                                    this.buildResponse(rawBytes, metadata, headers, true, clientETag)
+                                )
+                        )
+                    ))
+            )
+            .toSingle(ResponseBuilder.notFound().build())
+            .to(SingleInterop.get())
+            .toCompletableFuture();
+    }
+
+    /**
+     * Apply cooldown filtering to abbreviated metadata.
+     * Still memory-efficient since abbreviated is ~3MB vs 38MB full.
+     */
+    private io.reactivex.Maybe<Response> applyAbbreviatedCooldown(
+        final byte[] abbreviatedBytes,
+        final String packageName,
+        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final Headers headers,
+        final Optional<String> clientETag
+    ) {
+        final NpmCooldownInspector inspector = new NpmCooldownInspector();
+        final CompletableFuture<Response> filterFuture = 
+            this.cooldownMetadata.filterMetadata(
+                this.repoType,
+                this.repoName,
+                packageName,
+                abbreviatedBytes,
+                new NpmMetadataParser(),
+                new NpmMetadataFilter(),
+                new NpmMetadataRewriter(),
+                Optional.of(inspector)
+            ).handle((filtered, ex) -> {
+                if (ex != null) {
+                    Throwable cause = ex;
+                    while (cause != null) {
+                        if (cause instanceof AllVersionsBlockedException) {
+                            EcsLogger.info("com.artipie.npm")
+                                .message("All versions blocked by cooldown (abbreviated)")
+                                .eventCategory("cooldown")
+                                .eventAction("all_versions_blocked")
+                                .field("package.name", packageName)
+                                .log();
+                            final String json = String.format(
+                                "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
+                                packageName, packageName
+                            );
+                            return ResponseBuilder.forbidden()
+                                .jsonBody(json)
+                                .build();
+                        }
+                        cause = cause.getCause();
+                    }
+                    EcsLogger.warn("com.artipie.npm")
+                        .message("Cooldown filter error (abbreviated) - falling back to unfiltered")
+                        .eventCategory("cooldown")
+                        .eventAction("filter_error")
+                        .field("package.name", packageName)
+                        .error(ex)
+                        .log();
+                    return this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag);
+                }
+                // Success - build response with filtered abbreviated metadata
+                return this.buildAbbreviatedResponse(filtered, metadata, headers, clientETag);
+            });
+        return io.reactivex.Maybe.fromFuture(filterFuture);
+    }
+
+    /**
+     * Serve full metadata with cooldown filtering support.
+     */
+    private CompletableFuture<Response> serveFull(
+        final String packageName,
+        final Headers headers,
+        final Optional<String> clientETag
+    ) {
+        return this.npm.getPackageMetadataOnly(packageName)
+            .flatMap(metadata ->
+                this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
+                    new Concatenation(contentStream)
+                        .single()
+                        .map(ByteBuffer::array)
+                        .toMaybe()
+                        .flatMap(rawBytes -> {
+                            // Apply cooldown filtering if available
+                            if (this.cooldownMetadata != null && this.repoType != null) {
+                                final NpmCooldownInspector inspector = new NpmCooldownInspector();
+                                final CompletableFuture<Response> filterFuture = 
+                                    this.cooldownMetadata.filterMetadata(
+                                        this.repoType,
+                                        this.repoName,
+                                        packageName,
+                                        rawBytes,
+                                        new NpmMetadataParser(),
+                                        new NpmMetadataFilter(),
+                                        new NpmMetadataRewriter(),
+                                        Optional.of(inspector)
+                                    ).handle((filtered, ex) -> {
+                                        if (ex != null) {
+                                            Throwable cause = ex;
+                                            while (cause != null) {
+                                                if (cause instanceof AllVersionsBlockedException) {
+                                                    EcsLogger.info("com.artipie.npm")
+                                                        .message("All versions blocked by cooldown")
+                                                        .eventCategory("cooldown")
+                                                        .eventAction("all_versions_blocked")
+                                                        .field("package.name", packageName)
+                                                        .log();
+                                                    final String json = String.format(
+                                                        "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
+                                                        packageName, packageName
+                                                    );
+                                                    return ResponseBuilder.forbidden()
+                                                        .jsonBody(json)
+                                                        .build();
+                                                }
+                                                cause = cause.getCause();
+                                            }
+                                            EcsLogger.warn("com.artipie.npm")
+                                                .message("Cooldown filter error - falling back to unfiltered")
+                                                .eventCategory("cooldown")
+                                                .eventAction("filter_error")
+                                                .field("package.name", packageName)
+                                                .error(ex)
+                                                .log();
+                                            return this.buildResponse(rawBytes, metadata, headers, false, clientETag);
+                                        }
+                                        return this.buildResponse(filtered, metadata, headers, false, clientETag);
+                                    });
+                                return io.reactivex.Maybe.fromFuture(filterFuture);
+                            }
+                            return io.reactivex.Maybe.just(
+                                this.buildResponse(rawBytes, metadata, headers, false, clientETag)
+                            );
+                        })
+                )
+            )
+            .toSingle(ResponseBuilder.notFound().build())
+            .to(SingleInterop.get())
+            .toCompletableFuture();
+    }
+
+    /**
+     * Build response from pre-computed abbreviated metadata.
+     * MEMORY EFFICIENT: No JSON parsing needed - just transform tarball URLs.
+     */
+    private Response buildAbbreviatedResponse(
+        final byte[] abbreviatedBytes,
+        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final Headers headers,
+        final Optional<String> clientETag
+    ) {
+        final String rawContent = new String(abbreviatedBytes, StandardCharsets.UTF_8);
+        // Transform tarball URLs for client
+        final String clientContent = this.clientFormat(rawContent, headers);
+        
+        // Calculate ETag for caching
+        final String etag = new MetadataETag(clientContent).calculate();
+        
+        // Check for 304 Not Modified
+        if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+            return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .build();
+        }
+        
+        // Return abbreviated response
+        final Content streamedContent = new Content.From(
+            Flowable.fromArray(
+                ByteBuffer.wrap(clientContent.getBytes(StandardCharsets.UTF_8))
+            )
+        );
+        
+        return ResponseBuilder.ok()
+            .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
+            .header("Last-Modified", metadata.lastModified())
+            .header("ETag", etag)
+            .header("Cache-Control", "public, max-age=300")
+            .header("CDN-Cache-Control", "public, max-age=600")
+            .body(streamedContent)
+            .build();
+    }
+
+    /**
      * Build HTTP response from metadata bytes.
+     * MEMORY OPTIMIZATION: Uses streaming JSON transformation for URL rewriting.
      */
     private Response buildResponse(
         final byte[] rawBytes,
@@ -216,29 +379,93 @@ public final class DownloadPackageSlice implements Slice {
         final boolean abbreviated,
         final Optional<String> clientETag
     ) {
+        try {
+            // MEMORY OPTIMIZATION: Use streaming JSON transformer for URL rewriting
+            // This avoids creating multiple String copies of the 38MB metadata
+            final String tarballPrefix = this.getTarballPrefix(headers);
+            final StreamingJsonTransformer transformer = new StreamingJsonTransformer();
+            final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
+            
+            // For full metadata requests (abbreviated=false), we can skip JSON parsing
+            // Just use the transformed bytes directly
+            if (!abbreviated) {
+                final String responseStr = new String(transformedBytes, StandardCharsets.UTF_8);
+                final String etag = new MetadataETag(responseStr).calculate();
+                
+                if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+                    return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                        .header("ETag", etag)
+                        .header("Cache-Control", "public, max-age=300")
+                        .build();
+                }
+                
+                final Content streamedContent = new Content.From(
+                    Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
+                );
+                
+                return ResponseBuilder.ok()
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .header("Last-Modified", metadata.lastModified())
+                    .header("ETag", etag)
+                    .header("Cache-Control", "public, max-age=300")
+                    .header("CDN-Cache-Control", "public, max-age=600")
+                    .body(streamedContent)
+                    .build();
+            }
+            
+            // Abbreviated requests should use serveAbbreviated() path, but handle fallback
+            final String clientContent = new String(transformedBytes, StandardCharsets.UTF_8);
+            final JsonObject fullJson = Json.createReader(new StringReader(clientContent)).readObject();
+            final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
+            final JsonObject response = new AbbreviatedMetadata(enhanced).generate();
+            final String responseStr = response.toString();
+            final String etag = new MetadataETag(responseStr).calculate();
+
+            if (clientETag.isPresent() && clientETag.get().equals(etag)) {
+                return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                    .header("ETag", etag)
+                    .header("Cache-Control", "public, max-age=300")
+                    .build();
+            }
+
+            final Content streamedContent = new Content.From(
+                Flowable.fromArray(ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8)))
+            );
+
+            return ResponseBuilder.ok()
+                .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
+                .header("Last-Modified", metadata.lastModified())
+                .header("ETag", etag)
+                .header("Cache-Control", "public, max-age=300")
+                .header("CDN-Cache-Control", "public, max-age=600")
+                .body(streamedContent)
+                .build();
+        } catch (final Exception e) {
+            // Fallback to original implementation if streaming fails
+            return this.buildResponseFallback(rawBytes, metadata, headers, abbreviated, clientETag);
+        }
+    }
+    
+    /**
+     * Fallback response builder using DOM parsing (for error cases).
+     */
+    private Response buildResponseFallback(
+        final byte[] rawBytes,
+        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final Headers headers,
+        final boolean abbreviated,
+        final Optional<String> clientETag
+    ) {
         final String rawContent = new String(rawBytes, StandardCharsets.UTF_8);
-        // Get client-formatted content (with rewritten tarball URLs)
         final String clientContent = this.clientFormat(rawContent, headers);
-
-        // Parse JSON for processing
-        final JsonObject fullJson = Json.createReader(
-            new StringReader(clientContent)
-        ).readObject();
-
-        // P1.1: Enhance metadata with time and users objects
+        final JsonObject fullJson = Json.createReader(new StringReader(clientContent)).readObject();
         final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
-
-        // P0.1: Generate abbreviated or full format
         final JsonObject response = abbreviated
             ? new AbbreviatedMetadata(enhanced).generate()
             : enhanced;
-
         final String responseStr = response.toString();
-
-        // P0.2: Calculate ETag
         final String etag = new MetadataETag(responseStr).calculate();
 
-        // P0.2: Check if client has matching ETag (304 Not Modified)
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
@@ -246,15 +473,10 @@ public final class DownloadPackageSlice implements Slice {
                 .build();
         }
 
-        // CRITICAL MEMORY FIX: Use reactive Content that streams the response
-        // The byte array will be GC'd after streaming completes
         final Content streamedContent = new Content.From(
-            Flowable.fromArray(
-                ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8))
-            )
+            Flowable.fromArray(ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8)))
         );
 
-        // Return streaming response
         return ResponseBuilder.ok()
             .header("Content-Type", abbreviated
                 ? "application/vnd.npm.install-v1+json; charset=utf-8"
@@ -265,6 +487,21 @@ public final class DownloadPackageSlice implements Slice {
             .header("CDN-Cache-Control", "public, max-age=600")
             .body(streamedContent)
             .build();
+    }
+    
+    /**
+     * Get tarball URL prefix for streaming transformer.
+     */
+    private String getTarballPrefix(final Headers headers) {
+        if (this.baseUrl.isPresent()) {
+            return this.baseUrl.get().toString();
+        }
+        final String host = StreamSupport.stream(headers.spliterator(), false)
+            .filter(e -> "Host".equalsIgnoreCase(e.getKey()))
+            .findAny()
+            .map(Header::getValue)
+            .orElse("localhost");
+        return this.assetPrefix(host);
     }
     
     /**

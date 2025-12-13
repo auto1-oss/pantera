@@ -10,10 +10,14 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.fs.FileStorage;
 import org.reactivestreams.Publisher;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Optimized storage wrapper that provides fast content retrieval for FileStorage.
@@ -33,6 +37,24 @@ public final class OptimizedStorageCache {
      * Chunk size for streaming (1 MB).
      */
     private static final int CHUNK_SIZE = 1024 * 1024;
+
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.io.cache";
+
+    /**
+     * Dedicated executor for blocking file I/O operations.
+     * CRITICAL: Without this, CompletableFuture.runAsync() uses ForkJoinPool.commonPool()
+     * which can block Vert.x event loop threads, causing "Thread blocked" warnings.
+     */
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
+        Math.max(8, Runtime.getRuntime().availableProcessors() * 2),
+        new ThreadFactoryBuilder()
+            .setNameFormat(POOL_NAME + ".worker-%d")
+            .setDaemon(true)
+            .build()
+    );
 
     /**
      * Private constructor - utility class.
@@ -95,6 +117,7 @@ public final class OptimizedStorageCache {
         final FileStorage storage,
         final Key key
     ) {
+        // CRITICAL: Use dedicated executor to avoid blocking Vert.x event loop
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Use reflection to access FileStorage's base path
@@ -116,15 +139,18 @@ public final class OptimizedStorageCache {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to read file: " + key.string(), e);
             }
-        });
+        }, BLOCKING_EXECUTOR);
     }
 
     /**
      * Stream file content using NIO FileChannel.
+     * CRITICAL: Returns Content WITH size for proper Content-Length header support.
+     * This enables browsers to show download progress and download managers to
+     * use multi-connection downloads (Range requests).
      *
      * @param filePath File path
      * @param fileSize File size
-     * @return Content
+     * @return Content with size information
      */
     private static Content streamFileContent(
         final java.nio.file.Path filePath,
@@ -140,6 +166,7 @@ public final class OptimizedStorageCache {
                         return;
                     }
                     
+                    // CRITICAL: Use dedicated executor for file I/O
                     CompletableFuture.runAsync(() -> {
                         try (FileChannel channel = FileChannel.open(
                                 filePath, 
@@ -177,7 +204,7 @@ public final class OptimizedStorageCache {
                                 subscriber.onError(e);
                             }
                         }
-                    });
+                    }, BLOCKING_EXECUTOR);
                 }
                 
                 @Override
@@ -187,6 +214,8 @@ public final class OptimizedStorageCache {
             });
         };
         
-        return new Content.From(publisher);
+        // CRITICAL: Include file size so Content-Length header can be set
+        // This enables download progress in browsers and multi-connection downloads
+        return new Content.From(fileSize, publisher);
     }
 }

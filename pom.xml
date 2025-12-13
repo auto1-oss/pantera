@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.20.7</version>
+  <version>1.20.8</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -369,6 +369,7 @@ SOFTWARE.
                 <exclude>**/examples/**</exclude>
                 <exclude>**/docker-compose/**</exclude>
                 <exclude>**/docs/**</exclude>
+                <exclude>**/scripts/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>

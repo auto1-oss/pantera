@@ -64,7 +64,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -86,8 +86,8 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
+        "h": 5,
+        "w": 3,
         "x": 0,
         "y": 1
       },
@@ -114,10 +114,12 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(increase(artipie_cooldown_versions_blocked_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "rate(artipie_cooldown_versions_blocked_total{job=\"artipie\"}[5m])",
           "legendFormat": "Blocked",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -127,7 +129,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -149,9 +151,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
+        "h": 5,
+        "w": 3,
+        "x": 3,
         "y": 1
       },
       "id": 3,
@@ -177,10 +179,12 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(increase(artipie_cooldown_versions_allowed_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "expr": "rate(artipie_cooldown_versions_allowed_total{job=\"artipie\"}[5m])\n",
           "legendFormat": "Allowed",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -190,7 +194,72 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 6,
+        "y": 1
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(artipie_cooldown_active_blocks_repo{job=\"artipie\",}) / sum(artipie_cooldown_versions_allowed_total{job=\"artipie\",})",
+          "legendFormat": "Allowed",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked Percentage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -220,9 +289,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
+        "h": 5,
+        "w": 3,
+        "x": 9,
         "y": 1
       },
       "id": 4,
@@ -248,9 +317,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_cache_hits_total{instance=~\"$instance\"}[$__rate_interval])) / (sum(rate(artipie_cooldown_cache_hits_total{instance=~\"$instance\"}[$__rate_interval])) + sum(rate(artipie_cooldown_cache_misses_total{instance=~\"$instance\"}[$__rate_interval]))) * 100",
+          "expr": "sum(rate(artipie_cooldown_cache_hits_total[$__rate_interval])) / (sum(rate(artipie_cooldown_cache_hits_total[$__rate_interval])) + sum(rate(artipie_cooldown_cache_misses_total[$__rate_interval]))) * 100",
           "legendFormat": "Hit Rate",
           "refId": "A"
         }
@@ -261,7 +330,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -283,9 +352,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
+        "h": 5,
+        "w": 3,
+        "x": 12,
         "y": 1
       },
       "id": 5,
@@ -311,9 +380,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "artipie_cooldown_cache_size{instance=~\"$instance\"}",
+          "expr": "artipie_cooldown_cache_size",
           "legendFormat": "Cache Size",
           "refId": "A"
         }
@@ -327,7 +396,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 6
       },
       "id": 6,
       "panels": [],
@@ -337,7 +406,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -427,7 +496,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "id": 7,
       "options": {
@@ -450,18 +519,18 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_versions_blocked_total{instance=~\"$instance\"}[$__rate_interval])) by (repo_type)",
+          "expr": "sum(rate(artipie_cooldown_versions_blocked_total[$__rate_interval])) by (repo_type)",
           "legendFormat": "Blocked - {{repo_type}}",
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_versions_allowed_total{instance=~\"$instance\"}[$__rate_interval])) by (repo_type)",
+          "expr": "sum(rate(artipie_cooldown_versions_allowed_total[$__rate_interval])) by (repo_type)",
           "legendFormat": "Allowed - {{repo_type}}",
           "refId": "B"
         }
@@ -472,7 +541,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -531,7 +600,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 7
       },
       "id": 8,
       "options": {
@@ -554,9 +623,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_all_blocked_total{instance=~\"$instance\"}[$__rate_interval])) by (repo_type)",
+          "expr": "sum(rate(artipie_cooldown_all_blocked_total[$__rate_interval])) by (repo_type)",
           "legendFormat": "All Blocked - {{repo_type}}",
           "refId": "A"
         }
@@ -570,7 +639,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 9,
       "panels": [],
@@ -580,7 +649,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -685,7 +754,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 10,
       "options": {
@@ -708,27 +777,27 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_cache_hits_total{instance=~\"$instance\", tier=\"l1\"}[$__rate_interval]))",
+          "expr": "sum(rate(artipie_cooldown_cache_hits_total{tier=\"l1\"}[$__rate_interval]))",
           "legendFormat": "L1 Hits",
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_cache_hits_total{instance=~\"$instance\", tier=\"l2\"}[$__rate_interval]))",
+          "expr": "sum(rate(artipie_cooldown_cache_hits_total{tier=\"l2\"}[$__rate_interval]))",
           "legendFormat": "L2 Hits",
           "refId": "B"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_cache_misses_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum(rate(artipie_cooldown_cache_misses_total[$__rate_interval]))",
           "legendFormat": "Misses",
           "refId": "C"
         }
@@ -739,7 +808,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -798,7 +867,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 16
       },
       "id": 11,
       "options": {
@@ -821,9 +890,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "sum(rate(artipie_cooldown_invalidations_total{instance=~\"$instance\"}[$__rate_interval])) by (reason)",
+          "expr": "sum(rate(artipie_cooldown_invalidations_total[$__rate_interval])) by (reason)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -837,7 +906,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 24
       },
       "id": 12,
       "panels": [],
@@ -847,7 +916,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -914,7 +983,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 25
       },
       "id": 13,
       "options": {
@@ -939,27 +1008,27 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.50, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le, repo_type)) * 1000",
+          "expr": "histogram_quantile(0.50, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket[$__rate_interval])) by (le, repo_type)) * 1000",
           "legendFormat": "p50 - {{repo_type}}",
           "refId": "A"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le, repo_type)) * 1000",
+          "expr": "histogram_quantile(0.95, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket[$__rate_interval])) by (le, repo_type)) * 1000",
           "legendFormat": "p95 - {{repo_type}}",
           "refId": "B"
         },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le, repo_type)) * 1000",
+          "expr": "histogram_quantile(0.99, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket[$__rate_interval])) by (le, repo_type)) * 1000",
           "legendFormat": "p99 - {{repo_type}}",
           "refId": "C"
         }
@@ -970,7 +1039,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${datasource}"
+        "uid": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -1037,7 +1106,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 25
       },
       "id": 14,
       "options": {
@@ -1061,9 +1130,9 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${datasource}"
+            "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])) by (le, versions_bucket)) * 1000",
+          "expr": "histogram_quantile(0.99, sum(rate(artipie_cooldown_metadata_filter_duration_seconds_bucket[$__rate_interval])) by (le, versions_bucket)) * 1000",
           "legendFormat": "p99 - {{versions_bucket}} versions",
           "refId": "A"
         }
@@ -1082,55 +1151,15 @@
     "artipie-specialized"
   ],
   "templating": {
-    "list": [
-      {
-        "current": {
-          "text": "Prometheus",
-          "value": "Prometheus"
-        },
-        "includeAll": false,
-        "label": "Datasource",
-        "name": "datasource",
-        "options": [],
-        "query": "prometheus",
-        "refresh": 1,
-        "regex": "",
-        "type": "datasource"
-      },
-      {
-        "allValue": ".*",
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "definition": "label_values(artipie_cooldown_versions_blocked_total, instance)",
-        "includeAll": true,
-        "label": "Instance",
-        "multi": true,
-        "name": "instance",
-        "options": [],
-        "query": {
-          "query": "label_values(artipie_cooldown_versions_blocked_total, instance)",
-          "refId": "StandardVariableQuery"
-        },
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query"
-      }
-    ]
+    "list": []
   },
   "time": {
     "from": "now-1h",
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "",
+  "timezone": "browser",
   "title": "Artipie - Cooldown",
   "uid": "artipie-cooldown",
-  "version": 4
+  "version": 15
 }

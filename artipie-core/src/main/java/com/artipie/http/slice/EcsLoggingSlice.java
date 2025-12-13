@@ -10,7 +10,9 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.log.EcsLogEvent;
 import com.artipie.http.rq.RequestLine;
+import org.slf4j.MDC;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -70,6 +72,37 @@ public final class EcsLoggingSlice implements Slice {
         final long startTime = System.currentTimeMillis();
         final AtomicLong responseSize = new AtomicLong(0);
 
+        // TRACE CONTEXT: Set MDC values at request start for propagation to all downstream logging
+        // This enables auth, cooldown, and other services to log with request context
+        final String clientIp = EcsLogEvent.extractClientIp(headers, this.remoteAddress);
+        final String userName = EcsLogEvent.extractUsername(headers).orElse(null);
+        
+        // Generate trace.id if not already set (e.g., from incoming X-Request-ID header)
+        String traceId = MDC.get("trace.id");
+        if (traceId == null || traceId.isEmpty()) {
+            // Check for incoming trace headers
+            for (var h : headers.find("x-request-id")) {
+                traceId = h.getValue();
+                break;
+            }
+            if (traceId == null || traceId.isEmpty()) {
+                for (var h : headers.find("x-trace-id")) {
+                    traceId = h.getValue();
+                    break;
+                }
+            }
+            if (traceId == null || traceId.isEmpty()) {
+                traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            }
+        }
+        
+        // Set MDC context for this request thread
+        MDC.put("trace.id", traceId);
+        MDC.put("client.ip", clientIp);
+        if (userName != null) {
+            MDC.put("user.name", userName);
+        }
+
         return this.origin.response(line, headers, body)
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -80,7 +113,7 @@ public final class EcsLoggingSlice implements Slice {
                     .httpVersion(line.version())
                     .httpStatus(response.status())
                     .urlPath(line.uri().getPath())
-                    .clientIp(EcsLogEvent.extractClientIp(headers, this.remoteAddress))
+                    .clientIp(clientIp)
                     .userAgent(headers)
                     .duration(duration);
 
@@ -91,7 +124,9 @@ public final class EcsLoggingSlice implements Slice {
                 }
 
                 // Add username if available from authentication
-                EcsLogEvent.extractUsername(headers).ifPresent(logEvent::userName);
+                if (userName != null) {
+                    logEvent.userName(userName);
+                }
 
                 // Log the event (automatically selects log level based on status)
                 logEvent.log();
@@ -106,7 +141,7 @@ public final class EcsLoggingSlice implements Slice {
                     .httpMethod(line.method().value())
                     .httpVersion(line.version())
                     .urlPath(line.uri().getPath())
-                    .clientIp(EcsLogEvent.extractClientIp(headers, this.remoteAddress))
+                    .clientIp(clientIp)
                     .userAgent(headers)
                     .duration(duration)
                     .error(error)
@@ -115,6 +150,12 @@ public final class EcsLoggingSlice implements Slice {
 
                 // Re-throw the error
                 throw new RuntimeException(error);
+            })
+            .whenComplete((response, error) -> {
+                // Clean up MDC after request completes
+                MDC.remove("trace.id");
+                MDC.remove("client.ip");
+                MDC.remove("user.name");
             });
     }
 }

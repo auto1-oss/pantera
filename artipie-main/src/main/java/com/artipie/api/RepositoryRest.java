@@ -151,6 +151,15 @@ public final class RepositoryRest extends BaseRest {
             .handler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
             .handler(this::unblockAllCooldown)
             .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.operation("deleteArtifact")
+            .handler(
+                new AuthzHandler(
+                    this.policy,
+                    new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE)
+                )
+            )
+            .handler(this::deleteArtifact)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
         rbr.operation("moveRepo")
             .handler(
                 new AuthzHandler(
@@ -341,6 +350,63 @@ public final class RepositoryRest extends BaseRest {
                         .end(error.getMessage());
                 }
             });
+    }
+
+    /**
+     * Delete artifact from repository storage.
+     * @param context Routing context
+     */
+    private void deleteArtifact(final RoutingContext context) {
+        final RepositoryName rname = new RepositoryName.FromRequest(context);
+        final Validator validator = new Validator.All(
+            Validator.validator(new ReservedNamesVerifier(rname), HttpStatus.BAD_REQUEST_400),
+            Validator.validator(
+                () -> this.crs.exists(rname),
+                () -> String.format("Repository %s does not exist.", rname),
+                HttpStatus.NOT_FOUND_404
+            )
+        );
+        if (validator.validate(context)) {
+            final JsonObject body = BaseRest.readJsonObject(context);
+            final String path = body == null ? null : body.getString("path", "").trim();
+            if (path == null || path.isEmpty()) {
+                context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
+                    .end("path is required");
+                return;
+            }
+            final String actor = context.user().principal().getString(AuthTokenRest.SUB);
+            this.data.deleteArtifact(rname, path)
+                .whenComplete((deleted, error) -> {
+                    if (error != null) {
+                        EcsLogger.error("com.artipie.api")
+                            .message("Failed to delete artifact")
+                            .eventCategory("api")
+                            .eventAction("artifact_delete")
+                            .eventOutcome("failure")
+                            .field("repository.name", rname.toString())
+                            .field("artifact.path", path)
+                            .userName(actor)
+                            .error(error)
+                            .log();
+                        context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
+                            .end(error.getMessage());
+                    } else if (deleted) {
+                        EcsLogger.info("com.artipie.api")
+                            .message("Artifact deleted via API")
+                            .eventCategory("api")
+                            .eventAction("artifact_delete")
+                            .eventOutcome("success")
+                            .field("repository.name", rname.toString())
+                            .field("artifact.path", path)
+                            .userName(actor)
+                            .log();
+                        context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
+                    } else {
+                        context.response().setStatusCode(HttpStatus.NOT_FOUND_404)
+                            .end("Artifact not found: " + path);
+                    }
+                });
+        }
     }
 
     private void unblockAllCooldown(final RoutingContext context) {

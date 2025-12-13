@@ -12,6 +12,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.WwwAuthenticate;
 import com.artipie.http.rq.RequestLine;
+import org.slf4j.MDC;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -60,10 +61,16 @@ public final class AuthzSlice implements Slice {
             .thenCompose(
                 result -> {
                     if (result.status() == AuthScheme.AuthStatus.AUTHENTICATED) {
+                        // Set MDC for downstream logging (cooldown, metrics, etc.)
+                        // This ensures Bearer/JWT authenticated users are tracked correctly
+                        final String userName = result.user().name();
+                        if (userName != null && !userName.isEmpty() && !result.user().isAnonymous()) {
+                            MDC.put("user.name", userName);
+                        }
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
                                 line,
-                                headers.copy().add(AuthzSlice.LOGIN_HDR, result.user().name()),
+                                headers.copy().add(AuthzSlice.LOGIN_HDR, userName),
                                 body
                             );
                         }

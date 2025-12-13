@@ -78,6 +78,58 @@ public final class RepoData {
     }
 
     /**
+     * Delete artifact from repository storage.
+     * @param rname Repository name
+     * @param artifactPath Path to the artifact within repository storage
+     * @return Completable action of the delete operation, returns true if deleted, false if not found
+     */
+    public CompletionStage<Boolean> deleteArtifact(final RepositoryName rname, final String artifactPath) {
+        final String repo = rname.toString();
+        final Key artifactKey = new Key.From(repo, artifactPath);
+        return this.repoStorage(rname)
+            .thenCompose(asto -> asto.exists(artifactKey)
+                .thenCompose(exists -> {
+                    if (!exists) {
+                        // Check if it's a directory by listing children
+                        return asto.list(artifactKey)
+                            .thenCompose(keys -> {
+                                if (keys.isEmpty()) {
+                                    return CompletableFuture.completedFuture(false);
+                                }
+                                // Delete all files under this path
+                                return asto.deleteAll(artifactKey)
+                                    .thenApply(nothing -> {
+                                        EcsLogger.info("com.artipie.settings")
+                                            .message("Deleted artifact directory from repository")
+                                            .eventCategory("repository")
+                                            .eventAction("artifact_delete")
+                                            .eventOutcome("success")
+                                            .field("repository.name", repo)
+                                            .field("artifact.path", artifactPath)
+                                            .field("files.count", keys.size())
+                                            .log();
+                                        return true;
+                                    });
+                            });
+                    }
+                    // Single file - delete it
+                    return asto.delete(artifactKey)
+                        .thenApply(nothing -> {
+                            EcsLogger.info("com.artipie.settings")
+                                .message("Deleted artifact file from repository")
+                                .eventCategory("repository")
+                                .eventAction("artifact_delete")
+                                .eventOutcome("success")
+                                .field("repository.name", repo)
+                                .field("artifact.path", artifactPath)
+                                .log();
+                            return true;
+                        });
+                })
+            );
+    }
+
+    /**
      * Move data when repository is renamed: from location by the old name to location with
      * new name.
      * @param rname Repository name

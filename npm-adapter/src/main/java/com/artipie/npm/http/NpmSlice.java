@@ -24,6 +24,7 @@ import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.npm.http.auth.AddUserSlice;
 import com.artipie.npm.http.auth.ArtipieAddUserSlice;
@@ -474,7 +475,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*\\.json$")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SliceDownload(storage),
+                    new StorageArtifactSlice(storage),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(
@@ -502,7 +503,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*\\.tgz$")
                 ),
                 NpmSlice.createAuthSlice(
-                    new SliceDownload(storage),
+                    new StorageArtifactSlice(storage),
                     basicAuth,
                     npmTokenAuth,
                     new OperationControl(

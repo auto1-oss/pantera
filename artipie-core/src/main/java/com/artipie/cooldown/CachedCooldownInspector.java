@@ -4,6 +4,7 @@
  */
 package com.artipie.cooldown;
 
+import com.artipie.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
@@ -58,6 +59,23 @@ public final class CachedCooldownInspector implements CooldownInspector {
      */
     public CachedCooldownInspector(final CooldownInspector delegate) {
         this(delegate, 50_000, Duration.ofMinutes(30), 10_000, Duration.ofMinutes(30));
+    }
+
+    /**
+     * Constructor with CacheConfig support.
+     * Uses configured TTL and size settings.
+     *
+     * @param delegate Underlying inspector
+     * @param config Cache configuration from "cooldown" cache section
+     */
+    public CachedCooldownInspector(final CooldownInspector delegate, final CacheConfig config) {
+        this(
+            delegate,
+            config.valkeyEnabled() ? config.l1MaxSize() : config.maxSize(),
+            config.valkeyEnabled() ? config.l1Ttl() : config.ttl(),
+            config.valkeyEnabled() ? config.l1MaxSize() / 5 : config.maxSize() / 5,
+            config.valkeyEnabled() ? config.l1Ttl() : config.ttl()
+        );
     }
 
     /**

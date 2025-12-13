@@ -8,12 +8,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
+import com.artipie.cooldown.metrics.CooldownMetrics;
 import com.artipie.http.log.EcsLogger;
 
 final class JdbcCooldownService implements CooldownService {
@@ -68,6 +70,101 @@ final class JdbcCooldownService implements CooldownService {
      */
     public CooldownCache cache() {
         return this.cache;
+    }
+
+    /**
+     * Initialize metrics from database on startup.
+     * Loads actual active block counts and updates gauges.
+     * Should be called once after service construction.
+     */
+    public void initializeMetrics() {
+        if (!CooldownMetrics.isAvailable()) {
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("CooldownMetrics not available - metrics will not be initialized")
+                .eventCategory("cooldown")
+                .eventAction("metrics_init")
+                .log();
+            return;
+        }
+        // Eagerly get instance to ensure global gauges are registered even with 0 blocks
+        final CooldownMetrics metrics = CooldownMetrics.getInstance();
+        if (metrics == null) {
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("CooldownMetrics instance is null - metrics will not be initialized")
+                .eventCategory("cooldown")
+                .eventAction("metrics_init")
+                .log();
+            return;
+        }
+        CompletableFuture.runAsync(() -> {
+            try {
+                // Load active blocks per repo
+                final Map<String, Long> counts = this.repository.countAllActiveBlocks();
+                for (Map.Entry<String, Long> entry : counts.entrySet()) {
+                    final String[] parts = entry.getKey().split(":", 2);
+                    if (parts.length == 2) {
+                        metrics.updateActiveBlocks(parts[0], parts[1], entry.getValue());
+                    }
+                }
+                final long total = counts.values().stream().mapToLong(Long::longValue).sum();
+
+                // Load all-blocked packages count
+                final long allBlocked = this.repository.countAllBlockedPackages();
+                metrics.setAllBlockedPackages(allBlocked);
+
+                EcsLogger.info("com.artipie.cooldown")
+                    .message("Initialized cooldown metrics from database")
+                    .eventCategory("cooldown")
+                    .eventAction("metrics_init")
+                    .field("repositories.count", counts.size())
+                    .field("blocks.total", total)
+                    .field("all_blocked.packages", allBlocked)
+                    .log();
+            } catch (Exception e) {
+                EcsLogger.error("com.artipie.cooldown")
+                    .message("Failed to initialize cooldown metrics")
+                    .eventCategory("cooldown")
+                    .eventAction("metrics_init")
+                    .error(e)
+                    .log();
+            }
+        }, this.executor);
+    }
+
+    /**
+     * Increment active blocks metric for a repository (O(1), no DB query).
+     */
+    private void incrementActiveBlocksMetric(final String repoType, final String repoName) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().incrementActiveBlocks(repoType, repoName);
+        }
+    }
+
+    /**
+     * Decrement active blocks metric for a repository (O(1), no DB query).
+     */
+    private void decrementActiveBlocksMetric(final String repoType, final String repoName) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().decrementActiveBlocks(repoType, repoName);
+        }
+    }
+
+    /**
+     * Record a version blocked event (counter metric).
+     */
+    private void recordVersionBlockedMetric(final String repoType, final String repoName) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().recordVersionBlocked(repoType, repoName);
+        }
+    }
+
+    /**
+     * Record a version allowed event (counter metric).
+     */
+    private void recordVersionAllowedMetric(final String repoType, final String repoName) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().recordVersionAllowed(repoType, repoName);
+        }
     }
 
     @Override
@@ -128,6 +225,8 @@ final class JdbcCooldownService implements CooldownService {
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
                     .log();
+                // Record blocked version counter metric
+                this.recordVersionBlockedMetric(request.repoType(), request.repoName());
                 // Blocked: Fetch full block details from database (async)
                 return this.getBlockResult(request);
             } else {
@@ -139,6 +238,8 @@ final class JdbcCooldownService implements CooldownService {
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
                     .log();
+                // Record allowed version counter metric
+                this.recordVersionAllowedMetric(request.repoType(), request.repoName());
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
         }).whenComplete((result, error) -> {
@@ -169,9 +270,15 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Update cache to false first (immediate effect)
         this.cache.unblock(repoName, artifact, version);
-        // Then update database
+        // Then update database and metrics
         return CompletableFuture.runAsync(
-            () -> this.unblockSingle(repoType, repoName, artifact, version, actor),
+            () -> {
+                this.unblockSingle(repoType, repoName, artifact, version, actor);
+                // Decrement active blocks metric (O(1), no DB query)
+                this.decrementActiveBlocksMetric(repoType, repoName);
+                // Unmark all-blocked status and decrement metric
+                this.unmarkAllBlockedPackage(repoType, repoName, artifact);
+            },
             this.executor
         );
     }
@@ -184,9 +291,17 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Update all cache entries to false (immediate effect)
         this.cache.unblockAll(repoName);
-        // Then update database
+        // Then update database and metrics
         return CompletableFuture.runAsync(
-            () -> this.unblockAllBlocking(repoType, repoName, actor),
+            () -> {
+                final int unblockedCount = this.unblockAllBlocking(repoType, repoName, actor);
+                // Decrement active blocks metric by count (O(1), no DB query)
+                for (int i = 0; i < unblockedCount; i++) {
+                    this.decrementActiveBlocksMetric(repoType, repoName);
+                }
+                // Unmark all all-blocked packages in this repo and update metric
+                this.unmarkAllBlockedForRepo(repoType, repoName);
+            },
             this.executor
         );
     }
@@ -199,7 +314,7 @@ final class JdbcCooldownService implements CooldownService {
         return CompletableFuture.supplyAsync(
             () -> this.repository.findActiveForRepo(repoType, repoName).stream()
                 .filter(record -> record.status() == BlockStatus.ACTIVE)
-                .map(record -> this.toCooldownBlock(record, this.repository.dependenciesOf(record.id())))
+                .map(this::toCooldownBlock)
                 .collect(Collectors.toList()),
             this.executor
         );
@@ -288,8 +403,7 @@ final class JdbcCooldownService implements CooldownService {
                         this.cache.put(request.repoName(), request.artifact(), request.version(), false);
                         return CooldownResult.allowed();
                     }
-                    final List<DbBlockRecord> deps = this.repository.dependenciesOf(rec.id());
-                    return CooldownResult.blocked(this.toCooldownBlock(rec, deps));
+                    return CooldownResult.blocked(this.toCooldownBlock(rec));
                 }
             } else {
                 EcsLogger.warn("com.artipie.cooldown")
@@ -335,7 +449,6 @@ final class JdbcCooldownService implements CooldownService {
             final DbBlockRecord record = existing.get();
             if (record.status() == BlockStatus.ACTIVE) {
                 if (record.blockedUntil().isAfter(now)) {
-                    this.repository.recordAttempt(record.id(), request.requestedBy(), now);
                     // Blocked with expiration timestamp
                     return Optional.of(new BlockCacheEntry(true, record.blockedUntil()));
                 }
@@ -440,7 +553,7 @@ final class JdbcCooldownService implements CooldownService {
                 .field("package.release_date", date.toString())
                 .log();
             // Create block in database (async)
-            return this.createBlockInDatabase(request, inspector, CooldownReason.FRESH_RELEASE, until)
+            return this.createBlockInDatabase(request, CooldownReason.FRESH_RELEASE, until)
                 .thenApply(success -> {
                     // Cache as blocked with dynamic TTL (until block expires)
                     this.cache.putBlocked(request.repoName(), request.artifact(),
@@ -479,22 +592,23 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     /**
-     * Create block record in database with dependency checking.
+     * Create block record in database.
      * @param request Cooldown request
-     * @param inspector Inspector for dependencies
      * @param reason Block reason
      * @param blockedUntil Block expiration time
      * @return CompletableFuture<Boolean> (always returns true)
      */
     private CompletableFuture<Boolean> createBlockInDatabase(
         final CooldownRequest request,
-        final CooldownInspector inspector,
         final CooldownReason reason,
         final Instant blockedUntil
     ) {
         return CompletableFuture.supplyAsync(() -> {
             final Instant now = request.requestedAt();
-            final DbBlockRecord main = this.repository.insertBlock(
+            // Pass the user who tried to install as installed_by
+            final Optional<String> installedBy = Optional.ofNullable(request.requestedBy())
+                .filter(s -> !s.isEmpty() && !s.equals("anonymous"));
+            this.repository.insertBlock(
                 request.repoType(),
                 request.repoName(),
                 request.artifact(),
@@ -503,101 +617,20 @@ final class JdbcCooldownService implements CooldownService {
                 now,
                 blockedUntil,
                 SYSTEM_ACTOR,
-                Optional.empty()
+                installedBy
             );
-            this.repository.recordAttempt(main.id(), request.requestedBy(), now);
-            return main;
-        }, this.executor).thenCompose(main -> {
-            // Async fetch and insert dependencies (background)
-            inspector.dependencies(request.artifact(), request.version())
-                .thenAccept(rawDeps -> {
-                    final List<CooldownDependency> deps = deduplicateDependencies(
-                        rawDeps,
-                        request.artifact(),
-                        request.version()
-                    );
-                    if (!deps.isEmpty()) {
-                        this.repository.insertDependencies(
-                            request.repoType(),
-                            request.repoName(),
-                            deps,
-                            reason,
-                            request.requestedAt(),
-                            blockedUntil,
-                            SYSTEM_ACTOR,
-                            main.id()
-                        );
-                    }
-                });
-            return CompletableFuture.completedFuture(true);
+            return true;
+        }, this.executor).thenApply(result -> {
+            // Increment active blocks metric (O(1), no DB query)
+            this.incrementActiveBlocksMetric(request.repoType(), request.repoName());
+            return result;
         });
-    }
-
-    /**
-     * Process dependencies asynchronously - check freshness and insert blocks.
-     * @param request Cooldown request
-     * @param main Main block record
-     * @param deps Dependency list
-     * @param blockedUntil Block expiration
-     * @return CompletableFuture with main block record
-     */
-    private CompletableFuture<DbBlockRecord> processDependencies(
-        final CooldownRequest request,
-        final DbBlockRecord main,
-        final List<CooldownDependency> deps,
-        final Instant blockedUntil
-    ) {
-        final Instant now = request.requestedAt();
-        final Duration minAge = this.settings.minimumAllowedAge();
-        
-        if (minAge.isZero() || minAge.isNegative() || deps.isEmpty()) {
-            return CompletableFuture.completedFuture(main);
-        }
-        
-        // Background processing: Insert dependencies asynchronously
-        // Don't block the main result - user should not wait for dependency metadata
-        CompletableFuture.runAsync(() -> {
-            try {
-                this.repository.insertDependencies(
-                    request.repoType(),
-                    request.repoName(),
-                    deps,
-                    main.reason(),
-                    now,
-                    blockedUntil,
-                    SYSTEM_ACTOR,
-                    main.id()
-                );
-                EcsLogger.debug("com.artipie.cooldown")
-                    .message("Inserted " + deps.size() + " dependencies")
-                    .eventCategory("cooldown")
-                    .eventAction("dependency_insert")
-                    .eventOutcome("success")
-                    .field("package.name", request.artifact())
-                    .field("package.version", request.version())
-                    .log();
-            } catch (Exception ex) {
-                EcsLogger.warn("com.artipie.cooldown")
-                    .message("Failed to insert dependencies")
-                    .eventCategory("cooldown")
-                    .eventAction("dependency_insert")
-                    .eventOutcome("failure")
-                    .field("package.name", request.artifact())
-                    .field("package.version", request.version())
-                    .field("error.message", ex.getMessage())
-                    .log();
-            }
-        }, this.executor);
-        
-        // Return immediately - don't wait for dependency insertion
-        return CompletableFuture.completedFuture(main);
     }
 
     private void expire(final DbBlockRecord record, final Instant when) {
         this.repository.updateStatus(record.id(), BlockStatus.EXPIRED, Optional.of(when), Optional.empty());
-        this.repository.dependenciesOf(record.id()).forEach(
-            dep -> this.repository.updateStatus(dep.id(), BlockStatus.EXPIRED, Optional.of(when), Optional.empty())
-        );
+        // Decrement active blocks metric (O(1), no DB query)
+        this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
     }
 
     private void unblockSingle(
@@ -615,20 +648,22 @@ final class JdbcCooldownService implements CooldownService {
             .invalidate(repoType, repoName, artifact, version);
     }
 
-    private void unblockAllBlocking(
+    private int unblockAllBlocking(
         final String repoType,
         final String repoName,
         final String actor
     ) {
         final Instant now = Instant.now();
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
-        blocks.stream()
+        final int count = (int) blocks.stream()
             .filter(record -> record.status() == BlockStatus.ACTIVE)
-            .forEach(record -> this.release(record, actor, now));
+            .peek(record -> this.release(record, actor, now))
+            .count();
         
         // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
         com.artipie.cooldown.InspectorRegistry.instance()
             .clearAll(repoType, repoName);
+        return count;
     }
 
     private void release(final DbBlockRecord record, final String actor, final Instant when) {
@@ -638,25 +673,9 @@ final class JdbcCooldownService implements CooldownService {
             Optional.of(when),
             Optional.of(actor)
         );
-        if (record.parentId().isEmpty()) {
-            this.repository.dependenciesOf(record.id()).forEach(
-                dep -> this.repository.updateStatus(
-                    dep.id(),
-                    BlockStatus.INACTIVE,
-                    Optional.of(when),
-                    Optional.of(actor)
-                )
-            );
-        }
     }
 
-    private CooldownBlock toCooldownBlock(
-        final DbBlockRecord record,
-        final List<DbBlockRecord> dependencies
-    ) {
-        final List<CooldownDependency> deps = dependencies.stream()
-            .map(dep -> new CooldownDependency(dep.artifact(), dep.version()))
-            .collect(Collectors.toCollection(ArrayList::new));
+    private CooldownBlock toCooldownBlock(final DbBlockRecord record) {
         return new CooldownBlock(
             record.repoType(),
             record.repoName(),
@@ -665,36 +684,96 @@ final class JdbcCooldownService implements CooldownService {
             record.reason(),
             record.blockedAt(),
             record.blockedUntil(),
-            deps
+            java.util.Collections.emptyList()  // No dependencies tracked anymore
         );
     }
 
-    // Version comparison helpers removed as newer-than-cache logic is no longer supported.
-
-    private static List<CooldownDependency> deduplicateDependencies(
-        final List<CooldownDependency> deps,
-        final String artifact,
-        final String version
-    ) {
-        return deps.stream()
-            .filter(dep -> !sameArtifact(artifact, version, dep))
-            .collect(
-                Collectors.collectingAndThen(
-                    Collectors.toMap(
-                        dep -> dep.artifact().toLowerCase(Locale.US) + "@" + dep.version(),
-                        dep -> dep,
-                        (existing, replacement) -> existing
-                    ),
-                    map -> new ArrayList<>(map.values())
-                )
-            );
+    @Override
+    public void markAllBlocked(final String repoType, final String repoName, final String artifact) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                final boolean inserted = this.repository.markAllBlocked(repoType, repoName, artifact);
+                if (inserted && CooldownMetrics.isAvailable()) {
+                    CooldownMetrics.getInstance().incrementAllBlocked();
+                    EcsLogger.debug("com.artipie.cooldown")
+                        .message("Marked package as all-blocked")
+                        .eventCategory("cooldown")
+                        .eventAction("all_blocked_mark")
+                        .field("repository.type", repoType)
+                        .field("repository.name", repoName)
+                        .field("package.name", artifact)
+                        .log();
+                }
+            } catch (Exception e) {
+                EcsLogger.warn("com.artipie.cooldown")
+                    .message("Failed to mark package as all-blocked")
+                    .eventCategory("cooldown")
+                    .eventAction("all_blocked_mark")
+                    .field("repository.type", repoType)
+                    .field("package.name", artifact)
+                    .error(e)
+                    .log();
+            }
+        }, this.executor);
     }
 
-    private static boolean sameArtifact(
-        final String artifact,
-        final String version,
-        final CooldownDependency dep
-    ) {
-        return artifact.equalsIgnoreCase(dep.artifact()) && version.equals(dep.version());
+    /**
+     * Unmark a package as "all versions blocked" and decrement metric.
+     */
+    private void unmarkAllBlockedPackage(final String repoType, final String repoName, final String artifact) {
+        try {
+            final boolean wasBlocked = this.repository.unmarkAllBlocked(repoType, repoName, artifact);
+            if (wasBlocked && CooldownMetrics.isAvailable()) {
+                CooldownMetrics.getInstance().decrementAllBlocked();
+                EcsLogger.debug("com.artipie.cooldown")
+                    .message("Unmarked package as all-blocked")
+                    .eventCategory("cooldown")
+                    .eventAction("all_blocked_unmark")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .field("package.name", artifact)
+                    .log();
+            }
+        } catch (Exception e) {
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("Failed to unmark package as all-blocked")
+                .eventCategory("cooldown")
+                .eventAction("all_blocked_unmark")
+                .field("repository.type", repoType)
+                .field("package.name", artifact)
+                .error(e)
+                .log();
+        }
+    }
+
+    /**
+     * Unmark all all-blocked packages for a repository (called on unblockAll).
+     */
+    private void unmarkAllBlockedForRepo(final String repoType, final String repoName) {
+        try {
+            final int count = this.repository.unmarkAllBlockedForRepo(repoType, repoName);
+            if (count > 0 && CooldownMetrics.isAvailable()) {
+                // Reload from database to ensure accuracy
+                final long newTotal = this.repository.countAllBlockedPackages();
+                CooldownMetrics.getInstance().setAllBlockedPackages(newTotal);
+                EcsLogger.debug("com.artipie.cooldown")
+                    .message("Unmarked all-blocked packages for repo")
+                    .eventCategory("cooldown")
+                    .eventAction("all_blocked_unmark_all")
+                    .field("repository.type", repoType)
+                    .field("repository.name", repoName)
+                    .field("packages.unmarked", count)
+                    .log();
+            }
+        } catch (Exception e) {
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("Failed to unmark all-blocked packages for repo")
+                .eventCategory("cooldown")
+                .eventAction("all_blocked_unmark_all")
+                .field("repository.type", repoType)
+                .field("repository.name", repoName)
+                .error(e)
+                .log();
+        }
     }
 }

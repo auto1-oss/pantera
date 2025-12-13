@@ -168,6 +168,43 @@ public class NpmProxy {
     }
 
     /**
+     * Retrieve pre-computed abbreviated package content as reactive stream.
+     * MEMORY OPTIMIZATION: This is the most efficient path for npm install requests.
+     * Returns pre-computed abbreviated JSON without loading/parsing full metadata.
+     * Checks TTL and refreshes from remote if stale.
+     * @param name Package name
+     * @return Abbreviated package content or empty (fall back to full if not available)
+     */
+    public Maybe<com.artipie.asto.Content> getAbbreviatedContentStream(final String name) {
+        return this.storage.getPackageMetadata(name)
+            .flatMap(metadata -> {
+                if (this.isStale(metadata.lastRefreshed())) {
+                    // TTL expired - try to refresh from upstream
+                    return this.remotePackageAndSave(name)
+                        .flatMap(saved -> this.storage.getAbbreviatedContent(name))
+                        .switchIfEmpty(this.storage.getAbbreviatedContent(name));
+                }
+                // Still fresh - return cached abbreviated content
+                return this.storage.getAbbreviatedContent(name);
+            })
+            .switchIfEmpty(Maybe.defer(() -> {
+                // Not in storage - fetch from remote, save, then get abbreviated
+                return this.remotePackageAndSave(name).flatMap(
+                    saved -> this.storage.getAbbreviatedContent(name)
+                );
+            }));
+    }
+
+    /**
+     * Check if abbreviated content is available for a package.
+     * @param name Package name
+     * @return True if abbreviated is cached
+     */
+    public Maybe<Boolean> hasAbbreviatedContent(final String name) {
+        return this.storage.hasAbbreviatedContent(name);
+    }
+
+    /**
      * Check if cached metadata is stale based on TTL.
      * @param lastRefreshed When the metadata was last refreshed
      * @return True if metadata is stale and should be refreshed

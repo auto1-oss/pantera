@@ -9,6 +9,7 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.metadata.CooldownMetadataService;
 import com.artipie.cooldown.metadata.CooldownMetadataServiceImpl;
 import com.artipie.cooldown.metadata.FilteredMetadataCache;
+import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.artipie.cooldown.metadata.NoopCooldownMetadataService;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.settings.Settings;
@@ -61,11 +62,14 @@ public final class CooldownSupport {
                     .eventAction("cooldown_init")
                     .eventOutcome("success")
                     .log();
-                return (CooldownService) new JdbcCooldownService(
+                final JdbcCooldownService service = new JdbcCooldownService(
                     settings.cooldown(),
                     new CooldownRepository(ds),
                     executor
                 );
+                // Initialize metrics from database (async) - loads actual active block counts
+                service.initializeMetrics();
+                return (CooldownService) service;
             })
             .orElseGet(() -> {
                 EcsLogger.warn("com.artipie.cooldown")
@@ -98,15 +102,17 @@ public final class CooldownSupport {
         }
         final JdbcCooldownService jdbc = (JdbcCooldownService) cooldownService;
         
-        // Create metadata cache with Valkey L2 if available
+        // Create metadata cache with configuration and Valkey L2 if available
+        final FilteredMetadataCacheConfig cacheConfig = FilteredMetadataCacheConfig.getInstance();
         final FilteredMetadataCache metadataCache = 
             com.artipie.cache.GlobalCacheConfig.valkeyConnection()
-                .map(FilteredMetadataCache::new)
-                .orElseGet(FilteredMetadataCache::new);
+                .map(valkey -> new FilteredMetadataCache(cacheConfig, valkey))
+                .orElseGet(() -> new FilteredMetadataCache(cacheConfig, null));
         
         EcsLogger.info("com.artipie.cooldown")
-            .message("Created CooldownMetadataService with L2=" + 
-                (com.artipie.cache.GlobalCacheConfig.valkeyConnection().isPresent() ? "Valkey" : "none"))
+            .message("Created CooldownMetadataService with config=" + cacheConfig + 
+                ", L2=" + (com.artipie.cache.GlobalCacheConfig.valkeyConnection().isPresent() ? "Valkey" : "none") +
+                ", L2OnlyMode=" + metadataCache.isL2OnlyMode())
             .eventCategory("configuration")
             .eventAction("metadata_service_init")
             .log();

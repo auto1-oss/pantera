@@ -107,10 +107,10 @@ public final class VersionComparators {
                 final String p2 = i < parts2.length ? parts2[i] : "0";
                 // Try numeric comparison first
                 try {
-                    final int n1 = Integer.parseInt(p1);
-                    final int n2 = Integer.parseInt(p2);
+                    final long n1 = Long.parseLong(p1);
+                    final long n2 = Long.parseLong(p2);
                     if (n1 != n2) {
-                        return Integer.compare(n1, n2);
+                        return Long.compare(n1, n2);
                     }
                 } catch (NumberFormatException e) {
                     // Fall back to string comparison for qualifiers
@@ -136,11 +136,12 @@ public final class VersionComparators {
 
     /**
      * Compare numeric strings, treating null/empty as 0.
+     * Uses Long to handle version numbers that exceed Integer.MAX_VALUE.
      */
     private static int compareNumeric(final String s1, final String s2) {
-        final int n1 = s1 == null || s1.isEmpty() ? 0 : Integer.parseInt(s1);
-        final int n2 = s2 == null || s2.isEmpty() ? 0 : Integer.parseInt(s2);
-        return Integer.compare(n1, n2);
+        final long n1 = s1 == null || s1.isEmpty() ? 0L : Long.parseLong(s1);
+        final long n2 = s2 == null || s2.isEmpty() ? 0L : Long.parseLong(s2);
+        return Long.compare(n1, n2);
     }
 
     /**
