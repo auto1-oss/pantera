@@ -6,6 +6,7 @@ package com.artipie.npm;
 
 import com.artipie.asto.Concatenation;
 import com.artipie.asto.Content;
+import com.artipie.asto.Remaining;
 import io.reactivex.Flowable;
 import java.io.StringReader;
 import java.net.URL;
@@ -52,7 +53,7 @@ public final class Tarballs {
         return new Content.From(
             new Concatenation(this.original)
                 .single()
-                .map(ByteBuffer::array)
+                .map(buf -> new Remaining(buf).bytes())
                 .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
                 .map(json -> Json.createReader(new StringReader(json)).readObject())
                 .map(json -> Tarballs.updateJson(json, this.prefix.toString()))

@@ -12,9 +12,7 @@ import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
 import io.reactivex.Scheduler;
 import io.reactivex.Single;
-import io.reactivex.schedulers.Schedulers;
 import java.util.Collection;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 /**
@@ -81,13 +79,15 @@ public final class RxStorageWrapper implements RxStorage {
     public Single<Boolean> exists(final Key key) {
         // CRITICAL: Do NOT use observeOn() - causes backpressure violations under high concurrency
         // The underlying storage.exists() already returns CompletableFuture which handles threading
-        return Single.defer(() -> SingleInterop.fromFuture(this.storage.exists(key)));
+        // Use RxFuture.single (non-blocking) instead of SingleInterop.fromFuture (blocking)
+        return Single.defer(() -> RxFuture.single(this.storage.exists(key)));
     }
 
     @Override
     public Single<Collection<Key>> list(final Key prefix) {
         // CRITICAL: Do NOT use observeOn() - causes backpressure violations under high concurrency
-        return Single.defer(() -> SingleInterop.fromFuture(this.storage.list(prefix)));
+        // Use RxFuture.single (non-blocking) instead of SingleInterop.fromFuture (blocking)
+        return Single.defer(() -> RxFuture.single(this.storage.list(prefix)));
     }
 
     @Override
@@ -110,15 +110,15 @@ public final class RxStorageWrapper implements RxStorage {
     @Deprecated
     public Single<Long> size(final Key key) {
         // CRITICAL: Do NOT use observeOn() - causes backpressure violations under high concurrency
-        return Single.defer(() -> SingleInterop.fromFuture(this.storage.size(key)));
+        // Use RxFuture.single (non-blocking) instead of SingleInterop.fromFuture (blocking)
+        return Single.defer(() -> RxFuture.single(this.storage.size(key)));
     }
 
     @Override
     public Single<Content> value(final Key key) {
         // CRITICAL: Do NOT use observeOn() - causes backpressure violations under high concurrency
-        return Single.defer(() -> SingleInterop.fromFuture(
-            this.storage.value(key).thenCompose(CompletableFuture::completedFuture)
-        ));
+        // Use RxFuture.single (non-blocking) instead of SingleInterop.fromFuture (blocking)
+        return Single.defer(() -> RxFuture.single(this.storage.value(key)));
     }
 
     @Override
@@ -133,8 +133,10 @@ public final class RxStorageWrapper implements RxStorage {
         final Function<RxStorage, Single<T>> operation
     ) {
         // CRITICAL: Do NOT use observeOn() - causes backpressure violations under high concurrency
+        // Use RxFuture.single (non-blocking) instead of SingleInterop.fromFuture (blocking)
+        // SingleInterop.get() is used to convert Single back to CompletionStage (non-blocking)
         return Single.defer(
-            () -> SingleInterop.fromFuture(
+            () -> RxFuture.single(
                 this.storage.exclusively(
                     key,
                     st -> operation.apply(new RxStorageWrapper(st)).to(SingleInterop.get())

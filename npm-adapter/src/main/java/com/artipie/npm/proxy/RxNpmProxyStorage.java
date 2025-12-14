@@ -6,12 +6,12 @@ package com.artipie.npm.proxy;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.rx.RxFuture;
 import com.artipie.asto.rx.RxStorage;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.npm.misc.AbbreviatedMetadata;
 import com.artipie.npm.proxy.model.NpmAsset;
 import com.artipie.npm.proxy.model.NpmPackage;
-import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
 import io.reactivex.Single;
@@ -156,8 +156,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                     return Maybe.empty();
                 }
                 return this.storage.value(new Key.From(name, "meta.meta"))
-                    .map(Content::asBytesFuture)
-                    .flatMap(SingleInterop::fromFuture)
+                    .flatMap(content -> RxFuture.single(content.asBytesFuture()))
                     .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
                     .map(JsonObject::new)
                     .map(NpmPackage.Metadata::new)
@@ -205,12 +204,10 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
      */
     private Single<NpmPackage> readPackage(final String name) {
         return this.storage.value(new Key.From(name, "meta.json"))
-            .map(Content::asBytesFuture)
-            .flatMap(SingleInterop::fromFuture)
+            .flatMap(content -> RxFuture.single(content.asBytesFuture()))
             .zipWith(
                 this.storage.value(new Key.From(name, "meta.meta"))
-                    .map(Content::asBytesFuture)
-                    .flatMap(SingleInterop::fromFuture)
+                    .flatMap(content -> RxFuture.single(content.asBytesFuture()))
                     .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
                     .map(JsonObject::new),
                 (content, metadata) ->
@@ -231,8 +228,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         return this.storage.value(new Key.From(path))
             .zipWith(
                 this.storage.value(new Key.From(String.format("%s.meta", path)))
-                    .map(Content::asBytesFuture)
-                    .flatMap(SingleInterop::fromFuture)
+                    .flatMap(content -> RxFuture.single(content.asBytesFuture()))
                     .map(metadata -> new String(metadata, StandardCharsets.UTF_8))
                     .map(JsonObject::new),
                 (content, metadata) ->

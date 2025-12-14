@@ -8,10 +8,10 @@ https://github.com/artipie/artipie/blob/master/LICENSE.txt
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.8</version>
+    <version>1.20.9</version>
   </parent>
   <artifactId>vertx-server</artifactId>
-  <version>1.20.8</version>
+  <version>1.20.9</version>
   <packaging>jar</packaging>
   <name>The Vert.x server</name>
   <description>A Vert.x which can serve artipie slices</description>
@@ -27,9 +27,13 @@ https://github.com/artipie/artipie/blob/master/LICENSE.txt
       <artifactId>vertx-rx-java2</artifactId>
     </dependency>
     <dependency>
+      <groupId>io.vertx</groupId>
+      <artifactId>vertx-reactive-streams</artifactId>
+    </dependency>
+    <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>artipie-core</artifactId>
-      <version>1.20.8</version>
+      <version>1.20.9</version>
     </dependency>
     <!-- Micrometer for Vert.x metrics (legacy - will be replaced in Phase 4) -->
     <dependency>

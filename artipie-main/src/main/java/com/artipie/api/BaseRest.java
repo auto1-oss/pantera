@@ -42,6 +42,23 @@ abstract class BaseRest {
             } else {
                 status = code;
             }
+            // Check if response headers have already been sent
+            if (context.response().headWritten()) {
+                // Headers already sent, just log the error - can't modify response
+                EcsLogger.warn("com.artipie.api")
+                    .message("REST API request failed (response already sent)")
+                    .eventCategory("api")
+                    .eventAction("request_handling")
+                    .eventOutcome("failure")
+                    .field("http.response.status_code", status)
+                    .error(context.failure())
+                    .log();
+                // Try to end the response if not already ended
+                if (!context.response().ended()) {
+                    context.response().end();
+                }
+                return;
+            }
             // Sanitize message - HTTP status messages can't contain control chars
             final String msg = sanitizeStatusMessage(context.failure().getMessage());
             context.response()

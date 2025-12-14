@@ -6,6 +6,7 @@ package com.artipie.docker.asto;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.Remaining;
 import com.artipie.asto.SubStorage;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.memory.InMemoryStorage;
@@ -99,11 +100,11 @@ final class BlobsITCase {
         );
         final byte[] bytes = {0x05, 0x06, 0x07, 0x08};
         final Digest digest = blobs.put(new TrustedBlobSource(bytes)).get();
-        final byte[] read = Flowable.fromPublisher(
+        final byte[] read = new Remaining(Flowable.fromPublisher(
             blobs.blob(digest).get()
                 .get().content()
                 .toCompletableFuture().get()
-        ).toList().blockingGet().getFirst().array();
+        ).toList().blockingGet().getFirst()).bytes();
         MatcherAssert.assertThat(read, Matchers.equalTo(bytes));
     }
 

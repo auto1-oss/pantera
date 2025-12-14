@@ -7,6 +7,7 @@ package com.artipie.asto.cache;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
+import com.artipie.asto.rx.RxFuture;
 import com.artipie.asto.rx.RxStorageWrapper;
 import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -42,7 +43,8 @@ public final class FromStorageCache implements Cache {
         return rxsto.exists(key)
             .filter(exists -> exists)
             .flatMapSingleElement(
-                exists -> SingleInterop.fromFuture(
+                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                exists -> RxFuture.single(
                     // Use optimized content retrieval for validation (100-1000x faster for FileStorage)
                     control.validate(key, () -> OptimizedStorageCache.optimizedValue(this.storage, key).thenApply(Optional::of))
                 )
@@ -50,7 +52,8 @@ public final class FromStorageCache implements Cache {
             .filter(valid -> valid)
             .<Optional<? extends Content>>flatMapSingleElement(
                 // Use optimized content retrieval for cache hit (100-1000x faster for FileStorage)
-                ignore -> Single.fromFuture(
+                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                ignore -> RxFuture.single(
                     OptimizedStorageCache.optimizedValue(this.storage, key)
                 ).map(Optional::of)
             )
@@ -65,7 +68,8 @@ public final class FromStorageCache implements Cache {
             )
             .onErrorComplete()
             .switchIfEmpty(
-                SingleInterop.fromFuture(remote.get()).flatMap(
+                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                RxFuture.single(remote.get()).flatMap(
                     content -> {
                         final Single<Optional<? extends Content>> res;
                         if (content.isPresent()) {

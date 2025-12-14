@@ -18,6 +18,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RequestLinePrefix;
 import com.artipie.pypi.NormalizedProjectName;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -119,16 +120,19 @@ final class SliceIndex implements Slice {
      * @return Response future
      */
     private CompletableFuture<Response> generateDynamicIndex(final Key list, final String prefix) {
-        return SingleInterop.fromFuture(this.storage.list(list))
+        // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+        return RxFuture.single(this.storage.list(list))
             .flatMap(keys -> {
                 // Return 404 if package doesn't exist (empty directory)
                 if (keys.isEmpty()) {
                     return Single.just(ResponseBuilder.notFound().build());
                 }
                 // Process all keys and generate index
+                // Use concatMapSingle to preserve ordering (flatMapSingle doesn't preserve order)
                 return Flowable.fromIterable(keys)
-                    .flatMapSingle(
-                        key -> Single.fromFuture(
+                    .concatMapSingle(
+                        // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
+                        key -> RxFuture.single(
                             // Try to list this key as a directory (version folder)
                             this.storage.list(key).thenCompose(
                                 subKeys -> {
@@ -146,9 +150,11 @@ final class SliceIndex implements Slice {
                                         );
                                     } else {
                                         // It's a directory - process all files in it
+                                        // Use concatMapSingle to preserve ordering
                                         return Flowable.fromIterable(subKeys)
-                                            .flatMapSingle(
-                                                subKey -> Single.fromFuture(
+                                            .concatMapSingle(
+                                                // Use non-blocking RxFuture.single
+                                                subKey -> RxFuture.single(
                                                     this.storage.value(subKey).thenCompose(
                                                         value -> new ContentDigest(value, Digests.SHA256).hex()
                                                     ).thenApply(

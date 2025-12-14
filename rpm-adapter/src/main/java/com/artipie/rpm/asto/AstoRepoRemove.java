@@ -159,8 +159,9 @@ public final class AstoRepoRemove {
             .flatMapObservable(Observable::fromIterable)
             .map(AstoRepoRemove::removeTemp)
             .flatMapSingle(
+                // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
                 key -> rxsto.value(key).flatMap(
-                    val -> Single.fromFuture(
+                    val -> com.artipie.asto.rx.RxFuture.single(
                         new ContentDigest(val, () -> this.cnfg.digest().messageDigest())
                             .hex().toCompletableFuture()
                     )

@@ -10,6 +10,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.ext.ContentDigest;
 import com.artipie.asto.ext.Digests;
 import com.artipie.asto.ext.KeyLastPart;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -73,10 +74,12 @@ public final class IndexGenerator {
      * @return Completion future
      */
     public CompletableFuture<Void> generate() {
-        return SingleInterop.fromFuture(this.storage.list(this.packageKey))
+        // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+        return RxFuture.single(this.storage.list(this.packageKey))
             .flatMapPublisher(Flowable::fromIterable)
-            .flatMapSingle(
-                key -> Single.fromFuture(
+            // Use concatMapSingle to preserve ordering (flatMapSingle doesn't preserve order)
+            .concatMapSingle(
+                key -> RxFuture.single(
                     // Try to list this key as a directory (version folder)
                     this.storage.list(key).thenCompose(
                         subKeys -> {
@@ -94,9 +97,10 @@ public final class IndexGenerator {
                                 );
                             } else {
                                 // It's a directory - process all files in it
+                                // Use concatMapSingle to preserve ordering
                                 return Flowable.fromIterable(subKeys)
-                                    .flatMapSingle(
-                                        subKey -> Single.fromFuture(
+                                    .concatMapSingle(
+                                        subKey -> RxFuture.single(
                                             this.storage.value(subKey).thenCompose(
                                                 value -> new ContentDigest(value, Digests.SHA256).hex()
                                             ).thenApply(
@@ -159,7 +163,8 @@ public final class IndexGenerator {
      * @return Completion future
      */
     public CompletableFuture<Void> generateRepoIndex() {
-        return SingleInterop.fromFuture(this.storage.list(this.packageKey))
+        // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+        return RxFuture.single(this.storage.list(this.packageKey))
             .map(allKeys -> {
                 // Extract unique package names from all keys
                 // Keys look like: pypi/hello/0.1.0/hello-0.1.0.whl

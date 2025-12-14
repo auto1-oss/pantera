@@ -60,7 +60,8 @@ public final class RepositoryChecksums {
         return rxsto.list(artifact).flatMapObservable(Observable::fromIterable)
             .filter(key -> SUPPORTED_ALGS.contains(extension(key)))
             .flatMapSingle(
-                item -> SingleInterop.fromFuture(
+                // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                item -> com.artipie.asto.rx.RxFuture.single(
                     this.repo.value(item).thenCompose(Content::asStringFuture)
                         .thenApply(hash -> new ImmutablePair<>(extension(item), hash))
                 )

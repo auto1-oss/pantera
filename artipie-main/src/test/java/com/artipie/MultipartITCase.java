@@ -181,7 +181,7 @@ final class MultipartITCase {
                         }
                     )
                 ).flatMapSingle(
-                    part -> Single.fromFuture(
+                    part -> com.artipie.asto.rx.RxFuture.single(
                         new FileStorage(path).save(
                             new Key.From(new ContentDisposition(part.headers()).fileName()),
                             new Content.From(part)

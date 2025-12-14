@@ -125,9 +125,8 @@ public final class FileSystemArtifactSlice implements Slice {
                 }
 
                 if (!Files.isRegularFile(filePath)) {
-                    return ResponseBuilder.badRequest()
-                        .textBody("Not a file")
-                        .build();
+                    // Directory or special file - treat as not found (same as SliceDownload)
+                    return ResponseBuilder.notFound().build();
                 }
 
                 // Stream file content directly from filesystem
@@ -167,67 +166,217 @@ public final class FileSystemArtifactSlice implements Slice {
 
     /**
      * Stream file content directly from filesystem using NIO FileChannel.
+     * Implements proper Reactive Streams backpressure by respecting request(n) demand.
      *
      * @param filePath Filesystem path to file
      * @param fileSize File size in bytes
-     * @return Streaming content
+     * @return Streaming content with backpressure support
      */
     private static Content streamFromFilesystem(final Path filePath, final long fileSize) {
-        final Publisher<ByteBuffer> publisher = subscriber -> {
-            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                private volatile boolean cancelled = false;
-                
-                @Override
-                public void request(long n) {
-                    if (cancelled || n <= 0) {
-                        return;
-                    }
+        return new Content.From(fileSize, new BackpressureFilePublisher(filePath, fileSize, CHUNK_SIZE, BLOCKING_EXECUTOR));
+    }
 
-                    // Use dedicated blocking executor for file I/O
-                    CompletableFuture.runAsync(() -> {
-                        try (FileChannel channel = FileChannel.open(filePath, StandardOpenOption.READ)) {
-                            final ByteBuffer buffer = ByteBuffer.allocateDirect(CHUNK_SIZE);
-                            long totalRead = 0;
+    /**
+     * Reactive Streams Publisher that reads file chunks on-demand with proper backpressure.
+     * Only reads from disk when downstream requests data, preventing memory bloat.
+     */
+    private static final class BackpressureFilePublisher implements Publisher<ByteBuffer> {
+        private final Path filePath;
+        private final long fileSize;
+        private final int chunkSize;
+        private final ExecutorService executor;
 
-                            while (totalRead < fileSize && !cancelled) {
-                                buffer.clear();
-                                final int read = channel.read(buffer);
-                                
-                                if (read == -1) {
-                                    break;
-                                }
+        BackpressureFilePublisher(Path filePath, long fileSize, int chunkSize, ExecutorService executor) {
+            this.filePath = filePath;
+            this.fileSize = fileSize;
+            this.chunkSize = chunkSize;
+            this.executor = executor;
+        }
 
-                                buffer.flip();
-                                
-                                // Create a new buffer for emission
-                                final ByteBuffer chunk = ByteBuffer.allocate(read);
-                                chunk.put(buffer);
-                                chunk.flip();
-                                
-                                subscriber.onNext(chunk);
-                                totalRead += read;
-                            }
+        @Override
+        public void subscribe(org.reactivestreams.Subscriber<? super ByteBuffer> subscriber) {
+            subscriber.onSubscribe(new BackpressureFileSubscription(
+                subscriber, filePath, fileSize, chunkSize, executor
+            ));
+        }
+    }
 
-                            if (!cancelled) {
-                                subscriber.onComplete();
-                            }
+    /**
+     * Subscription that reads file chunks based on demand signal.
+     * Thread-safe implementation that handles concurrent request() calls.
+     */
+    private static final class BackpressureFileSubscription implements org.reactivestreams.Subscription {
+        private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
+        private final Path filePath;
+        private final long fileSize;
+        private final int chunkSize;
+        private final ExecutorService executor;
+        
+        // Thread-safe state management
+        private final java.util.concurrent.atomic.AtomicLong demanded = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
+        private final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        private final java.util.concurrent.atomic.AtomicBoolean draining = new java.util.concurrent.atomic.AtomicBoolean(false);
+        
+        // Keep channel open for efficient sequential reads
+        private volatile FileChannel channel;
+        private final Object channelLock = new Object();
 
-                        } catch (IOException e) {
-                            if (!cancelled) {
-                                subscriber.onError(e);
-                            }
-                        }
-                    }, BLOCKING_EXECUTOR);  // Use dedicated blocking executor
+        BackpressureFileSubscription(
+            org.reactivestreams.Subscriber<? super ByteBuffer> subscriber,
+            Path filePath,
+            long fileSize,
+            int chunkSize,
+            ExecutorService executor
+        ) {
+            this.subscriber = subscriber;
+            this.filePath = filePath;
+            this.fileSize = fileSize;
+            this.chunkSize = chunkSize;
+            this.executor = executor;
+        }
+
+        @Override
+        public void request(long n) {
+            if (n <= 0) {
+                subscriber.onError(new IllegalArgumentException("Non-positive request: " + n));
+                return;
+            }
+            if (cancelled.get() || completed.get()) {
+                return;
+            }
+            
+            // Add to demand (handle overflow by capping at Long.MAX_VALUE)
+            long current;
+            long updated;
+            do {
+                current = demanded.get();
+                updated = current + n;
+                if (updated < 0) {
+                    updated = Long.MAX_VALUE; // Overflow protection
                 }
-                
-                @Override
-                public void cancel() {
-                    cancelled = true;
+            } while (!demanded.compareAndSet(current, updated));
+            
+            // Drain if not already draining
+            drain();
+        }
+
+        @Override
+        public void cancel() {
+            if (cancelled.compareAndSet(false, true)) {
+                closeChannel();
+            }
+        }
+
+        /**
+         * Drain loop - emits chunks while there is demand and data remaining.
+         * Uses CAS to ensure only one thread drains at a time.
+         */
+        private void drain() {
+            if (!draining.compareAndSet(false, true)) {
+                return; // Another thread is already draining
+            }
+            
+            executor.execute(() -> {
+                try {
+                    drainLoop();
+                } finally {
+                    draining.set(false);
+                    // Check if more demand arrived while we were finishing
+                    if (demanded.get() > 0 && !completed.get() && !cancelled.get() && position.get() < fileSize) {
+                        drain();
+                    }
                 }
             });
-        };
-        
-        return new Content.From(publisher);
+        }
+
+        private void drainLoop() {
+            try {
+                // Open channel on first read
+                synchronized (channelLock) {
+                    if (channel == null && !cancelled.get()) {
+                        channel = FileChannel.open(filePath, StandardOpenOption.READ);
+                    }
+                }
+                
+                final ByteBuffer buffer = ByteBuffer.allocateDirect(chunkSize);
+                
+                while (demanded.get() > 0 && !cancelled.get() && !completed.get()) {
+                    final long currentPos = position.get();
+                    if (currentPos >= fileSize) {
+                        // File fully read
+                        if (completed.compareAndSet(false, true)) {
+                            closeChannel();
+                            subscriber.onComplete();
+                        }
+                        return;
+                    }
+                    
+                    // Read one chunk
+                    buffer.clear();
+                    final int bytesToRead = (int) Math.min(chunkSize, fileSize - currentPos);
+                    buffer.limit(bytesToRead);
+                    
+                    int totalRead = 0;
+                    while (totalRead < bytesToRead && !cancelled.get()) {
+                        synchronized (channelLock) {
+                            if (channel == null) {
+                                return; // Channel was closed
+                            }
+                            final int read = channel.read(buffer);
+                            if (read == -1) {
+                                break; // EOF
+                            }
+                            totalRead += read;
+                        }
+                    }
+                    
+                    if (totalRead > 0 && !cancelled.get()) {
+                        buffer.flip();
+                        
+                        // Copy to heap buffer for safe emission
+                        final ByteBuffer chunk = ByteBuffer.allocate(totalRead);
+                        chunk.put(buffer);
+                        chunk.flip();
+                        
+                        // Update position before emission
+                        position.addAndGet(totalRead);
+                        demanded.decrementAndGet();
+                        
+                        // Emit to subscriber
+                        subscriber.onNext(chunk);
+                    }
+                    
+                    // Check for completion
+                    if (position.get() >= fileSize) {
+                        if (completed.compareAndSet(false, true)) {
+                            closeChannel();
+                            subscriber.onComplete();
+                        }
+                        return;
+                    }
+                }
+            } catch (IOException e) {
+                if (!cancelled.get() && completed.compareAndSet(false, true)) {
+                    closeChannel();
+                    subscriber.onError(e);
+                }
+            }
+        }
+
+        private void closeChannel() {
+            synchronized (channelLock) {
+                if (channel != null) {
+                    try {
+                        channel.close();
+                    } catch (IOException e) {
+                        // Ignore close errors
+                    }
+                    channel = null;
+                }
+            }
+        }
     }
 
     /**

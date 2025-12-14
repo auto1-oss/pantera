@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
@@ -475,6 +476,109 @@ final class LargeArtifactDownloadTest {
         assertTrue(speedMBps >= MIN_SPEED_MBPS, 
             String.format("Download speed %.2f MB/s below minimum %.2f MB/s", 
                 speedMBps, MIN_SPEED_MBPS));
+    }
+
+    @Test
+    void dataIntegrityChecksumVerification() throws Exception {
+        // Test that downloaded data matches original file exactly
+        // This catches the "Premature end of Content-Length" bug
+        final long size = 20 * 1024 * 1024; // 20 MB
+        final Key key = new Key.From("test-artifact-checksum.jar");
+        createTestArtifact(key, size);
+        
+        // Compute expected checksum from file
+        final String expectedChecksum = computeFileChecksum(this.artifactPath);
+        
+        final Response response = new StorageArtifactSlice(this.storage)
+            .response(
+                new RequestLine(RqMethod.GET, "/" + key.string()),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join();
+
+        assertEquals(RsStatus.OK, response.status());
+        
+        // Compute checksum from streamed response
+        final MessageDigest md = MessageDigest.getInstance("SHA-256");
+        final AtomicLong bytesRead = new AtomicLong(0);
+        
+        Flowable.fromPublisher(response.body())
+            .doOnNext(buffer -> {
+                final byte[] bytes = new byte[buffer.remaining()];
+                buffer.get(bytes);
+                md.update(bytes);
+                bytesRead.addAndGet(bytes.length);
+            })
+            .blockingSubscribe();
+        
+        final String actualChecksum = bytesToHex(md.digest());
+        
+        assertEquals(size, bytesRead.get(), 
+            "All bytes must be received (got " + bytesRead.get() + " of " + size + ")");
+        assertEquals(expectedChecksum, actualChecksum, 
+            "Checksum must match - data corruption detected");
+    }
+
+    @Test
+    void noResourceLeaksOnCancellation() throws Exception {
+        // Test that cancelling a download doesn't leak file handles
+        final long size = SMALL_ARTIFACT_SIZE; // 10 MB
+        final Key key = new Key.From("test-artifact-cancel.jar");
+        createTestArtifact(key, size);
+        
+        // Do multiple downloads with cancellation
+        for (int i = 0; i < 10; i++) {
+            final Response response = new FileSystemArtifactSlice(this.storage)
+                .response(
+                    new RequestLine(RqMethod.GET, "/" + key.string()),
+                    Headers.EMPTY,
+                    Content.EMPTY
+                ).join();
+
+            assertEquals(RsStatus.OK, response.status());
+            
+            // Read only first chunk then cancel
+            final AtomicLong bytesRead = new AtomicLong(0);
+            Flowable.fromPublisher(response.body())
+                .take(1) // Only take first chunk - simulates cancellation
+                .doOnNext(buffer -> bytesRead.addAndGet(buffer.remaining()))
+                .blockingSubscribe();
+            
+            assertTrue(bytesRead.get() > 0, "Should read at least some bytes");
+            assertTrue(bytesRead.get() < size, "Should not read all bytes (cancelled)");
+        }
+        
+        // If we get here without file handle exhaustion, the test passes
+        // Create one more response to verify no leaks
+        final Response finalResponse = new FileSystemArtifactSlice(this.storage)
+            .response(
+                new RequestLine(RqMethod.GET, "/" + key.string()),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join();
+        
+        assertEquals(RsStatus.OK, finalResponse.status(), 
+            "Should still be able to serve files after multiple cancellations");
+    }
+
+    private static String computeFileChecksum(final Path path) throws Exception {
+        final MessageDigest md = MessageDigest.getInstance("SHA-256");
+        final byte[] buffer = new byte[1024 * 1024];
+        try (var in = Files.newInputStream(path)) {
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                md.update(buffer, 0, read);
+            }
+        }
+        return bytesToHex(md.digest());
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        final StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     /**

@@ -15,6 +15,7 @@ import com.artipie.debian.Config;
 import com.artipie.debian.GpgConfig;
 import com.artipie.debian.misc.GpgClearsign;
 import com.artipie.debian.misc.SizeAndDigest;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import org.apache.commons.lang3.tuple.ImmutablePair;
@@ -184,7 +185,8 @@ public interface Release {
             return rxsto.list(Key.ROOT).flatMapObservable(Observable::fromIterable)
                 .filter(key -> key.string().endsWith("Packages.gz"))
                 .flatMapSingle(
-                    item -> SingleInterop.fromFuture(this.packageData(item))
+                    // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                    item -> RxFuture.single(this.packageData(item))
                 ).collect(
                     StringBuilder::new,
                     (builder, pair) -> builder.append(pair.getKey()).append("\n")

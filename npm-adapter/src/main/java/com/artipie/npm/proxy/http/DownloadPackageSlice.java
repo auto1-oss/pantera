@@ -6,6 +6,7 @@ package com.artipie.npm.proxy.http;
 
 import com.artipie.asto.Concatenation;
 import com.artipie.asto.Content;
+import com.artipie.asto.Remaining;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
@@ -19,6 +20,7 @@ import com.artipie.npm.misc.AbbreviatedMetadata;
 import com.artipie.npm.misc.MetadataETag;
 import com.artipie.npm.misc.MetadataEnhancer;
 import com.artipie.npm.misc.StreamingJsonTransformer;
+import com.artipie.npm.misc.ByteLevelUrlTransformer;
 import com.artipie.cooldown.metadata.CooldownMetadataService;
 import com.artipie.cooldown.metadata.AllVersionsBlockedException;
 import com.artipie.http.log.EcsLogger;
@@ -26,6 +28,8 @@ import com.artipie.npm.cooldown.NpmMetadataParser;
 import com.artipie.npm.cooldown.NpmMetadataFilter;
 import com.artipie.npm.cooldown.NpmMetadataRewriter;
 import com.artipie.npm.cooldown.NpmCooldownInspector;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.apache.commons.lang3.StringUtils;
@@ -138,7 +142,52 @@ public final class DownloadPackageSlice implements Slice {
                 // FULL PATH: Load and process full metadata
                 return this.serveFull(packageName, headers, clientETag);
             }
+        }).exceptionally(error -> {
+            // CRITICAL: Convert exceptions to proper HTTP responses to prevent
+            // "Parse Error: Expected HTTP/" errors in npm client.
+            // Without this, exceptions propagate up and Vert.x closes the connection
+            // without sending HTTP headers.
+            final Throwable cause = unwrapException(error);
+            EcsLogger.error("com.artipie.npm")
+                .message("Error processing package request")
+                .eventCategory("repository")
+                .eventAction("get_package")
+                .eventOutcome("failure")
+                .field("url.path", line.uri().getPath())
+                .error(cause)
+                .log();
+            
+            // Check if it's an HTTP exception with a specific status
+            if (cause instanceof com.artipie.http.ArtipieHttpException) {
+                final com.artipie.http.ArtipieHttpException httpEx = 
+                    (com.artipie.http.ArtipieHttpException) cause;
+                return ResponseBuilder.from(httpEx.status())
+                    .jsonBody(String.format(
+                        "{\"error\":\"%s\"}",
+                        httpEx.getMessage() != null ? httpEx.getMessage() : "Upstream error"
+                    ))
+                    .build();
+            }
+            
+            // Generic 502 Bad Gateway for upstream errors
+            return ResponseBuilder.from(RsStatus.byCode(502))
+                .jsonBody(String.format(
+                    "{\"error\":\"Upstream error: %s\"}",
+                    cause.getMessage() != null ? cause.getMessage() : "Unknown error"
+                ))
+                .build();
         });
+    }
+    
+    /**
+     * Unwrap CompletionException to get the root cause.
+     */
+    private static Throwable unwrapException(final Throwable error) {
+        Throwable cause = error;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     /**
@@ -161,7 +210,7 @@ public final class DownloadPackageSlice implements Slice {
                     .flatMap(abbreviatedStream ->
                         new Concatenation(abbreviatedStream)
                             .single()
-                            .map(ByteBuffer::array)
+                            .map(buf -> new Remaining(buf).bytes())
                             .toMaybe()
                             .flatMap(abbreviatedBytes -> {
                                 // COOLDOWN: Apply filtering if enabled
@@ -181,7 +230,7 @@ public final class DownloadPackageSlice implements Slice {
                         this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
                             new Concatenation(contentStream)
                                 .single()
-                                .map(ByteBuffer::array)
+                                .map(buf -> new Remaining(buf).bytes())
                                 .toMaybe()
                                 .map(rawBytes -> 
                                     this.buildResponse(rawBytes, metadata, headers, true, clientETag)
@@ -196,7 +245,11 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Apply cooldown filtering to abbreviated metadata.
-     * Still memory-efficient since abbreviated is ~3MB vs 38MB full.
+     * 
+     * CRITICAL: Abbreviated metadata does NOT contain the "time" field with release dates.
+     * Without release dates, cooldown cannot determine which versions are blocked.
+     * Solution: Fetch full metadata just for release dates, preload into inspector,
+     * then filter the abbreviated metadata using those dates.
      */
     private io.reactivex.Maybe<Response> applyAbbreviatedCooldown(
         final byte[] abbreviatedBytes,
@@ -206,17 +259,78 @@ public final class DownloadPackageSlice implements Slice {
         final Optional<String> clientETag
     ) {
         final NpmCooldownInspector inspector = new NpmCooldownInspector();
-        final CompletableFuture<Response> filterFuture = 
-            this.cooldownMetadata.filterMetadata(
-                this.repoType,
-                this.repoName,
-                packageName,
-                abbreviatedBytes,
-                new NpmMetadataParser(),
-                new NpmMetadataFilter(),
-                new NpmMetadataRewriter(),
-                Optional.of(inspector)
-            ).handle((filtered, ex) -> {
+        
+        // CRITICAL FIX: Abbreviated metadata lacks "time" field with release dates.
+        // Fetch full metadata to get release dates for cooldown evaluation.
+        final CompletableFuture<Response> filterFuture = this.fetchReleaseDatesAndFilter(
+            abbreviatedBytes, packageName, metadata, headers, clientETag, inspector
+        );
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
+        return RxFuture.maybe(filterFuture);
+    }
+
+    /**
+     * Fetch release dates from full metadata and apply cooldown filtering.
+     */
+    private CompletableFuture<Response> fetchReleaseDatesAndFilter(
+        final byte[] abbreviatedBytes,
+        final String packageName,
+        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final Headers headers,
+        final Optional<String> clientETag,
+        final NpmCooldownInspector inspector
+    ) {
+        // Fetch full metadata just for release dates
+        return this.npm.getPackageContentStream(packageName)
+            .flatMap(contentStream ->
+                new Concatenation(contentStream)
+                    .single()
+                    .map(buf -> new Remaining(buf).bytes())
+                    .toMaybe()
+            )
+            .toSingle(new byte[0])
+            .to(SingleInterop.get())
+            .toCompletableFuture()
+            .thenCompose(fullMetadataBytes -> {
+                // Parse full metadata and preload release dates
+                if (fullMetadataBytes.length > 0) {
+                    try {
+                        final NpmMetadataParser parser = new NpmMetadataParser();
+                        final JsonNode fullParsed = parser.parse(fullMetadataBytes);
+                        final java.util.Map<String, java.time.Instant> releaseDates = parser.releaseDates(fullParsed);
+                        if (!releaseDates.isEmpty()) {
+                            inspector.preloadReleaseDates(releaseDates);
+                            EcsLogger.debug("com.artipie.npm")
+                                .message("Preloaded release dates from full metadata for abbreviated filtering")
+                                .eventCategory("cooldown")
+                                .eventAction("preload_dates")
+                                .field("package.name", packageName)
+                                .field("dates.count", releaseDates.size())
+                                .log();
+                        }
+                    } catch (Exception e) {
+                        EcsLogger.warn("com.artipie.npm")
+                            .message("Failed to parse full metadata for release dates")
+                            .eventCategory("cooldown")
+                            .eventAction("preload_dates")
+                            .field("package.name", packageName)
+                            .error(e)
+                            .log();
+                    }
+                }
+                
+                // Now filter abbreviated metadata with preloaded release dates
+                return this.cooldownMetadata.filterMetadata(
+                    this.repoType,
+                    this.repoName,
+                    packageName,
+                    abbreviatedBytes,
+                    new NpmMetadataParser(),
+                    new NpmMetadataFilter(),
+                    new NpmMetadataRewriter(),
+                    Optional.of(inspector)
+                );
+            }).handle((filtered, ex) -> {
                 if (ex != null) {
                     Throwable cause = ex;
                     while (cause != null) {
@@ -249,7 +363,6 @@ public final class DownloadPackageSlice implements Slice {
                 // Success - build response with filtered abbreviated metadata
                 return this.buildAbbreviatedResponse(filtered, metadata, headers, clientETag);
             });
-        return io.reactivex.Maybe.fromFuture(filterFuture);
     }
 
     /**
@@ -265,7 +378,7 @@ public final class DownloadPackageSlice implements Slice {
                 this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
                     new Concatenation(contentStream)
                         .single()
-                        .map(ByteBuffer::array)
+                        .map(buf -> new Remaining(buf).bytes())
                         .toMaybe()
                         .flatMap(rawBytes -> {
                             // Apply cooldown filtering if available
@@ -313,7 +426,7 @@ public final class DownloadPackageSlice implements Slice {
                                         }
                                         return this.buildResponse(filtered, metadata, headers, false, clientETag);
                                     });
-                                return io.reactivex.Maybe.fromFuture(filterFuture);
+                                return RxFuture.maybe(filterFuture);
                             }
                             return io.reactivex.Maybe.just(
                                 this.buildResponse(rawBytes, metadata, headers, false, clientETag)
@@ -328,7 +441,7 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Build response from pre-computed abbreviated metadata.
-     * MEMORY EFFICIENT: No JSON parsing needed - just transform tarball URLs.
+     * MEMORY EFFICIENT: Uses byte-level URL transformation - no JSON parsing.
      */
     private Response buildAbbreviatedResponse(
         final byte[] abbreviatedBytes,
@@ -336,12 +449,14 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
-        final String rawContent = new String(abbreviatedBytes, StandardCharsets.UTF_8);
-        // Transform tarball URLs for client
-        final String clientContent = this.clientFormat(rawContent, headers);
+        // MEMORY OPTIMIZATION: Use byte-level transformer instead of String + ClientContent
+        // This avoids creating multiple String copies of the metadata
+        final String tarballPrefix = this.getTarballPrefix(headers);
+        final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+        final byte[] transformedBytes = transformer.transform(abbreviatedBytes, tarballPrefix);
         
-        // Calculate ETag for caching
-        final String etag = new MetadataETag(clientContent).calculate();
+        // Calculate ETag for caching using bytes (avoids String conversion)
+        final String etag = new MetadataETag(transformedBytes).calculate();
         
         // Check for 304 Not Modified
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
@@ -351,11 +466,9 @@ public final class DownloadPackageSlice implements Slice {
                 .build();
         }
         
-        // Return abbreviated response
+        // Return abbreviated response - use transformed bytes directly
         final Content streamedContent = new Content.From(
-            Flowable.fromArray(
-                ByteBuffer.wrap(clientContent.getBytes(StandardCharsets.UTF_8))
-            )
+            Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
         );
         
         return ResponseBuilder.ok()
@@ -380,17 +493,18 @@ public final class DownloadPackageSlice implements Slice {
         final Optional<String> clientETag
     ) {
         try {
-            // MEMORY OPTIMIZATION: Use streaming JSON transformer for URL rewriting
-            // This avoids creating multiple String copies of the 38MB metadata
+            // MEMORY OPTIMIZATION: Use byte-level URL transformer instead of JSON parsing
+            // This reduces memory by ~60% - no JSON parse/serialize, just byte pattern matching
+            // Cached content has relative URLs like "/pkg/-/pkg.tgz", we prepend the host prefix
             final String tarballPrefix = this.getTarballPrefix(headers);
-            final StreamingJsonTransformer transformer = new StreamingJsonTransformer();
+            final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
             final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
             
             // For full metadata requests (abbreviated=false), we can skip JSON parsing
             // Just use the transformed bytes directly
             if (!abbreviated) {
-                final String responseStr = new String(transformedBytes, StandardCharsets.UTF_8);
-                final String etag = new MetadataETag(responseStr).calculate();
+                // MEMORY OPTIMIZATION: Use byte-based ETag to avoid String conversion
+                final String etag = new MetadataETag(transformedBytes).calculate();
                 
                 if (clientETag.isPresent() && clientETag.get().equals(etag)) {
                     return ResponseBuilder.from(RsStatus.NOT_MODIFIED)

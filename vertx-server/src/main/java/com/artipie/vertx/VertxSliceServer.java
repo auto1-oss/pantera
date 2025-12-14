@@ -686,67 +686,55 @@ public final class VertxSliceServer implements Closeable {
                     }
                 );
             } else {
-                // CRITICAL: Must execute on Vert.x event loop thread for thread safety
-                // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
-                // This is especially critical for large file downloads (>200MB)
-                // 
-                // BACKPRESSURE: Use writeQueueFull() and drainHandler() to prevent buffer bloat.
-                // Without backpressure, chunks accumulate faster than they can be sent,
-                // causing memory pressure and slow downloads (82 KB/s vs 500 Mbps).
-                vpb.subscribe(new org.reactivestreams.Subscriber<Buffer>() {
-                    private org.reactivestreams.Subscription subscription;
-                    private volatile boolean completed = false;
-                    
-                    @Override
-                    public void onSubscribe(org.reactivestreams.Subscription s) {
-                        this.subscription = s;
-                        // Request first chunk
-                        s.request(1);
-                    }
-                    
-                    @Override
-                    public void onNext(Buffer buffer) {
-                        response.write(buffer);
-                        // Backpressure: only request more if write queue is not full
-                        if (response.writeQueueFull()) {
-                            // Pause upstream, resume when drained
-                            response.drainHandler(v -> {
-                                if (!completed) {
-                                    subscription.request(1);
-                                }
-                            });
-                        } else {
-                            // Queue not full, request next chunk immediately
-                            subscription.request(1);
-                        }
-                    }
-                    
-                    @Override
-                    public void onError(Throwable error) {
-                        completed = true;
+                // PRODUCTION-GRADE BACKPRESSURE STREAMING
+                // Uses response.toSubscriber() which provides built-in backpressure via
+                // WriteStreamSubscriber - the same mechanism used for chunked responses.
+                // This handles writeQueueFull()/drainHandler() automatically.
+                //
+                // IMPORTANT: response.toSubscriber() automatically calls response.end() when
+                // the Flowable completes. We must NOT call terminator.end() ourselves, as that
+                // would cause "Response has already been written" errors.
+                // Instead, use endHandler to detect when Vert.x finishes writing.
+                final java.util.concurrent.atomic.AtomicLong bytesWritten = new java.util.concurrent.atomic.AtomicLong(0);
+                final long expectedBytes = response.headers().contains("Content-Length")
+                    ? Long.parseLong(response.headers().get("Content-Length"))
+                    : -1L;
+                
+                // Register end handler BEFORE subscribing - Vert.x will call this when
+                // response.end() is invoked by toSubscriber()
+                response.endHandler(ignored -> {
+                    final long bytes = bytesWritten.get();
+                    if (expectedBytes > 0 && bytes != expectedBytes) {
                         EcsLogger.error("com.artipie.vertx")
-                            .message("Error writing response body")
+                            .message("Incomplete transfer detected")
                             .eventCategory("http")
                             .eventAction("response_write")
                             .eventOutcome("failure")
-                            .error(error)
+                            .field("http.response.body.bytes", bytes)
+                            .field("http.response.body.expected", expectedBytes)
                             .log();
-                        terminator.fail(error);
-                    }
-                    
-                    @Override
-                    public void onComplete() {
-                        completed = true;
-                        EcsLogger.debug("com.artipie.vertx")
-                            .message("Response body fully written")
-                            .eventCategory("http")
-                            .eventAction("response_write")
-                            .eventOutcome("success")
-                            .field("http.response.body.bytes", true)
-                            .log();
-                        terminator.end();
+                        terminator.fail(new java.io.IOException(
+                            String.format("Incomplete transfer: expected %d bytes, wrote %d bytes",
+                                expectedBytes, bytes)));
+                    } else {
+                        terminator.completeWithoutEnding();
                     }
                 });
+                
+                // Use toSubscriber() for backpressure - it will call response.end() on completion
+                vpb.doOnNext(buffer -> bytesWritten.addAndGet(buffer.length()))
+                   .doOnError(error -> {
+                       EcsLogger.error("com.artipie.vertx")
+                           .message("Error streaming response body")
+                           .eventCategory("http")
+                           .eventAction("response_write")
+                           .eventOutcome("failure")
+                           .field("http.response.body.bytes", bytesWritten.get())
+                           .error(error)
+                           .log();
+                       terminator.fail(error);
+                   })
+                   .subscribe(response.toSubscriber());
             }
         } else {
             response.setChunked(true);

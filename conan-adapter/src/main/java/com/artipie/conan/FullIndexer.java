@@ -6,6 +6,7 @@ package  com.artipie.conan;
 
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.FlowableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -60,7 +61,8 @@ public class FullIndexer {
      * @return CompletionStage to handle operation completion.
      */
     public CompletionStage<Void> fullIndexUpdate(final Key key) {
-        final Flowable<List<Integer>> flowable = SingleInterop.fromFuture(
+        // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+        final Flowable<List<Integer>> flowable = RxFuture.single(
             this.indexer.buildIndex(
                 key, PackageList.PKG_SRC_LIST, (name, rev) -> new Key.From(
                     key, rev.toString(), FullIndexer.SRC_SUBDIR, name
@@ -70,7 +72,7 @@ public class FullIndexer {
                     final Key packages = new Key.From(
                         key, rev.toString(), FullIndexer.BIN_SUBDIR
                     );
-                    return SingleInterop.fromFuture(
+                    return RxFuture.single(
                         new PackageList(this.storage).get(packages).thenApply(
                             pkgs -> pkgs.stream().map(
                                 pkg -> new Key.From(packages, pkg)

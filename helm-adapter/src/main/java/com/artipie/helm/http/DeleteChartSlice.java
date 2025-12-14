@@ -94,7 +94,8 @@ final class DeleteChartSlice implements Slice {
      */
     private Single<Response> deleteArchives(final String name, final Optional<String> vers) {
         final AtomicBoolean wasdeleted = new AtomicBoolean();
-        return Single.fromFuture(
+        // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
+        return com.artipie.asto.rx.RxFuture.single(
             this.storage.list(Key.ROOT)
                 .thenApply(
                     keys -> keys.stream()

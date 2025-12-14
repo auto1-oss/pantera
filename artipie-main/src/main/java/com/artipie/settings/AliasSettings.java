@@ -48,7 +48,8 @@ public final class AliasSettings {
             found -> {
                 final CompletionStage<StorageByAlias> res;
                 if (found) {
-                    res = SingleInterop.fromFuture(new ConfigFile(key).valueFrom(this.storage))
+                    // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                    res = com.artipie.asto.rx.RxFuture.single(new ConfigFile(key).valueFrom(this.storage))
                         .to(new ContentAsYaml())
                         .to(SingleInterop.get())
                         .thenApply(StorageByAlias::new);

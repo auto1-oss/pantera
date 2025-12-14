@@ -97,8 +97,9 @@ public interface Debian {
             final RxStorageWrapper bsto = new RxStorageWrapper(this.asto);
             return Observable.fromIterable(debs)
                 .flatMapSingle(
+                    // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
                     key -> bsto.value(key).flatMap(
-                        val -> Single.fromFuture(
+                        val -> com.artipie.asto.rx.RxFuture.single(
                             new ContentAsStream<String>(val)
                                 .process(input -> new Control.FromInputStream(input).asString())
                                 .toCompletableFuture()
@@ -106,7 +107,8 @@ public interface Debian {
                     )
                 )
                 .flatMapSingle(
-                    pair -> Single.fromFuture(
+                    // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
+                    pair -> com.artipie.asto.rx.RxFuture.single(
                         new PackagesItem.Asto(this.asto).format(pair.getValue(), pair.getKey())
                             .toCompletableFuture()
                     )

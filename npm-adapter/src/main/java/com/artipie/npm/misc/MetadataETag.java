@@ -19,9 +19,14 @@ import java.security.NoSuchAlgorithmException;
 public final class MetadataETag {
     
     /**
-     * Metadata content.
+     * Metadata content as String.
      */
     private final String content;
+    
+    /**
+     * Metadata content as bytes (for memory-efficient path).
+     */
+    private final byte[] contentBytes;
     
     /**
      * Ctor.
@@ -30,6 +35,17 @@ public final class MetadataETag {
      */
     public MetadataETag(final String content) {
         this.content = content;
+        this.contentBytes = null;
+    }
+    
+    /**
+     * Ctor with byte array (memory-efficient - avoids String conversion).
+     * 
+     * @param contentBytes Metadata JSON content as bytes
+     */
+    public MetadataETag(final byte[] contentBytes) {
+        this.content = null;
+        this.contentBytes = contentBytes;
     }
     
     /**
@@ -40,8 +56,14 @@ public final class MetadataETag {
     public String calculate() {
         try {
             final MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            final byte[] hash = digest.digest(this.content.getBytes(StandardCharsets.UTF_8));
-            return this.toHex(hash);
+            final byte[] hash;
+            if (this.contentBytes != null) {
+                // Memory-efficient path: hash bytes directly
+                hash = digest.digest(this.contentBytes);
+            } else {
+                hash = digest.digest(this.content.getBytes(StandardCharsets.UTF_8));
+            }
+            return toHex(hash);
         } catch (NoSuchAlgorithmException ex) {
             // SHA-256 is always available in Java
             throw new IllegalStateException("SHA-256 not available", ex);

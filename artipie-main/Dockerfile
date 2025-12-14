@@ -25,7 +25,7 @@ RUN addgroup -g 2020 -S artipie && \
     chown artipie:artipie /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/artipie/cache/tmp
-ENV ARTIPIE_VERSION=1.20.8
+ENV ARTIPIE_VERSION=1.20.9
 
 USER 2021:2020
 

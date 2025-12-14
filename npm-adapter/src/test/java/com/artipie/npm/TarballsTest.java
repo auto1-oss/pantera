@@ -6,6 +6,7 @@ package com.artipie.npm;
 
 import com.artipie.asto.Concatenation;
 import com.artipie.asto.Content;
+import com.artipie.asto.Remaining;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URI;
@@ -47,7 +48,7 @@ public class TarballsTest {
         final Content modified = tarballs.value();
         final JsonObject json = new Concatenation(modified)
             .single()
-            .map(ByteBuffer::array)
+            .map(buf -> new Remaining(buf).bytes())
             .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
             .map(StringReader::new)
             .map(reader -> Json.createReader(reader).readObject())
@@ -86,7 +87,7 @@ public class TarballsTest {
         final Content modified = tarballs.value();
         final JsonObject json = new Concatenation(modified)
             .single()
-            .map(ByteBuffer::array)
+            .map(buf -> new Remaining(buf).bytes())
             .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
             .map(StringReader::new)
             .map(reader -> Json.createReader(reader).readObject())

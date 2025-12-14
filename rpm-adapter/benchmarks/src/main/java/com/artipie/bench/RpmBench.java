@@ -93,10 +93,10 @@ public class RpmBench {
      * @param dst Destination storage
      */
     private static void sync(final Storage src, final Storage dst) {
-        Single.fromFuture(src.list(Key.ROOT))
+        com.artipie.asto.rx.RxFuture.single(src.list(Key.ROOT))
             .flatMapObservable(Observable::fromIterable)
             .flatMapSingle(
-                key -> Single.fromFuture(
+                key -> com.artipie.asto.rx.RxFuture.single(
                     src.value(key)
                         .thenCompose(content -> dst.save(key, content))
                         .thenApply(none -> true)

@@ -125,7 +125,17 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             if (events.isEmpty()) {
                 return;
             }
-            final List<ArtifactEvent> errors = new ArrayList<>(events.size());
+            // Sort events by (repo_name, name, version) to ensure consistent lock ordering
+            // This prevents deadlocks when multiple transactions process overlapping artifacts
+            final List<ArtifactEvent> sortedEvents = new ArrayList<>(events);
+            sortedEvents.sort((a, b) -> {
+                int cmp = a.repoName().compareTo(b.repoName());
+                if (cmp != 0) return cmp;
+                cmp = a.artifactName().compareTo(b.artifactName());
+                if (cmp != 0) return cmp;
+                return a.artifactVersion().compareTo(b.artifactVersion());
+            });
+            final List<ArtifactEvent> errors = new ArrayList<>(sortedEvents.size());
             boolean error = false;
             try (
                 Connection conn = DbConsumer.this.source.getConnection();
@@ -144,7 +154,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 )
             ) {
                 conn.setAutoCommit(false);
-                for (final ArtifactEvent record : events) {
+                for (final ArtifactEvent record : sortedEvents) {
                     try {
                         if (record.eventType() == ArtifactEvent.Type.INSERT) {
                             // Use atomic UPSERT to prevent deadlocks
@@ -185,13 +195,13 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                 conn.commit();
             } catch (final SQLException ex) {
                 EcsLogger.error("com.artipie.db")
-                    .message("Failed to commit artifact events batch (" + events.size() + " events)")
+                    .message("Failed to commit artifact events batch (" + sortedEvents.size() + " events)")
                     .eventCategory("database")
                     .eventAction("batch_commit")
                     .eventOutcome("failure")
                     .error(ex)
                     .log();
-                events.forEach(DbConsumer.this.subject::onNext);
+                sortedEvents.forEach(DbConsumer.this.subject::onNext);
                 error = true;
             }
             if (!error) {

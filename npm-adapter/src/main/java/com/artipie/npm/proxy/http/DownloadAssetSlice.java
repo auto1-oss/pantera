@@ -125,7 +125,50 @@ public final class DownloadAssetSlice implements Slice {
                     }
                     return this.serveAsset(tgz, rqheaders);
                 });
+        }).exceptionally(error -> {
+            // CRITICAL: Convert exceptions to proper HTTP responses to prevent
+            // "Parse Error: Expected HTTP/" errors in npm client.
+            final Throwable cause = unwrapException(error);
+            EcsLogger.error("com.artipie.npm")
+                .message("Error processing asset request")
+                .eventCategory("repository")
+                .eventAction("get_asset")
+                .eventOutcome("failure")
+                .field("url.path", line.uri().getPath())
+                .error(cause)
+                .log();
+            
+            // Check if it's an HTTP exception with a specific status
+            if (cause instanceof com.artipie.http.ArtipieHttpException) {
+                final com.artipie.http.ArtipieHttpException httpEx = 
+                    (com.artipie.http.ArtipieHttpException) cause;
+                return ResponseBuilder.from(httpEx.status())
+                    .jsonBody(String.format(
+                        "{\"error\":\"%s\"}",
+                        httpEx.getMessage() != null ? httpEx.getMessage() : "Upstream error"
+                    ))
+                    .build();
+            }
+            
+            // Generic 502 Bad Gateway for upstream errors
+            return ResponseBuilder.from(com.artipie.http.RsStatus.byCode(502))
+                .jsonBody(String.format(
+                    "{\"error\":\"Upstream error: %s\"}",
+                    cause.getMessage() != null ? cause.getMessage() : "Unknown error"
+                ))
+                .build();
         });
+    }
+    
+    /**
+     * Unwrap CompletionException to get the root cause.
+     */
+    private static Throwable unwrapException(final Throwable error) {
+        Throwable cause = error;
+        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {

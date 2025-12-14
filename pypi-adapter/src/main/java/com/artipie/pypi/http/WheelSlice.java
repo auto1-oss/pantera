@@ -27,6 +27,7 @@ import com.artipie.pypi.meta.Metadata;
 import com.artipie.pypi.meta.PackageInfo;
 import com.artipie.pypi.meta.ValidFilename;
 import com.artipie.scheduling.ArtifactEvent;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -167,7 +168,8 @@ final class WheelSlice implements Slice {
                 .eventAction("upload")
                 .log()
         ).flatMapSingle(
-            part -> SingleInterop.fromFuture(
+            // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+            part -> RxFuture.single(
                 this.storage.save(temp, new Content.From(part))
                     .thenRun(() -> EcsLogger.debug("com.artipie.pypi")
                         .message("WS: content saved to temp file")

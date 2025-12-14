@@ -13,6 +13,7 @@ import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
 import com.artipie.http.rq.RqMethod;
+import com.artipie.asto.rx.RxFuture;
 import com.artipie.npm.misc.DateTimeNowStr;
 import com.artipie.npm.proxy.json.CachedContent;
 import com.artipie.npm.proxy.model.NpmAsset;
@@ -48,7 +49,8 @@ public final class HttpNpmRemote implements NpmRemote {
 
     @Override
     public Maybe<NpmPackage> loadPackage(final String name) {
-        return Maybe.fromFuture(
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
+        return RxFuture.maybe(
             this.performRemoteRequest(name).thenCompose(
                 pair -> pair.getKey().asStringFuture().thenApply(
                     str -> {
@@ -64,7 +66,7 @@ public final class HttpNpmRemote implements NpmRemote {
                         );
                     }
                 )
-            ).toCompletableFuture()
+            )
         ).onErrorResumeNext(
             throwable -> {
                 // Distinguish between true 404s and transient errors so the
@@ -97,7 +99,8 @@ public final class HttpNpmRemote implements NpmRemote {
 
     @Override
     public Maybe<NpmAsset> loadAsset(final String path, final Path tmp) {
-        return Maybe.fromFuture(
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
+        return RxFuture.maybe(
             this.performRemoteRequest(path).thenApply(
                 pair -> new NpmAsset(
                     path,
