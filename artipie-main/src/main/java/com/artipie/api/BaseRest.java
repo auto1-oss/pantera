@@ -51,6 +51,9 @@ abstract class BaseRest {
                     .eventAction("request_handling")
                     .eventOutcome("failure")
                     .field("http.response.status_code", status)
+                    .field("url.path", context.request().path())
+                    .field("http.request.method", context.request().method().name())
+                    .field("user.name", context.user() != null ? context.user().principal().getString("sub") : null)
                     .error(context.failure())
                     .log();
                 // Try to end the response if not already ended
@@ -71,6 +74,9 @@ abstract class BaseRest {
                 .eventAction("request_handling")
                 .eventOutcome("failure")
                 .field("http.response.status_code", status)
+                .field("url.path", context.request().path())
+                .field("http.request.method", context.request().method().name())
+                .field("user.name", context.user() != null ? context.user().principal().getString("sub") : null)
                 .error(context.failure())
                 .log();
         };

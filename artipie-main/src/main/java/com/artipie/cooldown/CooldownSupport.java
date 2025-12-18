@@ -12,6 +12,7 @@ import com.artipie.cooldown.metadata.FilteredMetadataCache;
 import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.artipie.cooldown.metadata.NoopCooldownMetadataService;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContextExecutor;
 import com.artipie.settings.Settings;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -32,18 +33,21 @@ public final class CooldownSupport {
     /**
      * Dedicated executor for cooldown operations to avoid exhausting common pool.
      * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to cooldown threads.
      */
-    private static final ExecutorService COOLDOWN_EXECUTOR = Executors.newFixedThreadPool(
-        Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
-        new ThreadFactory() {
-            private final AtomicInteger counter = new AtomicInteger(0);
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread thread = new Thread(r, POOL_NAME + ".worker-" + counter.getAndIncrement());
-                thread.setDaemon(true);
-                return thread;
+    private static final ExecutorService COOLDOWN_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread thread = new Thread(r, POOL_NAME + ".worker-" + counter.getAndIncrement());
+                    thread.setDaemon(true);
+                    return thread;
+                }
             }
-        }
+        )
     );
 
     private CooldownSupport() {

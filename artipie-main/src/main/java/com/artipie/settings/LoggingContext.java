@@ -55,3 +55,4 @@ public final class LoggingContext {
         // No-op: logging is now configured via log4j2.xml
     }
 }
+

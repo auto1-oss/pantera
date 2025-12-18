@@ -223,8 +223,8 @@ public final class MavenGroupSlice implements Slice {
             // CRITICAL: Consume original body to prevent OneTimePublisher errors
             // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
             return body.asBytesFuture().thenCompose(requestBytes -> {
-            // Track merge duration for slow request logging
-            final long mergeStartTime = System.currentTimeMillis();
+            // Track fetch duration separately from merge duration
+            final long fetchStartTime = System.currentTimeMillis();
 
             // Fetch metadata from all members in parallel with Content.EMPTY
             final List<CompletableFuture<byte[]>> futures = new ArrayList<>();
@@ -279,6 +279,9 @@ public final class MavenGroupSlice implements Slice {
                     }
                 }
 
+                // Calculate fetch duration (time to get data from all members)
+                final long fetchDuration = System.currentTimeMillis() - fetchStartTime;
+
                 if (metadataList.isEmpty()) {
                     EcsLogger.warn("com.artipie.maven")
                         .message("No metadata found in any member")
@@ -287,26 +290,45 @@ public final class MavenGroupSlice implements Slice {
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
                         .field("url.path", path)
+                        .field("fetch.duration.ms", fetchDuration)
                         .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.notFound().build()
                     );
                 }
 
+                // Track merge duration separately (actual XML processing time)
+                final long mergeStartTime = System.currentTimeMillis();
+
                 // Use reflection to call MetadataMerger from maven-adapter module
                 // This avoids circular dependency issues
                 return mergeUsingReflection(metadataList)
                     .thenApply(mergedBytes -> {
                         final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
+                        final long totalDuration = fetchDuration + mergeDuration;
 
                         // Cache the merged result (L1 + L2)
                         MavenGroupSlice.this.metadataCache.put(cacheKey, mergedBytes);
 
-                        // Record metadata merge metrics
-                        recordMetadataOperation("merge", mergeDuration);
+                        // Record metadata merge metrics (total for backward compatibility)
+                        recordMetadataOperation("merge", totalDuration);
 
-                        // Only log slow merges
-                        if (mergeDuration > 500) {
+                        // Log slow fetches (>500ms) - expected for proxy repos
+                        if (fetchDuration > 500) {
+                            EcsLogger.info("com.artipie.maven")
+                                .message("Slow member fetch (" + metadataList.size() + " members)")
+                                .eventCategory("repository")
+                                .eventAction("metadata_fetch")
+                                .eventOutcome("success")
+                                .field("repository.name", this.group)
+                                .field("url.path", path)
+                                .field("fetch.duration.ms", fetchDuration)
+                                .field("merge.duration.ms", mergeDuration)
+                                .log();
+                        }
+
+                        // Log slow merges (>50ms) - indicates actual performance issue
+                        if (mergeDuration > 50) {
                             EcsLogger.warn("com.artipie.maven")
                                 .message("Slow metadata merge (" + metadataList.size() + " members)")
                                 .eventCategory("repository")
@@ -314,7 +336,8 @@ public final class MavenGroupSlice implements Slice {
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .duration(mergeDuration)
+                                .field("fetch.duration.ms", fetchDuration)
+                                .field("merge.duration.ms", mergeDuration)
                                 .log();
                         }
 

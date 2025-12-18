@@ -136,8 +136,10 @@ public final class RestApi extends AbstractVerticle {
             repoRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/users.yaml").compose(
                 userRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
                     tokenRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
-                        settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").onSuccess(
-                            rolesRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb)
+                        settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
+                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/cache.yaml").onSuccess(
+                                cacheRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb)
+                            ).onFailure(Throwable::printStackTrace)
                         ).onFailure(Throwable::printStackTrace)
                     )
                 )
@@ -152,10 +154,12 @@ public final class RestApi extends AbstractVerticle {
      * @param tokenRb Token RouterBuilder
      * @param settingsRb Settings RouterBuilder
      * @param rolesRb Roles RouterBuilder
+     * @param cacheRb Cache RouterBuilder
      */
     private void startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
-        final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb) {
-        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb);
+        final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb,
+        final RouterBuilder cacheRb) {
+        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, cacheRb);
         final BlockingStorage asto = new BlockingStorage(this.configsStorage);
         new RepositoryRest(
             this.caches.filtersCache(),
@@ -182,11 +186,13 @@ public final class RestApi extends AbstractVerticle {
             }
         }
         new SettingsRest(this.port, this.settings).init(settingsRb);
+        new CacheRest(this.security.policy()).init(cacheRb);
         final Router router = repoRb.createRouter();
         router.route("/*").subRouter(rolesRb.createRouter());
         router.route("/*").subRouter(userRb.createRouter());
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
+        router.route("/*").subRouter(cacheRb.createRouter());
         // CRITICAL: Add simple health endpoint BEFORE StaticHandler
         // This avoids StaticHandler's file-serving leak for health checks
         router.get("/api/health").handler(ctx -> {
@@ -195,7 +201,7 @@ public final class RestApi extends AbstractVerticle {
                 .putHeader("Content-Type", "application/json")
                 .end("{\"status\":\"ok\"}");
         });
-        
+
         router.route("/api/*").handler(
             StaticHandler.create("swagger-ui")
                 .setIndexPage("index.html")

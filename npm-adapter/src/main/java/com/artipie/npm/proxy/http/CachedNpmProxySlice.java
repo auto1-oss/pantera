@@ -28,17 +28,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * NPM proxy slice with negative and metadata caching.
  * Wraps NpmProxySlice to add caching layer that prevents repeated
  * 404 requests and caches package metadata.
+ * 
+ * <p>Uses signal-based request deduplication: concurrent requests for the same
+ * package wait for the first request to complete, then read from NpmProxy's
+ * storage cache. This eliminates memory buffering while maintaining full
+ * deduplication.</p>
  *
  * @since 1.0
  */
 public final class CachedNpmProxySlice implements Slice {
-
-    /**
-     * Maximum response size to buffer for request deduplication (5MB).
-     * Larger responses (e.g., typescript metadata ~30MB) are streamed directly
-     * to prevent OOM. Request deduplication is skipped for large responses.
-     */
-    private static final int MAX_BUFFER_SIZE = 5 * 1024 * 1024;
 
     /**
      * Origin slice (NpmProxySlice).
@@ -71,12 +69,13 @@ public final class CachedNpmProxySlice implements Slice {
     private final String repoType;
 
     /**
-     * In-flight requests map for deduplication.
-     * Maps request key to a future that completes with BUFFERED response data.
-     * This prevents thundering herd while allowing each caller to get a fresh
-     * Content instance (avoiding OneTimePublisher multiple subscription errors).
+     * In-flight requests map for signal-based deduplication.
+     * Maps request key to a future that completes with a FetchResult signal.
+     * Waiters act on the signal: SUCCESS means read from storage cache,
+     * NOT_FOUND means return 404, ERROR means retry.
+     * This eliminates memory buffering while maintaining full deduplication.
      */
-    private final Map<Key, CompletableFuture<BufferedResponse>> inFlight;
+    private final Map<Key, CompletableFuture<FetchResult>> inFlight;
 
     /**
      * Ctor with default caching (24h TTL, enabled).
@@ -272,9 +271,11 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Fetches from origin and caches the result with request deduplication.
-     * <p>Response bodies are buffered so each caller gets a fresh Content instance,
-     * preventing OneTimePublisher multiple subscription errors.</p>
+     * Fetches from origin with signal-based request deduplication.
+     * <p>First request fetches from origin (which saves to NpmProxy's storage cache).
+     * Concurrent requests wait for a signal, then fetch from origin again - which
+     * will be served from storage cache. This eliminates memory buffering while
+     * maintaining full deduplication.</p>
      * @param line Request line
      * @param headers Request headers
      * @param body Request body
@@ -287,44 +288,54 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
-        final CompletableFuture<BufferedResponse> pending = this.inFlight.get(key);
+        // Check for existing in-flight request
+        final CompletableFuture<FetchResult> pending = this.inFlight.get(key);
         if (pending != null) {
             EcsLogger.debug("com.artipie.npm")
-                .message("NPM proxy: joining in-flight request")
+                .message("NPM proxy: joining in-flight request (signal-based)")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
                 .field("repository.name", this.repoName)
                 .field("package.name", key.string())
                 .log();
-            return pending.thenApply(BufferedResponse::toFreshResponse);
+            // Wait for signal, then act accordingly
+            return pending.thenCompose(result -> 
+                this.handleWaiterResult(result, line, headers, key)
+            );
         }
 
         final long startTime = System.currentTimeMillis();
-        final CompletableFuture<BufferedResponse> newRequest = new CompletableFuture<>();
+        final CompletableFuture<FetchResult> newRequest = new CompletableFuture<>();
         
-        final CompletableFuture<BufferedResponse> existing = this.inFlight.putIfAbsent(key, newRequest);
+        // Try to register as first request
+        final CompletableFuture<FetchResult> existing = this.inFlight.putIfAbsent(key, newRequest);
         if (existing != null) {
             EcsLogger.debug("com.artipie.npm")
-                .message("NPM proxy: lost race, joining other request")
+                .message("NPM proxy: lost race, joining other request (signal-based)")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
                 .field("repository.name", this.repoName)
                 .field("package.name", key.string())
                 .log();
-            return existing.thenApply(BufferedResponse::toFreshResponse);
+            return existing.thenCompose(result -> 
+                this.handleWaiterResult(result, line, headers, key)
+            );
         }
 
         EcsLogger.debug("com.artipie.npm")
-            .message("NPM proxy: fetching upstream (new request)")
+            .message("NPM proxy: fetching upstream (first request)")
             .eventCategory("repository")
             .eventAction("proxy_request")
             .field("repository.name", this.repoName)
             .field("package.name", key.string())
             .field("url.original", this.upstreamUrl)
             .log();
+        
+        // First request: fetch from origin
         return this.origin.response(line, headers, body)
-            .thenCompose(response -> {
+            .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
+                
                 if (response.status().code() == 404) {
                     EcsLogger.debug("com.artipie.npm")
                         .message("NPM proxy: caching 404")
@@ -336,110 +347,29 @@ public final class CachedNpmProxySlice implements Slice {
                         .log();
                     this.negativeCache.cacheNotFound(key);
                     this.recordProxyMetric("not_found", duration);
-                    final BufferedResponse buffered404 = new BufferedResponse(
-                        response.status(), response.headers(), new byte[0]
-                    );
-                    newRequest.complete(buffered404);
-                    return CompletableFuture.completedFuture(buffered404.toFreshResponse());
+                    // Signal waiters: NOT_FOUND
+                    newRequest.complete(FetchResult.NOT_FOUND);
+                    return ResponseBuilder.notFound().build();
                 }
 
                 if (response.status().success()) {
                     this.recordProxyMetric("success", duration);
-                    // Check Content-Length to avoid buffering huge responses (OOM prevention)
-                    final long contentLength = response.headers().asList().stream()
-                        .filter(h -> "Content-Length".equalsIgnoreCase(h.getKey()))
-                        .map(h -> {
-                            try {
-                                return Long.parseLong(h.getValue());
-                            } catch (NumberFormatException e) {
-                                return -1L;
-                            }
-                        })
-                        .findFirst()
-                        .orElse(-1L);
-                    
-                    // Skip buffering for large responses to prevent OOM
-                    if (contentLength > MAX_BUFFER_SIZE) {
-                        EcsLogger.debug("com.artipie.npm")
-                            .message("NPM proxy: streaming large response without buffering")
-                            .eventCategory("repository")
-                            .eventAction("proxy_request")
-                            .field("repository.name", this.repoName)
-                            .field("package.name", key.string())
-                            .field("http.response.body.bytes", contentLength)
-                            .log();
-                        // Complete in-flight with empty buffer so other waiters don't hang
-                        // They will make their own requests
-                        newRequest.complete(new BufferedResponse(
-                            RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, new byte[0]
-                        ));
-                        // Return streaming response directly
-                        return CompletableFuture.completedFuture(response);
-                    }
-                    
-                    return response.body().asBytesFuture()
-                        .thenApply(bodyBytes -> {
-                            // Double-check size after reading (in case Content-Length was missing)
-                            if (bodyBytes.length > MAX_BUFFER_SIZE) {
-                                EcsLogger.warn("com.artipie.npm")
-                                    .message("NPM proxy: response exceeded buffer limit")
-                                    .eventCategory("repository")
-                                    .eventAction("proxy_request")
-                                    .field("repository.name", this.repoName)
-                                    .field("package.name", key.string())
-                                    .field("http.response.body.bytes", bodyBytes.length)
-                                    .log();
-                            }
-                            final BufferedResponse buffered = new BufferedResponse(
-                                response.status(), response.headers(), bodyBytes
-                            );
-                            newRequest.complete(buffered);
-                            return buffered.toFreshResponse();
-                        })
-                        .exceptionally(err -> {
-                            EcsLogger.warn("com.artipie.npm")
-                                .message("NPM proxy: body read failed")
-                                .eventCategory("repository")
-                                .eventAction("proxy_request")
-                                .eventOutcome("failure")
-                                .field("repository.name", this.repoName)
-                                .field("package.name", key.string())
-                                .error(err)
-                                .log();
-                            final Response errorResp = ResponseBuilder.unavailable()
-                                .textBody("Upstream read error - please retry")
-                                .build();
-                            final BufferedResponse bufferedErr = new BufferedResponse(
-                                errorResp.status(), errorResp.headers(), new byte[0]
-                            );
-                            newRequest.complete(bufferedErr);
-                            return errorResp;
-                        });
-                } else if (response.status().code() >= 500) {
+                    // Signal waiters: SUCCESS - they will read from storage cache
+                    newRequest.complete(FetchResult.SUCCESS);
+                    // First request returns the streaming response directly
+                    return response;
+                }
+                
+                // Error responses (4xx other than 404, 5xx)
+                if (response.status().code() >= 500) {
                     this.recordProxyMetric("error", duration);
                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
                 } else {
                     this.recordProxyMetric("client_error", duration);
                 }
-
-                return response.body().asBytesFuture()
-                    .thenApply(bodyBytes -> {
-                        final BufferedResponse buffered = new BufferedResponse(
-                            response.status(), response.headers(), bodyBytes
-                        );
-                        newRequest.complete(buffered);
-                        return buffered.toFreshResponse();
-                    })
-                    .exceptionally(err -> {
-                        final Response errorResp = ResponseBuilder.unavailable()
-                            .textBody("Upstream read error")
-                            .build();
-                        final BufferedResponse bufferedErr = new BufferedResponse(
-                            errorResp.status(), errorResp.headers(), new byte[0]
-                        );
-                        newRequest.complete(bufferedErr);
-                        return errorResp;
-                    });
+                // Signal waiters: ERROR - they should retry
+                newRequest.complete(FetchResult.ERROR);
+                return response;
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -455,18 +385,73 @@ public final class CachedNpmProxySlice implements Slice {
                     .field("url.upstream", this.upstreamUrl)
                     .error(error)
                     .log();
-                final Response errorResp = ResponseBuilder.unavailable()
+                // Signal waiters: ERROR
+                newRequest.complete(FetchResult.ERROR);
+                return ResponseBuilder.unavailable()
                     .textBody("Upstream error - please retry")
                     .build();
-                final BufferedResponse bufferedErr = new BufferedResponse(
-                    errorResp.status(), errorResp.headers(), new byte[0]
-                );
-                newRequest.complete(bufferedErr);
-                return errorResp;
             })
             .whenComplete((result, error) -> {
                 this.inFlight.remove(key);
             });
+    }
+
+    /**
+     * Handle result for a waiter based on the signal from the first request.
+     * @param result Fetch result signal
+     * @param line Original request line
+     * @param headers Original request headers
+     * @param key Cache key
+     * @return Response future
+     */
+    private CompletableFuture<Response> handleWaiterResult(
+        final FetchResult result,
+        final RequestLine line,
+        final Headers headers,
+        final Key key
+    ) {
+        switch (result) {
+            case SUCCESS:
+                // Data is now in NpmProxy's storage cache - fetch from origin
+                // which will serve from cache (no upstream request)
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: waiter fetching from cache")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", key.string())
+                    .log();
+                return this.origin.response(line, headers, Content.EMPTY);
+                
+            case NOT_FOUND:
+                // 404 already cached by first request
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: waiter received NOT_FOUND signal")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", key.string())
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+                
+            case ERROR:
+            default:
+                // First request failed - waiter should retry (which may go to upstream)
+                EcsLogger.debug("com.artipie.npm")
+                    .message("NPM proxy: waiter received ERROR signal, returning 503")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .field("repository.name", this.repoName)
+                    .field("package.name", key.string())
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.unavailable()
+                        .textBody("Upstream temporarily unavailable - please retry")
+                        .build()
+                );
+        }
     }
 
     /**
@@ -518,47 +503,28 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Buffered response data for request deduplication.
-     * <p>Stores response status, headers, and body bytes so each caller
-     * can receive a fresh Response with new Content instance.</p>
+     * Result signal for in-flight request deduplication.
+     * <p>Signals the outcome of the first request to waiting requests:</p>
+     * <ul>
+     *   <li>SUCCESS - Data saved to storage, waiters should read from cache</li>
+     *   <li>NOT_FOUND - 404 from upstream, already cached in negative cache</li>
+     *   <li>ERROR - Transient error, waiters should retry or return 503</li>
+     * </ul>
      */
-    private static final class BufferedResponse {
+    private enum FetchResult {
         /**
-         * Response status.
+         * Success - data is now in storage cache.
          */
-        private final RsStatus status;
-
+        SUCCESS,
+        
         /**
-         * Response headers.
+         * Not found - 404 cached in negative cache.
          */
-        private final Headers headers;
-
+        NOT_FOUND,
+        
         /**
-         * Buffered response body bytes.
+         * Error - transient failure, retry may help.
          */
-        private final byte[] body;
-
-        /**
-         * Ctor.
-         * @param status Response status
-         * @param headers Response headers
-         * @param body Buffered body bytes
-         */
-        BufferedResponse(final RsStatus status, final Headers headers, final byte[] body) {
-            this.status = status;
-            this.headers = headers;
-            this.body = body;
-        }
-
-        /**
-         * Creates a fresh Response with new Content from buffered data.
-         * @return New Response instance with fresh Content
-         */
-        Response toFreshResponse() {
-            return ResponseBuilder.from(this.status)
-                .headers(this.headers)
-                .body(this.body.length > 0 ? new Content.From(this.body) : Content.EMPTY)
-                .build();
-        }
+        ERROR
     }
 }

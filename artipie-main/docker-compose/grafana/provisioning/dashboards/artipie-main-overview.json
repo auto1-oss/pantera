@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 16,
+  "id": 3,
   "links": [
     {
       "asDropdown": false,
@@ -397,7 +397,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "100 * (\n  sum(jvm_memory_used_bytes{job=\"artipie\",area=\"heap\"}) \n  / \n  sum(jvm_memory_max_bytes{job=\"artipie\",area=\"heap\"})\n)",
+          "expr": "100 *\nsum by (job, instance) (\n  jvm_memory_used_bytes{job=\"artipie\", area=\"heap\"}\n)\n/\nsum by (job, instance) (\n  jvm_memory_max_bytes{job=\"artipie\", area=\"heap\"}\n)\n",
           "legendFormat": "Heap Usage %",
           "range": true,
           "refId": "A"
@@ -1248,5 +1248,5 @@
   "timezone": "browser",
   "title": "Artipie - Main Overview",
   "uid": "artipie-main-overview",
-  "version": 11
+  "version": 1
 }

@@ -234,39 +234,81 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Error message
     User:
       type: object
+      description: User information returned by GET endpoints
       required:
         - name
       properties:
         name:
           type: string
+          description: Username (unique identifier)
+          example: "john.doe"
         email:
           type: string
+          format: email
+          description: User email address
+          example: "john.doe@example.com"
         groups:
           type: array
+          description: List of groups/roles the user belongs to
           items:
             type: string
+          example: ["developers", "readers"]
+        enabled:
+          type: boolean
+          description: Whether the user account is enabled
+          example: true
     FullUser:
       type: object
+      description: Full user configuration for creating or updating users
       required:
         - type
         - pass
       properties:
         type:
           type: string
+          description: Password encoding type
+          enum: ["plain", "sha256"]
+          example: "sha256"
         pass:
           type: string
+          format: password
+          description: User password (plain text or encoded based on type)
+          example: "securepassword123"
         email:
           type: string
+          format: email
+          description: User email address
+          example: "john.doe@example.com"
         groups:
           type: array
+          description: List of groups/roles to assign to the user
           items:
             type: string
+          example: ["developers", "readers"]
+        enabled:
+          type: boolean
+          description: Whether the user account should be enabled
+          default: true
+          example: true
+        permissions:
+          type: object
+          description: Direct permissions assigned to the user
+          additionalProperties: true
+          example:
+            api_repository_permissions: "*"
+            adapter_basic_permissions:
+              my-maven:
+                - read
+                - write
     AlterPassword:
       type: object
+      description: Request body for changing user password
       required:
         - old_pass
         - new_pass
@@ -274,10 +316,19 @@ components:
       properties:
         old_pass:
           type: string
+          format: password
+          description: Current password for verification
+          example: "oldpassword123"
         new_pass:
           type: string
+          format: password
+          description: New password to set
+          example: "newpassword456"
         new_type:
           type: string
+          description: Password encoding type for the new password
+          enum: ["plain", "sha256"]
+          example: "sha256"
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"

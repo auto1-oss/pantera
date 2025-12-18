@@ -7,6 +7,7 @@ package com.artipie.http.rq.multipart;
 import com.artipie.ArtipieException;
 import com.artipie.http.misc.ByteBufferTokenizer;
 import com.artipie.http.misc.Pipeline;
+import com.artipie.http.trace.TraceContextExecutor;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -34,18 +35,21 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
     /**
      * Cached thread pool for parts processing.
      * Pool name: {@value #POOL_NAME}.parts (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to parts threads.
      */
-    private static final ExecutorService CACHED_PEXEC = Executors.newCachedThreadPool(
-        new ThreadFactory() {
-            private final AtomicInteger counter = new AtomicInteger(0);
-            @Override
-            public Thread newThread(final Runnable runnable) {
-                final Thread thread = new Thread(runnable);
-                thread.setName(POOL_NAME + ".parts-" + counter.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
+    private static final ExecutorService CACHED_PEXEC = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName(POOL_NAME + ".parts-" + counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
             }
-        }
+        )
     );
 
     /**
@@ -110,12 +114,14 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
         this.tokenizer = new ByteBufferTokenizer(
             this, boundary.getBytes(StandardCharsets.US_ASCII)
         );
-        this.exec = Executors.newSingleThreadExecutor(
-            r -> {
-                final Thread thread = new Thread(r, POOL_NAME + ".sub-" + SUB_COUNTER.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
-            }
+        this.exec = TraceContextExecutor.wrap(
+            Executors.newSingleThreadExecutor(
+                r -> {
+                    final Thread thread = new Thread(r, POOL_NAME + ".sub-" + SUB_COUNTER.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            )
         );
         this.pipeline = new Pipeline<>();
         this.completion = new Completion<>(this.pipeline);

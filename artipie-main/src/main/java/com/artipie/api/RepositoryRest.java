@@ -101,6 +101,63 @@ public final class RepositoryRest extends BaseRest {
         this.bus = bus;
     }
 
+    /**
+     * Delete entire package folder from repository storage.
+     * @param context Routing context
+     */
+    private void deletePackageFolder(final RoutingContext context) {
+        final RepositoryName rname = new RepositoryName.FromRequest(context);
+        final Validator validator = new Validator.All(
+            Validator.validator(new ReservedNamesVerifier(rname), HttpStatus.BAD_REQUEST_400),
+            Validator.validator(
+                () -> this.crs.exists(rname),
+                () -> String.format("Repository %s does not exist.", rname),
+                HttpStatus.NOT_FOUND_404
+            )
+        );
+        if (validator.validate(context)) {
+            final JsonObject body = BaseRest.readJsonObject(context);
+            final String path = body == null ? null : body.getString("path", "").trim();
+            if (path == null || path.isEmpty()) {
+                context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
+                    .end("path is required");
+                return;
+            }
+            final String actor = context.user().principal().getString(AuthTokenRest.SUB);
+            this.data.deletePackageFolder(rname, path)
+                .whenComplete((deleted, error) -> {
+                    if (error != null) {
+                        EcsLogger.error("com.artipie.api")
+                            .message("Failed to delete package folder")
+                            .eventCategory("api")
+                            .eventAction("package_delete")
+                            .eventOutcome("failure")
+                            .field("repository.name", rname.toString())
+                            .field("package.path", path)
+                            .userName(actor)
+                            .error(error)
+                            .log();
+                        context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
+                            .end(error.getMessage());
+                    } else if (deleted) {
+                        EcsLogger.info("com.artipie.api")
+                            .message("Package folder deleted via API")
+                            .eventCategory("api")
+                            .eventAction("package_delete")
+                            .eventOutcome("success")
+                            .field("repository.name", rname.toString())
+                            .field("package.path", path)
+                            .userName(actor)
+                            .log();
+                        context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
+                    } else {
+                        context.response().setStatusCode(HttpStatus.NOT_FOUND_404)
+                            .end("Package folder not found: " + path);
+                    }
+                });
+        }
+    }
+
     @Override
     @SuppressWarnings("PMD.ExcessiveMethodLength")
     public void init(final RouterBuilder rbr) {
@@ -159,6 +216,15 @@ public final class RepositoryRest extends BaseRest {
                 )
             )
             .handler(this::deleteArtifact)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.operation("deletePackageFolder")
+            .handler(
+                new AuthzHandler(
+                    this.policy,
+                    new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE)
+                )
+            )
+            .handler(this::deletePackageFolder)
             .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
         rbr.operation("moveRepo")
             .handler(
@@ -408,6 +474,7 @@ public final class RepositoryRest extends BaseRest {
                 });
         }
     }
+
 
     private void unblockAllCooldown(final RoutingContext context) {
         final RepositoryName name = new RepositoryName.FromRequest(context);

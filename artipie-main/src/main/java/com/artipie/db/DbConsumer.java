@@ -5,6 +5,7 @@
 package com.artipie.db;
 
 import com.artipie.scheduling.ArtifactEvent;
+import com.artipie.group.GroupNegativeCache;
 import com.artipie.http.log.EcsLogger;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
@@ -106,6 +107,47 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     }
 
     /**
+     * Invalidate group negative cache for a package.
+     * This ensures newly published packages are immediately visible via group repos.
+     * @param packageName Package name (e.g., "@retail/backoffice-interaction-notes")
+     */
+    private static void invalidateGroupNegativeCache(final String packageName) {
+        try {
+            GroupNegativeCache.invalidatePackageGlobally(packageName)
+                .whenComplete((v, err) -> {
+                    if (err != null) {
+                        EcsLogger.warn("com.artipie.db")
+                            .message("Failed to invalidate group negative cache")
+                            .eventCategory("cache")
+                            .eventAction("invalidate_negative_cache")
+                            .eventOutcome("failure")
+                            .field("package.name", packageName)
+                            .error(err)
+                            .log();
+                    } else {
+                        EcsLogger.debug("com.artipie.db")
+                            .message("Invalidated group negative cache for published package")
+                            .eventCategory("cache")
+                            .eventAction("invalidate_negative_cache")
+                            .eventOutcome("success")
+                            .field("package.name", packageName)
+                            .log();
+                    }
+                });
+        } catch (final Exception ex) {
+            // Don't fail the publish if cache invalidation fails
+            EcsLogger.warn("com.artipie.db")
+                .message("Exception during group negative cache invalidation")
+                .eventCategory("cache")
+                .eventAction("invalidate_negative_cache")
+                .eventOutcome("failure")
+                .field("package.name", packageName)
+                .error(ex)
+                .log();
+        }
+    }
+
+    /**
      * Database observer. Writes pack into database.
      * @since 0.31
      */
@@ -169,6 +211,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setString(8, record.owner());
                             upsert.execute();
                             logArtifactPublish(record);
+                            // Invalidate group negative cache for npm packages
+                            // This ensures newly published packages are immediately visible via group repos
+                            if ("npm".equals(record.repoType())) {
+                                invalidateGroupNegativeCache(record.artifactName());
+                            }
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());

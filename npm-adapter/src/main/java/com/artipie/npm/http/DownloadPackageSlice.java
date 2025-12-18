@@ -23,6 +23,7 @@ import com.artipie.npm.misc.MetadataEnhancer;
 import javax.json.JsonObject;
 
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -47,7 +48,9 @@ public final class DownloadPackageSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        final String pkg = new PackageNameFromUrl(line).value();
+        // URL-decode package name to handle scoped packages like @retail%2fbackoffice -> @retail/backoffice
+        final String rawPkg = new PackageNameFromUrl(line).value();
+        final String pkg = URLDecoder.decode(rawPkg, StandardCharsets.UTF_8);
         
         // Guard: If this is a browser request (Accept: text/html) for directory browsing,
         // return 404 to let IndexedBrowsableSlice handle it

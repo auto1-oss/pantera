@@ -125,7 +125,7 @@ meta:
       maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 1000
+        l1MaxSize: 0
         l1Ttl: 24h
         l2MaxSize: 1000000
         l2Ttl: 72h
@@ -145,7 +145,7 @@ meta:
       maxSize: 1000
       valkey:
         enabled: true
-        l1MaxSize: 1000
+        l1MaxSize: 0
         l1Ttl: 30d
         l2MaxSize: 500000
         l2Ttl: 30d

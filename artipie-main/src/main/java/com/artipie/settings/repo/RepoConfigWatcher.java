@@ -5,11 +5,10 @@
 package com.artipie.settings.repo;
 
 import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.settings.ConfigFile;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Map;
@@ -159,13 +158,15 @@ class RepoConfigWatcher implements AutoCloseable {
             .thenCompose(keys -> {
                 final var futures = new ArrayList<CompletableFuture<Map.Entry<String, String>>>();
                 for (final Key key : keys) {
+                    final ConfigFile file = new ConfigFile(key);
+                    if (file.isSystem() || !file.isYamlOrYml()) {
+                        continue;
+                    }
                     futures.add(
-                        this.storage.metadata(key).handle((meta, err) -> {
-                            if (err != null || meta == null) {
-                                return Map.entry(key.string(), "unknown" + System.nanoTime());
-                            }
-                            return Map.entry(key.string(), fingerprint(meta));
-                        })
+                        this.storage.value(key)
+                            .thenCompose(content -> content.asStringFuture())
+                            .thenApply(content -> Map.entry(key.string(), contentHash(content)))
+                            .exceptionally(err -> Map.entry(key.string(), "error"))
                     );
                 }
                 return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
@@ -182,18 +183,18 @@ class RepoConfigWatcher implements AutoCloseable {
             });
     }
 
-    private static String fingerprint(final Meta meta) {
-        return meta.read(Meta.OP_UPDATED_AT)
-            .map(instant -> Long.toString(instant.toEpochMilli()))
-            .orElseGet(
-                () -> meta.read(Meta.OP_MD5)
-                    .map(Object::toString)
-                    .orElseGet(
-                        () -> meta.read(Meta.OP_SIZE)
-                            .map(Object::toString)
-                            .orElse("unknown")
-                    )
-            );
+    private static String contentHash(final String content) {
+        try {
+            final java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            final byte[] digest = md.digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            final StringBuilder sb = new StringBuilder();
+            for (final byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (final java.security.NoSuchAlgorithmException ex) {
+            return String.valueOf(content.hashCode());
+        }
     }
 
     private static ScheduledExecutorService defaultScheduler() {

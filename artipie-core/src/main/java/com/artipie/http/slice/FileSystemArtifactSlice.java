@@ -14,6 +14,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContextExecutor;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.reactivestreams.Publisher;
 
@@ -84,12 +85,14 @@ public final class FileSystemArtifactSlice implements Slice {
      */
     public static final String POOL_NAME = "artipie.io.filesystem";
 
-    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
-        FileSystemIoConfig.instance().threads(),
-        new ThreadFactoryBuilder()
-            .setNameFormat(POOL_NAME + ".worker-%d")
-            .setDaemon(true)
-            .build()
+    private static final ExecutorService BLOCKING_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newFixedThreadPool(
+            FileSystemIoConfig.instance().threads(),
+            new ThreadFactoryBuilder()
+                .setNameFormat(POOL_NAME + ".worker-%d")
+                .setDaemon(true)
+                .build()
+        )
     );
 
     /**

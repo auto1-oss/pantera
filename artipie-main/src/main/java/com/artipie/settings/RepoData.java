@@ -130,6 +130,55 @@ public final class RepoData {
     }
 
     /**
+     * Delete a package folder (and its contents) from repository storage.
+     * @param rname Repository name
+     * @param packagePath Path to the package folder within repository storage
+     * @return Completable action returning true if deletion happened, false if nothing found
+     */
+    public CompletionStage<Boolean> deletePackageFolder(final RepositoryName rname, final String packagePath) {
+        final String repo = rname.toString();
+        final Key folder = new Key.From(repo, packagePath);
+        return this.repoStorage(rname)
+            .thenCompose(asto ->
+                asto.exists(folder).thenCompose(exists -> {
+                    final CompletionStage<Boolean> deletion;
+                    if (exists) {
+                        deletion = asto.deleteAll(folder).thenApply(
+                            nothing -> {
+                                this.logPackageDelete(repo, packagePath);
+                                return true;
+                            }
+                        );
+                    } else {
+                        deletion = asto.list(folder)
+                            .thenCompose(children -> {
+                                if (children.isEmpty()) {
+                                    return CompletableFuture.completedFuture(false);
+                                }
+                                return asto.deleteAll(folder)
+                                    .thenApply(nothing -> {
+                                        this.logPackageDelete(repo, packagePath);
+                                        return true;
+                                    });
+                            });
+                    }
+                    return deletion;
+                })
+            );
+    }
+
+    private void logPackageDelete(final String repo, final String packagePath) {
+        EcsLogger.info("com.artipie.settings")
+            .message("Deleted package folder from repository")
+            .eventCategory("repository")
+            .eventAction("package_delete")
+            .eventOutcome("success")
+            .field("repository.name", repo)
+            .field("package.path", packagePath)
+            .log();
+    }
+
+    /**
      * Move data when repository is renamed: from location by the old name to location with
      * new name.
      * @param rname Repository name

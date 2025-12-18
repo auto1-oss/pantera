@@ -205,10 +205,11 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaxLifetime(1800000); // 30 minutes
         hikariConfig.setPoolName("ArtipieDB-Pool");
 
-        // Enable connection leak detection (60 seconds threshold)
-        // Logs a warning if a connection is not returned to the pool within 60 seconds
-        // Helps identify connection leaks in application code
-        hikariConfig.setLeakDetectionThreshold(60000); // 60 seconds
+        // Enable connection leak detection (120 seconds threshold)
+        // Logs a warning if a connection is not returned to the pool within 120 seconds
+        // Increased from 60s to reduce false positives during batch processing
+        // DbConsumer batch operations can take >60s under high load
+        hikariConfig.setLeakDetectionThreshold(120000); // 120 seconds
 
         // Enable metrics and logging for connection pool monitoring
         hikariConfig.setRegisterMbeans(true); // Enable JMX metrics
@@ -217,7 +218,7 @@ public final class ArtifactDbFactory {
 
         // Log connection pool configuration for monitoring
         EcsLogger.info("com.artipie.db")
-            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: 60000ms)")
+            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: 120000ms)")
             .eventCategory("database")
             .eventAction("connection_pool_init")
             .eventOutcome("success")

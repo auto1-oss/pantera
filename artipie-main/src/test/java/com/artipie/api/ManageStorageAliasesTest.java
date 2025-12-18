@@ -110,7 +110,7 @@ class ManageStorageAliasesTest {
         }
         final CrudStorageAliases storages = new ManageStorageAliases(key, this.blsto);
         final String another = "newOne";
-        storages.add(another, Json.createObjectBuilder().add("type", "file").build());
+        storages.add(another, Json.createObjectBuilder().add("type", "fs").build());
         MatcherAssert.assertThat(
             storages.list().stream().map(item -> item.getString("alias"))
                 .collect(Collectors.toList()),
@@ -123,7 +123,7 @@ class ManageStorageAliasesTest {
         for (final String alias : aliases) {
             builder = builder.add(
                 alias,
-                Yaml.createYamlMappingBuilder().add("type", "file")
+                Yaml.createYamlMappingBuilder().add("type", "fs")
                     .add("path", String.format("/data/%s", alias)).build()
             );
         }

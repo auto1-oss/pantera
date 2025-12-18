@@ -28,7 +28,6 @@ import com.artipie.npm.cooldown.NpmMetadataParser;
 import com.artipie.npm.cooldown.NpmMetadataFilter;
 import com.artipie.npm.cooldown.NpmMetadataRewriter;
 import com.artipie.npm.cooldown.NpmCooldownInspector;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -226,15 +225,24 @@ public final class DownloadPackageSlice implements Slice {
                             })
                     )
                     // Fall back to full metadata if abbreviated not available
+                    // This can happen for legacy cached data before abbreviated was added
                     .switchIfEmpty(io.reactivex.Maybe.defer(() ->
                         this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
                             new Concatenation(contentStream)
                                 .single()
                                 .map(buf -> new Remaining(buf).bytes())
                                 .toMaybe()
-                                .map(rawBytes -> 
-                                    this.buildResponse(rawBytes, metadata, headers, true, clientETag)
-                                )
+                                .flatMap(rawBytes -> {
+                                    // Apply cooldown filtering to full metadata too
+                                    if (this.cooldownMetadata != null && this.repoType != null) {
+                                        return this.applyFullMetadataCooldown(
+                                            rawBytes, packageName, metadata, headers, clientETag
+                                        );
+                                    }
+                                    return io.reactivex.Maybe.just(
+                                        this.buildResponse(rawBytes, metadata, headers, true, clientETag)
+                                    );
+                                })
                         )
                     ))
             )
@@ -246,10 +254,11 @@ public final class DownloadPackageSlice implements Slice {
     /**
      * Apply cooldown filtering to abbreviated metadata.
      * 
-     * CRITICAL: Abbreviated metadata does NOT contain the "time" field with release dates.
-     * Without release dates, cooldown cannot determine which versions are blocked.
-     * Solution: Fetch full metadata just for release dates, preload into inspector,
-     * then filter the abbreviated metadata using those dates.
+     * Abbreviated metadata contains the "time" field with release dates
+     * (added for pnpm compatibility in AbbreviatedMetadata.generate()).
+     * CooldownMetadataService.filterMetadata() handles parsing and date extraction
+     * internally via NpmMetadataParser which implements ReleaseDateProvider.
+     * No need to pre-parse here - that would be redundant.
      */
     private io.reactivex.Maybe<Response> applyAbbreviatedCooldown(
         final byte[] abbreviatedBytes,
@@ -258,79 +267,96 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
-        final NpmCooldownInspector inspector = new NpmCooldownInspector();
-        
-        // CRITICAL FIX: Abbreviated metadata lacks "time" field with release dates.
-        // Fetch full metadata to get release dates for cooldown evaluation.
-        final CompletableFuture<Response> filterFuture = this.fetchReleaseDatesAndFilter(
-            abbreviatedBytes, packageName, metadata, headers, clientETag, inspector
+        // filterMetadata() parses JSON once and extracts release dates via ReleaseDateProvider
+        // No need to pre-parse - that would double the parsing overhead
+        final CompletableFuture<Response> filterFuture = this.applyFilterAndBuildResponse(
+            abbreviatedBytes, packageName, metadata, headers, clientETag
         );
-        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
         return RxFuture.maybe(filterFuture);
     }
 
     /**
-     * Fetch release dates from full metadata and apply cooldown filtering.
+     * Apply cooldown filtering to full metadata (fallback when abbreviated not available).
+     * Full metadata contains the "time" field. CooldownMetadataService handles parsing.
      */
-    private CompletableFuture<Response> fetchReleaseDatesAndFilter(
+    private io.reactivex.Maybe<Response> applyFullMetadataCooldown(
+        final byte[] fullBytes,
+        final String packageName,
+        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final Headers headers,
+        final Optional<String> clientETag
+    ) {
+        // Create inspector for cooldown evaluation - dates are preloaded from metadata
+        final NpmCooldownInspector inspector = new NpmCooldownInspector();
+        final CompletableFuture<Response> filterFuture = this.cooldownMetadata.filterMetadata(
+            this.repoType,
+            this.repoName,
+            packageName,
+            fullBytes,
+            new NpmMetadataParser(),
+            new NpmMetadataFilter(),
+            new NpmMetadataRewriter(),
+            Optional.of(inspector)
+        ).handle((filtered, ex) -> {
+            if (ex != null) {
+                Throwable cause = ex;
+                while (cause != null) {
+                    if (cause instanceof AllVersionsBlockedException) {
+                        EcsLogger.info("com.artipie.npm")
+                            .message("All versions blocked by cooldown (full fallback)")
+                            .eventCategory("cooldown")
+                            .eventAction("all_versions_blocked")
+                            .field("package.name", packageName)
+                            .log();
+                        final String json = String.format(
+                            "{\"error\":\"All versions of '%s' are under security cooldown. New packages must wait 7 days before installation.\",\"package\":\"%s\"}",
+                            packageName, packageName
+                        );
+                        return ResponseBuilder.forbidden()
+                            .jsonBody(json)
+                            .build();
+                    }
+                    cause = cause.getCause();
+                }
+                EcsLogger.warn("com.artipie.npm")
+                    .message("Cooldown filter error (full fallback) - serving unfiltered")
+                    .eventCategory("cooldown")
+                    .eventAction("filter_error")
+                    .field("package.name", packageName)
+                    .error(ex)
+                    .log();
+                return this.buildResponse(fullBytes, metadata, headers, true, clientETag);
+            }
+            return this.buildResponse(filtered, metadata, headers, true, clientETag);
+        });
+        return RxFuture.maybe(filterFuture);
+    }
+
+    /**
+     * Apply cooldown filtering and build abbreviated response.
+     * CooldownMetadataService handles JSON parsing and release date extraction internally.
+     * NpmCooldownInspector is required for cooldown evaluation - release dates are preloaded
+     * from metadata via ReleaseDateProvider, so no remote fetch is needed.
+     */
+    private CompletableFuture<Response> applyFilterAndBuildResponse(
         final byte[] abbreviatedBytes,
         final String packageName,
         final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
-        final Optional<String> clientETag,
-        final NpmCooldownInspector inspector
+        final Optional<String> clientETag
     ) {
-        // Fetch full metadata just for release dates
-        return this.npm.getPackageContentStream(packageName)
-            .flatMap(contentStream ->
-                new Concatenation(contentStream)
-                    .single()
-                    .map(buf -> new Remaining(buf).bytes())
-                    .toMaybe()
-            )
-            .toSingle(new byte[0])
-            .to(SingleInterop.get())
-            .toCompletableFuture()
-            .thenCompose(fullMetadataBytes -> {
-                // Parse full metadata and preload release dates
-                if (fullMetadataBytes.length > 0) {
-                    try {
-                        final NpmMetadataParser parser = new NpmMetadataParser();
-                        final JsonNode fullParsed = parser.parse(fullMetadataBytes);
-                        final java.util.Map<String, java.time.Instant> releaseDates = parser.releaseDates(fullParsed);
-                        if (!releaseDates.isEmpty()) {
-                            inspector.preloadReleaseDates(releaseDates);
-                            EcsLogger.debug("com.artipie.npm")
-                                .message("Preloaded release dates from full metadata for abbreviated filtering")
-                                .eventCategory("cooldown")
-                                .eventAction("preload_dates")
-                                .field("package.name", packageName)
-                                .field("dates.count", releaseDates.size())
-                                .log();
-                        }
-                    } catch (Exception e) {
-                        EcsLogger.warn("com.artipie.npm")
-                            .message("Failed to parse full metadata for release dates")
-                            .eventCategory("cooldown")
-                            .eventAction("preload_dates")
-                            .field("package.name", packageName)
-                            .error(e)
-                            .log();
-                    }
-                }
-                
-                // Now filter abbreviated metadata with preloaded release dates
-                return this.cooldownMetadata.filterMetadata(
-                    this.repoType,
-                    this.repoName,
-                    packageName,
-                    abbreviatedBytes,
-                    new NpmMetadataParser(),
-                    new NpmMetadataFilter(),
-                    new NpmMetadataRewriter(),
-                    Optional.of(inspector)
-                );
-            }).handle((filtered, ex) -> {
+        // Create inspector for cooldown evaluation - dates are preloaded from metadata
+        final NpmCooldownInspector inspector = new NpmCooldownInspector();
+        return this.cooldownMetadata.filterMetadata(
+            this.repoType,
+            this.repoName,
+            packageName,
+            abbreviatedBytes,
+            new NpmMetadataParser(),
+            new NpmMetadataFilter(),
+            new NpmMetadataRewriter(),
+            Optional.of(inspector)
+        ).handle((filtered, ex) -> {
                 if (ex != null) {
                     Throwable cause = ex;
                     while (cause != null) {
@@ -382,6 +408,7 @@ public final class DownloadPackageSlice implements Slice {
                         .toMaybe()
                         .flatMap(rawBytes -> {
                             // Apply cooldown filtering if available
+                            // Create inspector for cooldown evaluation - dates are preloaded from metadata
                             if (this.cooldownMetadata != null && this.repoType != null) {
                                 final NpmCooldownInspector inspector = new NpmCooldownInspector();
                                 final CompletableFuture<Response> filterFuture = 

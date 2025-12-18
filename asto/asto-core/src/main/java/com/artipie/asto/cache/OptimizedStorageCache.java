@@ -8,6 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.fs.FileStorage;
+import com.artipie.asto.log.EcsLogger;
 import org.reactivestreams.Publisher;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -18,6 +19,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Optimized storage wrapper that provides fast content retrieval for FileStorage.
@@ -159,10 +161,18 @@ public final class OptimizedStorageCache {
         final Publisher<ByteBuffer> publisher = subscriber -> {
             subscriber.onSubscribe(new org.reactivestreams.Subscription() {
                 private volatile boolean cancelled = false;
+                private final AtomicBoolean started = new AtomicBoolean(false);
                 
                 @Override
                 public void request(long n) {
                     if (cancelled || n <= 0) {
+                        return;
+                    }
+                    
+                    // CRITICAL: Prevent multiple request() calls from re-reading the file
+                    // Reactive Streams spec allows multiple request() calls, but we stream
+                    // the entire file in one go, so we must only start once.
+                    if (!started.compareAndSet(false, true)) {
                         return;
                     }
                     
@@ -191,7 +201,23 @@ public final class OptimizedStorageCache {
                                 chunk.put(buffer);
                                 chunk.flip();
                                 
-                                subscriber.onNext(chunk);
+                                try {
+                                    subscriber.onNext(chunk);
+                                } catch (final IllegalStateException ex) {
+                                    // Response already written - client disconnected or response ended
+                                    // This is expected during client cancellation, log and stop streaming
+                                    EcsLogger.debug("com.artipie.asto.cache")
+                                        .message("Subscriber rejected chunk - response already written")
+                                        .eventCategory("cache")
+                                        .eventAction("stream_file")
+                                        .eventOutcome("cancelled")
+                                        .field("file.path", filePath.toString())
+                                        .field("file.size", fileSize)
+                                        .field("bytes.sent", totalRead)
+                                        .log();
+                                    cancelled = true;
+                                    return;
+                                }
                                 totalRead += read;
                             }
 

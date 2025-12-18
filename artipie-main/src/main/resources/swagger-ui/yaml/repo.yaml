@@ -318,6 +318,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/repository/{rname}/packages:
+    delete:
+      summary: Delete package folder from repository
+      description: |
+        Delete an entire package folder (and its contents) from the repository storage.
+        This works for all repository types.
+        For example, to delete an NPM package "@scope/package", the path would be "@scope/package".
+        For a Maven artifact's folder like "com/example/mylib", the path would be "com/example/mylib".
+      operationId: deletePackageFolder
+      tags:
+        - repository
+      parameters:
+        - name: rname
+          in: path
+          required: true
+          description: Name of the repository
+          schema:
+            type: string
+      requestBody:
+        description: Package folder to delete
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactDeleteRequest'
+        required: true
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '204':
+          description: Package folder deleted successfully
+        '400':
+          description: Invalid request (missing path)
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Repository or package folder not found
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/repository/{rname}/storages:
     get:
       summary: Get repository storage aliases
@@ -523,71 +565,246 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Error message
     Repository:
       type: object
+      description: Repository configuration wrapper
       required:
         - repo
       properties:
         repo:
-          type: object
+          $ref: '#/components/schemas/RepoConfig'
+    RepoConfig:
+      type: object
+      description: Repository configuration
+      required:
+        - type
+        - storage
+      properties:
+        type:
+          type: string
+          description: Repository type
+          enum: ["maven", "maven-proxy", "maven-group", "npm", "npm-proxy", "npm-group", "pypi", "pypi-proxy", "pypi-group", "docker", "docker-proxy", "docker-group", "rpm", "gem", "gem-group", "go", "go-proxy", "go-group", "gradle", "gradle-proxy", "gradle-group", "nuget", "php", "php-proxy", "php-group", "conan", "conda", "deb", "helm", "hexpm", "file", "file-proxy", "file-group"]
+          example: "maven"
+        storage:
+          oneOf:
+            - type: string
+              description: Storage alias name
+            - $ref: '#/components/schemas/StorageConfig'
+          description: Storage configuration (alias name or inline config)
+        permissions:
+          $ref: '#/components/schemas/RepoPermissions'
+        settings:
+          $ref: '#/components/schemas/RepoSettings'
     FullRepository:
       type: object
+      description: Full repository configuration returned by GET
       required:
         - type
         - storage
       properties:
         type:
           type: string
+          description: Repository type
+          example: "maven"
         storage:
-          type: object
+          $ref: '#/components/schemas/StorageConfig'
+        permissions:
+          $ref: '#/components/schemas/RepoPermissions'
+        settings:
+          $ref: '#/components/schemas/RepoSettings'
     AliasRepository:
       type: object
+      description: Repository configuration using storage alias
       required:
         - type
         - storage
       properties:
         type:
           type: string
+          description: Repository type
+          example: "npm-proxy"
         storage:
           type: string
+          description: Storage alias name
+          example: "default"
+    StorageConfig:
+      type: object
+      description: Storage configuration
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          description: Storage type
+          enum: ["fs", "s3", "etcd", "redis"]
+          example: "fs"
+        path:
+          type: string
+          description: File system path (for fs storage)
+          example: "/var/artipie/data"
+        bucket:
+          type: string
+          description: S3 bucket name (for s3 storage)
+          example: "my-artifacts"
+        region:
+          type: string
+          description: S3 region (for s3 storage)
+          example: "us-east-1"
+        endpoint:
+          type: string
+          description: Custom S3 endpoint URL
+          example: "https://s3.example.com"
+        credentials:
+          type: object
+          description: S3 credentials
+          properties:
+            type:
+              type: string
+              enum: ["basic", "env"]
+            accessKeyId:
+              type: string
+            secretAccessKey:
+              type: string
+    RepoPermissions:
+      type: object
+      description: Repository-level permissions
+      additionalProperties:
+        type: array
+        items:
+          type: string
+          enum: ["read", "write", "delete", "*"]
+      example:
+        alice:
+          - read
+          - write
+        bob:
+          - read
+        /readers:
+          - read
+    RepoSettings:
+      type: object
+      description: Repository-specific settings
+      properties:
+        remote:
+          $ref: '#/components/schemas/RemoteConfig'
+        members:
+          type: array
+          description: Group repository members
+          items:
+            type: string
+          example: ["local-maven", "maven-central-proxy"]
+        cooldown:
+          $ref: '#/components/schemas/CooldownConfig'
+    RemoteConfig:
+      type: object
+      description: Remote/proxy repository configuration
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Remote repository URL
+          example: "https://repo.maven.apache.org/maven2"
+        username:
+          type: string
+          description: Authentication username
+        password:
+          type: string
+          format: password
+          description: Authentication password
+        cache:
+          type: object
+          description: Cache configuration
+          properties:
+            storage:
+              oneOf:
+                - type: string
+                - $ref: '#/components/schemas/StorageConfig'
+    CooldownConfig:
+      type: object
+      description: Cooldown configuration for proxy repositories
+      properties:
+        enabled:
+          type: boolean
+          description: Whether cooldown is enabled
+          default: false
+        duration:
+          type: string
+          description: Cooldown duration (ISO-8601 format)
+          example: "P7D"
+        type:
+          type: string
+          description: Cooldown type
+          enum: ["valkey", "file"]
+          example: "valkey"
     StorageAlias:
       type: object
+      description: Storage alias entry
       required:
         - alias
         - storage
       properties:
         alias:
           type: string
+          description: Alias name
+          example: "default"
         storage:
-          type: object
+          $ref: '#/components/schemas/StorageConfig'
     Storage:
       type: object
+      description: Storage configuration for creating aliases
       required:
         - type
       properties:
         type:
           type: string
+          description: Storage type
+          enum: ["fs", "s3", "etcd", "redis"]
+          example: "fs"
+        path:
+          type: string
+          description: File system path
+          example: "/var/artipie/data"
+        bucket:
+          type: string
+          description: S3 bucket name
+        region:
+          type: string
+          description: S3 region
+        endpoint:
+          type: string
+          description: Custom S3 endpoint
     MoveToRepository:
       type: object
+      description: Request to move/rename a repository
       required:
         - new_name
       properties:
         new_name:
           type: string
+          description: New repository name
+          example: "my-new-repo-name"
     CooldownUnblockRequest:
       type: object
+      description: Request to unblock a specific artifact from cooldown
       required:
         - artifact
         - version
       properties:
         artifact:
           type: string
+          description: Artifact/package name
+          example: "@scope/my-package"
         version:
           type: string
+          description: Artifact version
+          example: "1.2.3"
     ArtifactDeleteRequest:
       type: object
+      description: Request to delete an artifact from repository
       required:
         - path
       properties:
@@ -599,6 +816,7 @@ components:
             - Maven: "com/example/mylib/1.0.0" (deletes entire version directory)
             - NPM: "@scope/package" or "package" (deletes package directory)
             - Composer: "vendor/package" (deletes package directory)
+          example: "com/example/mylib/1.0.0"
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"

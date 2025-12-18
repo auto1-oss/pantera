@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.9</version>
+    <version>1.20.10</version>
   </parent>
   <artifactId>composer-adapter</artifactId>
-  <version>1.20.9</version>
+  <version>1.20.10</version>
   <packaging>jar</packaging>
   <name>composer-files</name>
   <description>Turns your files/objects into PHP Composer artifacts</description>
@@ -45,19 +45,19 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>http-client</artifactId>
-      <version>1.20.9</version>
+      <version>1.20.10</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>files-adapter</artifactId>
-      <version>1.20.9</version>
+      <version>1.20.10</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.9</version>
+      <version>1.20.10</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -76,7 +76,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>1.20.9</version>
+      <version>1.20.10</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

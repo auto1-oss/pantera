@@ -13,7 +13,10 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,6 +36,13 @@ import java.util.concurrent.TimeUnit;
  * @since 1.0
  */
 public final class GroupNegativeCache {
+
+    /**
+     * Global registry of all GroupNegativeCache instances by group name.
+     * Allows L1 cache invalidation without process restart.
+     */
+    private static final ConcurrentHashMap<String, GroupNegativeCache> INSTANCES = 
+        new ConcurrentHashMap<>();
 
     /**
      * Sentinel value for cache entries.
@@ -101,6 +111,9 @@ public final class GroupNegativeCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
+        
+        // Register this instance for global invalidation
+        INSTANCES.put(groupName, this);
     }
 
     /**
@@ -305,5 +318,186 @@ public final class GroupNegativeCache {
     public boolean isTwoTier() {
         return this.twoTier;
     }
-}
 
+    // ========== Static methods for global cache invalidation ==========
+
+    /**
+     * Invalidate negative cache entries for a package across ALL group instances.
+     * This invalidates both L1 (in-memory) and L2 (Valkey) caches.
+     * 
+     * <p>Use this when a package is published to ensure group repos can find it.</p>
+     * 
+     * @param packagePath Package path (e.g., "@retail/backoffice-interaction-notes")
+     * @return CompletableFuture that completes when L2 invalidation is done
+     */
+    public static CompletableFuture<Void> invalidatePackageGlobally(final String packagePath) {
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        
+        for (final GroupNegativeCache instance : INSTANCES.values()) {
+            futures.add(instance.invalidatePackageInAllMembers(packagePath));
+        }
+        futures.add(invalidateGlobalL2Only(packagePath));
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+    }
+
+    /**
+     * Invalidate negative cache entries for a package in a specific group.
+     * This invalidates both L1 (in-memory) and L2 (Valkey) caches.
+     * 
+     * @param groupName Group repository name
+     * @param packagePath Package path (e.g., "@retail/backoffice-interaction-notes")
+     * @return CompletableFuture that completes when invalidation is done
+     */
+    public static CompletableFuture<Void> invalidatePackageInGroup(
+        final String groupName, 
+        final String packagePath
+    ) {
+        final GroupNegativeCache instance = INSTANCES.get(groupName);
+        if (instance != null) {
+            return instance.invalidatePackageInAllMembers(packagePath);
+        }
+        // Group not found - try L2 directly if available
+        return invalidateL2Only(groupName, packagePath);
+    }
+
+    /**
+     * Clear all negative cache entries for a specific group.
+     * This clears both L1 (in-memory) and L2 (Valkey) caches.
+     * 
+     * @param groupName Group repository name
+     * @return CompletableFuture that completes when clearing is done
+     */
+    public static CompletableFuture<Void> clearGroup(final String groupName) {
+        final GroupNegativeCache instance = INSTANCES.get(groupName);
+        if (instance != null) {
+            instance.clear();
+            return CompletableFuture.completedFuture(null);
+        }
+        // Group not found - try L2 directly if available
+        return clearL2Only(groupName);
+    }
+
+    /**
+     * Get list of all registered group names.
+     * @return List of group names with active negative caches
+     */
+    public static List<String> registeredGroups() {
+        return new ArrayList<>(INSTANCES.keySet());
+    }
+
+    /**
+     * Get a specific group's cache instance (for diagnostics).
+     * @param groupName Group repository name
+     * @return Optional cache instance
+     */
+    public static java.util.Optional<GroupNegativeCache> getInstance(final String groupName) {
+        return java.util.Optional.ofNullable(INSTANCES.get(groupName));
+    }
+
+    /**
+     * Invalidate package entries in all members of this group.
+     * @param packagePath Package path
+     * @return CompletableFuture that completes when done
+     */
+    private CompletableFuture<Void> invalidatePackageInAllMembers(final String packagePath) {
+        final String prefix = "negative:group:" + this.groupName + ":";
+        final String suffix = ":" + packagePath;
+        
+        // Invalidate L1: remove all entries for this package across all members
+        this.l1Cache.asMap().keySet().removeIf(k -> 
+            k.startsWith(prefix) && k.endsWith(suffix)
+        );
+        
+        // Invalidate L2: scan and delete matching keys
+        if (this.twoTier) {
+            final String pattern = prefix + "*" + suffix;
+            return this.l2.keys(pattern)
+                .thenCompose(keys -> {
+                    if (keys != null && !keys.isEmpty()) {
+                        return this.l2.del(keys.toArray(new String[0]))
+                            .thenApply(count -> null);
+                    }
+                    return CompletableFuture.completedFuture(null);
+                })
+                .toCompletableFuture()
+                .thenApply(v -> null);
+        }
+        
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Invalidate L2 cache only (when no L1 instance exists).
+     * @param groupName Group name
+     * @param packagePath Package path
+     * @return CompletableFuture that completes when done
+     */
+    private static CompletableFuture<Void> invalidateL2Only(
+        final String groupName, 
+        final String packagePath
+    ) {
+        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        if (valkey == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        final String pattern = "negative:group:" + groupName + ":*:" + packagePath;
+        return valkey.async().keys(pattern)
+            .thenCompose(keys -> {
+                if (keys != null && !keys.isEmpty()) {
+                    return valkey.async().del(keys.toArray(new String[0]))
+                        .thenApply(count -> null);
+                }
+                return CompletableFuture.completedFuture(null);
+            })
+            .toCompletableFuture()
+            .thenApply(v -> null);
+    }
+
+    /**
+     * Clear L2 cache only for a group (when no L1 instance exists).
+     * @param groupName Group name
+     * @return CompletableFuture that completes when done
+     */
+    private static CompletableFuture<Void> clearL2Only(final String groupName) {
+        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        if (valkey == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        final String pattern = "negative:group:" + groupName + ":*";
+        return valkey.async().keys(pattern)
+            .thenCompose(keys -> {
+                if (keys != null && !keys.isEmpty()) {
+                    return valkey.async().del(keys.toArray(new String[0]))
+                        .thenApply(count -> null);
+                }
+                return CompletableFuture.completedFuture(null);
+            })
+            .toCompletableFuture()
+            .thenApply(v -> null);
+    }
+
+    /**
+     * Invalidate L2 cache globally for a package, even if no in-memory instances exist.
+     * @param packagePath Package path
+     * @return CompletableFuture that completes when done
+     */
+    private static CompletableFuture<Void> invalidateGlobalL2Only(final String packagePath) {
+        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        if (valkey == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        final String pattern = "negative:group:*:*:" + packagePath;
+        return valkey.async().keys(pattern)
+            .thenCompose(keys -> {
+                if (keys != null && !keys.isEmpty()) {
+                    return valkey.async().del(keys.toArray(new String[0]))
+                        .thenApply(count -> null);
+                }
+                return CompletableFuture.completedFuture(null);
+            })
+            .toCompletableFuture()
+            .thenApply(v -> null);
+    }
+}

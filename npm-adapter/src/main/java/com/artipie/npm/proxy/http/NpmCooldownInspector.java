@@ -43,9 +43,14 @@ final class NpmCooldownInspector implements CooldownInspector,
     private final NpmRemote remote;
 
     /**
-     * Bounded cache of package metadata.
-     * Production: 50,000 packages, expire after 24 hours.
-     * Each entry is ~10-50KB, so max ~2.5GB memory usage (15% of 16GB heap).
+     * Bounded cache of package metadata for dependency resolution.
+     * 
+     * <p>WARNING: Each parsed JsonObject can be 1-50MB in memory (not serialized size!)
+     * due to LinkedHashMap overhead, String objects, and nested structures.</p>
+     * 
+     * <p>Reduced to 100 entries to limit memory to ~500MB worst case.
+     * Release dates are now handled by ReleaseDatesCache (lightweight).
+     * This cache is only needed for dependency resolution which is less frequent.</p>
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, CompletableFuture<Optional<JsonObject>>> metadata;
 
@@ -63,20 +68,20 @@ final class NpmCooldownInspector implements CooldownInspector,
      *   <li>Average case: O(1) to O(log n) instead of O(n)</li>
      * </ul>
      *
-     * <p>Production: 50,000 packages, ~250MB memory (1.5% of 16GB heap).</p>
+     * <p>Reduced to 500 entries (~5MB) since this is lightweight.</p>
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, List<Semver>> sortedVersionsCache;
 
     NpmCooldownInspector(final NpmRemote remote) {
         this.remote = remote;
         this.metadata = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-            .maximumSize(50_000)  // Production: 50K packages (~2.5GB)
-            .expireAfterWrite(Duration.ofHours(24))  // Auto-evict old entries
+            .maximumSize(100)  // Reduced from 50K - each entry can be 1-50MB in memory!
+            .expireAfterWrite(Duration.ofMinutes(5))  // Short TTL to free memory quickly
             .recordStats()  // Enable metrics
             .build();
         this.sortedVersionsCache = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-            .maximumSize(50_000)  // Production: 50K packages (~250MB)
-            .expireAfterWrite(Duration.ofHours(24))  // Same expiration
+            .maximumSize(500)  // Reduced from 50K - lightweight cache
+            .expireAfterWrite(Duration.ofHours(1))  // Shorter expiration
             .recordStats()  // Enable metrics
             .build();
     }

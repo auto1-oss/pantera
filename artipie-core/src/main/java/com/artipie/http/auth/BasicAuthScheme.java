@@ -8,6 +8,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.headers.Authorization;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
+import com.artipie.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -45,18 +46,21 @@ public final class BasicAuthScheme implements AuthScheme {
      * Thread pool for blocking authentication operations.
      * This offloads potentially slow operations (like Okta MFA) from the event loop.
      * Pool name: {@value #AUTH_POOL_NAME} (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to auth threads.
      */
-    private static final ExecutorService AUTH_EXECUTOR = Executors.newCachedThreadPool(
-        new ThreadFactory() {
-            private final AtomicInteger counter = new AtomicInteger(0);
-            @Override
-            public Thread newThread(final Runnable runnable) {
-                final Thread thread = new Thread(runnable);
-                thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
+    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
             }
-        }
+        )
     );
 
     /**

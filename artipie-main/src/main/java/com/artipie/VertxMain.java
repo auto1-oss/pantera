@@ -51,6 +51,7 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.tuple.Pair;
+import com.artipie.diagnostics.BlockedThreadDiagnostics;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -584,6 +585,9 @@ public final class VertxMain {
         // Micrometer still used for Prometheus metrics
         final MeterRegistry apm = null;
         
+        // Initialize blocked thread diagnostics for root cause analysis
+        BlockedThreadDiagnostics.initialize();
+        
         // Configure Vert.x options for optimal event loop performance
         final int cpuCores = Runtime.getRuntime().availableProcessors();
         final VertxOptions options = new VertxOptions()
@@ -591,12 +595,14 @@ public final class VertxMain {
             .setEventLoopPoolSize(cpuCores * 2)
             // Worker pool size: for blocking operations (BlockingStorage, etc.)
             .setWorkerPoolSize(Math.max(20, cpuCores * 4))
-            // Increase blocked thread check interval to reduce false positives
-            .setBlockedThreadCheckInterval(5000)
-            // Warn if event loop blocked for more than 2 seconds
-            .setMaxEventLoopExecuteTime(2000L * 1000000L) // 2 seconds in nanoseconds
-            // Warn if worker thread blocked for more than 60 seconds
-            .setMaxWorkerExecuteTime(60000L * 1000000L); // 60 seconds in nanoseconds
+            // Increase blocked thread check interval to 10s to reduce false positives
+            // GC pauses and system load spikes can cause spurious warnings at lower intervals
+            .setBlockedThreadCheckInterval(10000)
+            // Warn if event loop blocked for more than 5 seconds (increased from 2s)
+            // This accounts for GC pauses and reduces false positives in production
+            .setMaxEventLoopExecuteTime(5000L * 1000000L) // 5 seconds in nanoseconds
+            // Warn if worker thread blocked for more than 120 seconds
+            .setMaxWorkerExecuteTime(120000L * 1000000L); // 120 seconds in nanoseconds
         
         if (apm != null || endpoint.isPresent()) {
             final MicrometerMetricsOptions micrometer = new MicrometerMetricsOptions()

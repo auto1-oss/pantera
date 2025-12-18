@@ -94,13 +94,20 @@ components:
   schemas:
     Port:
       type: object
+      description: Artipie server port information
       required:
         - port
       properties:
         port:
           type: integer
+          format: int32
+          description: Server port number for repository access
+          minimum: 1
+          maximum: 65535
+          example: 8080
     GlobalPrefixes:
       type: object
+      description: Global path prefixes configuration with versioning
       required:
         - prefixes
         - version
@@ -109,15 +116,22 @@ components:
           type: array
           items:
             type: string
-          description: List of global path prefixes
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes. These prefixes are used to route requests
+            to repositories under a specific organization or team namespace.
+            Example: With prefix "org1", requests to /org1/my-repo will route to repository "org1/my-repo"
           example: ["org1", "org2", "team-alpha"]
         version:
           type: integer
           format: int64
-          description: Configuration version number (increments on each update)
+          description: |
+            Configuration version number. Automatically increments on each update.
+            Used for optimistic concurrency control and cache invalidation.
           example: 5
     PrefixesList:
       type: object
+      description: Request body for updating global prefixes
       required:
         - prefixes
       properties:
@@ -125,10 +139,16 @@ components:
           type: array
           items:
             type: string
-          description: List of global path prefixes to set
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes to set. Must not conflict with existing repository names.
+            Prefixes can contain alphanumeric characters, underscores, and hyphens.
           example: ["org1", "org2", "team-alpha"]
+          minItems: 0
+          uniqueItems: true
     Error:
       type: object
+      description: Error response
       required:
         - code
         - message
@@ -136,5 +156,7 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Human-readable error message

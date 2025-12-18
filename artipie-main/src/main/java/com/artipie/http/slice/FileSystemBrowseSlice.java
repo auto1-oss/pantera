@@ -17,6 +17,7 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContextExecutor;
 import io.reactivex.rxjava3.core.Flowable;
 
 import java.io.IOException;
@@ -85,12 +86,14 @@ public final class FileSystemBrowseSlice implements Slice {
      *
      * @since 1.19.2
      */
-    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
-        com.artipie.http.slice.FileSystemIoConfig.instance().threads(),
-        new ThreadFactoryBuilder()
-            .setNameFormat("filesystem-browse-%d")
-            .setDaemon(true)
-            .build()
+    private static final ExecutorService BLOCKING_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newFixedThreadPool(
+            com.artipie.http.slice.FileSystemIoConfig.instance().threads(),
+            new ThreadFactoryBuilder()
+                .setNameFormat("filesystem-browse-%d")
+                .setDaemon(true)
+                .build()
+        )
     );
 
     /**

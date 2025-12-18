@@ -5,6 +5,7 @@
 package com.artipie.maven.metadata;
 
 import com.artipie.asto.Content;
+import com.artipie.http.trace.TraceContextExecutor;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
@@ -65,13 +66,16 @@ public final class MetadataMerger {
      * Dedicated thread pool for metadata merging operations.
      * Sized to half of available processors to avoid saturating the system.
      * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to merge threads.
      */
-    private static final ExecutorService MERGE_EXECUTOR = Executors.newFixedThreadPool(
-        Math.max(4, Runtime.getRuntime().availableProcessors() / 2),
-        new ThreadFactoryBuilder()
-            .setNameFormat(POOL_NAME + ".worker-%d")
-            .setDaemon(true)
-            .build()
+    private static final ExecutorService MERGE_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newFixedThreadPool(
+            Math.max(4, Runtime.getRuntime().availableProcessors() / 2),
+            new ThreadFactoryBuilder()
+                .setNameFormat(POOL_NAME + ".worker-%d")
+                .setDaemon(true)
+                .build()
+        )
     );
 
     /**

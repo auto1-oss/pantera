@@ -86,6 +86,9 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             ).readObject();
             final javax.json.JsonObject abbreviated = new AbbreviatedMetadata(fullJson).generate();
             final byte[] result = abbreviated.toString().getBytes(StandardCharsets.UTF_8);
+            // Note: Release dates are included in abbreviated metadata via the "time" field
+            // (added for pnpm compatibility). No separate cache needed - cooldown filtering
+            // parses dates directly from abbreviated metadata.
             EcsLogger.debug("com.artipie.npm")
                 .message("Generated abbreviated metadata")
                 .eventCategory("cache")

@@ -8,6 +8,7 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContextExecutor;
 import com.artipie.settings.AliasSettings;
 import com.artipie.settings.ConfigFile;
 import com.artipie.settings.Settings;
@@ -236,12 +237,14 @@ public class MapRepositories implements Repositories, AutoCloseable {
     }
 
     private static ExecutorService createLoader() {
-        return Executors.newSingleThreadExecutor(
-            runnable -> {
-                final Thread thread = new Thread(runnable, "artipie.repo.loader");
-                thread.setDaemon(true);
-                return thread;
-            }
+        return TraceContextExecutor.wrap(
+            Executors.newSingleThreadExecutor(
+                runnable -> {
+                    final Thread thread = new Thread(runnable, "artipie.repo.loader");
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            )
         );
     }
 
