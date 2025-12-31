@@ -11,13 +11,16 @@ import com.artipie.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Negative cache for group repositories.
@@ -41,13 +44,41 @@ public final class GroupNegativeCache {
      * Global registry of all GroupNegativeCache instances by group name.
      * Allows L1 cache invalidation without process restart.
      */
-    private static final ConcurrentHashMap<String, GroupNegativeCache> INSTANCES = 
-        new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<
+        String,
+        GroupNegativeCache
+    > INSTANCES = new ConcurrentHashMap<>();
 
     /**
      * Sentinel value for cache entries.
      */
     private static final Boolean CACHED = Boolean.TRUE;
+
+    /**
+     * Dedicated executor for Redis operations to prevent event loop blocking.
+     * Lettuce's SharedLock can block on lock acquisition, so we offload
+     * all Redis operations to this executor pool.
+     *
+     * Pool size: 4 threads is sufficient for async Redis operations
+     * since actual I/O is still non-blocking in Lettuce.
+     */
+    private static final ExecutorService REDIS_EXECUTOR =
+        Executors.newFixedThreadPool(
+            4,
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+
+                @Override
+                public Thread newThread(final Runnable r) {
+                    final Thread thread = new Thread(r);
+                    thread.setName(
+                        "artipie-redis-cache-" + counter.getAndIncrement()
+                    );
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }
+        );
 
     /**
      * L1 cache (in-memory).
@@ -68,6 +99,11 @@ public final class GroupNegativeCache {
      * Cache TTL for L2.
      */
     private final Duration l2Ttl;
+
+    /**
+     * Timeout for L2 operations in milliseconds.
+     */
+    private final long l2TimeoutMs;
 
     /**
      * Group repository name.
@@ -92,15 +128,20 @@ public final class GroupNegativeCache {
      * @param groupName Group repository name
      * @param config Negative cache configuration
      */
-    public GroupNegativeCache(final String groupName, final NegativeCacheConfig config) {
+    public GroupNegativeCache(
+        final String groupName,
+        final NegativeCacheConfig config
+    ) {
         this.groupName = groupName;
         this.enabled = true;
 
         // Check global valkey connection
-        final ValkeyConnection actualValkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        final ValkeyConnection actualValkey =
+            GlobalCacheConfig.valkeyConnection().orElse(null);
         this.twoTier = config.isValkeyEnabled() && (actualValkey != null);
         this.l2 = this.twoTier ? actualValkey.async() : null;
         this.l2Ttl = config.l2Ttl();
+        this.l2TimeoutMs = config.l2Timeout().toMillis();
 
         // L1 cache configuration from unified config
         final Duration l1Ttl = this.twoTier ? config.l1Ttl() : config.ttl();
@@ -111,7 +152,7 @@ public final class GroupNegativeCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
-        
+
         // Register this instance for global invalidation
         INSTANCES.put(groupName, this);
     }
@@ -121,7 +162,14 @@ public final class GroupNegativeCache {
      * Format: negative:group:{group_name}:{member_name}:{path}
      */
     private String buildKey(final String memberName, final Key path) {
-        return "negative:group:" + this.groupName + ":" + memberName + ":" + path.string();
+        return (
+            "negative:group:" +
+            this.groupName +
+            ":" +
+            memberName +
+            ":" +
+            path.string()
+        );
     }
 
     /**
@@ -140,9 +188,15 @@ public final class GroupNegativeCache {
         // Record metrics
         if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
             if (found) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("group_negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit(
+                    "group_negative",
+                    "l1"
+                );
             } else {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("group_negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss(
+                    "group_negative",
+                    "l1"
+                );
             }
         }
         return found;
@@ -154,24 +208,33 @@ public final class GroupNegativeCache {
      * @param path Request path
      * @return Future with true if cached as not found in either L1 or L2
      */
-    public CompletableFuture<Boolean> isNotFoundAsync(final String memberName, final Key path) {
+    public CompletableFuture<Boolean> isNotFoundAsync(
+        final String memberName,
+        final Key path
+    ) {
         if (!this.enabled) {
             return CompletableFuture.completedFuture(false);
         }
 
         final String key = buildKey(memberName, path);
 
-        // Check L1 first (synchronous)
+        // Check L1 first (synchronous, in-memory - safe on event loop)
         final boolean foundL1 = this.l1Cache.getIfPresent(key) != null;
         if (foundL1) {
             if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("group_negative", "l1");
+                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit(
+                    "group_negative",
+                    "l1"
+                );
             }
             return CompletableFuture.completedFuture(true);
         }
 
         if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("group_negative", "l1");
+            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss(
+                "group_negative",
+                "l1"
+            );
         }
 
         // L1 MISS - check L2 if available
@@ -179,24 +242,51 @@ public final class GroupNegativeCache {
             return CompletableFuture.completedFuture(false);
         }
 
-        return this.l2.get(key)
-            .toCompletableFuture()
-            .orTimeout(100, TimeUnit.MILLISECONDS)
-            .exceptionally(err -> null)
-            .thenApply(bytes -> {
-                if (bytes != null) {
-                    // L2 HIT - promote to L1
-                    this.l1Cache.put(key, CACHED);
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("group_negative", "l2");
+        // CRITICAL FIX: Execute Redis operations on dedicated executor
+        // to prevent Lettuce's SharedLock from blocking Vert.x event loop.
+        // The lock acquisition in DefaultEndpoint.write() can block indefinitely
+        // if Redis is slow or connection pool is contended.
+        return CompletableFuture.supplyAsync(
+            () -> {
+                try {
+                    final byte[] bytes = this.l2.get(key)
+                        .toCompletableFuture()
+                        .get(this.l2TimeoutMs, TimeUnit.MILLISECONDS);
+
+                    if (bytes != null) {
+                        // L2 HIT - promote to L1
+                        this.l1Cache.put(key, CACHED);
+                        if (
+                            com.artipie.metrics.MicrometerMetrics.isInitialized()
+                        ) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit(
+                                "group_negative",
+                                "l2"
+                            );
+                        }
+                        return true;
                     }
-                    return true;
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss(
+                            "group_negative",
+                            "l2"
+                        );
+                    }
+                    return false;
+                } catch (Exception e) {
+                    // Timeout or Redis error - treat as cache miss, don't block
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheError(
+                            "group_negative",
+                            "l2",
+                            e.getClass().getSimpleName()
+                        );
+                    }
+                    return false;
                 }
-                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                    com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("group_negative", "l2");
-                }
-                return false;
-            });
+            },
+            REDIS_EXECUTOR
+        );
     }
 
     /**
@@ -205,30 +295,57 @@ public final class GroupNegativeCache {
      * @param path Request path
      * @return Future with true if cached as not found in L2
      */
-    public CompletableFuture<Boolean> isNotFoundL2Async(final String memberName, final Key path) {
+    public CompletableFuture<Boolean> isNotFoundL2Async(
+        final String memberName,
+        final Key path
+    ) {
         if (!this.enabled || !this.twoTier) {
             return CompletableFuture.completedFuture(false);
         }
 
         final String key = buildKey(memberName, path);
-        return this.l2.get(key)
-            .toCompletableFuture()
-            .orTimeout(100, TimeUnit.MILLISECONDS)
-            .exceptionally(err -> null)
-            .thenApply(bytes -> {
-                if (bytes != null) {
-                    // L2 HIT - promote to L1
-                    this.l1Cache.put(key, CACHED);
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("group_negative", "l2");
+
+        // Execute on dedicated executor to prevent event loop blocking
+        return CompletableFuture.supplyAsync(
+            () -> {
+                try {
+                    final byte[] bytes = this.l2.get(key)
+                        .toCompletableFuture()
+                        .get(this.l2TimeoutMs, TimeUnit.MILLISECONDS);
+
+                    if (bytes != null) {
+                        // L2 HIT - promote to L1
+                        this.l1Cache.put(key, CACHED);
+                        if (
+                            com.artipie.metrics.MicrometerMetrics.isInitialized()
+                        ) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit(
+                                "group_negative",
+                                "l2"
+                            );
+                        }
+                        return true;
                     }
-                    return true;
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss(
+                            "group_negative",
+                            "l2"
+                        );
+                    }
+                    return false;
+                } catch (Exception e) {
+                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheError(
+                            "group_negative",
+                            "l2",
+                            e.getClass().getSimpleName()
+                        );
+                    }
+                    return false;
                 }
-                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                    com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("group_negative", "l2");
-                }
-                return false;
-            });
+            },
+            REDIS_EXECUTOR
+        );
     }
 
     /**
@@ -248,7 +365,7 @@ public final class GroupNegativeCache {
 
         // Cache in L2 (if enabled)
         if (this.twoTier) {
-            final byte[] value = new byte[]{1};  // Sentinel value
+            final byte[] value = new byte[] { 1 }; // Sentinel value
             this.l2.setex(key, this.l2Ttl.getSeconds(), value);
         }
     }
@@ -271,10 +388,13 @@ public final class GroupNegativeCache {
      * @param memberName Member repository name
      */
     public void invalidateMember(final String memberName) {
-        final String prefix = "negative:group:" + this.groupName + ":" + memberName + ":";
+        final String prefix =
+            "negative:group:" + this.groupName + ":" + memberName + ":";
 
         // L1: Remove matching entries
-        this.l1Cache.asMap().keySet().removeIf(k -> k.startsWith(prefix));
+        this.l1Cache.asMap()
+            .keySet()
+            .removeIf(k -> k.startsWith(prefix));
 
         // L2: Scan and delete
         if (this.twoTier) {
@@ -292,7 +412,9 @@ public final class GroupNegativeCache {
     public void clear() {
         final String prefix = "negative:group:" + this.groupName + ":";
 
-        this.l1Cache.asMap().keySet().removeIf(k -> k.startsWith(prefix));
+        this.l1Cache.asMap()
+            .keySet()
+            .removeIf(k -> k.startsWith(prefix));
 
         if (this.twoTier) {
             this.l2.keys(prefix + "*").thenAccept(keys -> {
@@ -324,32 +446,36 @@ public final class GroupNegativeCache {
     /**
      * Invalidate negative cache entries for a package across ALL group instances.
      * This invalidates both L1 (in-memory) and L2 (Valkey) caches.
-     * 
+     *
      * <p>Use this when a package is published to ensure group repos can find it.</p>
-     * 
+     *
      * @param packagePath Package path (e.g., "@retail/backoffice-interaction-notes")
      * @return CompletableFuture that completes when L2 invalidation is done
      */
-    public static CompletableFuture<Void> invalidatePackageGlobally(final String packagePath) {
+    public static CompletableFuture<Void> invalidatePackageGlobally(
+        final String packagePath
+    ) {
         final List<CompletableFuture<Void>> futures = new ArrayList<>();
-        
+
         for (final GroupNegativeCache instance : INSTANCES.values()) {
             futures.add(instance.invalidatePackageInAllMembers(packagePath));
         }
         futures.add(invalidateGlobalL2Only(packagePath));
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        return CompletableFuture.allOf(
+            futures.toArray(new CompletableFuture[0])
+        );
     }
 
     /**
      * Invalidate negative cache entries for a package in a specific group.
      * This invalidates both L1 (in-memory) and L2 (Valkey) caches.
-     * 
+     *
      * @param groupName Group repository name
      * @param packagePath Package path (e.g., "@retail/backoffice-interaction-notes")
      * @return CompletableFuture that completes when invalidation is done
      */
     public static CompletableFuture<Void> invalidatePackageInGroup(
-        final String groupName, 
+        final String groupName,
         final String packagePath
     ) {
         final GroupNegativeCache instance = INSTANCES.get(groupName);
@@ -363,7 +489,7 @@ public final class GroupNegativeCache {
     /**
      * Clear all negative cache entries for a specific group.
      * This clears both L1 (in-memory) and L2 (Valkey) caches.
-     * 
+     *
      * @param groupName Group repository name
      * @return CompletableFuture that completes when clearing is done
      */
@@ -390,7 +516,9 @@ public final class GroupNegativeCache {
      * @param groupName Group repository name
      * @return Optional cache instance
      */
-    public static java.util.Optional<GroupNegativeCache> getInstance(final String groupName) {
+    public static java.util.Optional<GroupNegativeCache> getInstance(
+        final String groupName
+    ) {
         return java.util.Optional.ofNullable(INSTANCES.get(groupName));
     }
 
@@ -399,30 +527,33 @@ public final class GroupNegativeCache {
      * @param packagePath Package path
      * @return CompletableFuture that completes when done
      */
-    private CompletableFuture<Void> invalidatePackageInAllMembers(final String packagePath) {
+    private CompletableFuture<Void> invalidatePackageInAllMembers(
+        final String packagePath
+    ) {
         final String prefix = "negative:group:" + this.groupName + ":";
         final String suffix = ":" + packagePath;
-        
+
         // Invalidate L1: remove all entries for this package across all members
-        this.l1Cache.asMap().keySet().removeIf(k -> 
-            k.startsWith(prefix) && k.endsWith(suffix)
-        );
-        
+        this.l1Cache.asMap()
+            .keySet()
+            .removeIf(k -> k.startsWith(prefix) && k.endsWith(suffix));
+
         // Invalidate L2: scan and delete matching keys
         if (this.twoTier) {
             final String pattern = prefix + "*" + suffix;
             return this.l2.keys(pattern)
                 .thenCompose(keys -> {
                     if (keys != null && !keys.isEmpty()) {
-                        return this.l2.del(keys.toArray(new String[0]))
-                            .thenApply(count -> null);
+                        return this.l2.del(
+                            keys.toArray(new String[0])
+                        ).thenApply(count -> null);
                     }
                     return CompletableFuture.completedFuture(null);
                 })
                 .toCompletableFuture()
                 .thenApply(v -> null);
         }
-        
+
         return CompletableFuture.completedFuture(null);
     }
 
@@ -433,19 +564,25 @@ public final class GroupNegativeCache {
      * @return CompletableFuture that completes when done
      */
     private static CompletableFuture<Void> invalidateL2Only(
-        final String groupName, 
+        final String groupName,
         final String packagePath
     ) {
-        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        final ValkeyConnection valkey =
+            GlobalCacheConfig.valkeyConnection().orElse(null);
         if (valkey == null) {
             return CompletableFuture.completedFuture(null);
         }
-        
-        final String pattern = "negative:group:" + groupName + ":*:" + packagePath;
-        return valkey.async().keys(pattern)
+
+        final String pattern =
+            "negative:group:" + groupName + ":*:" + packagePath;
+        return valkey
+            .async()
+            .keys(pattern)
             .thenCompose(keys -> {
                 if (keys != null && !keys.isEmpty()) {
-                    return valkey.async().del(keys.toArray(new String[0]))
+                    return valkey
+                        .async()
+                        .del(keys.toArray(new String[0]))
                         .thenApply(count -> null);
                 }
                 return CompletableFuture.completedFuture(null);
@@ -460,16 +597,21 @@ public final class GroupNegativeCache {
      * @return CompletableFuture that completes when done
      */
     private static CompletableFuture<Void> clearL2Only(final String groupName) {
-        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+        final ValkeyConnection valkey =
+            GlobalCacheConfig.valkeyConnection().orElse(null);
         if (valkey == null) {
             return CompletableFuture.completedFuture(null);
         }
-        
+
         final String pattern = "negative:group:" + groupName + ":*";
-        return valkey.async().keys(pattern)
+        return valkey
+            .async()
+            .keys(pattern)
             .thenCompose(keys -> {
                 if (keys != null && !keys.isEmpty()) {
-                    return valkey.async().del(keys.toArray(new String[0]))
+                    return valkey
+                        .async()
+                        .del(keys.toArray(new String[0]))
                         .thenApply(count -> null);
                 }
                 return CompletableFuture.completedFuture(null);
@@ -483,16 +625,23 @@ public final class GroupNegativeCache {
      * @param packagePath Package path
      * @return CompletableFuture that completes when done
      */
-    private static CompletableFuture<Void> invalidateGlobalL2Only(final String packagePath) {
-        final ValkeyConnection valkey = GlobalCacheConfig.valkeyConnection().orElse(null);
+    private static CompletableFuture<Void> invalidateGlobalL2Only(
+        final String packagePath
+    ) {
+        final ValkeyConnection valkey =
+            GlobalCacheConfig.valkeyConnection().orElse(null);
         if (valkey == null) {
             return CompletableFuture.completedFuture(null);
         }
         final String pattern = "negative:group:*:*:" + packagePath;
-        return valkey.async().keys(pattern)
+        return valkey
+            .async()
+            .keys(pattern)
             .thenCompose(keys -> {
                 if (keys != null && !keys.isEmpty()) {
-                    return valkey.async().del(keys.toArray(new String[0]))
+                    return valkey
+                        .async()
+                        .del(keys.toArray(new String[0]))
                         .thenApply(count -> null);
                 }
                 return CompletableFuture.completedFuture(null);

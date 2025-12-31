@@ -61,6 +61,11 @@ public final class NegativeCacheConfig {
     public static final int DEFAULT_L2_MAX_SIZE = 5_000_000;
 
     /**
+     * Default L2 operation timeout (50ms - fail fast to avoid blocking).
+     */
+    public static final Duration DEFAULT_L2_TIMEOUT = Duration.ofMillis(50);
+
+    /**
      * Global instance (singleton).
      */
     private static volatile NegativeCacheConfig instance;
@@ -101,12 +106,17 @@ public final class NegativeCacheConfig {
     private final Duration l2Ttl;
 
     /**
+     * L2 operation timeout (for Redis/Valkey operations).
+     */
+    private final Duration l2Timeout;
+
+    /**
      * Default constructor with sensible defaults.
      */
     public NegativeCacheConfig() {
         this(DEFAULT_TTL, DEFAULT_MAX_SIZE, false, 
              DEFAULT_L1_MAX_SIZE, DEFAULT_L1_TTL, 
-             DEFAULT_L2_MAX_SIZE, DEFAULT_L2_TTL);
+             DEFAULT_L2_MAX_SIZE, DEFAULT_L2_TTL, DEFAULT_L2_TIMEOUT);
     }
 
     /**
@@ -128,6 +138,30 @@ public final class NegativeCacheConfig {
         final int l2MaxSize,
         final Duration l2Ttl
     ) {
+        this(ttl, maxSize, valkeyEnabled, l1MaxSize, l1Ttl, l2MaxSize, l2Ttl, DEFAULT_L2_TIMEOUT);
+    }
+
+    /**
+     * Full constructor with timeout.
+     * @param ttl Default TTL
+     * @param maxSize Default max size
+     * @param valkeyEnabled Whether L2 is enabled
+     * @param l1MaxSize L1 max size
+     * @param l1Ttl L1 TTL
+     * @param l2MaxSize L2 max size
+     * @param l2Ttl L2 TTL
+     * @param l2Timeout L2 operation timeout
+     */
+    public NegativeCacheConfig(
+        final Duration ttl,
+        final int maxSize,
+        final boolean valkeyEnabled,
+        final int l1MaxSize,
+        final Duration l1Ttl,
+        final int l2MaxSize,
+        final Duration l2Ttl,
+        final Duration l2Timeout
+    ) {
         this.ttl = ttl;
         this.maxSize = maxSize;
         this.valkeyEnabled = valkeyEnabled;
@@ -135,6 +169,7 @@ public final class NegativeCacheConfig {
         this.l1Ttl = l1Ttl;
         this.l2MaxSize = l2MaxSize;
         this.l2Ttl = l2Ttl;
+        this.l2Timeout = l2Timeout;
     }
 
     /**
@@ -191,6 +226,14 @@ public final class NegativeCacheConfig {
      */
     public Duration l2Ttl() {
         return this.l2Ttl;
+    }
+
+    /**
+     * Get L2 operation timeout.
+     * @return L2 timeout duration
+     */
+    public Duration l2Timeout() {
+        return this.l2Timeout;
     }
 
     /**
@@ -253,12 +296,13 @@ public final class NegativeCacheConfig {
                 parseInt(valkey.string("l1MaxSize"), DEFAULT_L1_MAX_SIZE),
                 parseDuration(valkey.string("l1Ttl"), DEFAULT_L1_TTL),
                 parseInt(valkey.string("l2MaxSize"), DEFAULT_L2_MAX_SIZE),
-                parseDuration(valkey.string("l2Ttl"), DEFAULT_L2_TTL)
+                parseDuration(valkey.string("l2Ttl"), DEFAULT_L2_TTL),
+                parseDuration(valkey.string("timeout"), DEFAULT_L2_TIMEOUT)
             );
         }
 
         return new NegativeCacheConfig(ttl, maxSize, false,
-            DEFAULT_L1_MAX_SIZE, DEFAULT_L1_TTL, DEFAULT_L2_MAX_SIZE, DEFAULT_L2_TTL);
+            DEFAULT_L1_MAX_SIZE, DEFAULT_L1_TTL, DEFAULT_L2_MAX_SIZE, DEFAULT_L2_TTL, DEFAULT_L2_TIMEOUT);
     }
 
     /**

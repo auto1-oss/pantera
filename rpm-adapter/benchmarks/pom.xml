@@ -26,13 +26,13 @@ SOFTWARE.
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.10</version>
+    <version>1.20.11</version>
     <relativePath>/../../pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>rpm-bench</artifactId>
   <groupId>benchmarks</groupId>
-  <version>1.20.10</version>
+  <version>1.20.11</version>
   <properties>
     <jmh.version>1.29</jmh.version>
     <header.license>${project.basedir}/../../LICENSE.header</header.license>
@@ -41,7 +41,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>rpm-adapter</artifactId>
-      <version>1.20.10</version>
+      <version>1.20.11</version>
     </dependency>
     <dependency>
       <groupId>org.openjdk.jmh</groupId>

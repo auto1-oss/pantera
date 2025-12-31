@@ -6,11 +6,11 @@
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.10</version>
+    <version>1.20.11</version>
   </parent>
 
   <artifactId>artipie-core</artifactId>
-  <version>1.20.10</version>
+  <version>1.20.11</version>
   <packaging>jar</packaging>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
@@ -19,7 +19,7 @@
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.10</version>
+      <version>1.20.11</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>

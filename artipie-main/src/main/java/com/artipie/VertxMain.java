@@ -323,6 +323,52 @@ public final class VertxMain {
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
 
+        // Deploy AsyncMetricsVerticle as worker verticle to handle Prometheus scraping off event loop
+        // This prevents the blocking issue where scrape() takes 2-10s and stalls all HTTP requests
+        // See: docs/PERFORMANCE_ISSUES_ANALYSIS.md Issue #1
+        if (settings.metrics().enabled()) {
+            final Optional<Pair<String, Integer>> metricsEndpoint = settings.metrics().endpointAndPort();
+            if (metricsEndpoint.isPresent()) {
+                final int metricsPort = metricsEndpoint.get().getValue();
+                final String metricsPath = metricsEndpoint.get().getKey();
+                final long metricsCacheTtlMs = 10_000L; // 10 second cache TTL as requested
+                final MeterRegistry metricsRegistry = BackendRegistries.getDefaultNow();
+                
+                final DeploymentOptions metricsOpts = new DeploymentOptions()
+                    .setWorker(true)
+                    .setWorkerPoolName("metrics-scraper")
+                    .setWorkerPoolSize(2);
+                
+                vertx.deployVerticle(
+                    () -> new com.artipie.metrics.AsyncMetricsVerticle(
+                        metricsRegistry, metricsPort, metricsPath, metricsCacheTtlMs
+                    ),
+                    metricsOpts,
+                    metricsResult -> {
+                        if (metricsResult.succeeded()) {
+                            EcsLogger.info("com.artipie.metrics")
+                                .message("AsyncMetricsVerticle deployed as worker verticle")
+                                .eventCategory("metrics")
+                                .eventAction("metrics_verticle_deploy")
+                                .eventOutcome("success")
+                                .field("destination.port", metricsPort)
+                                .field("url.path", metricsPath)
+                                .field("cache.ttl.ms", metricsCacheTtlMs)
+                                .log();
+                        } else {
+                            EcsLogger.error("com.artipie.metrics")
+                                .message("Failed to deploy AsyncMetricsVerticle")
+                                .eventCategory("metrics")
+                                .eventAction("metrics_verticle_deploy")
+                                .eventOutcome("failure")
+                                .error(metricsResult.cause())
+                                .log();
+                        }
+                    }
+                );
+            }
+        }
+
         // Start config watch service for hot reload
         try {
             this.configWatch = new com.artipie.settings.ConfigWatchService(
@@ -627,13 +673,14 @@ public final class VertxMain {
             }
 
             if (endpoint.isPresent()) {
-                // Enable embedded Prometheus server for Vert.x/Micrometer metrics
+                // CRITICAL FIX: Disable embedded Prometheus server to prevent event loop blocking.
+                // The embedded server runs scrape() on the event loop, which can take 2-10s
+                // and blocks ALL HTTP requests. Instead, we deploy AsyncMetricsVerticle
+                // as a worker verticle that handles scraping off the event loop.
+                // See: docs/PERFORMANCE_ISSUES_ANALYSIS.md Issue #1
                 micrometer.setPrometheusOptions(
                     new VertxPrometheusOptions().setEnabled(true)
-                        .setStartEmbeddedServer(true)
-                        .setEmbeddedServerOptions(
-                            new HttpServerOptions().setPort(endpoint.get().getValue())
-                        ).setEmbeddedServerEndpoint(endpoint.get().getKey())
+                        .setStartEmbeddedServer(false)  // Disabled - using AsyncMetricsVerticle instead
                 );
             }
             options.setMetricsOptions(micrometer);
