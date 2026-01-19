@@ -17,6 +17,7 @@ import io.vertx.reactivex.core.buffer.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The reactive file allows you to perform read and write operations via {@link RxFile#flow()}
@@ -50,6 +51,7 @@ public class VertxRxFile {
 
     /**
      * Read file content as a flow of bytes.
+     *
      * @return A flow of bytes
      */
     public Flowable<ByteBuffer> flow() {
@@ -63,6 +65,7 @@ public class VertxRxFile {
             .flatMapPublisher(
                 asyncFile -> {
                     final Promise<Void> promise = Promise.promise();
+                    final AtomicBoolean closed = new AtomicBoolean(false);
                     final Completable completable = Completable.create(
                         emitter ->
                             promise.future().onComplete(
@@ -75,9 +78,19 @@ public class VertxRxFile {
                                 }
                             )
                     );
+                    final Runnable closeFile = () -> {
+                        if (closed.compareAndSet(false, true)) {
+                            asyncFile.rxClose().subscribe(
+                                () -> promise.tryComplete(),
+                                promise::tryFail
+                            );
+                        }
+                    };
                     return asyncFile.toFlowable().map(
                         buffer -> ByteBuffer.wrap(buffer.getBytes())
-                    ).doOnTerminate(() -> asyncFile.rxClose().subscribe(promise::complete))
+                    )
+                        .doOnTerminate(closeFile::run)
+                        .doOnCancel(closeFile::run)
                         .mergeWith(completable);
                 }
             );
@@ -100,20 +113,13 @@ public class VertxRxFile {
         )
             .flatMapCompletable(
                 asyncFile -> Completable.create(
-                    emitter -> {
-                        flow.map(buf -> Buffer.buffer(new Remaining(buf).bytes()))
-                            .onErrorResumeNext(
-                                thr -> {
-                                    return asyncFile.rxClose().andThen(Flowable.error(thr));
-                                }
-                            )
-                            .subscribe(asyncFile.toSubscriber()
-                                .onWriteStreamEnd(emitter::onComplete)
-                                .onWriteStreamError(emitter::onError)
-                                .onWriteStreamEndError(emitter::onError)
-                                .onError(emitter::onError)
-                            );
-                    }
+                    emitter -> flow.map(buf -> Buffer.buffer(new Remaining(buf).bytes()))
+                        .subscribe(asyncFile.toSubscriber()
+                            .onWriteStreamEnd(emitter::onComplete)
+                            .onWriteStreamError(emitter::onError)
+                            .onWriteStreamEndError(emitter::onError)
+                            .onError(emitter::onError)
+                        )
                 )
             );
     }

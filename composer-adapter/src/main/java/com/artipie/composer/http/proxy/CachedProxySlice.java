@@ -9,6 +9,8 @@ import com.artipie.asto.Key;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.log.LogSanitizer;
 import com.artipie.asto.cache.Cache;
+import com.artipie.asto.cache.CacheControl;
+import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.cache.Remote;
 import com.artipie.composer.JsonPackages;
 import com.artipie.composer.Packages;
@@ -189,22 +191,104 @@ final class CachedProxySlice implements Slice {
                 .replaceAll("\\^.*", "")
                 .replaceAll(".json$", "");
 
-            // Check if this is a versioned package request that needs cooldown check
-            final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
+            // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+            // This ensures offline mode works - serve cached content even when upstream is down
+            return this.checkCacheFirst(line, name, headers);
+        });
+    }
 
-            if (cooldownReq.isPresent()) {
-                EcsLogger.debug("com.artipie.composer")
-                    .message("Evaluating cooldown for package")
+    /**
+     * Check cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param line Request line
+     * @param name Package name
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(
+        final RequestLine line,
+        final String name,
+        final Headers headers
+    ) {
+        // Check storage cache FIRST before any network calls
+        // Use FromStorageCache directly to avoid FromRemoteCache issues with Remote.EMPTY
+        return new FromStorageCache(this.repo.storage()).load(
+            new Key.From(name),
+            Remote.EMPTY,
+            CacheControl.Standard.ALWAYS
+        ).thenCompose(cached -> {
+            if (cached.isPresent()) {
+                // Cache HIT - serve immediately without any network calls
+                EcsLogger.info("com.artipie.composer")
+                    .message("Cache hit, serving cached metadata (offline-safe)")
                     .eventCategory("repository")
-                    .eventAction("cooldown_check")
+                    .eventAction("proxy_request")
+                    .eventOutcome("cache_hit")
                     .field("package.name", name)
                     .log();
-                return this.cooldown.evaluate(cooldownReq.get(), this.inspector)
-                    .thenCompose(result -> this.afterCooldown(result, line, name, headers));
+                // Read cached bytes and rewrite URLs
+                return cached.get().asBytesFuture().thenCompose(bytes ->
+                    this.evaluateMetadataCooldown(name, headers, bytes)
+                        .thenCompose(result -> {
+                            if (result.blocked()) {
+                                EcsLogger.info("com.artipie.composer")
+                                    .message("Cooldown blocked cached metadata request")
+                                    .eventCategory("repository")
+                                    .eventAction("cooldown_check")
+                                    .eventOutcome("blocked")
+                                    .field("package.name", name)
+                                    .log();
+                                return CompletableFuture.completedFuture(
+                                    CooldownResponses.forbidden(result.block().orElseThrow())
+                                );
+                            }
+                            // Rewrite URLs in cached metadata
+                            final Content rewritten = this.rewriteMetadata(bytes, headers);
+                            return rewritten.asBytesFuture().thenApply(rewrittenBytes ->
+                                ResponseBuilder.ok()
+                                    .header("Content-Type", "application/json")
+                                    .body(new Content.From(rewrittenBytes))
+                                    .build()
+                            );
+                        })
+                );
             }
+            // Cache MISS - now we need network, evaluate cooldown first
+            return this.evaluateCooldownAndFetch(line, name, headers);
+        }).toCompletableFuture();
+    }
 
-            return this.fetchThroughCache(line, name, headers);
-        });
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param line Request line
+     * @param name Package name
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final String name,
+        final Headers headers
+    ) {
+        final String path = line.uri().getPath();
+        // Check if this is a versioned package request that needs cooldown check
+        final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
+
+        if (cooldownReq.isPresent()) {
+            EcsLogger.debug("com.artipie.composer")
+                .message("Evaluating cooldown for package")
+                .eventCategory("repository")
+                .eventAction("cooldown_check")
+                .field("package.name", name)
+                .log();
+            return this.cooldown.evaluate(cooldownReq.get(), this.inspector)
+                .thenCompose(result -> this.afterCooldown(result, line, name, headers));
+        }
+
+        return this.fetchThroughCache(line, name, headers);
     }
     
     /**

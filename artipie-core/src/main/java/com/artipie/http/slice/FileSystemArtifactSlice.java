@@ -7,7 +7,6 @@ package com.artipie.http.slice;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
-import com.artipie.asto.fs.FileStorage;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
@@ -207,6 +206,11 @@ public final class FileSystemArtifactSlice implements Slice {
     /**
      * Subscription that reads file chunks based on demand signal.
      * Thread-safe implementation that handles concurrent request() calls.
+     *
+     * <p>CRITICAL: This class manages direct ByteBuffers which are allocated off-heap.
+     * Direct buffers MUST be explicitly cleaned up to avoid memory leaks, as they are
+     * not subject to normal garbage collection pressure. The cleanup is performed in
+     * {@link #cleanup()} which is called on cancel, complete, or error.</p>
      */
     private static final class BackpressureFileSubscription implements org.reactivestreams.Subscription {
         private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
@@ -214,17 +218,22 @@ public final class FileSystemArtifactSlice implements Slice {
         private final long fileSize;
         private final int chunkSize;
         private final ExecutorService executor;
-        
+
         // Thread-safe state management
         private final java.util.concurrent.atomic.AtomicLong demanded = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
         private final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean(false);
         private final java.util.concurrent.atomic.AtomicBoolean draining = new java.util.concurrent.atomic.AtomicBoolean(false);
-        
+        private final java.util.concurrent.atomic.AtomicBoolean cleanedUp = new java.util.concurrent.atomic.AtomicBoolean(false);
+
         // Keep channel open for efficient sequential reads
         private volatile FileChannel channel;
         private final Object channelLock = new Object();
+
+        // Reusable direct buffer - allocated once per subscription, cleaned on close
+        // CRITICAL: Must be cleaned up explicitly to prevent direct memory leak
+        private volatile ByteBuffer directBuffer;
 
         BackpressureFileSubscription(
             org.reactivestreams.Subscriber<? super ByteBuffer> subscriber,
@@ -268,7 +277,7 @@ public final class FileSystemArtifactSlice implements Slice {
         @Override
         public void cancel() {
             if (cancelled.compareAndSet(false, true)) {
-                closeChannel();
+                cleanup();
             }
         }
 
@@ -296,31 +305,42 @@ public final class FileSystemArtifactSlice implements Slice {
 
         private void drainLoop() {
             try {
-                // Open channel on first read
+                // Open channel and allocate buffer on first read
                 synchronized (channelLock) {
                     if (channel == null && !cancelled.get()) {
                         channel = FileChannel.open(filePath, StandardOpenOption.READ);
                     }
+                    // Allocate direct buffer ONCE per subscription, reuse for all chunks
+                    // CRITICAL: This prevents the memory leak where a new 1MB buffer was
+                    // allocated on every drainLoop() call
+                    if (directBuffer == null && !cancelled.get()) {
+                        directBuffer = ByteBuffer.allocateDirect(chunkSize);
+                    }
                 }
-                
-                final ByteBuffer buffer = ByteBuffer.allocateDirect(chunkSize);
-                
+
                 while (demanded.get() > 0 && !cancelled.get() && !completed.get()) {
                     final long currentPos = position.get();
                     if (currentPos >= fileSize) {
                         // File fully read
                         if (completed.compareAndSet(false, true)) {
-                            closeChannel();
+                            cleanup();
                             subscriber.onComplete();
                         }
                         return;
                     }
-                    
-                    // Read one chunk
+
+                    // Read one chunk using the reusable direct buffer
+                    final ByteBuffer buffer;
+                    synchronized (channelLock) {
+                        buffer = directBuffer;
+                        if (buffer == null) {
+                            return; // Buffer was cleaned up (cancelled)
+                        }
+                    }
                     buffer.clear();
                     final int bytesToRead = (int) Math.min(chunkSize, fileSize - currentPos);
                     buffer.limit(bytesToRead);
-                    
+
                     int totalRead = 0;
                     while (totalRead < bytesToRead && !cancelled.get()) {
                         synchronized (channelLock) {
@@ -334,27 +354,27 @@ public final class FileSystemArtifactSlice implements Slice {
                             totalRead += read;
                         }
                     }
-                    
+
                     if (totalRead > 0 && !cancelled.get()) {
                         buffer.flip();
-                        
-                        // Copy to heap buffer for safe emission
+
+                        // Copy to heap buffer for safe emission (direct buffer is reused)
                         final ByteBuffer chunk = ByteBuffer.allocate(totalRead);
                         chunk.put(buffer);
                         chunk.flip();
-                        
+
                         // Update position before emission
                         position.addAndGet(totalRead);
                         demanded.decrementAndGet();
-                        
+
                         // Emit to subscriber
                         subscriber.onNext(chunk);
                     }
-                    
+
                     // Check for completion
                     if (position.get() >= fileSize) {
                         if (completed.compareAndSet(false, true)) {
-                            closeChannel();
+                            cleanup();
                             subscriber.onComplete();
                         }
                         return;
@@ -362,14 +382,24 @@ public final class FileSystemArtifactSlice implements Slice {
                 }
             } catch (IOException e) {
                 if (!cancelled.get() && completed.compareAndSet(false, true)) {
-                    closeChannel();
+                    cleanup();
                     subscriber.onError(e);
                 }
             }
         }
 
-        private void closeChannel() {
+        /**
+         * Clean up all resources: close file channel and release direct buffer memory.
+         * CRITICAL: Direct buffers are off-heap and must be explicitly cleaned to avoid
+         * memory leaks. Without this cleanup, the 4GB MaxDirectMemorySize limit is
+         * exhausted quickly under load.
+         */
+        private void cleanup() {
+            if (!cleanedUp.compareAndSet(false, true)) {
+                return; // Already cleaned up
+            }
             synchronized (channelLock) {
+                // Close file channel
                 if (channel != null) {
                     try {
                         channel.close();
@@ -377,6 +407,55 @@ public final class FileSystemArtifactSlice implements Slice {
                         // Ignore close errors
                     }
                     channel = null;
+                }
+                // CRITICAL: Explicitly release direct buffer memory
+                // Direct buffers are not managed by GC - they require explicit cleanup
+                if (directBuffer != null) {
+                    cleanDirectBuffer(directBuffer);
+                    directBuffer = null;
+                }
+            }
+        }
+
+        /**
+         * Explicitly release direct buffer memory using the Cleaner mechanism.
+         * This is necessary because direct buffers are allocated off-heap and
+         * are not subject to normal garbage collection pressure.
+         *
+         * @param buffer The direct ByteBuffer to clean
+         */
+        private static void cleanDirectBuffer(final ByteBuffer buffer) {
+            if (buffer == null || !buffer.isDirect()) {
+                return;
+            }
+            try {
+                // Java 9+ approach using Unsafe.invokeCleaner
+                final Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                final java.lang.reflect.Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
+                theUnsafe.setAccessible(true);
+                final Object unsafe = theUnsafe.get(null);
+                final java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+                invokeCleaner.invoke(unsafe, buffer);
+            } catch (Exception e) {
+                // Fallback: try the Java 8 approach with DirectBuffer.cleaner()
+                try {
+                    final java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+                    cleanerMethod.setAccessible(true);
+                    final Object cleaner = cleanerMethod.invoke(buffer);
+                    if (cleaner != null) {
+                        final java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                        cleanMethod.setAccessible(true);
+                        cleanMethod.invoke(cleaner);
+                    }
+                } catch (Exception ex) {
+                    // Last resort: let GC handle it eventually (may cause OOM under load)
+                    EcsLogger.warn("com.artipie.http")
+                        .message("Failed to explicitly clean direct buffer, relying on GC")
+                        .eventCategory("memory")
+                        .eventAction("buffer_cleanup")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
                 }
             }
         }

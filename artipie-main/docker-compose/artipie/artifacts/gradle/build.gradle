@@ -1,7 +1,7 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id "com.github.ben-manes.versions" version "0.52.0"
+    id 'com.github.ben-manes.versions' version '0.53.0'
 }
 
 group = 'com.example'
@@ -25,7 +25,8 @@ dependencies {
     implementation 'org.apache.commons:commons-lang3:3.14.0'
     implementation 'aws.smithy.kotlin:aws-signing-common-jvm:1.5.15'
 
-    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 java {
@@ -33,6 +34,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
     withSourcesJar()
     withJavadocJar()
+}
+test {
+    useJUnitPlatform()
 }
 
 publishing {

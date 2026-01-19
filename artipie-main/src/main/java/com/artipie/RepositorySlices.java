@@ -38,6 +38,7 @@ import com.artipie.http.ContentLengthRestriction;
 import com.artipie.http.DockerRoutingSlice;
 import com.artipie.http.GoSlice;
 import com.artipie.http.ResponseBuilder;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.TimeoutSlice;
 import com.artipie.group.GroupSlice;
@@ -205,14 +206,40 @@ public class RepositorySlices {
         final SliceKey skey = new SliceKey(name, port);
         final SliceValue cached = this.slices.getIfPresent(skey);
         if (cached != null) {
+            EcsLogger.debug("com.artipie.settings")
+                .message("Repository slice resolved from cache")
+                .eventCategory("repository")
+                .eventAction("slice_resolve")
+                .eventOutcome("success")
+                .field("repository.name", name.string())
+                .field("port", port)
+                .field("source", "cache")
+                .log();
             return cached.slice();
         }
         final Optional<SliceValue> resolved = resolve(name, port, depth);
         if (resolved.isPresent()) {
             this.slices.put(skey, resolved.get());
+            EcsLogger.debug("com.artipie.settings")
+                .message("Repository slice resolved and cached")
+                .eventCategory("repository")
+                .eventAction("slice_resolve")
+                .eventOutcome("success")
+                .field("repository.name", name.string())
+                .field("port", port)
+                .field("source", "config")
+                .log();
             return resolved.get().slice();
         }
         // Not found is NOT cached to allow dynamic repo addition without restart
+        EcsLogger.warn("com.artipie.settings")
+            .message("Repository not found in configuration")
+            .eventCategory("repository")
+            .eventAction("slice_resolve")
+            .eventOutcome("failure")
+            .field("repository.name", name.string())
+            .field("port", port)
+            .log();
         return new SliceSimple(
             () -> ResponseBuilder.notFound()
                 .textBody(String.format("Repository '%s' not found", name.string()))

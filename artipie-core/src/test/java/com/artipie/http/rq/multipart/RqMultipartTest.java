@@ -65,7 +65,7 @@ final class RqMultipartTest {
                 new Header(ContentType.NAME, "multipart/mixed; boundary=\"simple boundary\""),
                 new Content.From(simple.getBytes(StandardCharsets.US_ASCII))
             ).parts()
-        ).flatMapSingle(
+        ).concatMapSingle(
             part -> com.artipie.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
         ).toList().blockingGet();
         MatcherAssert.assertThat(

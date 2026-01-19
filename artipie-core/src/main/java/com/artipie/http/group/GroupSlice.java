@@ -84,6 +84,13 @@ public final class GroupSlice implements Slice {
                     ? Content.EMPTY
                     : new Content.From(requestBytes);
 
+                EcsLogger.debug("com.artipie.http")
+                    .message("Sending request to target (index: " + index + ")")
+                    .eventCategory("http")
+                    .eventAction("group_race")
+                    .eventOutcome("pending")
+                    .field("url.path", line.uri().getPath())
+                    .log();
                 target.response(line, headers, memberBody)
                 .thenCompose(res -> {
                     // If result already completed (someone else won), consume and discard

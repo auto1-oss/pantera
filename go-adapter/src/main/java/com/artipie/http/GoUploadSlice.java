@@ -194,26 +194,30 @@ final class GoUploadSlice implements Slice {
                     );
                 }
                 return this.storage.value(list).thenCompose(
-                    content -> new Concatenation(content).single()
-                        .map(Remaining::new)
-                        .map(Remaining::bytes)
-                        .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
-                        .to(SingleInterop.get())
-                        .thenCompose(existing -> {
-                            final LinkedHashSet<String> versions = new LinkedHashSet<>();
-                            existing.lines()
-                                .map(String::trim)
-                                .filter(line -> !line.isEmpty())
-                                .forEach(versions::add);
-                            if (!versions.add(entry)) {
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            final String updated = String.join("\n", versions) + '\n';
-                            return this.storage.save(
-                                list,
-                                new Content.From(updated.getBytes(StandardCharsets.UTF_8))
-                            );
-                        })
+                    content -> {
+                        // OPTIMIZATION: Use size hint for efficient pre-allocation
+                        final long knownSize = content.size().orElse(-1L);
+                        return Concatenation.withSize(content, knownSize).single()
+                            .map(Remaining::new)
+                            .map(Remaining::bytes)
+                            .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
+                            .to(SingleInterop.get())
+                            .thenCompose(existing -> {
+                                final LinkedHashSet<String> versions = new LinkedHashSet<>();
+                                existing.lines()
+                                    .map(String::trim)
+                                    .filter(line -> !line.isEmpty())
+                                    .forEach(versions::add);
+                                if (!versions.add(entry)) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                                final String updated = String.join("\n", versions) + '\n';
+                                return this.storage.save(
+                                    list,
+                                    new Content.From(updated.getBytes(StandardCharsets.UTF_8))
+                                );
+                            });
+                    }
                 );
             }
         );

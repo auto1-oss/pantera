@@ -30,6 +30,7 @@ echo "2. Setting GOPROXY to use go_group..."
 # Extract URL components and inject credentials
 export GOPROXY="https://ayd:ayd@localhost:8443/test_prefix/api/go/go_group"
 export GOINSECURE="*"  # Allow insecure connections for localhost testing
+export GONOSUMDB="*"
 echo "   GOPROXY=$GOPROXY (with credentials)"
 echo "   GOINSECURE=* (allowing insecure connections)"
 

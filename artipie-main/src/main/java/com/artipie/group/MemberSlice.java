@@ -165,9 +165,9 @@ public final class MemberSlice {
 
     /**
      * Rewrite request path to include member repository name.
-     * 
+     *
      * <p>Transforms: /path → /member/path
-     * 
+     *
      * @param original Original request line
      * @return Rewritten request line with member prefix
      */
@@ -176,10 +176,10 @@ public final class MemberSlice {
         final String raw = uri.getRawPath();
         final String base = raw.startsWith("/") ? raw : "/" + raw;
         final String prefix = "/" + this.name + "/";
-        
+
         // Avoid double-prefixing
         final String path = base.startsWith(prefix) ? base : ("/" + this.name + base);
-        
+
         final StringBuilder full = new StringBuilder(path);
         if (uri.getRawQuery() != null) {
             full.append('?').append(uri.getRawQuery());
@@ -187,12 +187,23 @@ public final class MemberSlice {
         if (uri.getRawFragment() != null) {
             full.append('#').append(uri.getRawFragment());
         }
-        
-        return new RequestLine(
+
+        final RequestLine result = new RequestLine(
             original.method().value(),
             full.toString(),
             original.version()
         );
+
+        EcsLogger.info("com.artipie.group")
+            .message("MemberSlice rewritePath")
+            .eventCategory("repository")
+            .eventAction("path_rewrite")
+            .field("member.name", this.name)
+            .field("original.path", raw)
+            .field("rewritten.path", result.uri().getPath())
+            .log();
+
+        return result;
     }
 
     /**

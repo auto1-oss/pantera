@@ -101,30 +101,9 @@ public final class DownloadAssetSlice implements Slice {
             // URL-decode path to handle scoped packages like @authn8%2fmcp-server -> @authn8/mcp-server
             final String rawPath = this.path.value(line.uri().getPath());
             final String tgz = URLDecoder.decode(rawPath, StandardCharsets.UTF_8);
-            final Optional<CooldownRequest> request = this.cooldownRequest(tgz, rqheaders);
-            if (request.isEmpty()) {
-                return this.serveAsset(tgz, rqheaders);
-            }
-            final CooldownRequest req = request.get();
-            return this.cooldown.evaluate(req, this.inspector)
-                .thenCompose(result -> {
-                    if (result.blocked()) {
-                        final var block = result.block().orElseThrow();
-                        EcsLogger.info("com.artipie.npm")
-                            .message("Asset download blocked by cooldown")
-                            .eventCategory("cooldown")
-                            .eventAction("asset_blocked")
-                            .field("package.name", req.artifact())
-                            .field("package.version", req.version())
-                            .field("block.reason", block.reason().toString())
-                            .field("block.blockedUntil", block.blockedUntil().toString())
-                            .log();
-                        return CompletableFuture.completedFuture(
-                            CooldownResponses.forbidden(block)
-                        );
-                    }
-                    return this.serveAsset(tgz, rqheaders);
-                });
+            // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+            // This ensures offline mode works - serve cached content even when upstream is down
+            return this.checkCacheFirst(tgz, rqheaders);
         }).exceptionally(error -> {
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
             // "Parse Error: Expected HTTP/" errors in npm client.
@@ -169,6 +148,114 @@ public final class DownloadAssetSlice implements Slice {
             cause = cause.getCause();
         }
         return cause;
+    }
+
+    /**
+     * Check storage cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param tgz Asset path (tarball)
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(final String tgz, final Headers headers) {
+        // NpmProxy.getAsset checks storage first internally, but we need to check BEFORE
+        // calling cooldown.evaluate() which may make network calls.
+        // Use a non-blocking check that returns asset from storage if present.
+        return this.npm.getAsset(tgz)
+            .map(asset -> {
+                // Asset found in storage cache - check if it's served from cache (not remote)
+                // Since getAsset tries storage first, if we have it, serve immediately
+                EcsLogger.info("com.artipie.npm")
+                    .message("Cache hit for asset, serving cached (offline-safe)")
+                    .eventCategory("repository")
+                    .eventAction("get_asset")
+                    .eventOutcome("cache_hit")
+                    .field("package.name", tgz)
+                    .log();
+                // Queue the proxy event
+                this.packages.ifPresent(queue -> {
+                    Long millis = null;
+                    try {
+                        final String lm = asset.meta().lastModified();
+                        if (!Strings.isNullOrEmpty(lm)) {
+                            millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                        }
+                    } catch (final Exception ignored) {
+                        // ignore parse failures
+                    }
+                    queue.add(
+                        new ProxyArtifactEvent(
+                            new Key.From(tgz), this.repoName,
+                            new Login(headers).getValue(),
+                            java.util.Optional.ofNullable(millis)
+                        )
+                    );
+                });
+                String mime = asset.meta().contentType();
+                if (Strings.isNullOrEmpty(mime)){
+                    throw new IllegalStateException("Failed to get 'Content-Type'");
+                }
+                String lastModified = asset.meta().lastModified();
+                if(Strings.isNullOrEmpty(lastModified)){
+                    lastModified = new DateTimeNowStr().value();
+                }
+                return ResponseBuilder.ok()
+                    .header(ContentType.mime(mime))
+                    .header("Last-Modified", lastModified)
+                    .body(asset.dataPublisher())
+                    .build();
+            })
+            .toSingle(ResponseBuilder.notFound().build())
+            .to(SingleInterop.get())
+            .toCompletableFuture()
+            .thenCompose(response -> {
+                // If we got a 404 (not in storage), now we need to go to remote
+                // At this point, we should evaluate cooldown first
+                if (response.status().code() == 404) {
+                    return this.evaluateCooldownAndFetch(tgz, headers);
+                }
+                // Asset was served from cache - return it
+                return CompletableFuture.completedFuture(response);
+            });
+    }
+
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param tgz Asset path
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final String tgz,
+        final Headers headers
+    ) {
+        final Optional<CooldownRequest> request = this.cooldownRequest(tgz, headers);
+        if (request.isEmpty()) {
+            return this.serveAsset(tgz, headers);
+        }
+        final CooldownRequest req = request.get();
+        return this.cooldown.evaluate(req, this.inspector)
+            .thenCompose(result -> {
+                if (result.blocked()) {
+                    final var block = result.block().orElseThrow();
+                    EcsLogger.info("com.artipie.npm")
+                        .message("Asset download blocked by cooldown")
+                        .eventCategory("cooldown")
+                        .eventAction("asset_blocked")
+                        .field("package.name", req.artifact())
+                        .field("package.version", req.version())
+                        .field("block.reason", block.reason().toString())
+                        .field("block.blockedUntil", block.blockedUntil().toString())
+                        .log();
+                    return CompletableFuture.completedFuture(
+                        CooldownResponses.forbidden(block)
+                    );
+                }
+                return this.serveAsset(tgz, headers);
+            });
     }
 
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {

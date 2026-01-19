@@ -10,6 +10,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
+import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.cache.Remote;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.asto.ext.KeyLastPart;
@@ -119,9 +120,14 @@ final class ProxySlice implements Slice {
     private final Optional<Queue<ProxyArtifactEvent>> events;
 
     /**
-     * Repository storage.
+     * Repository storage (blocking).
      */
     private final BlockingStorage storage;
+
+    /**
+     * Repository storage (async) for cache-first lookup.
+     */
+    private final Storage asyncStorage;
 
     /**
      * Repository name.
@@ -217,6 +223,7 @@ final class ProxySlice implements Slice {
             .expireAfterWrite(Duration.ofHours(1))
             .build();
         this.storage = new BlockingStorage(backend);
+        this.asyncStorage = backend;
         this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
     }
 
@@ -226,58 +233,126 @@ final class ProxySlice implements Slice {
     ) {
         final Optional<ArtifactCoordinates> coords = this.extract(line);
         final String user = new Login(rqheaders).getValue();
-        
-        // For artifacts: evaluate cooldown FIRST using metadata (JSON API),
-        // then fetch/cached content only when allowed.
+
+        // For artifacts: CRITICAL FIX - Check cache FIRST before any network calls
+        // This ensures offline mode works - serve cached content even when upstream is down
         if (coords.isPresent()) {
             final ArtifactCoordinates info = coords.get();
-            final CooldownRequest request = new CooldownRequest(
-                this.rtype,
-                this.rname,
-                info.artifact(),
-                info.version(),
-                user,
-                Instant.now()
-            );
-            EcsLogger.debug("com.artipie.pypi")
-                .message("Evaluating cooldown for artifact")
-                .eventCategory("repository")
-                .eventAction("cooldown_evaluation")
-                .field("package.name", info.artifact())
-                .field("package.version", info.version())
-                .field("user.name", user)
-                .field("repository.type", this.rtype)
-                .field("repository.name", this.rname)
-                .log();
-            return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
-                if (evaluation.blocked()) {
-                    EcsLogger.warn("com.artipie.pypi")
-                        .message("Artifact BLOCKED by cooldown")
+            return this.checkCacheFirst(line, rqheaders, info, user);
+        }
+
+        // Non-artifacts (index pages, metadata): serve directly from cache/upstream
+        return this.serveNonArtifact(line, rqheaders, body, user);
+    }
+
+    /**
+     * Check cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param line Request line
+     * @param rqheaders Request headers
+     * @param info Artifact coordinates
+     * @param user User name
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(
+        final RequestLine line,
+        final Headers rqheaders,
+        final ArtifactCoordinates info,
+        final String user
+    ) {
+        final Key key = ProxySlice.keyFromPath(line);
+
+        // Check storage cache FIRST before any network calls
+        // Use FromStorageCache directly to avoid FromRemoteCache issues with Remote.EMPTY
+        return new FromStorageCache(this.asyncStorage).load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    // Cache HIT - serve immediately without any network calls
+                    EcsLogger.info("com.artipie.pypi")
+                        .message("Cache hit, serving cached artifact (offline-safe)")
                         .eventCategory("repository")
-                        .eventAction("cooldown_evaluation")
-                        .eventOutcome("failure")
+                        .eventAction("proxy_request")
+                        .eventOutcome("cache_hit")
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
                         .log();
-                    return CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(evaluation.block().orElseThrow())
+                    // Enqueue event for cache hit
+                    this.events.ifPresent(queue ->
+                        queue.add(new ProxyArtifactEvent(
+                            key,
+                            this.rname,
+                            user,
+                            Optional.empty()
+                        ))
                     );
+                    // Serve cached content
+                    return this.serveArtifactContent(line, key, cached.get(), Headers.EMPTY);
                 }
-                EcsLogger.debug("com.artipie.pypi")
-                    .message("Artifact ALLOWED by cooldown - serving content")
+                // Cache MISS - now we need network, evaluate cooldown first
+                return this.evaluateCooldownAndFetch(line, rqheaders, info, user);
+            }).toCompletableFuture();
+    }
+
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param line Request line
+     * @param rqheaders Request headers
+     * @param info Artifact coordinates
+     * @param user User name
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final Headers rqheaders,
+        final ArtifactCoordinates info,
+        final String user
+    ) {
+        final CooldownRequest request = new CooldownRequest(
+            this.rtype,
+            this.rname,
+            info.artifact(),
+            info.version(),
+            user,
+            Instant.now()
+        );
+        EcsLogger.debug("com.artipie.pypi")
+            .message("Evaluating cooldown for artifact")
+            .eventCategory("repository")
+            .eventAction("cooldown_evaluation")
+            .field("package.name", info.artifact())
+            .field("package.version", info.version())
+            .field("user.name", user)
+            .field("repository.type", this.rtype)
+            .field("repository.name", this.rname)
+            .log();
+        return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
+            if (evaluation.blocked()) {
+                EcsLogger.warn("com.artipie.pypi")
+                    .message("Artifact BLOCKED by cooldown")
                     .eventCategory("repository")
                     .eventAction("cooldown_evaluation")
-                    .eventOutcome("success")
+                    .eventOutcome("failure")
                     .field("package.name", info.artifact())
                     .field("package.version", info.version())
                     .log();
-                // Cooldown passed - now serve the artifact (no further cooldown checks)
-                return this.serveArtifact(line, rqheaders, info, user);
-            });
-        }
-        
-        // Non-artifacts (index pages, metadata): serve directly from cache/upstream
-        return this.serveNonArtifact(line, rqheaders, body, user);
+                return CompletableFuture.completedFuture(
+                    CooldownResponses.forbidden(evaluation.block().orElseThrow())
+                );
+            }
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Artifact ALLOWED by cooldown - serving content")
+                .eventCategory("repository")
+                .eventAction("cooldown_evaluation")
+                .eventOutcome("success")
+                .field("package.name", info.artifact())
+                .field("package.version", info.version())
+                .log();
+            // Cooldown passed - now serve the artifact (no further cooldown checks)
+            return this.serveArtifact(line, rqheaders, info, user);
+        });
     }
     
     private CompletableFuture<Response> serveNonArtifact(

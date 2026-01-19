@@ -77,6 +77,9 @@ public final class TrimPathSlice implements Slice {
         final Matcher matcher = this.ptn.matcher(full);
         final boolean recursion = !new RqHeaders(headers, TrimPathSlice.HDR_FULL_PATH).isEmpty();
         if (matcher.matches() && recursion) {
+            // Recursion detected - pass through without trimming
+            org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+                .debug("TrimPathSlice recursion: path={}, pattern={}", full, this.ptn);
             return this.slice.response(line, headers, body);
         }
         if (matcher.matches() && !recursion) {
@@ -88,6 +91,9 @@ public final class TrimPathSlice implements Slice {
             } catch (URISyntaxException e) {
                 throw new ArtipieException(e);
             }
+            final String trimmedPath = respUri.getPath();
+            org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+                .debug("TrimPathSlice trim: {} -> {} (pattern={})", full, trimmedPath, this.ptn);
             return this.slice.response(
                 new RequestLine(line.method(), respUri, line.version()),
                 headers.copy().add(new Header(TrimPathSlice.HDR_FULL_PATH, full)),
@@ -95,6 +101,8 @@ public final class TrimPathSlice implements Slice {
             );
         }
         // Consume request body to prevent Vert.x request leak
+        org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+            .warn("TrimPathSlice NO MATCH: path={}, pattern={}", full, this.ptn);
         return body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.internalError()
                 .textBody(String.format("Request path %s was not matched to %s", full, this.ptn))

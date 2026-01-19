@@ -334,6 +334,18 @@ public final class GroupSlice implements Slice {
                     : Content.EMPTY;
 
                 final RequestLine rewritten = member.rewritePath(line);
+
+                // Log the path rewriting for troubleshooting
+                EcsLogger.info("com.artipie.group")
+                    .message("Forwarding request to member")
+                    .eventCategory("repository")
+                    .eventAction("group_forward")
+                    .field("repository.name", this.group)
+                    .field("member.name", member.name())
+                    .field("original.path", line.uri().getPath())
+                    .field("rewritten.path", rewritten.uri().getPath())
+                    .log();
+
                 return member.slice().response(
                     rewritten,
                     dropFullPathHeader(headers),
@@ -409,7 +421,7 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: Cache in negative cache and try next member
             this.negativeCache.cacheNotFound(member.name(), pathKey);
-            ctx.addTo(EcsLogger.debug("com.artipie.group")
+            ctx.addTo(EcsLogger.info("com.artipie.group")
                 .message("Member returned 404, cached in negative cache")
                 .eventCategory("repository")
                 .eventAction("group_query")

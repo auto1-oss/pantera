@@ -206,8 +206,10 @@ public final class DownloadPackageSlice implements Slice {
             .flatMap(metadata ->
                 // Try to get pre-computed abbreviated content first
                 this.npm.getAbbreviatedContentStream(packageName)
-                    .flatMap(abbreviatedStream ->
-                        new Concatenation(abbreviatedStream)
+                    .flatMap(abbreviatedStream -> {
+                        // OPTIMIZATION: Use size from Content when available for pre-allocation
+                        final long abbrevSize = abbreviatedStream.size().orElse(-1L);
+                        return Concatenation.withSize(abbreviatedStream, abbrevSize)
                             .single()
                             .map(buf -> new Remaining(buf).bytes())
                             .toMaybe()
@@ -222,13 +224,15 @@ public final class DownloadPackageSlice implements Slice {
                                 return io.reactivex.Maybe.just(
                                     this.buildAbbreviatedResponse(abbreviatedBytes, metadata, headers, clientETag)
                                 );
-                            })
-                    )
+                            });
+                    })
                     // Fall back to full metadata if abbreviated not available
                     // This can happen for legacy cached data before abbreviated was added
                     .switchIfEmpty(io.reactivex.Maybe.defer(() ->
-                        this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
-                            new Concatenation(contentStream)
+                        this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
+                            // OPTIMIZATION: Use size from Content when available for pre-allocation
+                            final long contentSize = contentStream.size().orElse(-1L);
+                            return Concatenation.withSize(contentStream, contentSize)
                                 .single()
                                 .map(buf -> new Remaining(buf).bytes())
                                 .toMaybe()
@@ -242,8 +246,8 @@ public final class DownloadPackageSlice implements Slice {
                                     return io.reactivex.Maybe.just(
                                         this.buildResponse(rawBytes, metadata, headers, true, clientETag)
                                     );
-                                })
-                        )
+                                });
+                        })
                     ))
             )
             .toSingle(ResponseBuilder.notFound().build())
@@ -401,8 +405,10 @@ public final class DownloadPackageSlice implements Slice {
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
             .flatMap(metadata ->
-                this.npm.getPackageContentStream(packageName).flatMap(contentStream ->
-                    new Concatenation(contentStream)
+                this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
+                    // OPTIMIZATION: Use size from Content when available for pre-allocation
+                    final long contentSize = contentStream.size().orElse(-1L);
+                    return Concatenation.withSize(contentStream, contentSize)
                         .single()
                         .map(buf -> new Remaining(buf).bytes())
                         .toMaybe()
@@ -458,8 +464,8 @@ public final class DownloadPackageSlice implements Slice {
                             return io.reactivex.Maybe.just(
                                 this.buildResponse(rawBytes, metadata, headers, false, clientETag)
                             );
-                        })
-                )
+                        });
+                })
             )
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())

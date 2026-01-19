@@ -50,8 +50,10 @@ public final class Tarballs {
      * @return Modified content with prepended URLs
      */
     public Content value() {
+        // OPTIMIZATION: Use size hint for efficient pre-allocation
+        final long knownSize = this.original.size().orElse(-1L);
         return new Content.From(
-            new Concatenation(this.original)
+            Concatenation.withSize(this.original, knownSize)
                 .single()
                 .map(buf -> new Remaining(buf).bytes())
                 .map(bytes -> new String(bytes, StandardCharsets.UTF_8))

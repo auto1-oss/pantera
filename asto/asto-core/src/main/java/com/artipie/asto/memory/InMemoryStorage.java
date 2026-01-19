@@ -164,7 +164,9 @@ public final class InMemoryStorage implements Storage {
                 new ArtipieIOException("Unable to save to root")
             ).get();
         } else {
-            res = new Concatenation(new OneTimePublisher<>(content)).single()
+            // OPTIMIZATION: Use size hint for efficient pre-allocation
+            final long knownSize = content.size().orElse(-1L);
+            res = Concatenation.withSize(new OneTimePublisher<>(content), knownSize).single()
                 .to(SingleInterop.get())
                 .thenApply(Remaining::new)
                 .thenApply(Remaining::bytes)

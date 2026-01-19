@@ -9,6 +9,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.FromRemoteCache;
+import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.cache.Remote;
 import com.artipie.cooldown.CooldownRequest;
 import com.artipie.cooldown.CooldownResponses;
@@ -82,13 +83,18 @@ public final class FileProxySlice implements Slice {
     private final String upstreamUrl;
 
     /**
+     * Optional storage for cache-first lookup (offline mode support).
+     */
+    private final Optional<Storage> storage;
+
+    /**
      * New files proxy slice.
      * @param clients HTTP clients
      * @param remote Remote URI
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
         this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown");
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -103,7 +109,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
             new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString()
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -120,7 +126,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
             new FromRemoteCache(asto), Optional.of(events), rname,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString()
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -130,7 +136,7 @@ public final class FileProxySlice implements Slice {
      */
     FileProxySlice(final Slice remote, final Cache cache) {
         this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown");
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -145,7 +151,7 @@ public final class FileProxySlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events, final String rname,
         final CooldownService cooldown
     ) {
-        this(remote, cache, events, rname, cooldown, "unknown");
+        this(remote, cache, events, rname, cooldown, "unknown", Optional.empty());
     }
 
     /**
@@ -162,6 +168,25 @@ public final class FileProxySlice implements Slice {
         final Optional<Queue<ArtifactEvent>> events, final String rname,
         final CooldownService cooldown, final String upstreamUrl
     ) {
+        this(remote, cache, events, rname, cooldown, upstreamUrl, Optional.empty());
+    }
+
+    /**
+     * Full constructor with upstream URL and storage for cache-first lookup.
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     * @param storage Optional storage for cache-first lookup
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown, final String upstreamUrl,
+        final Optional<Storage> storage
+    ) {
         this.remote = remote;
         this.cache = cache;
         this.events = events;
@@ -169,6 +194,7 @@ public final class FileProxySlice implements Slice {
         this.cooldown = cooldown;
         this.inspector = new FilesCooldownInspector(remote);
         this.upstreamUrl = upstreamUrl;
+        this.storage = storage;
     }
 
     @Override
@@ -179,6 +205,69 @@ public final class FileProxySlice implements Slice {
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
         final String artifact = line.uri().getPath();
         final String user = new Login(rqheaders).getValue();
+
+        // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+        // This ensures offline mode works - serve cached content even when upstream is down
+        return this.checkCacheFirst(line, key, artifact, user, rshdr);
+    }
+
+    /**
+     * Check cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param artifact Artifact path
+     * @param user User name
+     * @param rshdr Response headers reference
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(
+        final RequestLine line,
+        final KeyFromPath key,
+        final String artifact,
+        final String user,
+        final AtomicReference<Headers> rshdr
+    ) {
+        // If no storage is configured, skip cache-first check and go directly to cooldown
+        if (this.storage.isEmpty()) {
+            return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+        }
+        // Check storage cache FIRST before any network calls
+        // Use FromStorageCache pattern: check storage directly, serve if present
+        return new FromStorageCache(this.storage.get()).load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    // Cache HIT - serve immediately without any network calls
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .body(cached.get())
+                            .build()
+                    );
+                }
+                // Cache MISS - now we need network, evaluate cooldown first
+                return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+            }).toCompletableFuture();
+    }
+
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param artifact Artifact path
+     * @param user User name
+     * @param rshdr Response headers reference
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final KeyFromPath key,
+        final String artifact,
+        final String user,
+        final AtomicReference<Headers> rshdr
+    ) {
         final CooldownRequest request = new CooldownRequest(
             FileProxySlice.REPO_TYPE,
             this.rname,
@@ -236,13 +325,17 @@ public final class FileProxySlice implements Slice {
                                             );
                                         }
                                     } else {
-                                        final String metricResult = response.status().code() == 404 ? "not_found" :
-                                            (response.status().code() >= 500 ? "error" : "client_error");
-                                        this.recordProxyMetric(metricResult, duration);
-                                        if (response.status().code() >= 500) {
-                                            this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
-                                        }
-                                        promise.complete(Optional.empty());
+                                        // CRITICAL: Consume body to prevent Vert.x request leak
+                                        response.body().asBytesFuture().whenComplete((ignored, error) -> {
+                                            final String metricResult = response.status().code() == 404 ? "not_found" :
+                                                (response.status().code() >= 500 ? "error" : "client_error");
+                                            this.recordProxyMetric(metricResult, duration);
+                                            if (response.status().code() >= 500) {
+                                                this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
+                                            }
+                                            promise.complete(Optional.empty());
+                                            term.complete(null);
+                                        });
                                     }
                                     return term;
                                 })
@@ -250,7 +343,8 @@ public final class FileProxySlice implements Slice {
                                 final long duration = System.currentTimeMillis() - startTime;
                                 this.recordProxyMetric("exception", duration);
                                 this.recordUpstreamErrorMetric(error);
-                                throw new java.util.concurrent.CompletionException(error);
+                                promise.complete(Optional.empty());
+                                return null;
                             });
                         return promise;
                     }

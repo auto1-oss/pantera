@@ -151,6 +151,44 @@ public final class GroupSliceTest {
         }
     }
 
+    /**
+     * Test that Go module paths work correctly through the group.
+     * The Go module path like /github.com/google/uuid/@v/v1.6.0.info
+     * should be rewritten to /go_proxy/github.com/google/uuid/@v/v1.6.0.info
+     * for the member, and TrimPathSlice should strip the /go_proxy prefix.
+     */
+    @Test
+    void goModulePathRewritingWorks() {
+        final AtomicReference<RequestLine> seen = new AtomicReference<>();
+        // This simulates what TrimPathSlice does - it receives /member/path and strips to /path
+        final Slice trimmed = (line, headers, body) -> {
+            final String path = line.uri().getPath();
+            if (path.startsWith("/go_proxy/")) {
+                final String stripped = path.substring("/go_proxy".length());
+                seen.set(new RequestLine(line.method().value(), stripped, line.version()));
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+            // Unexpected path - return 500 for debugging
+            seen.set(line);
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.internalError().textBody("Unexpected path: " + path).build()
+            );
+        };
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("go_proxy", trimmed);
+        final GroupSlice slice = new GroupSlice(new MapResolver(map), "go_group", List.of("go_proxy"), 8080);
+        // Simulate what goes into the group after the group's own TrimPathSlice stripped /go_group
+        final Response rsp = slice.response(
+            new RequestLine("GET", "/github.com/google/uuid/@v/v1.6.0.info"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        assertEquals(RsStatus.OK, rsp.status());
+        assertNotNull(seen.get());
+        assertEquals("/github.com/google/uuid/@v/v1.6.0.info", seen.get().uri().getPath(),
+            "After TrimPathSlice simulation, path should be the Go module path without member prefix");
+    }
+
     private static final class MapResolver implements SliceResolver {
         private final Map<String, Slice> map;
         private MapResolver(Map<String, Slice> map) { this.map = map; }

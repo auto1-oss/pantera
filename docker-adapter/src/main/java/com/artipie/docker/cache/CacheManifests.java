@@ -26,11 +26,14 @@ import javax.json.JsonReader;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Cache implementation of {@link Repo}.
@@ -211,14 +214,13 @@ public final class CacheManifests implements Manifests {
         final ManifestReference ref,
         final Manifest manifest
     ) {
-        CompletionStage<Void> staged = CompletableFuture.completedFuture(null);
-        if (!manifest.isManifestList()) {
-            staged = staged.thenCompose(nothing -> this.copy(manifest.config()));
-            for (final ManifestLayer layer : manifest.layers()) {
-                if (layer.urls().isEmpty()) {
-                    staged = staged.thenCompose(nothing -> this.copy(layer.digest()));
-                }
-            }
+        final CompletionStage<Void> blobsCopy;
+        if (manifest.isManifestList()) {
+            // For manifest lists (multi-platform images), cache all child manifests and their blobs
+            blobsCopy = this.cacheManifestListChildren(manifest);
+        } else {
+            // For single-platform manifests, cache config and layers in PARALLEL
+            blobsCopy = this.cacheBlobsInParallel(manifest);
         }
         final boolean needRelease = this.events.isPresent() || this.inspector.isPresent();
         final CompletionStage<Optional<Long>> release = needRelease
@@ -237,56 +239,178 @@ public final class CacheManifests implements Manifests {
                     return Optional.empty();
                 })
             : CompletableFuture.completedFuture(Optional.empty());
-        return staged.thenCombine(
+        return blobsCopy.thenCombine(
             release,
             (ignored, rel) -> rel
         ).thenCompose(
-            rel -> {
-                final CompletionStage<Manifest> res =
-                    this.cache.manifests().put(ref, manifest.content());
-                final Optional<Long> inspectorRelease = this.inspector
-                    .flatMap(ins -> ins.releaseDate(this.name, ref.digest()).join())
-                    .map(Instant::toEpochMilli);
-                final Optional<Long> effectiveRelease = rel.isPresent() ? rel : inspectorRelease;
-                effectiveRelease.ifPresent(
-                    millis -> this.inspector.ifPresent(ins -> {
-                        final Instant instant = Instant.ofEpochMilli(millis);
-                        ins.recordRelease(this.name, ref.digest(), instant);
-                        ins.recordRelease(this.name, manifest.digest().string(), instant);
-                    })
-                );
-                this.events.ifPresent(queue -> {
-                    final long created = System.currentTimeMillis();
-                    // Get owner: 1. From inspector cache, 2. From MDC (set by auth), 3. Default
-                    String owner = this.inspector
-                        .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
-                        .orElse(null);
-                    if (owner == null || owner.isEmpty()) {
-                        final String mdcUser = MDC.get("user.name");
-                        if (mdcUser != null && !mdcUser.isEmpty() && !"anonymous".equals(mdcUser)) {
-                            owner = mdcUser;
-                        } else {
-                            owner = ArtifactEvent.DEF_OWNER;
-                        }
-                    }
-                    queue.add(
-                        new ArtifactEvent(
-                            CacheManifests.REPO_TYPE,
-                            this.rname,
-                            owner,
-                            this.name,
-                            ref.digest(),
-                            manifest.isManifestList()
-                                ? 0L
-                                : manifest.layers().stream().mapToLong(ManifestLayer::size).sum(),
-                            created,
-                            effectiveRelease.orElse(null)
-                        )
-                    );
-                });
-                return res.thenApply(ignored -> null);
-            }
+            rel -> this.finalizeManifestCache(ref, manifest, rel)
         );
+    }
+
+    /**
+     * Cache all child manifests from a manifest list (multi-platform image).
+     * This ensures that when a client pulls a specific platform, the manifest and blobs are cached.
+     *
+     * @param manifestList The manifest list (fat manifest)
+     * @return Completion stage when all children are cached
+     */
+    private CompletionStage<Void> cacheManifestListChildren(final Manifest manifestList) {
+        final Collection<Digest> children = manifestList.manifestListChildren();
+        if (children.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        EcsLogger.info("com.artipie.docker")
+            .message("Caching manifest list children")
+            .eventCategory("repository")
+            .eventAction("manifest_list_cache")
+            .field("repository.name", this.rname)
+            .field("container.image.name", this.name)
+            .field("manifest.children.count", children.size())
+            .log();
+        // Cache all child manifests in parallel
+        final List<CompletableFuture<Void>> childCaches = children.stream()
+            .map(digest -> this.cacheChildManifest(digest))
+            .collect(Collectors.toList());
+        return CompletableFuture.allOf(childCaches.toArray(new CompletableFuture[0]));
+    }
+
+    /**
+     * Cache a single child manifest and its blobs.
+     *
+     * @param digest The child manifest digest
+     * @return Completion when the child and its blobs are cached
+     */
+    private CompletableFuture<Void> cacheChildManifest(final Digest digest) {
+        final ManifestReference childRef = ManifestReference.from(digest);
+        return this.origin.manifests().get(childRef)
+            .thenCompose(opt -> {
+                if (opt.isEmpty()) {
+                    EcsLogger.warn("com.artipie.docker")
+                        .message("Child manifest not found in origin")
+                        .eventCategory("repository")
+                        .eventAction("manifest_child_cache")
+                        .eventOutcome("not_found")
+                        .field("repository.name", this.rname)
+                        .field("container.image.name", this.name)
+                        .field("container.image.hash.all", digest.string())
+                        .log();
+                    return CompletableFuture.completedFuture(null);
+                }
+                final Manifest child = opt.get();
+                // Cache the child's blobs (config + layers) in parallel, then save the manifest
+                return this.cacheBlobsInParallel(child)
+                    .thenCompose(ignored ->
+                        this.cache.manifests().put(childRef, child.content())
+                    )
+                    .thenAccept(ignored ->
+                        EcsLogger.debug("com.artipie.docker")
+                            .message("Cached child manifest")
+                            .eventCategory("repository")
+                            .eventAction("manifest_child_cache")
+                            .eventOutcome("success")
+                            .field("repository.name", this.rname)
+                            .field("container.image.name", this.name)
+                            .field("container.image.hash.all", digest.string())
+                            .log()
+                    );
+            })
+            .exceptionally(ex -> {
+                EcsLogger.warn("com.artipie.docker")
+                    .message("Failed to cache child manifest")
+                    .eventCategory("repository")
+                    .eventAction("manifest_child_cache")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.rname)
+                    .field("container.image.name", this.name)
+                    .field("container.image.hash.all", digest.string())
+                    .error(ex)
+                    .log();
+                return null;
+            });
+    }
+
+    /**
+     * Cache config and layers in parallel (instead of sequentially).
+     *
+     * @param manifest The manifest whose blobs to cache
+     * @return Completion when all blobs are cached
+     */
+    private CompletionStage<Void> cacheBlobsInParallel(final Manifest manifest) {
+        // Collect all blob copy futures
+        final List<CompletableFuture<Void>> blobCopies = new java.util.ArrayList<>();
+        // Add config blob
+        blobCopies.add(this.copy(manifest.config()).toCompletableFuture());
+        // Add layer blobs (only those without external URLs)
+        for (final ManifestLayer layer : manifest.layers()) {
+            if (layer.urls().isEmpty()) {
+                blobCopies.add(this.copy(layer.digest()).toCompletableFuture());
+            }
+        }
+        // Execute all blob copies in parallel
+        return CompletableFuture.allOf(blobCopies.toArray(new CompletableFuture[0]));
+    }
+
+    /**
+     * Finalize manifest caching: save manifest and record events.
+     * This method avoids blocking calls by using async composition.
+     *
+     * @param ref Manifest reference
+     * @param manifest The manifest
+     * @param rel Release timestamp from config
+     * @return Completion when manifest is saved and events recorded
+     */
+    private CompletionStage<Void> finalizeManifestCache(
+        final ManifestReference ref,
+        final Manifest manifest,
+        final Optional<Long> rel
+    ) {
+        // Get inspector release date asynchronously (FIX: removed blocking .join())
+        final CompletionStage<Optional<Long>> inspectorReleaseFuture = this.inspector
+            .map(ins -> ins.releaseDate(this.name, ref.digest())
+                .thenApply(opt -> opt.map(Instant::toEpochMilli)))
+            .orElse(CompletableFuture.completedFuture(Optional.empty()));
+
+        return inspectorReleaseFuture.thenCompose(inspectorRelease -> {
+            final Optional<Long> effectiveRelease = rel.isPresent() ? rel : inspectorRelease;
+            effectiveRelease.ifPresent(
+                millis -> this.inspector.ifPresent(ins -> {
+                    final Instant instant = Instant.ofEpochMilli(millis);
+                    ins.recordRelease(this.name, ref.digest(), instant);
+                    ins.recordRelease(this.name, manifest.digest().string(), instant);
+                })
+            );
+            this.events.ifPresent(queue -> {
+                final long created = System.currentTimeMillis();
+                // Get owner: 1. From inspector cache, 2. From MDC (set by auth), 3. Default
+                String owner = this.inspector
+                    .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
+                    .orElse(null);
+                if (owner == null || owner.isEmpty()) {
+                    final String mdcUser = MDC.get("user.name");
+                    if (mdcUser != null && !mdcUser.isEmpty() && !"anonymous".equals(mdcUser)) {
+                        owner = mdcUser;
+                    } else {
+                        owner = ArtifactEvent.DEF_OWNER;
+                    }
+                }
+                queue.add(
+                    new ArtifactEvent(
+                        CacheManifests.REPO_TYPE,
+                        this.rname,
+                        owner,
+                        this.name,
+                        ref.digest(),
+                        manifest.isManifestList()
+                            ? 0L
+                            : manifest.layers().stream().mapToLong(ManifestLayer::size).sum(),
+                        created,
+                        effectiveRelease.orElse(null)
+                    )
+                );
+            });
+            return this.cache.manifests().put(ref, manifest.content())
+                .thenApply(ignored -> null);
+        });
     }
 
     /**

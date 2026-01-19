@@ -150,11 +150,12 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        EcsLogger.debug("com.artipie.go")
+        EcsLogger.info("com.artipie.go")
             .message("Processing Go proxy request")
             .eventCategory("repository")
             .eventAction("proxy_request")
             .field("url.path", path)
+            .field("repository.name", this.rname)
             .log();
 
         if ("/".equals(path) || path.isEmpty()) {
@@ -191,60 +192,99 @@ final class CachedProxySlice implements Slice {
             .field("package.version", version)
             .field("user.name", user)
             .log();
-        
-        final CooldownRequest request = new CooldownRequest(
-            this.rtype,
-            this.rname,
-            module,
-            version,
-            user,
-            Instant.now()
-        );
-        
-        // Check cooldown FIRST - get release date and evaluate
-        return this.cooldown.evaluate(request, this.inspector)
-            .thenCompose(result -> {
-                if (result.blocked()) {
-                    EcsLogger.info("com.artipie.go")
-                        .message("Blocked Go artifact due to cooldown: " + result.block().orElseThrow().reason())
-                        .eventCategory("repository")
-                        .eventAction("proxy_request")
-                        .eventOutcome("blocked")
-                        .field("package.name", module)
-                        .field("package.version", version)
-                        .log();
-                    return CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(result.block().orElseThrow())
-                    );
-                }
-                EcsLogger.debug("com.artipie.go")
-                    .message("Cooldown passed, proceeding with fetch")
+
+        // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+        // This ensures offline mode works - serve cached content even when upstream is down
+        return this.cache.load(
+            key,
+            Remote.EMPTY,  // Just check cache existence
+            CacheControl.Standard.ALWAYS
+        ).thenCompose(cached -> {
+            if (cached.isPresent()) {
+                // Cache HIT - serve immediately without any network calls
+                EcsLogger.info("com.artipie.go")
+                    .message("Cache hit, serving cached artifact (offline-safe)")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
+                    .eventOutcome("cache_hit")
                     .field("package.name", module)
                     .field("package.version", version)
                     .log();
-                // Cooldown passed, proceed with fetch
-                // Get the release date for database event
-                return this.inspector.releaseDate(module, version)
-                    .thenCompose(releaseDate -> {
-                        EcsLogger.debug("com.artipie.go")
-                            .message("Release date retrieved")
+                // Record event for .zip files (with unknown release date since we skip network)
+                if (key.string().endsWith(".zip")) {
+                    this.enqueueEvent(key, user, Optional.of(module + "/@v/" + version), Optional.empty());
+                }
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .body(cached.get())
+                        .build()
+                );
+            }
+
+            // Cache MISS - now we need network, evaluate cooldown
+            EcsLogger.debug("com.artipie.go")
+                .message("Cache miss, evaluating cooldown")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .eventOutcome("cache_miss")
+                .field("package.name", module)
+                .field("package.version", version)
+                .log();
+
+            final CooldownRequest request = new CooldownRequest(
+                this.rtype,
+                this.rname,
+                module,
+                version,
+                user,
+                Instant.now()
+            );
+
+            return this.cooldown.evaluate(request, this.inspector)
+                .thenCompose(result -> {
+                    if (result.blocked()) {
+                        EcsLogger.info("com.artipie.go")
+                            .message("Blocked Go artifact due to cooldown: " + result.block().orElseThrow().reason())
                             .eventCategory("repository")
                             .eventAction("proxy_request")
+                            .eventOutcome("blocked")
                             .field("package.name", module)
                             .field("package.version", version)
-                            .field("package.release_date", releaseDate.orElse(null))
                             .log();
-                        return this.fetchThroughCache(
-                            line, 
-                            key, 
-                            headers, 
-                            Optional.of(module + "/@v/" + version),
-                            releaseDate
+                        return CompletableFuture.completedFuture(
+                            CooldownResponses.forbidden(result.block().orElseThrow())
                         );
-                    });
-            });
+                    }
+                    EcsLogger.debug("com.artipie.go")
+                        .message("Cooldown passed, proceeding with fetch")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .field("package.name", module)
+                        .field("package.version", version)
+                        .log();
+                    // Cooldown passed, proceed with fetch
+                    // Get the release date for database event
+                    return this.inspector.releaseDate(module, version)
+                        .thenCompose(releaseDate -> {
+                            EcsLogger.debug("com.artipie.go")
+                                .message("Release date retrieved")
+                                .eventCategory("repository")
+                                .eventAction("proxy_request")
+                                .field("package.name", module)
+                                .field("package.version", version)
+                                .field("package.release_date", releaseDate.orElse(null))
+                                .log();
+                            return this.fetchFromRemoteAndCache(
+                                line,
+                                key,
+                                user,
+                                Optional.of(module + "/@v/" + version),
+                                releaseDate,
+                                new AtomicReference<>(Headers.EMPTY)
+                            );
+                        });
+                });
+        }).toCompletableFuture();
     }
 
 
@@ -257,82 +297,170 @@ final class CachedProxySlice implements Slice {
     ) {
         final AtomicReference<Headers> rshdr = new AtomicReference<>(Headers.EMPTY);
         final String owner = new Login(request).getValue();
+
+        // CRITICAL FIX: Check cache FIRST before attempting remote HEAD
+        // This allows serving cached content when upstream is unavailable (offline mode)
+        // Previously, the code would fail immediately if remote HEAD failed, even if
+        // the content was already cached locally.
+        return this.cache.load(
+            key,
+            Remote.EMPTY,  // Just check cache, don't fetch yet
+            CacheControl.Standard.ALWAYS
+        ).thenCompose(cached -> {
+            if (cached.isPresent()) {
+                // Cache HIT - serve immediately without contacting remote
+                EcsLogger.debug("com.artipie.go")
+                    .message("Cache hit, serving cached content")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .eventOutcome("cache_hit")
+                    .field("package.name", key.string())
+                    .log();
+                // Record event for .zip files
+                if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
+                    this.enqueueEvent(key, owner, artifactPath, releaseDate);
+                }
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .body(cached.get())
+                        .build()
+                );
+            }
+            // Cache MISS - fetch from remote with checksum validation
+            EcsLogger.debug("com.artipie.go")
+                .message("Cache miss, fetching from remote")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .eventOutcome("cache_miss")
+                .field("package.name", key.string())
+                .log();
+            return this.fetchFromRemoteAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
+        }).toCompletableFuture();
+    }
+
+    /**
+     * Fetch content from remote and cache it.
+     * Called when cache miss occurs.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param owner Owner username
+     * @param artifactPath Optional artifact path for events
+     * @param releaseDate Optional release date
+     * @param rshdr Atomic reference to store response headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> fetchFromRemoteAndCache(
+        final RequestLine line,
+        final Key key,
+        final String owner,
+        final Optional<String> artifactPath,
+        final Optional<Instant> releaseDate,
+        final AtomicReference<Headers> rshdr
+    ) {
+        // Get checksum headers from remote HEAD for validation
         return new RepoHead(this.client)
-            .head(line.uri().getPath()).thenCompose(
-                head -> this.cache.load(
-                    key,
-                    new Remote.WithErrorHandling(
-                        () -> {
-                            final CompletableFuture<Optional<? extends Content>> promise =
-                                new CompletableFuture<>();
-                            this.client.response(line, Headers.EMPTY, Content.EMPTY)
-                                .thenApply(resp -> {
-                                    final CompletableFuture<Void> term = new CompletableFuture<>();
-                                    if (resp.status().success()) {
-                                        final Flowable<ByteBuffer> res =
-                                            Flowable.fromPublisher(resp.body())
-                                                .doOnError(term::completeExceptionally)
-                                                .doOnTerminate(() -> term.complete(null));
-                                        promise.complete(Optional.of(new Content.From(res)));
-                                    } else {
-                                        // CRITICAL: Consume body to prevent Vert.x request leak
-                                        resp.body().asBytesFuture().whenComplete((ignored, error) -> {
-                                            promise.complete(Optional.empty());
-                                            term.complete(null);
-                                        });
-                                    }
-                                    rshdr.set(resp.headers());
-                                    return term;
-                                });
-                            return promise;
-                        }
-                    ),
-                    this.cacheControlFor(key, head.orElse(Headers.EMPTY))
-                ).handle(
-                    (content, throwable) -> {
-                        if (throwable == null && content.isPresent()) {
-                            // Record database event ONLY after successful cache load for .zip files
-                            // This ensures the full module is downloaded before recording the event
-                            if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
-                                EcsLogger.debug("com.artipie.go")
-                                    .message("Attempting to enqueue Go proxy event")
+            .head(line.uri().getPath())
+            .exceptionally(err -> {
+                // Network error during HEAD - log and continue with empty headers
+                // This allows cache to work in degraded mode (no checksum validation)
+                EcsLogger.warn("com.artipie.go")
+                    .message("Remote HEAD failed, proceeding without checksum validation")
+                    .eventCategory("repository")
+                    .eventAction("proxy_request")
+                    .eventOutcome("degraded")
+                    .field("package.name", key.string())
+                    .field("error.message", err.getMessage())
+                    .log();
+                return Optional.empty();
+            })
+            .thenCompose(head -> this.cache.load(
+                key,
+                new Remote.WithErrorHandling(
+                    () -> {
+                        final CompletableFuture<Optional<? extends Content>> promise =
+                            new CompletableFuture<>();
+                        this.client.response(line, Headers.EMPTY, Content.EMPTY)
+                            .thenApply(resp -> {
+                                final CompletableFuture<Void> term = new CompletableFuture<>();
+                                if (resp.status().success()) {
+                                    final Flowable<ByteBuffer> res =
+                                        Flowable.fromPublisher(resp.body())
+                                            .doOnError(term::completeExceptionally)
+                                            .doOnTerminate(() -> term.complete(null));
+                                    promise.complete(Optional.of(new Content.From(res)));
+                                } else {
+                                    // CRITICAL: Consume body to prevent Vert.x request leak
+                                    resp.body().asBytesFuture().whenComplete((ignored, error) -> {
+                                        promise.complete(Optional.empty());
+                                        term.complete(null);
+                                    });
+                                }
+                                rshdr.set(resp.headers());
+                                return term;
+                            })
+                            .exceptionally(err -> {
+                                // Network error during fetch - complete with empty
+                                EcsLogger.warn("com.artipie.go")
+                                    .message("Remote fetch failed")
                                     .eventCategory("repository")
                                     .eventAction("proxy_request")
+                                    .eventOutcome("failure")
                                     .field("package.name", key.string())
-                                    .field("file.path", artifactPath.get())
-                                    .field("user.name", owner)
+                                    .field("error.message", err.getMessage())
                                     .log();
-                                this.enqueueEvent(
-                                    key,
-                                    owner,
-                                    artifactPath,
-                                    releaseDate.or(() -> this.parseLastModified(rshdr.get()))
-                                );
-                            } else {
-                                EcsLogger.debug("com.artipie.go")
-                                    .message("Skipping event enqueue for " + key.string() + " (is_zip: " + key.string().endsWith(".zip") + ", has_artifact_path: " + artifactPath.isPresent() + ")")
-                                    .eventCategory("repository")
-                                    .eventAction("proxy_request")
-                                    .field("package.name", key.string())
-                                    .log();
-                            }
-                            return ResponseBuilder.ok()
-                                .headers(rshdr.get())
-                                .body(content.get())
-                                .build();
-                        }
-                        if (throwable != null) {
-                            EcsLogger.error("com.artipie.go")
-                                .message("Failed to fetch through cache")
+                                promise.complete(Optional.empty());
+                                return null;
+                            });
+                        return promise;
+                    }
+                ),
+                this.cacheControlFor(key, head.orElse(Headers.EMPTY))
+            )).handle(
+                (content, throwable) -> {
+                    if (throwable == null && content.isPresent()) {
+                        // Record database event ONLY after successful cache load for .zip files
+                        if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
+                            EcsLogger.debug("com.artipie.go")
+                                .message("Attempting to enqueue Go proxy event")
                                 .eventCategory("repository")
                                 .eventAction("proxy_request")
-                                .eventOutcome("failure")
-                                .error(throwable)
+                                .field("package.name", key.string())
+                                .field("file.path", artifactPath.get())
+                                .field("user.name", owner)
                                 .log();
+                            this.enqueueEvent(
+                                key,
+                                owner,
+                                artifactPath,
+                                releaseDate.or(() -> this.parseLastModified(rshdr.get()))
+                            );
                         }
-                        return ResponseBuilder.notFound().build();
+                        return ResponseBuilder.ok()
+                            .headers(rshdr.get())
+                            .body(content.get())
+                            .build();
                     }
-                )
+                    if (throwable != null) {
+                        EcsLogger.error("com.artipie.go")
+                            .message("Failed to fetch through cache")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .eventOutcome("failure")
+                            .error(throwable)
+                            .log();
+                    } else {
+                        EcsLogger.warn("com.artipie.go")
+                            .message("Cache load returned empty, returning 404")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .eventOutcome("not_found")
+                            .field("package.name", key.string())
+                            .field("repository.name", this.rname)
+                            .log();
+                    }
+                    return ResponseBuilder.notFound().build();
+                }
             ).toCompletableFuture();
     }
 

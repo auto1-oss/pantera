@@ -209,6 +209,102 @@ final class CachedProxySlice implements Slice {
             );
         }
 
+        // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+        // This ensures offline mode works - serve cached content even when upstream is down
+        return this.checkCacheFirst(line, key, headers);
+    }
+
+    /**
+     * Check cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(
+        final RequestLine line,
+        final Key key,
+        final Headers headers
+    ) {
+        final String path = key.string();
+
+        // Checksum files are generated as sidecars - serve from cache if present
+        if (isChecksumFile(path) && this.storageBacked) {
+            return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+                .thenCompose(cached -> {
+                    if (cached.isPresent()) {
+                        EcsLogger.info("com.artipie.gradle")
+                            .message("Cache hit for checksum, serving cached (offline-safe)")
+                            .eventCategory("repository")
+                            .eventAction("proxy_request")
+                            .eventOutcome("cache_hit")
+                            .field("package.name", key.string())
+                            .log();
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.ok()
+                                .header("Content-Type", "text/plain")
+                                .body(cached.get())
+                                .build()
+                        );
+                    }
+                    // Cache miss - continue with cooldown check and upstream fetch
+                    return this.evaluateCooldownAndFetch(line, key, headers);
+                }).toCompletableFuture();
+        }
+
+        // Skip cache check for metadata and directories
+        if (path.contains("maven-metadata.xml") || !this.storageBacked || isDirectory(path)) {
+            return this.evaluateCooldownAndFetch(line, key, headers);
+        }
+
+        // Check storage cache FIRST before any network calls
+        return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    // Cache HIT - serve immediately without any network calls
+                    EcsLogger.info("com.artipie.gradle")
+                        .message("Cache hit, serving cached artifact (offline-safe)")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .eventOutcome("cache_hit")
+                        .field("package.name", key.string())
+                        .log();
+                    // Fast path: serve cached content with async metadata loading
+                    if (this.metadata.isPresent()) {
+                        return this.metadata.get().load(key).thenApply(
+                            meta -> {
+                                final ResponseBuilder builder = ResponseBuilder.ok().body(cached.get());
+                                meta.ifPresent(metadata -> builder.headers(metadata.headers()));
+                                return builder.build();
+                            }
+                        );
+                    }
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok().body(cached.get()).build()
+                    );
+                }
+                // Cache MISS - now we need network, evaluate cooldown first
+                return this.evaluateCooldownAndFetch(line, key, headers);
+            }).toCompletableFuture();
+    }
+
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param headers Request headers
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final Key key,
+        final Headers headers
+    ) {
+        final String path = key.string();
         final Optional<CooldownRequest> request = this.cooldownRequest(headers, path);
         if (request.isEmpty()) {
             EcsLogger.debug("com.artipie.gradle")

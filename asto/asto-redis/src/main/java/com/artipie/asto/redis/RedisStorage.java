@@ -31,9 +31,20 @@ import org.redisson.api.RMapAsync;
 /**
  * Redis implementation of Storage.
  *
+ * <p><strong>ENTERPRISE RECOMMENDATION:</strong> Redis storage is optimized for small
+ * metadata files. For large artifacts, use FileStorage or S3Storage instead.
+ * This storage has a configurable size limit (default 10MB) to prevent memory issues.</p>
+ *
  * @since 0.1
  */
 public final class RedisStorage implements Storage {
+
+    /**
+     * Default maximum content size (10MB).
+     * Redis should be used for metadata, not large artifacts.
+     */
+    public static final long DEFAULT_MAX_SIZE = 10 * 1024 * 1024L;
+
     /**
      * Async interface for Redis based implementation
      * of {@link java.util.concurrent.ConcurrentMap} and {@link java.util.Map}.
@@ -46,14 +57,31 @@ public final class RedisStorage implements Storage {
     private final String id;
 
     /**
-     * Ctor.
+     * Maximum content size in bytes.
+     */
+    private final long maxSize;
+
+    /**
+     * Ctor with default max size (10MB).
      *
      * @param data Async interface for Redis.
      * @param id Redisson instance id
      */
     public RedisStorage(final RMapAsync<String, byte[]> data, final String id) {
+        this(data, id, DEFAULT_MAX_SIZE);
+    }
+
+    /**
+     * Ctor with configurable max size.
+     *
+     * @param data Async interface for Redis.
+     * @param id Redisson instance id
+     * @param maxSize Maximum content size in bytes (0 = unlimited)
+     */
+    public RedisStorage(final RMapAsync<String, byte[]> data, final String id, final long maxSize) {
         this.data = data;
-        this.id = String.format("Radis: id=%s", id);
+        this.id = String.format("Redis: id=%s", id);
+        this.maxSize = maxSize;
     }
 
     @Override
@@ -86,16 +114,41 @@ public final class RedisStorage implements Storage {
                 new ArtipieIOException("Unable to save to root")
             ).get();
         } else {
-            res = new Concatenation(new OneTimePublisher<>(content)).single()
-                .to(SingleInterop.get())
-                .thenApply(Remaining::new)
-                .thenApply(Remaining::bytes)
-                .thenCompose(bytes -> this.data.fastPutAsync(key.string(), bytes))
-                .thenRun(
-                    () -> {
-                    }
-                )
-                .toCompletableFuture();
+            // ENTERPRISE: Check size limit before buffering to prevent OOM
+            final long contentSize = content.size().orElse(-1L);
+            if (this.maxSize > 0 && contentSize > this.maxSize) {
+                res = new CompletableFutureSupport.Failed<Void>(
+                    new ArtipieIOException(
+                        String.format(
+                            "Content size %d exceeds Redis storage limit of %d bytes. "
+                                + "Use FileStorage or S3Storage for large artifacts.",
+                            contentSize, this.maxSize
+                        )
+                    )
+                ).get();
+            } else {
+                // OPTIMIZATION: Use size-optimized Concatenation when size is known
+                res = Concatenation.withSize(new OneTimePublisher<>(content), contentSize)
+                    .single()
+                    .to(SingleInterop.get())
+                    .thenApply(Remaining::new)
+                    .thenApply(Remaining::bytes)
+                    .thenCompose(bytes -> {
+                        // Double-check size after buffering (for unknown sizes)
+                        if (this.maxSize > 0 && bytes.length > this.maxSize) {
+                            throw new ArtipieIOException(
+                                String.format(
+                                    "Content size %d exceeds Redis storage limit of %d bytes. "
+                                        + "Use FileStorage or S3Storage for large artifacts.",
+                                    bytes.length, this.maxSize
+                                )
+                            );
+                        }
+                        return this.data.fastPutAsync(key.string(), bytes);
+                    })
+                    .thenRun(() -> { })
+                    .toCompletableFuture();
+            }
         }
         return res;
     }

@@ -1,10 +1,9 @@
 FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE
-ARG APM_VERSION=1.55.1
+ARG APM_VERSION=1.55.3
 
 # Install curl for downloading Elastic APM agent + jattach for programmatic attachment (jmap + jstack + jcmd + jinfo)
 RUN apk add --no-cache curl jattach
-
 
 ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
   -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled \
@@ -16,6 +15,7 @@ ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
   -Dvertx.cacheDirBase=/var/artipie/cache/tmp \
   -Dio.netty.leakDetection.level=simple"
 
+
 RUN addgroup -g 2020 -S artipie && \
     adduser -u 2021 -S -G artipie -s /sbin/nologin artipie && \
     mkdir -p /etc/artipie /usr/lib/artipie /var/artipie/logs/dumps /var/artipie/cache/tmp /opt/apm && \
@@ -25,7 +25,7 @@ RUN addgroup -g 2020 -S artipie && \
     chown artipie:artipie /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/artipie/cache/tmp
-ENV ARTIPIE_VERSION=1.20.11
+ENV ARTIPIE_VERSION=1.20.12
 
 USER 2021:2020
 
@@ -36,9 +36,20 @@ VOLUME /var/artipie /etc/artipie
 WORKDIR /var/artipie
 
 EXPOSE 8080 8086
-CMD [ "sh", "-c", "java \
+
+# Default ulimit values (will be raised to Docker's hard limit at runtime)
+ENV ULIMIT_NOFILE=1048576
+ENV ULIMIT_NPROC=65536
+
+CMD [ "sh", "-c", "\
+  # Raise soft limits to hard limits (or configured values, whichever is lower) \n\
+  ulimit -n ${ULIMIT_NOFILE} 2>/dev/null || ulimit -n $(ulimit -Hn) 2>/dev/null || true && \
+  ulimit -u ${ULIMIT_NPROC} 2>/dev/null || ulimit -u $(ulimit -Hu) 2>/dev/null || true && \
+  echo 'Ulimits - nofile: '$(ulimit -n)' nproc: '$(ulimit -u) && \
+  exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
+  $VERTX_OPTS \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/artipie/artipie.jar:/usr/lib/artipie/lib/* \

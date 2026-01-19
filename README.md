@@ -1,161 +1,500 @@
 <a href="http://artipie.com"><img src="https://www.artipie.com/logo.svg" width="64px" height="64px"/></a>
 
-[![Join our Telegramm group](https://img.shields.io/badge/Join%20us-Telegram-blue?&logo=telegram&?link=http://right&link=http://t.me/artipie)](http://t.me/artipie)
+# Artipie - Enterprise Binary Artifact Management (Auto1 Fork)
 
-[![Javadoc](http://www.javadoc.io/badge/com.artipie/artipie.svg)](http://www.javadoc.io/doc/com.artipie/artipie)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/artipie/artipie/blob/master/LICENSE.txt)
-[![codecov](https://codecov.io/gh/artipie/artipie/branch/master/graph/badge.svg)](https://app.codecov.io/gh/artipie/artipie)
-[![Hits-of-Code](https://hitsofcode.com/github/artipie/artipie)](https://hitsofcode.com/view/github/artipie/artipie)
-![Docker Pulls](https://img.shields.io/docker/pulls/artipie/artipie)
-![Docker Image Version (latest by date)](https://img.shields.io/docker/v/artipie/artipie?label=DockerHub&sort=date)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.txt)
+[![Java Version](https://img.shields.io/badge/java-21+-blue.svg)](https://openjdk.org/)
 
-Artipie is a binary artifact management tool, similar to
-[Artifactory](https://jfrog.com/artifactory/),
-[Nexus](https://www.sonatype.com/product-nexus-repository),
-[Archiva](https://archiva.apache.org/),
-[ProGet](https://inedo.com/proget),
-and many others.
-The following set of features makes Artipie unique among all others:
+> **Auto1 Fork**: This is a production-hardened fork of the original [Artipie](https://github.com/artipie/artipie) project, significantly enhanced for enterprise-scale deployments. It includes performance optimizations, security features, and operational improvements developed for high-traffic production workloads.
 
-  * It is open source ([MIT license](https://github.com/artipie/artipie/blob/master/LICENSE.txt))
-  * It is horizontally scalable, you can add servers easily
-  * It is written in reactive Java (using [Vert.x](https://vertx.io/))
-  * It supports
-    [Maven](https://github.com/artipie/artipie/wiki/maven),
-    [Docker](https://github.com/artipie/artipie/wiki/docker),
-    [Rubygems](https://github.com/artipie/artipie/wiki/gem),
-    [Go](https://github.com/artipie/artipie/wiki/go),
-    [Helm](https://github.com/artipie/artipie/wiki/helm),
-    [Npm](https://github.com/artipie/artipie/wiki/npm),
-    [NuGet](https://github.com/artipie/artipie/wiki/nuget),
-    [Composer](https://github.com/artipie/artipie/wiki/composer),
-    [Pip](https://github.com/artipie/artipie/wiki/pypi),
-    [Rpm](https://github.com/artipie/artipie/wiki/rpm),
-    [Debian](https://github.com/artipie/artipie/wiki/debian),
-    [Anaconda](https://github.com/artipie/artipie/wiki/anaconda)
-    and [others](https://github.com/artipie/artipie/wiki/Configuration-Repository#supported-repository-types)
-  * It can host the data in the file system, [Amazon S3](https://aws.amazon.com/s3/) or in a storage defined by user
+## What is Artipie?
 
-Learn more about Artipie in our [Wiki](https://github.com/artipie/artipie/wiki).
+Artipie is a **binary artifact management platform** similar to [JFrog Artifactory](https://jfrog.com/artifactory/), [Sonatype Nexus](https://www.sonatype.com/product-nexus-repository), and [Apache Archiva](https://archiva.apache.org/). It provides a unified solution for hosting, proxying, and managing software packages across multiple ecosystems.
 
-**Publications about Artipie:**
-- [An Easy Way to Get Your Own Binary Repository](https://dzone.com/articles/easy-way-to-get-your-own-binary-repository#)
-- [Private Remote Maven Repository With Artipie](https://dzone.com/articles/private-remote-maven-repository-with-artipie-1)
-- [Deployment of NPM Repositories with Artipie](https://dev.to/andpopov/deployment-of-npm-repositories-with-artipie-30co)
-- [How I use Artipie, a PyPI repo](https://opensource.com/article/22/12/python-package-index-repository-artipie)
-- [Готовим приватные репозитории с помощью Artipie](https://habr.com/ru/post/687394/)
+### Key Features (Auto1 Fork)
 
+| Feature | Description |
+|---------|-------------|
+| **High Performance** | Built on reactive Java with [Vert.x](https://vertx.io/) for non-blocking I/O |
+| **Multi-Format Support** | 16+ package manager types in a single deployment |
+| **Supply Chain Security** | Cooldown system blocks fresh package versions to prevent attacks |
+| **Enterprise Auth** | OAuth/OIDC integration (Keycloak, Okta with MFA), JWT, RBAC |
+| **Cloud-Native Storage** | Optimized S3-compatible storage with memory-efficient streaming |
+| **Observability** | Prometheus metrics, ECS JSON structured logging, Elastic APM |
+| **Dynamic Configuration** | Create, update, delete repositories at runtime via REST API |
+| **Production-Ready** | Docker Compose stack with PostgreSQL, Valkey (Redis), Nginx, monitoring |
 
-# Quickstart
+### Fork-Specific Enhancements
 
-Artipie is distributed as Docker container and as fat `jar`. The `jar` file can be downloaded on the
-GitHub [release page](https://github.com/artipie/artipie/releases) and here is a 
-[Wiki page](https://github.com/artipie/artipie/wiki#how-to-start-artipie-service-with-a-maven-proxy-repository) describing how to start it.
-The fastest way to start Artipie is by using Docker container. First, make sure you have already installed [Docker Engine](https://docs.docker.com/get-docker/).
-Then, open command line and instruct Docker Engine to run Artipie container:
+- **Cooldown System**: Configurable delay on new package versions (supply chain attack prevention)
+- **Okta OIDC Integration**: Full Okta authentication with MFA support (TOTP + push)
+- **S3 Performance**: Memory-optimized streaming, retry improvements, connection pooling
+- **File Descriptor Optimization**: High ulimit settings for many concurrent connections
+- **ECS JSON Logging**: Structured logging compatible with Elasticsearch/Kibana
+- **Docker Proxy Improvements**: Streaming optimization, timeout handling, multi-platform support
+- **NPM Proxy Deduplication**: Request deduplication for high-concurrency scenarios
+
+## Supported Repository Types
+
+| Type | Local | Proxy | Group | Description |
+|------|:-----:|:-----:|:-----:|-------------|
+| **Maven** | Yes | Yes | Yes | Java artifacts and dependencies |
+| **Gradle** | Yes | Yes | Yes | Gradle artifacts and plugins |
+| **Docker** | Yes | Yes | Yes | Container images registry |
+| **NPM** | Yes | Yes | Yes | JavaScript packages |
+| **PyPI** | Yes | Yes | Yes | Python packages |
+| **Go** | Yes | Yes | Yes | Go modules |
+| **Composer (PHP)** | Yes | Yes | Yes | PHP packages |
+| **Files** | Yes | Yes | Yes | Generic binary files |
+| **Gem** | Yes | — | Yes | Ruby gems |
+| **NuGet** | Yes | — | — | .NET packages |
+| **Helm** | Yes | — | — | Kubernetes charts |
+| **RPM** | Yes | — | — | Red Hat/CentOS packages |
+| **Debian** | Yes | — | — | Debian/Ubuntu packages |
+| **Conda** | Yes | — | — | Data science packages |
+| **Conan** | Yes | — | — | C/C++ packages |
+| **HexPM** | Yes | — | — | Elixir/Erlang packages |
+
+**Repository Modes:**
+- **Local**: Host your own packages (read/write)
+- **Proxy**: Cache packages from upstream registries with cooldown protection
+- **Group**: Aggregate multiple local and/or proxy repositories
+
+## Quick Start
+
+### Using Docker
 
 ```bash
-docker run -it -p 8080:8080 -p 8086:8086 artipie/artipie:latest
+docker run -d \
+  --name artipie \
+  -p 8080:8080 \
+  -p 8086:8086 \
+  --ulimit nofile=1048576:1048576 \
+  artipie/artipie:latest
 ```
 
-It'll start a new Docker container with latest Artipie version, the command includes mapping of two 
-ports: on port `8080` repositories are served and on port `8086` Artipie Rest API and Swagger 
-documentation is provided.
-A new image generate default configuration, prints a list of running repositories, test 
-credentials and a link to the [Swagger](https://swagger.io/) documentation to console. To check 
-existing repositories using Artipie Rest API:
-- go to Swagger documentation page `http://localhost:8086/api/index.html`, 
-choose "Auth token" in "Select a definition" list,
-- generate and copy authentication token for user `artipie/artipie`,  
-- switch to "Repositories" definition, press "Authorize" button and paste the token 
-- then perform `GET /api/v1/repository/list` request. 
-Response should be a json list with three default repositories:
+**Ports:**
+- `8080`: Repository endpoints
+- `8086`: REST API and Swagger documentation
+
+**Default Credentials:**
+- Username: `artipie`
+- Password: `artipie`
+
+### Verify Installation
+
+```bash
+# Check health
+curl http://localhost:8080/.health
+
+# Check version
+curl http://localhost:8080/.version
+
+# Open Swagger UI
+open http://localhost:8086/api/index.html
+```
+
+## Production Deployment (Recommended)
+
+For production, use the Docker Compose stack which includes all required services:
+
+```bash
+cd artipie-main/docker-compose
+
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your settings
+
+# Start all services
+docker-compose up -d
+```
+
+### Included Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| **Artipie** | 8081 (via nginx) | Repository endpoints |
+| **Artipie API** | 8086 | REST API, Swagger docs |
+| **PostgreSQL** | 5432 | Artifact metadata, cooldown state |
+| **Valkey (Redis)** | 6379 | Caching layer |
+| **Keycloak** | 8080 | OAuth/OIDC authentication |
+| **Nginx** | 8081, 8443 | Reverse proxy with TLS |
+| **Prometheus** | 9090 | Metrics collection |
+| **Grafana** | 3000 | Dashboards and alerting |
+
+### Production Configuration
+
+The Docker Compose setup includes production-ready defaults:
+
+```yaml
+# docker-compose.yaml (artipie service)
+cpus: 4
+mem_limit: 6gb
+ulimits:
+  nofile:
+    soft: 1048576
+    hard: 1048576
+  nproc:
+    soft: 65536
+    hard: 65536
+```
+
+### Environment Variables
+
+Key environment variables (see [.env.example](artipie-main/docker-compose/.env.example) for complete list):
+
+```bash
+# Artipie
+ARTIPIE_VERSION=1.20.12
+ARTIPIE_USER_NAME=artipie
+ARTIPIE_USER_PASS=changeme
+
+# JVM (optimized for high concurrency)
+JVM_ARGS=-Xms3g -Xmx4g -XX:+UseG1GC ...
+
+# AWS/S3 (for S3 storage backend)
+AWS_PROFILE=your_profile_name
+AWS_REGION=eu-west-1
+
+# Okta OIDC (optional)
+OKTA_ISSUER=https://your-org.okta.com
+OKTA_CLIENT_ID=your_client_id
+OKTA_CLIENT_SECRET=your_client_secret
+
+# Database
+POSTGRES_USER=artipie
+POSTGRES_PASSWORD=changeme
+```
+
+## Configuration
+
+### Main Configuration (`artipie.yml`)
+
+```yaml
+meta:
+  storage:
+    type: fs
+    path: /var/artipie/repo
+
+  credentials:
+    - type: env
+    - type: artipie
+    - type: okta  # Auto1 fork feature
+      issuer: ${OKTA_ISSUER}
+      client-id: ${OKTA_CLIENT_ID}
+      client-secret: ${OKTA_CLIENT_SECRET}
+
+  policy:
+    type: artipie
+    storage:
+      type: fs
+      path: /var/artipie/security
+
+  # Cooldown system (Auto1 fork feature)
+  cooldown:
+    enabled: true
+    minimum_allowed_age: 7d
+
+  metrics:
+    endpoint: /metrics/vertx
+    port: 8087
+```
+
+### Repository Configuration Examples
+
+**NPM Proxy with Cooldown:**
+```yaml
+repo:
+  type: npm-proxy
+  storage:
+    type: fs
+    path: /var/artipie/data/npm
+  remote:
+    url: https://registry.npmjs.org
+  # Cooldown blocks versions newer than configured age
+```
+
+**Docker Registry Proxy:**
+```yaml
+repo:
+  type: docker-proxy
+  storage:
+    type: fs
+    path: /var/artipie/data/docker
+  remotes:
+    - url: https://registry-1.docker.io
+      cache:
+        storage:
+          type: fs
+          path: /var/artipie/cache/docker
+```
+
+**Maven Proxy with S3 Storage:**
+```yaml
+repo:
+  type: maven-proxy
+  storage:
+    type: s3
+    bucket: artipie-cache
+    region: eu-west-1
+  remotes:
+    - url: https://repo.maven.apache.org/maven2
+```
+
+## Cooldown System (Supply Chain Security)
+
+The cooldown system blocks package versions that are too fresh (recently released) to prevent supply chain attacks:
+
+```yaml
+meta:
+  cooldown:
+    enabled: true
+    minimum_allowed_age: 7d  # Block versions newer than 7 days
+```
+
+**How it works:**
+1. Client requests a package (e.g., `npm install lodash`)
+2. Artipie filters metadata to hide versions newer than the cooldown period
+3. Fresh versions return `403 Forbidden` if requested directly
+4. Old versions are served normally from cache or upstream
+
+**Monitoring:**
+```bash
+# Check active blocks
+docker exec artipie-db psql -U artipie -d artifacts -c \
+  "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = 'ACTIVE';"
+
+# View blocked requests in logs
+docker logs artipie | grep "event.outcome=blocked"
+```
+
+See [Cooldown System Documentation](docs/cooldown-fallback/README.md) for complete details.
+
+## Documentation
+
+### User Documentation
+
+| Document | Description |
+|----------|-------------|
+| [User Guide](docs/USER_GUIDE.md) | Complete installation and configuration guide |
+| [API Routing](docs/API_ROUTING.md) | URL patterns and routing configuration |
+| [NPM CLI Compatibility](docs/NPM_CLI_COMPATIBILITY.md) | Complete NPM command reference |
+| [Okta OIDC Integration](docs/OKTA_OIDC_INTEGRATION.md) | Okta authentication with MFA |
+
+### Operations & Performance
+
+| Document | Description |
+|----------|-------------|
+| [S3 Performance Tuning](docs/S3_PERFORMANCE_TUNING.md) | S3 storage optimization |
+| [JVM Optimization](docs/ARTIPIE_JVM_OPTIMIZATION.md) | JVM tuning for production |
+| [Logging Configuration](docs/LOGGING_CONFIGURATION.md) | Log4j2 and ECS JSON setup |
+| [ECS JSON Reference](docs/ECS_JSON_QUICK_REFERENCE.md) | Structured logging format |
+
+### Security
+
+| Document | Description |
+|----------|-------------|
+| [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain attack prevention |
+| [Disk Cache Cleanup](docs/DISK_CACHE_CLEANUP_CONFIG.md) | Cache management configuration |
+
+### Developer Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Developer Guide](docs/DEVELOPER_GUIDE.md) | Architecture and contributing |
+| [S3 Optimizations](docs/s3-optimizations/README.md) | S3 memory and performance fixes |
+| [NPM Proxy Analysis](docs/npm-proxy-complete-analysis.md) | NPM proxy architecture |
+
+## REST API
+
+### Authentication
+
+```bash
+# Get auth token
+TOKEN=$(curl -s -X POST http://localhost:8086/api/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"name":"artipie","pass":"artipie"}' | jq -r '.token')
+```
+
+### Repository Management
+
+```bash
+# Create Maven repository
+curl -X PUT "http://localhost:8086/api/v1/repository/my-maven" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"repo":{"type":"maven","storage":"default"}}'
+
+# List repositories
+curl -H "Authorization: Bearer ${TOKEN}" \
+  http://localhost:8086/api/v1/repository/list
+
+# Delete repository
+curl -X DELETE "http://localhost:8086/api/v1/repository/my-maven" \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/token` | Get authentication token |
+| PUT | `/api/v1/repository/{name}` | Create or update repository |
+| GET | `/api/v1/repository/{name}` | Get repository settings |
+| DELETE | `/api/v1/repository/{name}` | Remove repository |
+| GET | `/api/v1/repository/list` | List all repositories |
+
+## Building from Source
+
+### Prerequisites
+
+- JDK 21+
+- Maven 3.9+
+- Docker (for integration tests)
+
+### Build Commands
+
+```bash
+# Full build with tests
+mvn clean verify
+
+# Fast build (skip tests)
+mvn install -DskipTests -Dpmd.skip=true
+
+# Build Docker image
+cd artipie-main
+mvn package -DskipTests
+docker build -t auto1-artipie:local --build-arg JAR_FILE=artipie-main-*.jar .
+```
+
+### Running Tests
+
+```bash
+# Unit tests only
+mvn test
+
+# Integration tests
+mvn verify
+
+# Specific module
+mvn test -pl npm-adapter
+```
+
+## Architecture
+
+```
++-------------------------------------------------------------+
+|                     HTTP Layer (Vert.x)                      |
+|  +---------+  +---------+  +---------+  +-----------------+ |
+|  |MainSlice|--|TimeoutSl|--|AuthSlice|--|RepositorySlices | |
+|  +---------+  +---------+  +---------+  +-----------------+ |
++-------------------------------------------------------------+
+                              |
++-------------------------------------------------------------+
+|                   Repository Adapters                        |
+|  +------+ +------+ +-----+ +-----+ +-----+ +-----+          |
+|  |Maven | |Docker| | NPM | |PyPI | |Helm | | ... |          |
+|  +------+ +------+ +-----+ +-----+ +-----+ +-----+          |
++-------------------------------------------------------------+
+                              |
++-------------------------------------------------------------+
+|               Cooldown Layer (Auto1 Fork)                    |
+|  +----------------+  +----------------+  +---------------+   |
+|  |CooldownService |  |MetadataService |  |CooldownInspect|   |
+|  +----------------+  +----------------+  +---------------+   |
++-------------------------------------------------------------+
+                              |
++-------------------------------------------------------------+
+|                  Storage Layer (Asto)                        |
+|  +------------+  +--------+  +------+  +-------+            |
+|  | FileSystem |  |   S3   |  | etcd |  | Redis |            |
+|  +------------+  +--------+  +------+  +-------+            |
++-------------------------------------------------------------+
+```
+
+### Key Design Principles
+
+1. **Reactive/Non-blocking**: All I/O operations are asynchronous using `CompletableFuture`
+2. **Slice Pattern**: HTTP handlers compose through the `Slice` interface
+3. **Storage Abstraction**: Pluggable storage backends via the Asto library
+4. **Hot Reload**: Configuration changes apply without restart
+5. **Defense in Depth**: Cooldown system adds supply chain security layer
+
+## Monitoring
+
+### Prometheus Metrics
+
+Artipie exposes metrics at `/metrics/vertx` (port 8087):
+
+```bash
+curl http://localhost:8087/metrics/vertx
+```
+
+Key metrics:
+- `artipie_http_requests_total` - Request count by path, method, status
+- `artipie_proxy_requests_total` - Proxy requests to upstream
+- `artipie_cooldown_blocks_total` - Blocked versions by cooldown
+- `artipie_cache_hits_total` - Cache hit/miss ratio
+
+### Grafana Dashboards
+
+Pre-configured dashboards are available in `artipie-main/docker-compose/grafana/dashboards/`:
+- Artipie Overview
+- Repository Performance
+- Cooldown Activity
+- JVM Metrics
+
+### Logging
+
+ECS JSON structured logging for Elasticsearch/Kibana:
+
 ```json
-[
-  "my-bin",
-  "my-docker",
-  "my-maven"
-]
-```
-Artipie server side (repositories) is served on `8080` port and is available on URI 
-`http://localhost:8080/{reponame}`, where `{reponame}` is the name of the repository. 
-Let's put some text data into binary repository:
-```commandline
-curl -X PUT -d 'Hello world!' http://localhost:8080/my-bin/test.txt
-```
-With this request we added file `test.txt` containing text "Hello world!" into repository. Let's check
-it's really there:
-```commandline
-curl -X GET http://localhost:8080/my-bin/test.txt
-```
-"Hello world!" should be printed in console.
-
-To dive in deeper into Artipie configuration, features, explore repositories and storages settings,
-please, address our [Wiki](https://github.com/artipie/artipie/wiki).
-
-Default server configuration in Docker Container refers to `/var/artipie/repo` to look up for
-repository configurations. You may want to mount local configurations `<your-local-config-dir>` 
-to `/var/artipie/repo` to check and edit it manually.
-
-> **Important:** for provided Artipie docker containers `<your-local-config-dir>` should have directory ownership set to `2021:2020`. To change it correctly use `sudo chown -R 2021:2020 <your-local-config-dir>`.
-
-If you have any question or suggestions, do not hesitate to [create an issue](https://github.com/artipie/artipie/issues/new) or contact us in
-[Telegram](https://t.me/artipie).  
-Artipie [roadmap](https://github.com/orgs/artipie/projects/3).
-
-## How to contribute
-
-Fork repository, make changes, send us a pull request. We will review
-your changes and apply them to the `master` branch shortly, provided
-they don't violate our quality standards. To avoid frustration, before
-sending us your pull request please run full Maven build:
-
-```
-$ mvn clean install
+{
+  "@timestamp": "2026-01-19T10:30:00.000Z",
+  "log.level": "INFO",
+  "message": "Package version blocked by cooldown",
+  "event.category": "cooldown",
+  "event.action": "block",
+  "event.outcome": "blocked",
+  "package.name": "lodash",
+  "package.version": "4.18.0"
+}
 ```
 
-To avoid build errors use Maven 3.2+ and please read 
-[contributing rules](https://github.com/artipie/artipie/blob/master/CONTRIBUTING.md).
+## Version Information
 
-Thanks to [FreePik](https://www.freepik.com/free-photos-vectors/party) for the logo.
+| Component | Version |
+|-----------|---------|
+| Artipie | 1.20.12 |
+| Java | 21+ |
+| Vert.x | 4.5.x |
 
-## Dynamic Repositories (no restart)
+## Contributing
 
-Artipie now supports creating, updating and deleting repositories dynamically via the REST API without restarting the process or container.
+Contributions are welcome. Please:
 
-- Create or update a repository: `PUT /api/v1/repository/{name}`
-- Get repository settings: `GET /api/v1/repository/{name}`
-- Check if repository exists: `HEAD /api/v1/repository/{name}`
-- Delete a repository: `DELETE /api/v1/repository/{name}`
+1. Fork the repository
+2. Create a feature branch
+3. Run tests: `mvn clean verify`
+4. Submit a pull request
 
-Example to create a new file repository named `my-bin` using the default storage alias:
+### Code Style
 
-```
-curl -X PUT \
-  -H 'Authorization: Bearer <token>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "repo": {
-          "type": "file",
-          "storage": "default"
-        }
-      }' \
-  http://localhost:8086/api/v1/repository/my-bin
-```
+- PMD enforced code style
+- Checkstyle validation
+- Unit tests required for new features
 
-After this call, the repository is immediately available at `http://localhost:8080/my-bin` with no restart required. This works for all supported repository types (maven, docker, npm, gem, helm, rpm, pypi, nuget, conda, conan, hexpm, file, and their proxy variants). If a repository configuration specifies its own `port`, Artipie will start a dedicated HTTP or HTTP/3 server for it on the fly as well.
-
-## How to release
-
-Artipie service is released in several formats: 
-- [docker image in DockerHub](https://hub.docker.com/r/artipie/artipie)
-- [docker image based on Ubuntu](https://hub.docker.com/r/artipie/artipie-ubuntu)
-- jar archive with dependencies in GitHub release page ([example](https://github.com/artipie/artipie/releases/tag/v0.30.1))
-- asto modules, artipie-core, http-client, vertx-server and each adapter are released as jars into Maven central
-
-All these distributions are created by GitHub [workflows](.github/workflows). To
-publish release, push tag starting with `v` into this repository masted branch:
 ```bash
-git tag v1.2.0
-git push --tags origin
+# Before submitting a PR
+mvn clean verify
 ```
+
+## License
+
+[MIT License](LICENSE.txt) - Copyright (c) Artipie Contributors
+
+---
+
+<p align="center">
+  <i>Auto1 Fork - Production-hardened for enterprise scale</i>
+</p>

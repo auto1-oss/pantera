@@ -13,6 +13,15 @@ services:
     cpus: 4
     mem_limit: 6gb
     mem_reservation: 6gb
+    # FILE DESCRIPTOR OPTIMIZATION: High limits for many concurrent connections
+    # Required for: proxy connections, cached file handles, streaming uploads/downloads
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc:
+        soft: 65536
+        hard: 65536
     container_name: artipie
     restart: unless-stopped
     environment:

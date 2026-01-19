@@ -135,6 +135,31 @@ public final class Manifest {
     }
 
     /**
+     * Get child manifest digests from a manifest list (fat manifest).
+     * For multi-platform images, this returns the digests of platform-specific manifests.
+     *
+     * <p>This enables proper caching of multi-arch images by allowing the cache
+     * to fetch and store each platform-specific manifest and its associated blobs.</p>
+     *
+     * @return Collection of child manifest digests, empty if not a manifest list
+     */
+    public Collection<Digest> manifestListChildren() {
+        if (!this.isManifestList()) {
+            return Collections.emptyList();
+        }
+        final JsonArray manifests = this.json.getJsonArray("manifests");
+        if (manifests == null) {
+            return Collections.emptyList();
+        }
+        return manifests.getValuesAs(JsonValue::asJsonObject)
+            .stream()
+            .map(obj -> obj.getString("digest", null))
+            .filter(digest -> digest != null && !digest.isEmpty())
+            .map(Digest.FromString::new)
+            .collect(Collectors.toList());
+    }
+
+    /**
      * Manifest digest.
      *
      * @return Digest.

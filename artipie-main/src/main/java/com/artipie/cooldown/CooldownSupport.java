@@ -31,13 +31,29 @@ public final class CooldownSupport {
     public static final String POOL_NAME = "artipie.cooldown";
 
     /**
+     * Default pool size multiplier for cooldown threads.
+     * ENTERPRISE: Sized for high-concurrency (1000 req/s target).
+     * Pool scales with CPU count to handle concurrent database operations.
+     */
+    private static final int POOL_SIZE_MULTIPLIER = 4;
+
+    /**
+     * Minimum pool size regardless of CPU count.
+     */
+    private static final int MIN_POOL_SIZE = 8;
+
+    /**
      * Dedicated executor for cooldown operations to avoid exhausting common pool.
      * Pool name: {@value #POOL_NAME} (visible in thread dumps and metrics).
      * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to cooldown threads.
+     *
+     * <p>ENTERPRISE SIZING: Pool is sized for high concurrency (target 1000 req/s).
+     * With synchronous JDBC calls, each blocked thread handles one request.
+     * Default: max(8, CPU * 4) threads to handle concurrent cooldown evaluations.</p>
      */
     private static final ExecutorService COOLDOWN_EXECUTOR = TraceContextExecutor.wrap(
         Executors.newFixedThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            Math.max(MIN_POOL_SIZE, Runtime.getRuntime().availableProcessors() * POOL_SIZE_MULTIPLIER),
             new ThreadFactory() {
                 private final AtomicInteger counter = new AtomicInteger(0);
                 @Override

@@ -159,89 +159,167 @@ public final class OptimizedStorageCache {
         final long fileSize
     ) {
         final Publisher<ByteBuffer> publisher = subscriber -> {
-            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
-                private volatile boolean cancelled = false;
-                private final AtomicBoolean started = new AtomicBoolean(false);
-                
-                @Override
-                public void request(long n) {
-                    if (cancelled || n <= 0) {
-                        return;
-                    }
-                    
-                    // CRITICAL: Prevent multiple request() calls from re-reading the file
-                    // Reactive Streams spec allows multiple request() calls, but we stream
-                    // the entire file in one go, so we must only start once.
-                    if (!started.compareAndSet(false, true)) {
-                        return;
-                    }
-                    
-                    // CRITICAL: Use dedicated executor for file I/O
-                    CompletableFuture.runAsync(() -> {
-                        try (FileChannel channel = FileChannel.open(
-                                filePath, 
-                                StandardOpenOption.READ
-                            )) {
-                            final ByteBuffer buffer = 
-                                ByteBuffer.allocateDirect(CHUNK_SIZE);
-                            long totalRead = 0;
-
-                            while (totalRead < fileSize && !cancelled) {
-                                buffer.clear();
-                                final int read = channel.read(buffer);
-                                
-                                if (read == -1) {
-                                    break;
-                                }
-
-                                buffer.flip();
-                                
-                                // Create a new buffer for emission
-                                final ByteBuffer chunk = ByteBuffer.allocate(read);
-                                chunk.put(buffer);
-                                chunk.flip();
-                                
-                                try {
-                                    subscriber.onNext(chunk);
-                                } catch (final IllegalStateException ex) {
-                                    // Response already written - client disconnected or response ended
-                                    // This is expected during client cancellation, log and stop streaming
-                                    EcsLogger.debug("com.artipie.asto.cache")
-                                        .message("Subscriber rejected chunk - response already written")
-                                        .eventCategory("cache")
-                                        .eventAction("stream_file")
-                                        .eventOutcome("cancelled")
-                                        .field("file.path", filePath.toString())
-                                        .field("file.size", fileSize)
-                                        .field("bytes.sent", totalRead)
-                                        .log();
-                                    cancelled = true;
-                                    return;
-                                }
-                                totalRead += read;
-                            }
-
-                            if (!cancelled) {
-                                subscriber.onComplete();
-                            }
-
-                        } catch (java.io.IOException e) {
-                            if (!cancelled) {
-                                subscriber.onError(e);
-                            }
-                        }
-                    }, BLOCKING_EXECUTOR);
-                }
-                
-                @Override
-                public void cancel() {
-                    cancelled = true;
-                }
-            });
+            subscriber.onSubscribe(new CacheFileSubscription(subscriber, filePath, fileSize));
         };
-        
+
         // CRITICAL: Include file size so Content-Length header can be set
         // This enables download progress in browsers and multi-connection downloads
         return new Content.From(fileSize, publisher);
+    }
+
+    /**
+     * Subscription that streams file content with proper resource cleanup.
+     * CRITICAL: Manages direct ByteBuffer lifecycle to prevent memory leaks.
+     */
+    private static final class CacheFileSubscription implements org.reactivestreams.Subscription {
+        private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
+        private final java.nio.file.Path filePath;
+        private final long fileSize;
+        private volatile boolean cancelled = false;
+        private final AtomicBoolean started = new AtomicBoolean(false);
+        private final AtomicBoolean cleanedUp = new AtomicBoolean(false);
+        private volatile ByteBuffer directBuffer;
+
+        CacheFileSubscription(
+            final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber,
+            final java.nio.file.Path filePath,
+            final long fileSize
+        ) {
+            this.subscriber = subscriber;
+            this.filePath = filePath;
+            this.fileSize = fileSize;
+        }
+
+        @Override
+        public void request(long n) {
+            if (cancelled || n <= 0) {
+                return;
+            }
+
+            // CRITICAL: Prevent multiple request() calls from re-reading the file
+            // Reactive Streams spec allows multiple request() calls, but we stream
+            // the entire file in one go, so we must only start once.
+            if (!started.compareAndSet(false, true)) {
+                return;
+            }
+
+            // CRITICAL: Use dedicated executor for file I/O
+            CompletableFuture.runAsync(() -> {
+                try (FileChannel channel = FileChannel.open(
+                        filePath,
+                        StandardOpenOption.READ
+                    )) {
+                    // Allocate direct buffer ONCE for this subscription
+                    directBuffer = ByteBuffer.allocateDirect(CHUNK_SIZE);
+                    long totalRead = 0;
+
+                    while (totalRead < fileSize && !cancelled) {
+                        directBuffer.clear();
+                        final int read = channel.read(directBuffer);
+
+                        if (read == -1) {
+                            break;
+                        }
+
+                        directBuffer.flip();
+
+                        // Create a new heap buffer for emission (direct buffer is reused)
+                        final ByteBuffer chunk = ByteBuffer.allocate(read);
+                        chunk.put(directBuffer);
+                        chunk.flip();
+
+                        try {
+                            subscriber.onNext(chunk);
+                        } catch (final IllegalStateException ex) {
+                            // Response already written - client disconnected or response ended
+                            // This is expected during client cancellation, log and stop streaming
+                            EcsLogger.debug("com.artipie.asto.cache")
+                                .message("Subscriber rejected chunk - response already written")
+                                .eventCategory("cache")
+                                .eventAction("stream_file")
+                                .eventOutcome("cancelled")
+                                .field("file.path", filePath.toString())
+                                .field("file.size", fileSize)
+                                .field("bytes.sent", totalRead)
+                                .log();
+                            cancelled = true;
+                            break;
+                        }
+                        totalRead += read;
+                    }
+
+                    if (!cancelled) {
+                        subscriber.onComplete();
+                    }
+
+                } catch (java.io.IOException e) {
+                    if (!cancelled) {
+                        subscriber.onError(e);
+                    }
+                } finally {
+                    // CRITICAL: Always clean up the direct buffer
+                    cleanup();
+                }
+            }, BLOCKING_EXECUTOR);
+        }
+
+        @Override
+        public void cancel() {
+            cancelled = true;
+            cleanup();
+        }
+
+        /**
+         * Clean up direct buffer memory.
+         * CRITICAL: Direct buffers are off-heap and must be explicitly cleaned.
+         */
+        private void cleanup() {
+            if (!cleanedUp.compareAndSet(false, true)) {
+                return;
+            }
+            if (directBuffer != null) {
+                cleanDirectBuffer(directBuffer);
+                directBuffer = null;
+            }
+        }
+
+        /**
+         * Explicitly release direct buffer memory using the Cleaner mechanism.
+         */
+        private static void cleanDirectBuffer(final ByteBuffer buffer) {
+            if (buffer == null || !buffer.isDirect()) {
+                return;
+            }
+            try {
+                // Java 9+ approach using Unsafe.invokeCleaner
+                final Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                final java.lang.reflect.Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
+                theUnsafe.setAccessible(true);
+                final Object unsafe = theUnsafe.get(null);
+                final java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+                invokeCleaner.invoke(unsafe, buffer);
+            } catch (Exception e) {
+                // Fallback: try the Java 8 approach with DirectBuffer.cleaner()
+                try {
+                    final java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+                    cleanerMethod.setAccessible(true);
+                    final Object cleaner = cleanerMethod.invoke(buffer);
+                    if (cleaner != null) {
+                        final java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                        cleanMethod.setAccessible(true);
+                        cleanMethod.invoke(cleaner);
+                    }
+                } catch (Exception ex) {
+                    // Last resort: let GC handle it eventually
+                    EcsLogger.warn("com.artipie.asto.cache")
+                        .message("Failed to explicitly clean direct buffer, relying on GC")
+                        .eventCategory("memory")
+                        .eventAction("buffer_cleanup")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
+                }
+            }
+        }
     }
 }

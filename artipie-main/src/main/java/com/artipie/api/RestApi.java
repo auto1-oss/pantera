@@ -211,12 +211,25 @@ public final class RestApi extends AbstractVerticle {
         final HttpServer server;
         final String schema;
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
-            server = vertx.createHttpServer(
-                this.keystore.get().secureOptions(this.vertx, this.configsStorage)
-            );
+            // SSL server with TCP optimizations for low latency
+            final io.vertx.core.http.HttpServerOptions sslOptions =
+                this.keystore.get().secureOptions(this.vertx, this.configsStorage);
+            sslOptions
+                .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
+                .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
+                .setIdleTimeout(60);      // Close idle connections after 60 seconds
+            server = vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
-            server = this.vertx.createHttpServer();
+            // Non-SSL server with TCP optimizations matching main server config
+            server = this.vertx.createHttpServer(
+                new io.vertx.core.http.HttpServerOptions()
+                    .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
+                    .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
+                    .setIdleTimeout(60)       // Close idle connections after 60 seconds
+                    .setUseAlpn(true)         // Enable ALPN for HTTP/2 negotiation
+                    .setHttp2ClearTextEnabled(true)  // Enable HTTP/2 over cleartext (h2c)
+            );
             schema = "http";
         }
         server.requestHandler(router)

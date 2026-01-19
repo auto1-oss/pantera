@@ -62,6 +62,21 @@ public class MapRepositories implements Repositories, AutoCloseable {
 
     MapRepositories(final Settings settings, final Duration watchInterval,
         final ExecutorService loader, final RepoConfigWatcher customWatcher) {
+        this(settings, watchInterval, loader, customWatcher, false);
+    }
+
+    /**
+     * Full constructor with async option.
+     *
+     * @param settings Application settings.
+     * @param watchInterval Watch interval for config changes.
+     * @param loader Executor for config loading.
+     * @param customWatcher Custom watcher or null.
+     * @param asyncStartup If true, don't wait for initial load (faster startup but may 404 briefly).
+     */
+    MapRepositories(final Settings settings, final Duration watchInterval,
+        final ExecutorService loader, final RepoConfigWatcher customWatcher,
+        final boolean asyncStartup) {
         this.settings = settings;
         this.snapshot = new AtomicReference<>(RepoSnapshot.empty());
         this.loader = loader;
@@ -71,7 +86,20 @@ public class MapRepositories implements Repositories, AutoCloseable {
         this.watcher = customWatcher == null
             ? createWatcher(settings.repoConfigsStorage(), watchInterval)
             : customWatcher;
-        this.scheduleRefresh().join();
+        // Schedule initial load - wait for it unless async startup is requested
+        final CompletableFuture<RepoSnapshot> initial = this.scheduleRefresh();
+        if (!asyncStartup) {
+            // Default: blocking startup for backward compatibility and test reliability
+            initial.join();
+        } else {
+            // ENTERPRISE: Non-blocking startup - server accepts requests while configs load.
+            // Empty snapshot serves 404 until first load completes (typically <1s).
+            EcsLogger.info("com.artipie.settings")
+                .message("Repository loading started asynchronously (non-blocking startup)")
+                .eventCategory("configuration")
+                .eventAction("startup")
+                .log();
+        }
         this.watcher.start();
     }
 
