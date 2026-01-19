@@ -22,4 +22,14 @@ public interface Tokens {
      * @return String token
      */
     String generate(AuthUser user);
+
+    /**
+     * Generate token for provided user with explicit permanence control.
+     * @param user User to issue token for
+     * @param permanent If true, generate a non-expiring token regardless of global settings
+     * @return String token
+     */
+    default String generate(AuthUser user, boolean permanent) {
+        return generate(user);
+    }
 }

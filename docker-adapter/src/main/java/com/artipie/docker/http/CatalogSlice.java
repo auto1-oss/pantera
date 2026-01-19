@@ -34,12 +34,15 @@ public final class CatalogSlice extends DockerActionSlice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return this.docker.catalog(Pagination.from(line.uri()))
-            .thenApply(
-                catalog -> ResponseBuilder.ok()
-                    .header(ContentType.json())
-                    .body(catalog.json())
-                    .build()
-            );
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.catalog(Pagination.from(line.uri()))
+                .thenApply(
+                    catalog -> ResponseBuilder.ok()
+                        .header(ContentType.json())
+                        .body(catalog.json())
+                        .build()
+                )
+        );
     }
 }

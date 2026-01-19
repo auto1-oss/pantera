@@ -16,7 +16,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.SubStorage;
 import com.artipie.cache.StoragesCache;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -66,12 +66,116 @@ public final class RepoData {
                         .deleteAll(new Key.From(repo))
                         .thenAccept(
                             nothing ->
-                                Logger.info(
-                                    this,
-                                    String.format("Removed data from repository %s", repo)
-                                )
+                                EcsLogger.info("com.artipie.settings")
+                                    .message("Removed data from repository")
+                                    .eventCategory("repository")
+                                    .eventAction("data_remove")
+                                    .eventOutcome("success")
+                                    .field("repository.name", repo)
+                                    .log()
                         )
             );
+    }
+
+    /**
+     * Delete artifact from repository storage.
+     * @param rname Repository name
+     * @param artifactPath Path to the artifact within repository storage
+     * @return Completable action of the delete operation, returns true if deleted, false if not found
+     */
+    public CompletionStage<Boolean> deleteArtifact(final RepositoryName rname, final String artifactPath) {
+        final String repo = rname.toString();
+        final Key artifactKey = new Key.From(repo, artifactPath);
+        return this.repoStorage(rname)
+            .thenCompose(asto -> asto.exists(artifactKey)
+                .thenCompose(exists -> {
+                    if (!exists) {
+                        // Check if it's a directory by listing children
+                        return asto.list(artifactKey)
+                            .thenCompose(keys -> {
+                                if (keys.isEmpty()) {
+                                    return CompletableFuture.completedFuture(false);
+                                }
+                                // Delete all files under this path
+                                return asto.deleteAll(artifactKey)
+                                    .thenApply(nothing -> {
+                                        EcsLogger.info("com.artipie.settings")
+                                            .message("Deleted artifact directory from repository")
+                                            .eventCategory("repository")
+                                            .eventAction("artifact_delete")
+                                            .eventOutcome("success")
+                                            .field("repository.name", repo)
+                                            .field("artifact.path", artifactPath)
+                                            .field("files.count", keys.size())
+                                            .log();
+                                        return true;
+                                    });
+                            });
+                    }
+                    // Single file - delete it
+                    return asto.delete(artifactKey)
+                        .thenApply(nothing -> {
+                            EcsLogger.info("com.artipie.settings")
+                                .message("Deleted artifact file from repository")
+                                .eventCategory("repository")
+                                .eventAction("artifact_delete")
+                                .eventOutcome("success")
+                                .field("repository.name", repo)
+                                .field("artifact.path", artifactPath)
+                                .log();
+                            return true;
+                        });
+                })
+            );
+    }
+
+    /**
+     * Delete a package folder (and its contents) from repository storage.
+     * @param rname Repository name
+     * @param packagePath Path to the package folder within repository storage
+     * @return Completable action returning true if deletion happened, false if nothing found
+     */
+    public CompletionStage<Boolean> deletePackageFolder(final RepositoryName rname, final String packagePath) {
+        final String repo = rname.toString();
+        final Key folder = new Key.From(repo, packagePath);
+        return this.repoStorage(rname)
+            .thenCompose(asto ->
+                asto.exists(folder).thenCompose(exists -> {
+                    final CompletionStage<Boolean> deletion;
+                    if (exists) {
+                        deletion = asto.deleteAll(folder).thenApply(
+                            nothing -> {
+                                this.logPackageDelete(repo, packagePath);
+                                return true;
+                            }
+                        );
+                    } else {
+                        deletion = asto.list(folder)
+                            .thenCompose(children -> {
+                                if (children.isEmpty()) {
+                                    return CompletableFuture.completedFuture(false);
+                                }
+                                return asto.deleteAll(folder)
+                                    .thenApply(nothing -> {
+                                        this.logPackageDelete(repo, packagePath);
+                                        return true;
+                                    });
+                            });
+                    }
+                    return deletion;
+                })
+            );
+    }
+
+    private void logPackageDelete(final String repo, final String packagePath) {
+        EcsLogger.info("com.artipie.settings")
+            .message("Deleted package folder from repository")
+            .eventCategory("repository")
+            .eventAction("package_delete")
+            .eventOutcome("success")
+            .field("repository.name", repo)
+            .field("package.path", packagePath)
+            .log();
     }
 
     /**
@@ -96,14 +200,12 @@ public final class RepoData {
                         ).thenCompose(nothing -> asto.deleteAll(new Key.From(repo)))
                         .thenAccept(
                             nothing ->
-                                Logger.info(
-                                    this,
-                                    String.format(
-                                        "Moved data from repository %s to %s",
-                                        repo,
-                                        nrepo
-                                    )
-                                )
+                                EcsLogger.info("com.artipie.settings")
+                                    .message("Moved data from repository (" + repo.toString() + " -> " + nrepo.toString() + ")")
+                                    .eventCategory("repository")
+                                    .eventAction("data_move")
+                                    .eventOutcome("success")
+                                    .log()
                         )
             );
     }

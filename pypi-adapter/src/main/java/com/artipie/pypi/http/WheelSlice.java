@@ -12,6 +12,7 @@ import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.streams.ContentAsStream;
 import com.artipie.http.Headers;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
@@ -26,7 +27,7 @@ import com.artipie.pypi.meta.Metadata;
 import com.artipie.pypi.meta.PackageInfo;
 import com.artipie.pypi.meta.ValidFilename;
 import com.artipie.scheduling.ArtifactEvent;
-import com.jcabi.log.Logger;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -84,9 +85,12 @@ final class WheelSlice implements Slice {
                 info -> {
                     final CompletionStage<RsStatus> res;
                     if (new ValidFilename(info, filename).valid()) {
+                        // Organize by version: <repo>/<package_name>/<version>/<filename>
+                        final String packageName = new NormalizedProjectName.Simple(info.name()).value();
                         final Key name = new Key.From(
                             new KeyFromPath(line.uri().toString()),
-                            new NormalizedProjectName.Simple(info.name()).value(),
+                            packageName,
+                            info.version(),
                             filename
                         );
                         CompletionStage<Void> move = this.storage.move(key, name);
@@ -96,6 +100,27 @@ final class WheelSlice implements Slice {
                                     this.putArtifactToQueue(name, info, filename, iterable)
                             );
                         }
+                        // Regenerate package-level index.html after upload
+                        final Key packageKey = new Key.From(
+                            new KeyFromPath(line.uri().toString()),
+                            packageName
+                        );
+                        move = move.thenCompose(
+                            ignored -> new IndexGenerator(
+                                this.storage,
+                                packageKey,
+                                line.uri().getPath()
+                            ).generate()
+                        );
+                        // Regenerate repository-level index.html
+                        final Key repoKey = new KeyFromPath(line.uri().toString());
+                        move = move.thenCompose(
+                            ignored -> new IndexGenerator(
+                                this.storage,
+                                repoKey,
+                                line.uri().getPath()
+                            ).generateRepoIndex()
+                        );
                         res = move.thenApply(ignored -> RsStatus.CREATED);
                     } else {
                         res = this.storage.delete(key)
@@ -137,11 +162,21 @@ final class WheelSlice implements Slice {
                 }
             )
         ).doOnNext(
-            part -> Logger.debug(this, "WS: multipart request body parsed, part %s found", part)
+            part -> EcsLogger.debug("com.artipie.pypi")
+                .message("WS: multipart request body parsed, part found: " + part.toString())
+                .eventCategory("repository")
+                .eventAction("upload")
+                .log()
         ).flatMapSingle(
-            part -> SingleInterop.fromFuture(
+            // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+            part -> RxFuture.single(
                 this.storage.save(temp, new Content.From(part))
-                    .thenRun(() -> Logger.debug(this, "WS: content saved to temp file `%s`", temp.string()))
+                    .thenRun(() -> EcsLogger.debug("com.artipie.pypi")
+                        .message("WS: content saved to temp file")
+                        .eventCategory("repository")
+                        .eventAction("upload")
+                        .field("file.name", temp.string())
+                        .log())
                     .thenApply(nothing -> new ContentDisposition(part.headers()).fileName())
             )
         ).toList().map(
@@ -173,10 +208,12 @@ final class WheelSlice implements Slice {
             .thenAccept(
                 size -> this.events.get().add(
                     new ArtifactEvent(
-                        WheelSlice.TYPE, this.rname,
+                        WheelSlice.TYPE,
+                        this.rname,
                         new Login(headers).getValue(),
-                        String.join("/", info.name(), filename),
-                        info.version(), size
+                        new NormalizedProjectName.Simple(info.name()).value(),
+                        info.version(),
+                        size
                     )
                 )
             );

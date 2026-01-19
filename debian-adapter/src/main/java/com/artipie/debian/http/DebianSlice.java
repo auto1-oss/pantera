@@ -50,7 +50,7 @@ public final class DebianSlice extends Slice.Wrap {
                 new RtRulePath(
                     MethodRule.GET,
                     new BasicAuthzSlice(
-                        new ReleaseSlice(new SliceDownload(storage), storage, config),
+                        new ReleaseSlice(new StorageArtifactSlice(storage), storage, config),
                         users,
                         new OperationControl(
                             policy,

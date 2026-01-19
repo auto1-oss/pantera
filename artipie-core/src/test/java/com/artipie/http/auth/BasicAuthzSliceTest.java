@@ -111,7 +111,8 @@ class BasicAuthzSliceTest {
                 Headers.from(new Header("WWW-Authenticate", "Basic realm=\"artipie\"")),
                 Content.EMPTY
             ).join(),
-            RsStatus.UNAUTHORIZED
+            RsStatus.UNAUTHORIZED,
+            new Header("WWW-Authenticate", "Basic realm=\"artipie\"")
         );
     }
 

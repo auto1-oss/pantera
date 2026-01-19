@@ -13,15 +13,29 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.BearerAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.TokenAuthentication;
+import com.artipie.http.auth.Tokens;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
+import com.artipie.npm.http.auth.AddUserSlice;
+import com.artipie.npm.http.auth.ArtipieAddUserSlice;
+import com.artipie.npm.http.auth.NpmTokenAuthentication;
+import com.artipie.npm.http.auth.WhoAmISlice;
+import com.artipie.npm.http.search.SearchSlice;
+import com.artipie.npm.http.search.InMemoryPackageIndex;
+import com.artipie.npm.repository.StorageUserRepository;
+import com.artipie.npm.repository.StorageTokenRepository;
+import com.artipie.npm.security.BCryptPasswordHasher;
+import com.artipie.npm.security.TokenGenerator;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
@@ -67,6 +81,11 @@ public final class NpmSlice implements Slice {
     private final SliceRoute route;
 
     /**
+     * Token service (optional, used for JWT-only logins).
+     */
+    private final Tokens tokens;
+
+    /**
      * Ctor with existing front and default parameters for free access.
      * @param base Base URL.
      * @param storage Storage for package
@@ -103,15 +122,159 @@ public final class NpmSlice implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(base, storage, policy, null, auth, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     *
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Events queue
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, false, null);
+    }
+    
+    /**
+     * Ctor with JWT-only option.
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication (Keycloak JWT).
+     * @param name Repository name
+     * @param events Events queue
+     * @param jwtOnly If true, use only JWT auth (no npm-specific tokens)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, null);
+    }
+
+    /**
+     * Ctor with JWT-only option and token service.
+     *
+     * @param base Base URL.
+     * @param storage Storage for package.
+     * @param policy Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param tokens Token service
+     * @param name Repository name
+     * @param events Events queue
+     * @param jwtOnly If true, use only JWT auth (no npm-specific tokens)
+     */
+    public NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final Tokens tokens,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly
+    ) {
+        this(base, storage, policy, basicAuth, tokenAuth, name, events, jwtOnly, tokens);
+    }
+
+    /**
+     * Primary ctor.
+     * @param base Base URL.
+     * @param storage Storage.
+     * @param policy Policy.
+     * @param basicAuth Basic auth.
+     * @param tokenAuth Token auth.
+     * @param name Repository name.
+     * @param events Events queue.
+     * @param jwtOnly Use JWT-only mode.
+     * @param tokens Token service (optional).
+     */
+    private NpmSlice(
+        final URL base,
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events,
+        final boolean jwtOnly,
+        final Tokens tokens
+    ) {
+        this.tokens = tokens;
+        final TokenAuthentication npmTokenAuth = jwtOnly
+            ? tokenAuth
+            : new NpmTokenAuthentication(new StorageTokenRepository(storage), tokenAuth);
+
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
                     new RtRule.ByPath("/npm")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new SliceSimple(ResponseBuilder.ok().build()),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_SCOPE_PATTERN)
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                        base,
+                        basicAuth,
+                        this.tokens,
+                        npmTokenAuth
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_PATTERN)
+                ),
+                NpmSlice.createAuthSlice(
+                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                        base,
+                        basicAuth,
+                        this.tokens,
+                        npmTokenAuth
+                    ),
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -122,9 +285,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.PUT,
                     new RtRule.ByPath(AddDistTagsSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new AddDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -135,9 +299,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.DELETE,
                     new RtRule.ByPath(AddDistTagsSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DeleteDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -151,9 +316,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, CliPublish.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UploadSlice(new CliPublish(storage), storage, events, name),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -167,9 +333,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, DeprecateSlice.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DeprecateSlice(storage),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -183,9 +350,10 @@ public final class NpmSlice implements Slice {
                         new RtRule.ByHeader(NpmSlice.REFERER, UnpublishPutSlice.HEADER)
                     )
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UnpublishPutSlice(storage, events, name),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -196,9 +364,26 @@ public final class NpmSlice implements Slice {
                     MethodRule.PUT,
                     new RtRule.ByPath(CurlPublish.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UploadSlice(new CurlPublish(storage), storage, events, name),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                    )
+                )
+            ),
+            // Catch-all PUT route for package publish (lerna, pnpm, etc. that don't send headers)
+            // Matches: /@scope/package or /package (but not .tgz files - already handled above)
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath("^/(@[^/]+/)?[^/]+$")  // Matches package names, not paths with /
+                ),
+                NpmSlice.createAuthSlice(
+                    new UploadSlice(new CliPublish(storage), storage, events, name),
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                     )
@@ -209,9 +394,90 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*/dist-tags$")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new GetDistTagsSlice(storage),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(".*/-/npm/v1/security/.*")
+                ),
+                // Use LocalAuditSlice (returns empty) - anonymous access
+                new com.artipie.npm.http.audit.LocalAuditSlice()
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.PUT,
+                    new RtRule.ByPath(".*/-/user/org\\.couchdb\\.user:.+")
+                ),
+                // Use JWT-only OAuth login or npm token-based adduser
+                jwtOnly && basicAuth != null
+                    ? new com.artipie.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
+                    : (basicAuth != null 
+                        ? new ArtipieAddUserSlice(  // Creates npm tokens
+                            basicAuth,
+                            new StorageTokenRepository(storage),
+                            new TokenGenerator()
+                        )
+                        : new AddUserSlice(  // Standalone npm tokens
+                            new StorageUserRepository(storage, new BCryptPasswordHasher()),
+                            new StorageTokenRepository(storage),
+                            new BCryptPasswordHasher(),
+                            new TokenGenerator()
+                        ))
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/whoami")
+                ),
+                jwtOnly
+                    ? NpmSlice.createAuthSlice(  // JWT-only whoami
+                        new com.artipie.npm.http.auth.JwtWhoAmISlice(),
+                        basicAuth,
+                        npmTokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                    : NpmSlice.createAuthSlice(  // Old whoami with npm tokens
+                        new WhoAmISlice(),
+                        basicAuth,
+                        npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*/-/v1/search")
+                ),
+                NpmSlice.createAuthSlice(
+                    new SearchSlice(storage, new InMemoryPackageIndex()),
+                    basicAuth,
+                    npmTokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath(".*\\.json$")
+                ),
+                NpmSlice.createAuthSlice(
+                    new StorageArtifactSlice(storage),
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -222,9 +488,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*(?<!\\.tgz)$")
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new DownloadPackageSlice(base, storage),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -235,9 +502,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.GET,
                     new RtRule.ByPath(".*\\.tgz$")
                 ),
-                new BearerAuthzSlice(
-                    new SliceDownload(storage),
-                    auth,
+                NpmSlice.createAuthSlice(
+                    new StorageArtifactSlice(storage),
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
@@ -248,9 +516,10 @@ public final class NpmSlice implements Slice {
                     MethodRule.DELETE,
                     new RtRule.ByPath(UnpublishForceSlice.PTRN)
                 ),
-                new BearerAuthzSlice(
+                NpmSlice.createAuthSlice(
                     new UnpublishForceSlice(storage, events, name),
-                    auth,
+                    basicAuth,
+                    npmTokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.DELETE)
                     )
@@ -265,5 +534,23 @@ public final class NpmSlice implements Slice {
         final Headers headers,
         final Content body) {
         return this.route.response(line, headers, body);
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (basicAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BearerAuthzSlice(origin, tokenAuth, control);
     }
 }

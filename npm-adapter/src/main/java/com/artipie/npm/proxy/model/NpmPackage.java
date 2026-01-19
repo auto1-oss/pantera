@@ -114,7 +114,7 @@ public final class NpmPackage {
          * @param modified Last modified date
          * @param refreshed Last refreshed date
          */
-        Metadata(final String modified, final OffsetDateTime refreshed) {
+        public Metadata(final String modified, final OffsetDateTime refreshed) {
             this.modified = modified;
             this.refreshed = refreshed;
         }

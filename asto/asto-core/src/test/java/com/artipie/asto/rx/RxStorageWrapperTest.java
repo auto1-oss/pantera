@@ -189,4 +189,104 @@ final class RxStorageWrapperTest {
         }, executor).toCompletableFuture().join();
         MatcherAssert.assertThat("Values must match", result.equals(data));
     }
+
+    /**
+     * Test high concurrency scenario to verify no backpressure violations occur.
+     * This is a regression test for the observeOn() bug that caused:
+     * - MissingBackpressureException: Queue is full?!
+     * - Connection resets under concurrent load
+     * - Resource exhaustion (OOM kills)
+     *
+     * The bug was: adding .observeOn(Schedulers.io()) to all RxStorageWrapper methods
+     * caused backpressure violations when the observeOn buffer (128 items) overflowed
+     * under high concurrency.
+     */
+    @Test
+    void highConcurrencyWithoutBackpressureViolations() throws Exception {
+        final int concurrentOperations = 200; // More than observeOn buffer size (128)
+        final int fileSize = 1024 * 100; // 100KB per file
+
+        // Create test data
+        final byte[] testData = new byte[fileSize];
+        Arrays.fill(testData, (byte) 42);
+
+        // Execute many concurrent save operations
+        final java.util.List<io.reactivex.Completable> saveOps = new java.util.ArrayList<>();
+        for (int i = 0; i < concurrentOperations; i++) {
+            final Key key = new Key.From("concurrent", "file-" + i + ".dat");
+            saveOps.add(this.wrapper.save(key, new Content.From(testData)));
+        }
+
+        // Wait for all saves to complete - should NOT throw MissingBackpressureException
+        io.reactivex.Completable.merge(saveOps).blockingAwait();
+
+        // Verify all files were saved correctly
+        final java.util.List<io.reactivex.Single<Boolean>> existsOps = new java.util.ArrayList<>();
+        for (int i = 0; i < concurrentOperations; i++) {
+            final Key key = new Key.From("concurrent", "file-" + i + ".dat");
+            existsOps.add(this.wrapper.exists(key));
+        }
+
+        // All files should exist
+        final java.util.List<Boolean> results = io.reactivex.Single.merge(existsOps)
+            .toList()
+            .blockingGet();
+
+        MatcherAssert.assertThat(
+            "All concurrent operations should succeed",
+            results.stream().allMatch(exists -> exists),
+            new IsEqual<>(true)
+        );
+
+        // Execute many concurrent read operations
+        final java.util.List<io.reactivex.Single<Content>> readOps = new java.util.ArrayList<>();
+        for (int i = 0; i < concurrentOperations; i++) {
+            final Key key = new Key.From("concurrent", "file-" + i + ".dat");
+            readOps.add(this.wrapper.value(key));
+        }
+
+        // Wait for all reads to complete - should NOT throw MissingBackpressureException
+        final java.util.List<Content> contents = io.reactivex.Single.merge(readOps)
+            .toList()
+            .blockingGet();
+
+        MatcherAssert.assertThat(
+            "All files should be readable",
+            contents.size(),
+            new IsEqual<>(concurrentOperations)
+        );
+    }
+
+    /**
+     * Test that RxStorageWrapper handles rapid sequential operations without issues.
+     * This verifies that removing observeOn() doesn't break normal operation.
+     */
+    @Test
+    void rapidSequentialOperationsWork() {
+        final int iterations = 100;
+
+        for (int i = 0; i < iterations; i++) {
+            final Key key = new Key.From("rapid", "item-" + i);
+            final String data = "data-" + i;
+
+            // Save
+            this.wrapper.save(key, new Content.From(data.getBytes(StandardCharsets.UTF_8)))
+                .blockingAwait();
+
+            // Verify exists
+            MatcherAssert.assertThat(
+                this.wrapper.exists(key).blockingGet(),
+                new IsEqual<>(true)
+            );
+
+            // Read back
+            final String readData = this.wrapper.value(key)
+                .to(ContentAs.STRING)
+                .to(SingleInterop.get())
+                .toCompletableFuture()
+                .join();
+
+            MatcherAssert.assertThat(readData, new IsEqual<>(data));
+        }
+    }
 }

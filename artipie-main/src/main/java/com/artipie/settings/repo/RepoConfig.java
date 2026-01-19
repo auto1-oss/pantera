@@ -9,13 +9,11 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.artipie.asto.Key;
-import com.artipie.asto.LoggingStorage;
 import com.artipie.asto.Storage;
 import com.artipie.asto.SubStorage;
 import com.artipie.cache.StoragesCache;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.http.client.RemoteConfig;
-import com.artipie.micrometer.MicrometerStorage;
 import com.artipie.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
@@ -54,10 +52,11 @@ public final class RepoConfig {
         Storage storage = null;
         YamlNode storageNode = repoYaml.value("storage");
         if (storageNode != null) {
-            Storage sub = new SubStorage(prefix,
-                new LoggingStorage(storage(cache, aliases, storageNode))
-            );
-            storage = metrics ? new MicrometerStorage(sub) : sub;
+            // Direct storage without wrappers:
+            // - No MicrometerStorage (metrics overhead, bypassed by optimized slices)
+            // - No LoggingStorage (already bypassed, 2-50% overhead on writes)
+            // Request-level logging and metrics still active via Vert.x HTTP
+            storage = new SubStorage(prefix, storage(cache, aliases, storageNode));
         }
 
         return new RepoConfig(repoYaml, prefix.string(), type, storage);
@@ -157,6 +156,38 @@ public final class RepoConfig {
      */
     public Optional<Long> contentLengthMax() {
         return this.stringOpt("content-length-max").map(Long::valueOf);
+    }
+
+    /**
+     * Group members list (for *-group repositories).
+     * The order of members defines resolution priority.
+     *
+     * @return List of member repository names or empty list if not specified.
+     */
+    public List<String> members() {
+        final YamlSequence seq = this.repoYaml.yamlSequence("members");
+        if (seq == null) {
+            return Collections.emptyList();
+        }
+        final List<String> res = new ArrayList<>(seq.size());
+        seq.forEach(node -> {
+            if (node instanceof Scalar scalar) {
+                res.add(scalar.value());
+            } else {
+                throw new IllegalStateException("`members` element is not scalar in group config");
+            }
+        });
+        return res;
+    }
+
+    /**
+     * Group member request timeout in seconds (for *-group repositories).
+     * Controls how long to wait for each member repository to respond.
+     *
+     * @return Timeout in seconds, or empty if not specified (uses default).
+     */
+    public Optional<Long> groupMemberTimeout() {
+        return this.stringOpt("member_timeout").map(Long::valueOf);
     }
 
     /**

@@ -13,10 +13,13 @@ import com.artipie.docker.Digest;
 import com.artipie.docker.Layers;
 import com.artipie.docker.error.InvalidDigestException;
 import com.artipie.docker.misc.DigestedFlowable;
+import com.artipie.http.Headers;
+import com.artipie.http.slice.ContentWithSize;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -151,7 +154,7 @@ public final class Upload {
      * @param digest Expected blob digest.
      * @return Created blob.
      */
-    public CompletableFuture<Void> putTo(Layers layers, Digest digest) {
+    public CompletableFuture<Void> putTo(final Layers layers, final Digest digest) {
         final Key source = this.chunk(digest);
         return this.storage.exists(source)
             .thenCompose(
@@ -176,6 +179,26 @@ public final class Upload {
                     return CompletableFuture.failedFuture(new InvalidDigestException(digest.toString()));
                 }
             );
+    }
+
+    public CompletableFuture<Void> putTo(
+        final Layers layers,
+        final Digest digest,
+        final Content body,
+        final Headers headers
+    ) {
+        return this.chunks().thenCompose(
+            chunks -> {
+                final CompletableFuture<Void> stage;
+                if (chunks.isEmpty() && body != Content.EMPTY) {
+                    final ContentWithSize sized = new ContentWithSize(body, headers);
+                    stage = this.append(sized).thenApply(ignored -> null);
+                } else {
+                    stage = CompletableFuture.completedFuture(null);
+                }
+                return stage.thenCompose(ignored -> this.putTo(layers, digest));
+            }
+        );
     }
 
     /**
@@ -215,7 +238,12 @@ public final class Upload {
         return this.storage.list(this.root())
             .thenApply(
                 keys -> keys.stream()
-                    .filter(key -> !key.string().equals(this.started().string()))
+                    .filter(
+                        key -> {
+                            final String value = key.string();
+                            return !value.equals("started") && !value.endsWith("/started");
+                        }
+                    )
                     .toList()
             );
     }

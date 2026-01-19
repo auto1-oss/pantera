@@ -27,14 +27,15 @@ final class GroupSliceTest {
 
     @Test
     @Timeout(1)
-    void returnsFirstOrderedSuccessResponse() {
-        final String expects = "ok-150";
+    void returnsFirstSuccessResponseInParallel() {
+        // Parallel race strategy: fastest success wins, not first in order
+        final String expects = "ok-50";  // This is the FASTEST success (50ms)
         Response response = new GroupSlice(
             slice(RsStatus.NOT_FOUND, "not-found-250", Duration.ofMillis(250)),
             slice(RsStatus.NOT_FOUND, "not-found-50", Duration.ofMillis(50)),
-            slice(RsStatus.OK, expects, Duration.ofMillis(150)),
+            slice(RsStatus.OK, "ok-150", Duration.ofMillis(150)),  // Slower success
             slice(RsStatus.NOT_FOUND, "not-found-200", Duration.ofMillis(200)),
-            slice(RsStatus.OK, "ok-50", Duration.ofMillis(50)),
+            slice(RsStatus.OK, expects, Duration.ofMillis(50)),  // FASTEST success - wins!
             slice(RsStatus.OK, "ok-never", Duration.ofDays(1))
         ).response(new RequestLine(RqMethod.GET, "/"), Headers.EMPTY, Content.EMPTY).join();
 

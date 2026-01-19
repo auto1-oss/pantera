@@ -172,9 +172,13 @@ public final class IndexYaml {
                     if (exist) {
                         result =
                             this.storage.value(IndexYaml.INDEX_YAML)
-                                .flatMap(content -> new Concatenation(content).single())
+                                .flatMap(content -> {
+                                    // OPTIMIZATION: Use size hint for efficient pre-allocation
+                                    final long knownSize = content.size().orElse(-1L);
+                                    return Concatenation.withSize(content, knownSize).single();
+                                })
                                 .map(buf -> new String(new Remaining(buf).bytes()))
-                                .map(content -> new Yaml().load(content));
+                                .map(yaml -> new Yaml().load(yaml));
                     } else {
                         result = notexist;
                     }

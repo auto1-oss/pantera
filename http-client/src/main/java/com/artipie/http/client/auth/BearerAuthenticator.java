@@ -15,9 +15,11 @@ import com.artipie.http.rq.RqMethod;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Bearer authenticator using specified authenticator and format to get required token.
@@ -58,7 +60,15 @@ public final class BearerAuthenticator implements Authenticator {
 
     @Override
     public CompletionStage<Headers> authenticate(final Headers headers) {
-        return this.authenticate(new WwwAuthenticate(headers))
+        final Optional<WwwAuthenticate> challenge =
+            StreamSupport.stream(headers.spliterator(), false)
+                .filter(header -> WwwAuthenticate.NAME.equalsIgnoreCase(header.getKey()))
+                .map(header -> new WwwAuthenticate(header.getValue()))
+                .filter(auth -> "Bearer".equalsIgnoreCase(auth.scheme()))
+                .findFirst();
+        return challenge
+            .map(this::authenticate)
+            .orElseThrow(() -> new IllegalStateException("Bearer challenge was not found"))
             .thenApply(Headers::from);
     }
 

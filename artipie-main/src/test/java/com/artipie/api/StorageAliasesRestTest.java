@@ -81,7 +81,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
             vertx, ctx,
             new TestRequest(
                 HttpMethod.PUT, "/api/v1/storages/new-alias",
-                new JsonObject().put("type", "file").put("path", "new/alias/path")
+                new JsonObject().put("type", "fs").put("path", "new/alias/path")
             ),
             resp -> {
                 MatcherAssert.assertThat(
@@ -97,7 +97,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
                             System.lineSeparator(),
                             "storages:",
                             "  \"new-alias\":",
-                            "    type: file",
+                            "    type: fs",
                             "    path: new/alias/path"
                         )
                     )
@@ -117,7 +117,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
         this.requestAndAssert(
             vertx, ctx, new TestRequest(
                 HttpMethod.PUT, String.format("/api/v1/repository/%s/storages/new-alias", rname),
-                new JsonObject().put("type", "file").put("path", "new/alias/path")
+                new JsonObject().put("type", "fs").put("path", "new/alias/path")
             ),
             resp -> {
                 MatcherAssert.assertThat(
@@ -139,7 +139,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
                             "    type: redis",
                             "    config: some",
                             "  \"new-alias\":",
-                            "    type: file",
+                            "    type: fs",
                             "    path: new/alias/path"
                         )
                     )

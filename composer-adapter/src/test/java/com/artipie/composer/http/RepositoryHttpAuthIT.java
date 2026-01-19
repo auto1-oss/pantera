@@ -36,7 +36,7 @@ import org.junit.jupiter.api.condition.OS;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.shaded.org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FileUtils;
 
 /**
  * Integration test for PHP Composer repository with auth.

@@ -63,7 +63,10 @@ public final class SliceDelete implements Slice {
                             nothing -> this.events.ifPresent(item -> item.addDeleteEventByKey(key))
                         ).thenApply(none -> ResponseBuilder.noContent().build());
                     } else {
-                        rsp = CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                        // Consume request body to prevent Vert.x request leak
+                        rsp = body.asBytesFuture().thenApply(ignored ->
+                            ResponseBuilder.notFound().build()
+                        );
                     }
                     return rsp;
                 }

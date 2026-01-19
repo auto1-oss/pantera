@@ -380,4 +380,54 @@ final class FileStorageTest {
             }
         }
     }
+
+    @Test
+    void savesFileWithDeepDirectoryPath() throws Exception {
+        // Test that temp files are created in .tmp directory at storage root
+        // even when the target file is in a deeply nested directory structure
+        // This ensures temp file paths don't exceed filesystem limits
+        final StringBuilder deepPath = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            deepPath.append("level").append(i).append("/");
+        }
+        deepPath.append("file.txt");
+
+        final byte[] content = "test content".getBytes(StandardCharsets.UTF_8);
+        final Key key = new Key.From(deepPath.toString());
+
+        // Should not throw FileSystemException
+        this.storage.save(key, new Content.From(content)).get();
+
+        // Verify content was saved correctly
+        MatcherAssert.assertThat(
+            new BlockingStorage(this.storage).value(key),
+            new IsEqual<>(content)
+        );
+
+        // Verify no temp files left behind in .tmp directory
+        final Path tmpDir = this.tmp.resolve(".tmp");
+        if (Files.exists(tmpDir)) {
+            try (Stream<Path> files = Files.walk(tmpDir)) {
+                final long tempFiles = files
+                    .filter(Files::isRegularFile)
+                    .count();
+                MatcherAssert.assertThat(
+                    "Temporary files in .tmp directory should be cleaned up",
+                    tempFiles,
+                    new IsEqual<>(0L)
+                );
+            }
+        }
+    }
+
+    @Test
+    void listReturnsEmptyForNonExistentDirectory() {
+        // Test that listing a non-existent directory returns empty list instead of throwing
+        final Key nonExistent = new Key.From(".system", "test");
+        MatcherAssert.assertThat(
+            "Listing non-existent directory should return empty list",
+            this.storage.list(nonExistent).join(),
+            new IsEmptyCollection<>()
+        );
+    }
 }

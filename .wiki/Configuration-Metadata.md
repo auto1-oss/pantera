@@ -1,24 +1,25 @@
-# Artifacts metadata
+# Artifacts metadata (PostgreSQL)
 
-Artipie can gather uploaded artifacts metadata and write them into [SQLite](https://www.sqlite.org/index.html) database.
-To enable this mechanism, add the following section into Artipie main configuration file:
+Artipie gathers uploaded artifacts metadata and writes them to a PostgreSQL database.
+To enable this, add the following section to the main configuration file (`meta` section):
 
 ```yaml
 meta:
   artifacts_database:
-    sqlite_data_file_path: /var/artipie/artifacts.db
-    threads_count: 2 # optional, default 1
-    interval_seconds: 3 # optional, default 1
+    postgres_host: localhost           # required: PostgreSQL host
+    postgres_port: 5432                # optional: default 5432
+    postgres_database: artifacts       # required: DB name
+    postgres_user: artipie             # required: DB user
+    postgres_password: artipie         # required: DB password
+    threads_count: 2                   # optional: default 1
+    interval_seconds: 3                # optional: default 1
 ```
 
-The essential here is `artifacts_database` section, other fields are optional. If `sqlite_data_file_path` field is absent,
-a database file will be created at the parent location (directory) of the main configuration file. The metadata gathering
-mechanism uses [quartz](http://www.quartz-scheduler.org/) scheduler to process artifacts metadata under the hood. Quartz
-can be [configured separately](http://www.quartz-scheduler.org/documentation/quartz-2.1.7/configuration/ConfigMain.html),
-by default it uses `org.quartz.simpl.SimpleThreadPool` with 10 threads. If `threads_count` is larger than thread pool size,
-threads amount is limited to the thread pool size.
+The metadata writer runs as a Quartz job and periodically flushes queued events to the database.
+Quartz can be configured separately; by default it uses `org.quartz.simpl.SimpleThreadPool` with 10 threads.
+If `threads_count` exceeds the pool size, it is limited by the pool.
 
-The database has only one table `artifacts` with the following structure:
+The database has a single table `artifacts` with the following structure:
 
 | Name         | Type     | Description                              |
 |--------------|----------|------------------------------------------|
@@ -31,7 +32,10 @@ The database has only one table `artifacts` with the following structure:
 | created_date | datetime | Date uploaded                            |
 | owner        | varchar  | Artifact uploader login                  |
 
-All the fields are not null, unique constraint is created on repo_name, name and version.
+All fields are NOT NULL; a UNIQUE constraint is created on `(repo_name, name, version)`.
+
+Migration note: earlier versions supported SQLite via `sqlite_data_file_path`. This is deprecated in favor of PostgreSQL.
+Please migrate your data and update the configuration to use the `postgres_*` settings.
 
 ## Maven, NPM and PyPI proxy adapters
 

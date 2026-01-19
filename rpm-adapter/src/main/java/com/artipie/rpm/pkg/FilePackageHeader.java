@@ -5,7 +5,8 @@
 package com.artipie.rpm.pkg;
 
 import com.artipie.asto.misc.UncheckedIOScalar;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -14,7 +15,6 @@ import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.logging.Level;
 import org.redline_rpm.ReadableChannelWrapper;
 import org.redline_rpm.Scanner;
 import org.redline_rpm.header.Format;
@@ -63,14 +63,19 @@ public final class FilePackageHeader {
         try (ReadableByteChannel chan = Channels.newChannel(this.pckg)) {
             final Format format;
             try {
+                // Use ByteArrayOutputStream for Scanner output (discarded - Scanner is just parsing)
                 format = new Scanner(
-                    new PrintStream(Logger.stream(Level.FINE, this))
+                    new PrintStream(new ByteArrayOutputStream())
                 ).run(new ReadableChannelWrapper(chan));
             } catch (final RuntimeException ex) {
                 throw new InvalidPackageException(ex);
             }
             final Header header = format.getHeader();
-            Logger.debug(this, "header: %s", header.toString());
+            EcsLogger.debug("com.artipie.rpm")
+                .message("Parsed RPM header: " + header.toString())
+                .eventCategory("repository")
+                .eventAction("package_parsing")
+                .log();
             final int bufsize = 1024;
             int read = 1;
             while (read > 0) {

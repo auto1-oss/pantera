@@ -94,7 +94,11 @@ public class BlockingStorage {
     public byte[] value(final Key key) {
         return new Remaining(
             this.storage.value(key).thenApplyAsync(
-                pub -> new Concatenation(pub).single().blockingGet()
+                pub -> {
+                    // OPTIMIZATION: Use size hint when available for pre-allocation
+                    final long knownSize = pub.size().orElse(-1L);
+                    return Concatenation.withSize(pub, knownSize).single().blockingGet();
+                }
             ).join(),
             true
         ).bytes();

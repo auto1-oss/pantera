@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>org.apache.maven.plugins</groupId>
+  <plugins>
+    <plugin>
+      <prefix>clean</prefix>
+      <artifactId>maven-clean-plugin</artifactId>
+      <name>Apache Maven Clean Plugin</name>
+    </plugin>
+    <plugin>
+      <prefix>compiler</prefix>
+      <artifactId>maven-compiler-plugin</artifactId>
+      <name>Apache Maven Compiler Plugin</name>
+    </plugin>
+  </plugins>
+</metadata>
+

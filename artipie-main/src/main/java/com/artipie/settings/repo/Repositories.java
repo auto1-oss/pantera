@@ -6,6 +6,7 @@ package com.artipie.settings.repo;
 
 import java.util.Collection;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Artipie repositories registry.
@@ -29,7 +30,20 @@ public interface Repositories {
     Collection<RepoConfig> configs();
 
     /**
-     * Refreshes repositories configurations.
+     * Refresh repositories asynchronously.
+     *
+     * @return future completed when reload finishes
      */
-    void refresh();
+    default CompletableFuture<Void> refreshAsync() {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Refresh repositories synchronously.
+     * @deprecated Prefer {@link #refreshAsync()} to avoid blocking critical threads.
+     */
+    @Deprecated
+    default void refresh() {
+        refreshAsync().join();
+    }
 }

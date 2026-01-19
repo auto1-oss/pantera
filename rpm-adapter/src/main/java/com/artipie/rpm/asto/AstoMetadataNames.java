@@ -66,9 +66,10 @@ final class AstoMetadataNames {
                 key -> new XmlPackage.Stream(this.cnfg.filelists()).get()
                     .anyMatch(item -> key.string().endsWith(item.name()))
             )
+            // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
             .<Pair<Key, Key>>flatMapSingle(
                 key -> rxsto.value(key).flatMap(
-                    val -> Single.fromFuture(
+                    val -> com.artipie.asto.rx.RxFuture.single(
                         new ContentDigest(val, () -> this.cnfg.digest().messageDigest()).hex()
                             .thenApply(
                                 hex -> new ImmutablePair<Key, Key>(

@@ -15,6 +15,7 @@ import com.artipie.docker.error.InvalidManifestException;
 import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.manifest.ManifestLayer;
 import com.artipie.docker.misc.Pagination;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
@@ -71,21 +72,62 @@ public final class AstoManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        EcsLogger.debug("com.artipie.docker")
+            .message("AstoManifests.get() called")
+            .eventCategory("repository")
+            .eventAction("manifest_get")
+            .field("container.image.hash.all", ref.digest())
+            .log();
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
-                digest -> this.blobs.blob(digest)
-                    .thenCompose(
-                        blobOpt -> blobOpt
-                            .map(
-                                blob -> blob.content()
-                                    .thenCompose(Content::asBytesFuture)
-                                    .thenApply(bytes -> Optional.of(
-                                        new Manifest(blob.digest(), bytes))
-                                    )
-                            )
-                            .orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
-                    )
-            ).orElseGet(() -> CompletableFuture.completedFuture(Optional.empty()))
+                digest -> {
+                    EcsLogger.debug("com.artipie.docker")
+                        .message("Found link for manifest reference")
+                        .eventCategory("repository")
+                        .eventAction("manifest_get")
+                        .field("container.image.hash.all", ref.digest())
+                        .field("package.checksum", digest.string())
+                        .log();
+                    return this.blobs.blob(digest)
+                        .thenCompose(
+                            blobOpt -> blobOpt
+                                .map(
+                                    blob -> blob.content()
+                                        .thenCompose(Content::asBytesFuture)
+                                        .thenApply(bytes -> {
+                                            EcsLogger.info("com.artipie.docker")
+                                                .message("Creating Manifest from bytes")
+                                                .eventCategory("repository")
+                                                .eventAction("manifest_get")
+                                                .eventOutcome("success")
+                                                .field("package.checksum", digest.string())
+                                                .field("package.size", bytes.length)
+                                                .log();
+                                            return Optional.of(new Manifest(blob.digest(), bytes));
+                                        })
+                                )
+                                .orElseGet(() -> {
+                                    EcsLogger.warn("com.artipie.docker")
+                                        .message("Blob not found for digest")
+                                        .eventCategory("repository")
+                                        .eventAction("manifest_get")
+                                        .eventOutcome("failure")
+                                        .field("package.checksum", digest.string())
+                                        .log();
+                                    return CompletableFuture.completedFuture(Optional.empty());
+                                })
+                        );
+                }
+            ).orElseGet(() -> {
+                EcsLogger.warn("com.artipie.docker")
+                    .message("No link found for manifest reference")
+                    .eventCategory("repository")
+                    .eventAction("manifest_get")
+                    .eventOutcome("failure")
+                    .field("container.image.hash.all", ref.digest())
+                    .log();
+                return CompletableFuture.completedFuture(Optional.empty());
+            })
         );
     }
 
@@ -104,19 +146,28 @@ public final class AstoManifests implements Manifests {
      * @return Validation completion.
      */
     private CompletionStage<Void> validate(final Manifest manifest) {
+        // Check if this is a manifest list (multi-platform)
+        boolean isManifestList = manifest.isManifestList();
+
         final Stream<Digest> digests;
-        try {
-            digests = Stream.concat(
-                Stream.of(manifest.config()),
-                manifest.layers().stream()
-                    .filter(layer -> layer.urls().isEmpty())
-                    .map(ManifestLayer::digest)
-            );
-        } catch (final JsonException ex) {
-            throw new InvalidManifestException(
-                String.format("Failed to parse manifest: %s", ex.getMessage()),
-                ex
-            );
+        if (isManifestList) {
+            // Manifest lists don't have config or layers, skip validation
+            digests = Stream.empty();
+        } else {
+            // Regular manifests have config and layers
+            try {
+                digests = Stream.concat(
+                    Stream.of(manifest.config()),
+                    manifest.layers().stream()
+                        .filter(layer -> layer.urls().isEmpty())
+                        .map(ManifestLayer::digest)
+                );
+            } catch (final JsonException ex) {
+                throw new InvalidManifestException(
+                    String.format("Failed to parse manifest: %s", ex.getMessage()),
+                    ex
+                );
+            }
         }
         return CompletableFuture.allOf(
             Stream.concat(

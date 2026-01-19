@@ -55,8 +55,13 @@ public final class FileChecksum implements Checksum {
     @Override
     public String hex() throws IOException {
         final MessageDigest digest = this.dgst.messageDigest();
+        // Use heap buffer instead of direct buffer for short-lived operations.
+        // Direct buffers are intended for long-lived I/O operations where the
+        // overhead of native memory allocation is amortized. For checksum
+        // calculation which completes quickly, heap buffers are more appropriate
+        // and avoid potential direct memory leaks if cleanup fails.
+        final ByteBuffer buf = ByteBuffer.allocate(FileChecksum.BUF_SIZE);
         try (FileChannel chan = FileChannel.open(this.file, StandardOpenOption.READ)) {
-            final ByteBuffer buf = ByteBuffer.allocateDirect(FileChecksum.BUF_SIZE);
             while (chan.read(buf) > 0) {
                 ((Buffer) buf).flip();
                 digest.update(buf);

@@ -5,6 +5,7 @@
 package com.artipie.scheduling;
 
 import com.artipie.asto.Key;
+import java.util.Optional;
 import java.util.Objects;
 
 /**
@@ -30,15 +31,18 @@ public final class ProxyArtifactEvent {
     private final String owner;
 
     /**
+     * Optional release timestamp in milliseconds since epoch.
+     */
+    private final Optional<Long> release;
+
+    /**
      * Ctor.
      * @param key Artifact key
      * @param rname Repository name
      * @param owner Artifact owner name
      */
     public ProxyArtifactEvent(final Key key, final String rname, final String owner) {
-        this.key = key;
-        this.rname = rname;
-        this.owner = owner;
+        this(key, rname, owner, Optional.empty());
     }
 
     /**
@@ -47,7 +51,29 @@ public final class ProxyArtifactEvent {
      * @param rname Repository name
      */
     public ProxyArtifactEvent(final Key key, final String rname) {
-        this(key, rname, ArtifactEvent.DEF_OWNER);
+        this(key, rname, ArtifactEvent.DEF_OWNER, Optional.empty());
+    }
+
+    /**
+     * Ctor.
+     * @param key Artifact key
+     * @param rname Repository name
+     * @param owner Artifact owner name
+     * @param release Release timestamp in millis since epoch (optional)
+     */
+    public ProxyArtifactEvent(final Key key, final String rname, final String owner, final Optional<Long> release) {
+        this.key = key;
+        this.rname = rname;
+        this.owner = owner;
+        this.release = release == null ? Optional.empty() : release;
+    }
+
+    /**
+     * Optional release timestamp in milliseconds.
+     * @return Optional timestamp
+     */
+    public Optional<Long> releaseMillis() {
+        return this.release;
     }
 
     /**

@@ -4,6 +4,7 @@
  */
 package com.artipie.api;
 
+import com.artipie.auth.OktaAuthContext;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.Tokens;
@@ -63,16 +64,38 @@ public final class AuthTokenRest extends BaseRest {
      */
     private void getJwtToken(final RoutingContext routing) {
         final JsonObject body = routing.body().asJsonObject();
-        final Optional<AuthUser> user = this.auth.user(
-            body.getString("name"), body.getString("pass")
-        );
-        if (user.isPresent()) {
-            routing.response().setStatusCode(HttpStatus.OK_200).end(
-                new JsonObject().put("token", this.tokens.generate(user.get())).encode()
-            );
-        } else {
-            routing.response().setStatusCode(HttpStatus.UNAUTHORIZED_401).send();
-        }
+        final String mfa = body.getString("mfa_code");
+        final String name = body.getString("name");
+        final String pass = body.getString("pass");
+        final boolean permanent = body.getBoolean("permanent", false);
+        // Offload to worker thread to avoid blocking the event loop (MFA push polling)
+        routing.vertx().<Optional<AuthUser>>executeBlocking(
+            () -> {
+                OktaAuthContext.setMfaCode(mfa);
+                try {
+                    return this.auth.user(name, pass);
+                } finally {
+                    OktaAuthContext.clear();
+                }
+            },
+            false
+        ).onComplete(ar -> {
+            if (ar.succeeded()) {
+                final Optional<AuthUser> user = ar.result();
+                if (user.isPresent()) {
+                    final String token = permanent
+                        ? this.tokens.generate(user.get(), true)
+                        : this.tokens.generate(user.get());
+                    routing.response().setStatusCode(HttpStatus.OK_200).end(
+                        new JsonObject().put("token", token).encode()
+                    );
+                } else {
+                    routing.response().setStatusCode(HttpStatus.UNAUTHORIZED_401).send();
+                }
+            } else {
+                routing.fail(ar.cause());
+            }
+        });
     }
 
 }

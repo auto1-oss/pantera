@@ -77,7 +77,10 @@ final class MavenProxySliceITCase {
                     Authenticator.ANONYMOUS,
                     new FromStorageCache(this.storage),
                     Optional.of(this.events),
-                    "my-maven-proxy"
+                    "my-maven-proxy",
+                    "maven-proxy",
+                    com.artipie.cooldown.NoopCooldownService.INSTANCE,
+                    Optional.of(this.storage)
                 )
             )
         );

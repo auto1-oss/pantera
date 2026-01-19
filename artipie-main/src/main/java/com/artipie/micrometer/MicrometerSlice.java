@@ -71,6 +71,7 @@ public final class MicrometerSlice implements Slice {
     public CompletableFuture<Response> response(final RequestLine line, final Headers head,
                                                 final Content body) {
         final String method = line.method().value();
+        final long startTime = System.currentTimeMillis();
         final Counter.Builder requestCounter = Counter.builder("artipie.request.counter")
             .description("HTTP requests counter")
             .tag(MicrometerSlice.METHOD, method);
@@ -90,10 +91,22 @@ public final class MicrometerSlice implements Slice {
             .thenCompose(response -> {
                 requestCounter.tag(MicrometerSlice.STATUS, response.status().name())
                     .register(MicrometerSlice.this.registry).increment();
-                return ResponseBuilder.from(response.status())
-                    .headers(response.headers())
-                    .body(new MicrometerPublisher(response.body(), responseBody))
-                    .completedFuture();
+                // CRITICAL FIX: Do NOT wrap response body with MicrometerPublisher.
+                // Response bodies from storage are often Content.OneTime which can only
+                // be subscribed once. Wrapping causes double subscription: once by
+                // MicrometerPublisher for metrics, once by Vert.x for sending response.
+                // Use Content-Length header for response size tracking instead.
+                response.headers().values("Content-Length").stream()
+                    .findFirst()
+                    .ifPresent(contentLength -> {
+                        try {
+                            responseBody.record(Long.parseLong(contentLength));
+                        } catch (NumberFormatException ignored) {
+                            // Skip if Content-Length is invalid
+                        }
+                    });
+                // Pass response through unchanged - no body wrapping
+                return CompletableFuture.completedFuture(response);
             }).handle(
                 (resp, err) -> {
                     CompletableFuture<Response> res;
@@ -103,7 +116,18 @@ public final class MicrometerSlice implements Slice {
                         timer.stop(this.registry.timer(name));
                         res = CompletableFuture.failedFuture(err);
                     } else {
+                        final long duration = System.currentTimeMillis() - startTime;
                         timer.stop(this.registry.timer(name, MicrometerSlice.STATUS, resp.status().name()));
+
+                        // Record HTTP request metrics via MicrometerMetrics
+                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                            com.artipie.metrics.MicrometerMetrics.getInstance().recordHttpRequest(
+                                method,
+                                String.valueOf(resp.status().code()),
+                                duration
+                            );
+                        }
+
                         res = CompletableFuture.completedFuture(resp);
                     }
                     return res;

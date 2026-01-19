@@ -58,7 +58,8 @@ class JettyClientSliceTest {
             this.client,
             this.client.getSslContextFactory().isTrustAll(),
             "localhost",
-            port
+            port,
+            0L
         );
     }
 

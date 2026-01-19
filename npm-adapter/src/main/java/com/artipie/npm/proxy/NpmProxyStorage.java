@@ -41,4 +41,35 @@ public interface NpmProxyStorage {
      * @return NPM asset or empty
      */
     Maybe<NpmAsset> getAsset(String path);
+
+    /**
+     * Retrieve package metadata (without loading full content into memory).
+     * Returns only the metadata (last-modified, refreshed dates).
+     * @param name Package name
+     * @return Package metadata or empty
+     */
+    Maybe<NpmPackage.Metadata> getPackageMetadata(String name);
+
+    /**
+     * Retrieve package content as reactive stream (without loading into memory).
+     * @param name Package name
+     * @return Package content as reactive Content or empty
+     */
+    Maybe<com.artipie.asto.Content> getPackageContent(String name);
+
+    /**
+     * Retrieve pre-computed abbreviated package content as reactive stream.
+     * This is memory-efficient for npm install requests that only need abbreviated format.
+     * Falls back to empty if abbreviated version is not cached.
+     * @param name Package name
+     * @return Abbreviated package content as reactive Content or empty
+     */
+    Maybe<com.artipie.asto.Content> getAbbreviatedContent(String name);
+
+    /**
+     * Check if abbreviated metadata exists for a package.
+     * @param name Package name
+     * @return True if abbreviated metadata is cached
+     */
+    Maybe<Boolean> hasAbbreviatedContent(String name);
 }

@@ -1,0 +1,6 @@
+repo:
+  type: nuget
+  storage:
+    type: fs
+    path: /var/artipie/data
+  url: http://localhost:8080/nuget

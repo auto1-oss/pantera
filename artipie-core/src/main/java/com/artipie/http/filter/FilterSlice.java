@@ -57,6 +57,9 @@ public class FilterSlice implements Slice {
         if (this.filters.allowed(line, headers)) {
             return this.origin.response(line, headers, body);
         }
-        return CompletableFuture.completedFuture(ResponseBuilder.forbidden().build());
+        // Consume request body to prevent Vert.x request leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.forbidden().build()
+        );
     }
 }

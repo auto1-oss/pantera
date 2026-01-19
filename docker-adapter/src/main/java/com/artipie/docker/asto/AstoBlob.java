@@ -57,6 +57,7 @@ public final class AstoBlob implements Blob {
 
     @Override
     public CompletableFuture<Content> content() {
+        // Storage.value() already returns Content with size, no need to wrap
         return this.storage.value(this.key);
     }
 }

@@ -18,3 +18,15 @@ classes/
 .settings/
 .storage/data/**
 .storage/data/test/**
+artipie-main/docker-compose/artipie/data/**
+artipie-main/docker-compose/artipie/artifacts/npm/node_modules/**
+artipie-main/docker-compose/artipie/cache/**
+artipie-main/docker-compose/artipie/artifacts/php/vendor/**
+
+# Environment files with secrets - never commit these!
+.env
+!.env.example
+artipie-main/docker-compose/.env
+
+# AI agent task/analysis documents - not part of product documentation
+agents/

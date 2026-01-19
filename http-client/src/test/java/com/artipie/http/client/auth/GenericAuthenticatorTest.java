@@ -75,4 +75,27 @@ class GenericAuthenticatorTest {
             Matchers.contains(Authorization.NAME)
         );
     }
+
+    @Test
+    void shouldPreferBearerWhenBothSchemesPresentWithoutCredentials() {
+        final FakeClientSlices slices = new FakeClientSlices(
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok()
+                    .jsonBody("{\"access_token\":\"anon-token\"}")
+                    .build()
+            )
+        );
+        final Headers challenges = new Headers()
+            .add(WwwAuthenticate.NAME, "Basic realm=\"registry\"")
+            .add(WwwAuthenticate.NAME,
+                "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/nginx:pull\"")
+        ;
+        final Headers headers = GenericAuthenticator.create(slices, null, null)
+            .authenticate(challenges)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            headers.single(Authorization.NAME).getValue(),
+            Matchers.startsWith("Bearer ")
+        );
+    }
 }

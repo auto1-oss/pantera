@@ -47,4 +47,48 @@ public final class AuthorizationBasicTest {
             new IsEqual<>("qwerty")
         );
     }
+    
+    @Test
+    void shouldThrowOnEmptyCredentials() {
+        // Empty credentials string fails at regex parsing level
+        final Authorization.Basic basic = new Authorization.Basic("");
+        org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalStateException.class,
+            basic::username,
+            "Should throw exception on empty credentials"
+        );
+    }
+    
+    @Test
+    void shouldThrowOnMissingPassword() {
+        // Base64("alice") = "YWxpY2U=" (no colon, no password)
+        final Authorization.Basic basic = new Authorization.Basic("YWxpY2U=");
+        org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalArgumentException.class,
+            basic::password,
+            "Should throw IllegalArgumentException when password is missing"
+        );
+    }
+    
+    @Test
+    void shouldHandleUsernameWithoutPassword() {
+        // Base64("alice") = "YWxpY2U=" (no colon, no password)
+        final Authorization.Basic basic = new Authorization.Basic("YWxpY2U=");
+        MatcherAssert.assertThat(
+            "Should extract username even without password",
+            basic.username(),
+            new IsEqual<>("alice")
+        );
+    }
+    
+    @Test
+    void shouldHandlePasswordWithColon() {
+        // Base64("alice:pass:word") = "YWxpY2U6cGFzczp3b3Jk"
+        final Authorization.Basic basic = new Authorization.Basic("YWxpY2U6cGFzczp3b3Jk");
+        MatcherAssert.assertThat(
+            "Password should include everything after first colon",
+            basic.password(),
+            new IsEqual<>("pass:word")
+        );
+    }
 }

@@ -14,7 +14,6 @@ import org.apache.commons.codec.binary.Hex;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonPatchBuilder;
-import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -34,6 +33,14 @@ public interface MetaUpdate {
 
     /**
      * Update `meta.json` by adding information from the uploaded json.
+     * 
+     * <p>Uses per-version file layout to eliminate lock contention:</p>
+     * <ul>
+     *   <li>Each version writes to .versions/VERSION.json</li>
+     *   <li>No locking needed - different versions don't compete</li>
+     *   <li>132 versions = 132 parallel writes (not serial!)</li>
+     * </ul>
+     * 
      * @since 0.9
      */
     class ByJson implements MetaUpdate {
@@ -53,27 +60,61 @@ public interface MetaUpdate {
 
         @Override
         public CompletableFuture<Void> update(final Key prefix, final Storage storage) {
-            final Key keymeta = new Key.From(prefix, "meta.json");
-            return storage.exists(keymeta)
-                .thenCompose(
-                    exists -> {
-                        if (exists) {
-                            return storage.value(keymeta)
-                                .thenCompose(Content::asJsonObjectFuture)
-                                .thenApply(Meta::new);
-                        }
-                        return CompletableFuture.completedFuture(
-                            new Meta(new NpmPublishJsonToMetaSkelethon(this.json).skeleton())
-                        );
-                    })
-                .thenCompose(
-                    meta -> {
-                        JsonObject updated = meta.updatedMeta(this.json);
-                        return storage.save(
-                            keymeta, new Content.From(updated.toString().getBytes(StandardCharsets.UTF_8))
-                        );
-                    }
+            // Extract version from JSON
+            final String version = this.extractVersion();
+            if (version == null) {
+                return CompletableFuture.failedFuture(
+                    new IllegalArgumentException("No version found in package JSON")
                 );
+            }
+            
+            // Extract version-specific metadata from the "versions" field
+            final JsonObject versionData;
+            if (this.json.containsKey("versions") 
+                && this.json.getJsonObject("versions").containsKey(version)) {
+                versionData = this.json.getJsonObject("versions").getJsonObject(version);
+            } else {
+                // Fallback: use the entire JSON if it doesn't have versions structure
+                versionData = this.json;
+            }
+            
+            // Use per-version layout - no locking needed!
+            // Each version writes to its own file
+            final PerVersionLayout layout = new PerVersionLayout(storage);
+            return layout.addVersion(prefix, version, versionData)
+                .toCompletableFuture();
+        }
+        
+        /**
+         * Extract version from JSON.
+         * Tries multiple locations where version might be specified.
+         * 
+         * @return Version string or null if not found
+         */
+        private String extractVersion() {
+            // Try direct version field
+            if (this.json.containsKey("version")) {
+                return this.json.getString("version");
+            }
+            
+            // Try dist-tags/latest
+            if (this.json.containsKey("dist-tags")) {
+                final JsonObject distTags = this.json.getJsonObject("dist-tags");
+                if (distTags.containsKey("latest")) {
+                    return distTags.getString("latest");
+                }
+            }
+            
+            // Try first version in versions object
+            if (this.json.containsKey("versions")) {
+                final JsonObject versions = this.json.getJsonObject("versions");
+                if (!versions.isEmpty()) {
+                    final String firstKey = versions.keySet().iterator().next();
+                    return firstKey;
+                }
+            }
+            
+            return null;
         }
     }
 

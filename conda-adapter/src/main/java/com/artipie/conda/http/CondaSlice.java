@@ -21,6 +21,7 @@ import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
@@ -100,7 +101,7 @@ public final class CondaSlice extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     new TokenAuthSlice(
-                        new SliceDownload(storage, CondaSlice.transform()),
+                        new StorageArtifactSlice(storage),
                         new OperationControl(
                             policy, new AdapterBasicPermission(repo, Action.Standard.READ)
                         ), tokens.auth()
@@ -112,7 +113,7 @@ public final class CondaSlice extends Slice.Wrap {
                         MethodRule.GET
                     ),
                     new BasicAuthzSlice(
-                        new SliceDownload(storage, CondaSlice.transform()), users,
+                        new StorageArtifactSlice(storage), users,
                         new OperationControl(
                             policy, new AdapterBasicPermission(repo, Action.Standard.READ)
                         )

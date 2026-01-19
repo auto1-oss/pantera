@@ -80,32 +80,36 @@ final class PushChartSlice implements Slice {
     ) {
         final Optional<String> upd = new RqParams(line.uri()).value("updateIndex");
         return memory(body).flatMapCompletable(
-                tgz -> new RxStorageWrapper(this.storage).save(
-                    new Key.From(tgz.name()),
-                    new Content.From(tgz.bytes())
-                ).andThen(
-                    Completable.defer(
-                        () -> {
-                            final Completable res;
-                            if (upd.isEmpty() || "true".equals(upd.get())) {
-                                final ChartYaml chart = tgz.chartYaml();
-                                res = new IndexYaml(this.storage).update(tgz);
-                                this.events.ifPresent(
-                                    queue -> queue.add(
-                                        new ArtifactEvent(
-                                            PushChartSlice.REPO_TYPE, this.rname,
-                                            new Login(headers).getValue(),
-                                            chart.name(), chart.version(), tgz.size()
+                tgz -> {
+                    // Organize by chart name: <chart_name>/<chart_name>-<version>.tgz
+                    final ChartYaml chart = tgz.chartYaml();
+                    final Key artifactKey = new Key.From(chart.name(), tgz.name());
+                    return new RxStorageWrapper(this.storage).save(
+                        artifactKey,
+                        new Content.From(tgz.bytes())
+                    ).andThen(
+                        Completable.defer(
+                            () -> {
+                                final Completable res;
+                                if (upd.isEmpty() || "true".equals(upd.get())) {
+                                    res = new IndexYaml(this.storage).update(tgz);
+                                    this.events.ifPresent(
+                                        queue -> queue.add(
+                                            new ArtifactEvent(
+                                                PushChartSlice.REPO_TYPE, this.rname,
+                                                new Login(headers).getValue(),
+                                                chart.name(), chart.version(), tgz.size()
+                                            )
                                         )
-                                    )
-                                );
-                            } else {
-                                res = Completable.complete();
+                                    );
+                                } else {
+                                    res = Completable.complete();
+                                }
+                                return res;
                             }
-                            return res;
-                        }
-                    )
-                )
+                        )
+                    );
+                }
             ).andThen(Single.just(ResponseBuilder.ok().build()))
             .to(SingleInterop.get())
             .toCompletableFuture();

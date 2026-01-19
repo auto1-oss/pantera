@@ -14,6 +14,8 @@ import javax.json.JsonObject;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -41,11 +43,17 @@ public final class AstoRepository implements Repository {
     private final Optional<String> prefix;
 
     /**
+     * Satis layout handler for lock-free per-package metadata.
+     */
+    private final SatisLayout satis;
+
+
+    /**
      * Ctor.
      * @param storage Storage to store all repository data.
      */
     public AstoRepository(final Storage storage) {
-        this(storage, Optional.empty());
+        this(storage, Optional.empty(), Optional.empty());
     }
 
     /**
@@ -54,8 +62,23 @@ public final class AstoRepository implements Repository {
      * @param prefix Prefix with url for uploaded archive.
      */
     public AstoRepository(final Storage storage, final Optional<String> prefix) {
+        this(storage, prefix, Optional.empty());
+    }
+
+    /**
+     * Ctor.
+     * @param storage Storage to store all repository data
+     * @param prefix Base URL for uploaded archive
+     * @param repo Repository name
+     */
+    public AstoRepository(
+        final Storage storage,
+        final Optional<String> prefix,
+        final Optional<String> repo
+    ) {
         this.asto = storage;
-        this.prefix = prefix;
+        this.prefix = prefix.map(url -> AstoRepository.ensureRepoUrl(url, repo));
+        this.satis = new SatisLayout(storage, this.prefix);
     }
 
     @Override
@@ -76,25 +99,9 @@ public final class AstoRepository implements Repository {
                 .thenCompose(Content::asBytesFuture)
                 .thenCompose(bytes -> {
                     final Package pack = new JsonPackage(bytes);
-                    return CompletableFuture.allOf(
-                        this.packages().thenCompose(
-                            packages -> packages.orElse(new JsonPackages())
-                                .add(pack, vers)
-                                .thenCompose(
-                                    pkgs -> pkgs.save(
-                                        this.asto, AstoRepository.ALL_PACKAGES
-                                    )
-                                )
-                        ).toCompletableFuture(),
-                        pack.name().thenCompose(
-                            name -> this.packages(name).thenCompose(
-                                packages -> packages.orElse(new JsonPackages())
-                                    .add(pack, vers)
-                                    .thenCompose(
-                                        pkgs -> pkgs.save(this.asto, name.key())
-                                    )
-                            )
-                        ).toCompletableFuture()
+                    return pack.name().thenCompose(
+                        name -> this.updatePackages(AstoRepository.ALL_PACKAGES, pack, vers)
+                            .thenCompose(ignored -> this.updatePackages(name.key(), pack, vers))
                     ).thenCompose(
                         ignored -> this.asto.delete(key)
                     );
@@ -105,8 +112,7 @@ public final class AstoRepository implements Repository {
     @Override
     public CompletableFuture<Void> addArchive(final Archive archive, final Content content) {
         final Key key = archive.name().artifact();
-        final Key rand = new Key.From(UUID.randomUUID().toString());
-        final Key tmp = new Key.From(rand, archive.name().full());
+        final Key tmp = new Key.From(String.format("%s.tmp", UUID.randomUUID()));
         return this.asto.save(key, content)
             .thenCompose(
                 nothing -> this.asto.value(key)
@@ -123,19 +129,15 @@ public final class AstoRepository implements Repository {
                                 ).thenCompose(arch -> this.asto.save(tmp, arch))
                                 .thenCompose(noth -> this.asto.delete(key))
                                 .thenCompose(noth -> this.asto.move(tmp, key))
-                                .thenCombine(
-                                    this.packages(),
-                                    (noth, packages) -> packages.orElse(new JsonPackages())
-                                        .add(
-                                            new JsonPackage(this.addDist(compos, key)),
-                                            Optional.empty()
-                                        )
-                                        .thenCompose(
-                                            pkgs -> pkgs.save(
-                                                this.asto, AstoRepository.ALL_PACKAGES
-                                            )
-                                        )
-                                ).thenCompose(Function.identity())
+                                .thenCompose(
+                                    noth -> {
+                                        final Package pack = new JsonPackage(this.addDist(compos, key));
+                                        return pack.name().thenCompose(
+                                            name -> this.updatePackages(AstoRepository.ALL_PACKAGES, pack, Optional.empty())
+                                                .thenCompose(ignored -> this.updatePackages(name.key(), pack, Optional.empty()))
+                                        );
+                                    }
+                                )
                             ).thenCompose(Function.identity())
                     )
             );
@@ -194,28 +196,115 @@ public final class AstoRepository implements Repository {
     /**
      * Add `dist` field to composer json.
      * @param compos Composer json file
-     * @param path Prefix path for uploading tgz archive
+     * @param path Prefix path for uploading archive (includes extension)
      * @return Composer json with added `dist` field.
      */
     private byte[] addDist(final JsonObject compos, final Key path) {
         final String url = this.prefix.orElseThrow(
             () -> new IllegalStateException("Prefix url for `dist` for uploaded archive was empty.")
         ).replaceAll("/$", "");
-        try {
-            return Json.createObjectBuilder(compos).add(
-                "dist", Json.createObjectBuilder()
-                    .add("url", new URI(String.format("%s/%s", url, path.string())).toString())
-                    .add("type", "zip")
-                    .build()
-                ).build()
-                .toString()
-                .getBytes(StandardCharsets.UTF_8);
-        } catch (final URISyntaxException exc) {
-            throw new IllegalStateException(
-                String.format("Failed to combine url `%s` with path `%s`", url, path.string()),
-                exc
-            );
+        
+        // Detect archive type from path extension
+        final String pathStr = path.string();
+        final String distType = pathStr.endsWith(".tar.gz") || pathStr.endsWith(".tgz") 
+            ? "tar" 
+            : "zip";
+        
+        // Build full URL by appending path to base URL
+        // Note: URI.resolve() with absolute paths replaces the path, so we concatenate instead
+        final String fullUrl;
+        if (pathStr.startsWith("/")) {
+            // Path is absolute, append to base URL
+            fullUrl = url.endsWith("/") ? url + pathStr.substring(1) : url + pathStr;
+        } else {
+            // Path is relative, ensure proper separation
+            fullUrl = url.endsWith("/") ? url + pathStr : url + "/" + pathStr;
         }
+        
+        return Json.createObjectBuilder(compos).add(
+            "dist", Json.createObjectBuilder()
+                .add("url", fullUrl)
+                .add("type", distType)
+                .build()
+        ).build()
+            .toString()
+            .getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Ensure repository URL contains repository name as the last segment.
+     * @param base Base URL from configuration
+     * @param repo Repository name
+     * @return Base URL guaranteed to end with the repository name segment
+     */
+    private static String ensureRepoUrl(final String base, final Optional<String> repo) {
+        if (repo.isEmpty() || repo.get().isBlank()) {
+            return base;
+        }
+        final String normalizedRepo = repo.get().trim()
+            .replaceAll("^/+", "")
+            .replaceAll("/+$", "");
+        if (normalizedRepo.isEmpty()) {
+            return base;
+        }
+        try {
+            final URI uri = new URI(base);
+            final String path = uri.getPath();
+            final List<String> segments = new ArrayList<>();
+            if (path != null && !path.isBlank()) {
+                for (final String segment : path.split("/")) {
+                    if (!segment.isEmpty()) {
+                        segments.add(segment);
+                    }
+                }
+            }
+            if (segments.isEmpty() || !segments.get(segments.size() - 1).equals(normalizedRepo)) {
+                segments.add(normalizedRepo);
+            }
+            final String newPath = "/" + String.join("/", segments);
+            final URI updated = new URI(
+                uri.getScheme(),
+                uri.getUserInfo(),
+                uri.getHost(),
+                uri.getPort(),
+                newPath,
+                uri.getQuery(),
+                uri.getFragment()
+            );
+            return updated.toString();
+        } catch (final URISyntaxException ex) {
+            return base;
+        }
+    }
+
+    /**
+     * Update package metadata using Satis layout (per-package files).
+     * 
+     * <p>For ALL_PACKAGES key: Skip update (root packages.json generated on-demand)</p>
+     * <p>For per-package keys: Use Satis layout with per-package file locking</p>
+     * 
+     * @param metadataKey Key to metadata file
+     * @param pack Package to add
+     * @param version Version to add
+     * @return Completion stage
+     */
+    private CompletionStage<Void> updatePackages(
+        final Key metadataKey,
+        final Package pack,
+        final Optional<String> version
+    ) {
+        // If updating global packages.json (ALL_PACKAGES), skip it
+        // In Satis model, root packages.json is generated on-demand
+        if (metadataKey.equals(AstoRepository.ALL_PACKAGES)) {
+            // Skip global packages.json update - eliminates bottleneck!
+            // Root packages.json will be generated on read with provider references
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        // Use Satis layout for per-package metadata
+        // Each package has its own file in p2/ directory
+        // This eliminates lock contention between different packages
+        return this.satis.addPackageVersion(pack, version);
     }
 
     /**
@@ -225,12 +314,25 @@ public final class AstoRepository implements Repository {
      * @return Packages found by name, might be empty.
      */
     private CompletionStage<Optional<Packages>> packages(final Key key) {
+        // If reading root packages.json (ALL_PACKAGES), generate it on-demand from p2/
+        if (key.equals(AstoRepository.ALL_PACKAGES)) {
+            return this.satis.generateRootPackagesJson()
+                .thenCompose(nothing -> this.asto.value(key))
+                .thenApply(content -> (Packages) new JsonPackages(content))
+                .thenApply(Optional::of)
+                .exceptionally(err -> {
+                    // If generation fails, return empty (repo might be empty)
+                    return Optional.empty();
+                });
+        }
+        
+        // For per-package reads, use existing logic
         return this.asto.exists(key).thenCompose(
             exists -> {
                 final CompletionStage<Optional<Packages>> packages;
                 if (exists) {
                     packages = this.asto.value(key)
-                        .thenApply(JsonPackages::new)
+                        .thenApply(content -> (Packages) new JsonPackages(content))
                         .thenApply(Optional::of);
                 } else {
                     packages = CompletableFuture.completedFuture(Optional.empty());

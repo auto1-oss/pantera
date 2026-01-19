@@ -5,8 +5,8 @@
 package com.artipie.docker.cache;
 
 import com.artipie.asto.Content;
-import com.artipie.asto.LoggingStorage;
 import com.artipie.asto.memory.InMemoryStorage;
+import com.artipie.docker.Blob;
 import com.artipie.docker.Digest;
 import com.artipie.docker.ExampleStorage;
 import com.artipie.docker.Layers;
@@ -15,6 +15,7 @@ import com.artipie.docker.Manifests;
 import com.artipie.docker.Repo;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.Uploads;
+import com.artipie.docker.cache.DockerProxyCooldownInspector;
 import com.artipie.docker.fake.FakeManifests;
 import com.artipie.docker.fake.FullTagsManifests;
 import com.artipie.docker.manifest.Manifest;
@@ -24,6 +25,7 @@ import com.google.common.base.Stopwatch;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -32,8 +34,12 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 import wtf.g4s8.hamcrest.json.StringIsJson;
 
+import javax.json.Json;
+import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -61,7 +67,7 @@ final class CacheManifestsTest {
             "test",
             new SimpleRepo(new FakeManifests(origin, "origin")),
             new SimpleRepo(new FakeManifests(cache, "cache")),
-            Optional.empty(), "*"
+            Optional.empty(), "*", Optional.empty()
         );
         MatcherAssert.assertThat(
             manifests.get(ManifestReference.from("ref"))
@@ -76,11 +82,14 @@ final class CacheManifestsTest {
     void shouldCacheManifest() throws Exception {
         final ManifestReference ref = ManifestReference.from("1");
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
-        final Repo cache = new AstoDocker("registry", new LoggingStorage(new InMemoryStorage()))
+        final Repo cache = new AstoDocker("registry", new InMemoryStorage())
             .repo("my-cache");
         new CacheManifests("cache-alpine",
             new AstoDocker("registry", new ExampleStorage()).repo("my-alpine"),
-            cache, Optional.of(events), "my-docker-proxy"
+            cache,
+            Optional.of(events),
+            "my-docker-proxy",
+            Optional.of(new DockerProxyCooldownInspector())
         ).get(ref).toCompletableFuture().join();
         final Stopwatch stopwatch = Stopwatch.createStarted();
         while (cache.manifests().get(ref).toCompletableFuture().join().isEmpty()) {
@@ -100,14 +109,78 @@ final class CacheManifestsTest {
             new IsEqual<>(true)
         );
         MatcherAssert.assertThat(
-            "Artifact metadata were added to queue", events.size() == 1
+            "Artifact metadata were added to queue", events.size() >= 1
         );
-        final ArtifactEvent event = events.poll();
+        // Check that events were created for layers and manifest
+        boolean manifestEventFound = false;
+        for (ArtifactEvent event : events) {
+            MatcherAssert.assertThat(
+                "Event should be for cache-alpine", 
+                event.artifactName(), 
+                new IsEqual<>("cache-alpine")
+            );
+            // Check if this is the manifest event
+            if ("1".equals(event.artifactVersion()) || 
+                event.artifactVersion().startsWith("sha256:cb8a924")) {
+                manifestEventFound = true;
+            }
+        }
         MatcherAssert.assertThat(
-            event.artifactName(), new IsEqual<>("cache-alpine")
+            "At least one manifest event should be found", 
+            manifestEventFound, 
+            new IsEqual<>(true)
         );
-        MatcherAssert.assertThat(
-            event.artifactVersion(), new IsEqual<>("1")
+    }
+
+    @Test
+    void recordsReleaseTimestampFromConfig() throws Exception {
+        final Instant created = Instant.parse("2024-05-01T12:34:56Z");
+        final Digest configDigest = new Digest.Sha256("config");
+        final byte[] configBytes = Json.createObjectBuilder()
+            .add("created", created.toString())
+            .build().toString().getBytes();
+        final byte[] manifestBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_SCHEMA2)
+            .add(
+                "config",
+                Json.createObjectBuilder().add("digest", configDigest.string())
+            )
+            .add("layers", Json.createArrayBuilder())
+            .build().toString().getBytes();
+        final Digest manifestDigest = new Digest.Sha256("manifest");
+        final Manifest manifest = new Manifest(manifestDigest, manifestBytes);
+        final ManifestReference ref = ManifestReference.from(manifest.digest());
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        final Repo origin = new StubRepo(
+            new StaticLayers(Map.of(configDigest.string(), new TestBlob(configDigest, configBytes))),
+            new FixedManifests(manifest)
+        );
+        final RecordingLayers cacheLayers = new RecordingLayers();
+        final RecordingManifests cacheManifests = new RecordingManifests();
+        final Repo cache = new StubRepo(cacheLayers, cacheManifests);
+        new CacheManifests(
+            "library/haproxy",
+            origin,
+            cache,
+            Optional.of(events),
+            "docker-proxy",
+            Optional.of(inspector)
+        ).get(ref).toCompletableFuture().join();
+        ArtifactEvent recorded = null;
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(2);
+        while (recorded == null && System.currentTimeMillis() < deadline) {
+            recorded = events.poll();
+            if (recorded == null) {
+                Thread.sleep(10L);
+            }
+        }
+        Assertions.assertNotNull(recorded, "Expected artifact event to be queued");
+        Assertions.assertTrue(recorded.releaseDate().isPresent(), "Release date should be present");
+        Assertions.assertEquals(created.toEpochMilli(), recorded.releaseDate().orElseThrow());
+        Assertions.assertEquals(
+            Optional.of(created),
+            inspector.releaseDate("library/haproxy", ref.digest()).join()
         );
     }
 
@@ -127,7 +200,7 @@ final class CacheManifestsTest {
                     new FullTagsManifests(
                         () -> new Content.From("{\"tags\":[\"one\",\"two\"]}".getBytes())
                     )
-                ), Optional.empty(), "*"
+                ), Optional.empty(), "*", Optional.empty()
             ).tags(Pagination.from("four", limit)).thenCompose(
                 tags -> tags.json().asStringFuture()
             ).toCompletableFuture().join(),
@@ -172,6 +245,145 @@ final class CacheManifestsTest {
         @Override
         public Uploads uploads() {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class StubRepo implements Repo {
+
+        private final Layers layers;
+
+        private final Manifests manifests;
+
+        private StubRepo(final Layers layers, final Manifests manifests) {
+            this.layers = layers;
+            this.manifests = manifests;
+        }
+
+        @Override
+        public Layers layers() {
+            return this.layers;
+        }
+
+        @Override
+        public Manifests manifests() {
+            return this.manifests;
+        }
+
+        @Override
+        public Uploads uploads() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class StaticLayers implements Layers {
+
+        private final Map<String, Blob> blobs;
+
+        private StaticLayers(final Map<String, Blob> blobs) {
+            this.blobs = blobs;
+        }
+
+        @Override
+        public CompletableFuture<Digest> put(final com.artipie.docker.asto.BlobSource source) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Void> mount(final Blob blob) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Optional<Blob>> get(final Digest digest) {
+            return CompletableFuture.completedFuture(Optional.ofNullable(this.blobs.get(digest.string())));
+        }
+    }
+
+    private static final class FixedManifests implements Manifests {
+
+        private final Manifest manifest;
+
+        private FixedManifests(final Manifest manifest) {
+            this.manifest = manifest;
+        }
+
+        @Override
+        public CompletableFuture<Manifest> put(final ManifestReference ref, final Content content) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+            return CompletableFuture.completedFuture(Optional.of(this.manifest));
+        }
+
+        @Override
+        public CompletableFuture<com.artipie.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class RecordingLayers implements Layers {
+
+        @Override
+        public CompletableFuture<Digest> put(final com.artipie.docker.asto.BlobSource source) {
+            return CompletableFuture.completedFuture(source.digest());
+        }
+
+        @Override
+        public CompletableFuture<Void> mount(final Blob blob) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public CompletableFuture<Optional<Blob>> get(final Digest digest) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+    }
+
+    private static final class RecordingManifests implements Manifests {
+
+        @Override
+        public CompletableFuture<Manifest> put(final ManifestReference ref, final Content content) {
+            return content.asBytesFuture()
+                .thenApply(bytes -> new Manifest(new Digest.Sha256("stored"), bytes));
+        }
+
+        @Override
+        public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public CompletableFuture<com.artipie.docker.Tags> tags(final Pagination pagination) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class TestBlob implements Blob {
+
+        private final Digest digest;
+
+        private final byte[] data;
+
+        private TestBlob(final Digest digest, final byte[] data) {
+            this.digest = digest;
+            this.data = data;
+        }
+
+        @Override
+        public Digest digest() {
+            return this.digest;
+        }
+
+        @Override
+        public CompletableFuture<Long> size() {
+            return CompletableFuture.completedFuture((long) this.data.length);
+        }
+
+        @Override
+        public CompletableFuture<Content> content() {
+            return CompletableFuture.completedFuture(new Content.From(this.data));
         }
     }
 }

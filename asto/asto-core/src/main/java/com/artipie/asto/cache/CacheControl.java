@@ -5,6 +5,7 @@
 package com.artipie.asto.cache;
 
 import com.artipie.asto.Key;
+import com.artipie.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import java.util.Arrays;
@@ -89,8 +90,10 @@ public interface CacheControl {
 
         @Override
         public CompletionStage<Boolean> validate(final Key key, final Remote content) {
+            // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+            // SingleInterop.get() converts Single back to CompletionStage (non-blocking)
             return Observable.fromIterable(this.items)
-                .flatMapSingle(item -> SingleInterop.fromFuture(item.validate(key, content)))
+                .flatMapSingle(item -> RxFuture.single(item.validate(key, content)))
                 .all(item -> item)
                 .to(SingleInterop.get());
         }

@@ -1,0 +1,6 @@
+repo:
+  type: helm
+  storage:
+    type: fs
+    path: /var/artipie/data
+  url: http://localhost:8081/helm

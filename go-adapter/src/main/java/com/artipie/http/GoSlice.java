@@ -8,7 +8,9 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Storage;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.headers.Header;
 import com.artipie.http.rq.RequestLine;
@@ -18,12 +20,16 @@ import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceWithHeaders;
+import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.security.policy.Policy;
 
+import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
@@ -42,35 +48,104 @@ public final class GoSlice implements Slice {
      */
     public GoSlice(final Storage storage, final Policy<?> policy, final Authentication users,
         final String name) {
+        this(storage, policy, users, null, name, Optional.empty());
+    }
+
+    /**
+     * @param storage Storage
+     * @param policy Security policy
+     * @param users Users
+     * @param name Repository name
+     * @param events Artifact events
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication users,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(storage, policy, users, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     */
+    public GoSlice(final Storage storage, final Policy<?> policy, final Authentication basicAuth,
+        final TokenAuthentication tokenAuth, final String name) {
+        this(storage, policy, basicAuth, tokenAuth, name, Optional.empty());
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage Storage
+     * @param policy Security policy
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact events queue
+     */
+    public GoSlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         this.origin = new SliceRoute(
             GoSlice.pathGet(
                 ".+/@v/v.*\\.info",
-                GoSlice.createSlice(storage, ContentType.json(), policy, users, name)
+                GoSlice.createSlice(storage, ContentType.json(), policy, basicAuth, tokenAuth, name)
             ),
             GoSlice.pathGet(
                 ".+/@v/v.*\\.mod",
-                GoSlice.createSlice(storage, ContentType.text(), policy, users, name)
+                GoSlice.createSlice(storage, ContentType.text(), policy, basicAuth, tokenAuth, name)
             ),
             GoSlice.pathGet(
                 ".+/@v/v.*\\.zip",
-                GoSlice.createSlice(storage, ContentType.mime("application/zip"), policy, users, name)
+                GoSlice.createSlice(storage, ContentType.mime("application/zip"), policy, basicAuth, tokenAuth, name)
             ),
             GoSlice.pathGet(
-                ".+/@v/list", GoSlice.createSlice(storage, ContentType.text(), policy, users, name)
+                ".+/@v/list", GoSlice.createSlice(storage, ContentType.text(), policy, basicAuth, tokenAuth, name)
             ),
             GoSlice.pathGet(
                 ".+/@latest",
-                new BasicAuthzSlice(
+                GoSlice.createAuthSlice(
                     new LatestSlice(storage),
-                    users,
+                    basicAuth,
+                    tokenAuth,
                     new OperationControl(
                         policy, new AdapterBasicPermission(name, Action.Standard.READ)
                     )
                 )
             ),
             new RtRulePath(
+                MethodRule.PUT,
+                GoSlice.createAuthSlice(
+                    new GoUploadSlice(storage, name, events),
+                    basicAuth,
+                    tokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                    )
+                )
+            ),
+            new RtRulePath(
                 RtRule.FALLBACK,
-                new SliceSimple(ResponseBuilder.notFound().build())
+                GoSlice.createAuthSlice(
+                    new SliceSimple(ResponseBuilder.notFound().build()),
+                    basicAuth,
+                    tokenAuth,
+                    new OperationControl(
+                        policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                    )
+                )
             )
         );
     }
@@ -87,7 +162,8 @@ public final class GoSlice implements Slice {
      * @param storage Storage
      * @param contentType Content-type
      * @param policy Security policy
-     * @param users Users
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
      * @param name Repository name
      * @return Slice
      */
@@ -95,14 +171,34 @@ public final class GoSlice implements Slice {
         Storage storage,
         Header contentType,
         Policy<?> policy,
-        Authentication users,
+        Authentication basicAuth,
+        TokenAuthentication tokenAuth,
         String name
     ) {
-        return new BasicAuthzSlice(
-            new SliceWithHeaders(new SliceDownload(storage), Headers.from(contentType)),
-            users,
+        return GoSlice.createAuthSlice(
+            new SliceWithHeaders(new StorageArtifactSlice(storage), Headers.from(contentType)),
+            basicAuth,
+            tokenAuth,
             new OperationControl(policy, new AdapterBasicPermission(name, Action.Standard.READ))
         );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BasicAuthzSlice(origin, basicAuth, control);
     }
 
     /**

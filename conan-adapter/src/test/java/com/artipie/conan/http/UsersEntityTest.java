@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package  com.artipie.conan.http;
+package com.artipie.conan.http;
 
 import com.artipie.asto.Content;
 import com.artipie.http.Headers;
@@ -18,7 +18,7 @@ import com.artipie.http.RsStatus;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import javax.json.Json;
 

@@ -8,7 +8,9 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
+import com.artipie.npm.PerVersionLayout;
 import com.artipie.npm.Publish;
+import java.nio.charset.StandardCharsets;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,14 @@ final class CliPublishTest {
         final Key name = new Key.From("uploaded-artifact");
         new TestResource("json/cli_publish.json").saveTo(asto, name);
         new CliPublish(asto).publish(prefix, name).join();
+        // Generate meta.json from per-version files
+        new PerVersionLayout(asto).generateMetaJson(prefix)
+            .thenCompose(meta -> asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             "Tgz archive was created",
             asto.exists(new Key.From(String.format("%s/-/%s-1.0.1.tgz", prefix, prefix))).join(),
@@ -46,6 +56,14 @@ final class CliPublishTest {
         final Key name = new Key.From("uploaded-artifact");
         new TestResource("json/cli_publish.json").saveTo(asto, name);
         final Publish.PackageInfo res = new CliPublish(asto).publishWithInfo(prefix, name).join();
+        // Generate meta.json from per-version files
+        new PerVersionLayout(asto).generateMetaJson(prefix)
+            .thenCompose(meta -> asto.save(
+                new Key.From(prefix, "meta.json"),
+                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
         MatcherAssert.assertThat(
             "Tgz archive was created",
             asto.exists(new Key.From(String.format("%s/-/%s-1.0.1.tgz", prefix, prefix))).join(),

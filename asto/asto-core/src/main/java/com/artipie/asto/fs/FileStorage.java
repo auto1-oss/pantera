@@ -8,6 +8,7 @@ import com.artipie.ArtipieException;
 import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.Meta;
 import com.artipie.asto.OneTimePublisher;
 import com.artipie.asto.Storage;
@@ -15,8 +16,10 @@ import com.artipie.asto.UnderLockOperation;
 import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
+import com.artipie.asto.metrics.StorageMetricsCollector;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -25,9 +28,11 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -78,16 +83,26 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Boolean> exists(final Key key) {
+        final long startNs = System.nanoTime();
         return this.keyPath(key).thenApplyAsync(
             path -> Files.exists(path) && !Files.isDirectory(path)
-        );
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "exists",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
+        final long startNs = System.nanoTime();
         return this.keyPath(prefix).thenApplyAsync(
             path -> {
-                final Collection<Key> keys;
+                Collection<Key> keys;
                 if (Files.exists(path)) {
                     final int dirnamelen;
                     if (Key.ROOT.equals(prefix)) {
@@ -108,31 +123,141 @@ public final class FileStorage implements Storage {
                             .map(Key.From::new)
                             .sorted(Comparator.comparing(Key.From::string))
                             .collect(Collectors.toList());
+                    } catch (final NoSuchFileException nsfe) {
+                        // Handle race condition: directory was deleted between exists() check and walk()
+                        // Treat as empty directory to avoid breaking callers
+                        EcsLogger.debug("com.artipie.asto")
+                            .message("Directory disappeared during list operation")
+                            .eventCategory("storage")
+                            .eventAction("list_keys")
+                            .eventOutcome("success")
+                            .field("file.path", path.toString())
+                            .log();
+                        keys = Collections.emptyList();
                     } catch (final IOException iex) {
                         throw new ArtipieIOException(iex);
                     }
                 } else {
                     keys = Collections.emptyList();
                 }
-                Logger.info(
-                    this,
-                    "Found %d objects by the prefix \"%s\" in %s by %s: %s",
-                    keys.size(), prefix.string(), this.dir, path, keys
-                );
+                EcsLogger.debug("com.artipie.asto")
+                    .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
+                    .eventCategory("storage")
+                    .eventAction("list_keys")
+                    .eventOutcome("success")
+                    .field("file.path", path.toString())
+                    .field("file.directory", this.dir.toString())
+                    .log();
                 return keys;
+            }
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "list",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
+        return this.keyPath(prefix).thenApplyAsync(
+            path -> {
+                if (!Files.exists(path)) {
+                    EcsLogger.debug("com.artipie.asto")
+                        .message("Path does not exist for prefix: " + prefix.string())
+                        .eventCategory("storage")
+                        .eventAction("list_hierarchical")
+                        .eventOutcome("success")
+                        .field("file.path", path.toString())
+                        .log();
+                    return ListResult.EMPTY;
+                }
+
+                if (!Files.isDirectory(path)) {
+                    EcsLogger.debug("com.artipie.asto")
+                        .message("Path is not a directory for prefix: " + prefix.string())
+                        .eventCategory("storage")
+                        .eventAction("list_hierarchical")
+                        .eventOutcome("success")
+                        .field("file.path", path.toString())
+                        .log();
+                    return ListResult.EMPTY;
+                }
+                
+                final Collection<Key> files = new ArrayList<>();
+                final Collection<Key> directories = new LinkedHashSet<>();
+                final String separator = FileSystems.getDefault().getSeparator();
+                
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
+                    for (final Path entry : stream) {
+                        final String fileName = entry.getFileName().toString();
+                        
+                        // Build the key relative to storage root
+                        final Key entryKey;
+                        if (Key.ROOT.equals(prefix) || prefix.string().isEmpty()) {
+                            entryKey = new Key.From(fileName.split(separator.replace("\\", "\\\\")));
+                        } else {
+                            final String[] prefixParts = prefix.string().split("/");
+                            final String[] nameParts = fileName.split(separator.replace("\\", "\\\\"));
+                            final String[] combined = new String[prefixParts.length + nameParts.length];
+                            System.arraycopy(prefixParts, 0, combined, 0, prefixParts.length);
+                            System.arraycopy(nameParts, 0, combined, prefixParts.length, nameParts.length);
+                            entryKey = new Key.From(combined);
+                        }
+                        
+                        if (Files.isDirectory(entry)) {
+                            // Add trailing delimiter to indicate directory
+                            final String dirKeyStr = entryKey.string().endsWith("/") 
+                                ? entryKey.string() 
+                                : entryKey.string() + "/";
+                            directories.add(new Key.From(dirKeyStr));
+                        } else if (Files.isRegularFile(entry)) {
+                            files.add(entryKey);
+                        }
+                    }
+                } catch (final IOException iex) {
+                    throw new ArtipieIOException(iex);
+                }
+
+                EcsLogger.debug("com.artipie.asto")
+                    .message("Hierarchical list completed for prefix '" + prefix.string() + "' (" + files.size() + " files, " + directories.size() + " directories)")
+                    .eventCategory("storage")
+                    .eventAction("list_hierarchical")
+                    .eventOutcome("success")
+                    .log();
+
+                return new ListResult.Simple(files, new ArrayList<>(directories));
             }
         );
     }
 
     @Override
     public CompletableFuture<Void> save(final Key key, final Content content) {
-        return this.keyPath(key).thenApplyAsync(
+        final long startNs = System.nanoTime();
+        // Validate root key is not supported
+        if (Key.ROOT.string().equals(key.string())) {
+            return new CompletableFutureSupport.Failed<Void>(
+                new ArtipieIOException("Unable to save to root")
+            ).get();
+        }
+
+        final CompletableFuture<Void> result = this.keyPath(key).thenApplyAsync(
             path ->  {
-                final Path tmp = Paths.get(
-                    this.dir.toString(),
-                    String.format("%s.%s.tmp", key.string(), UUID.randomUUID())
-                );
-                tmp.getParent().toFile().mkdirs();
+                // Create temp file in .tmp directory at storage root to avoid filename length issues
+                // Using parent directory could still exceed 255-byte limit if parent path is long
+                final Path tmpDir = this.dir.resolve(".tmp");
+                tmpDir.toFile().mkdirs();
+                final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
+
+                // Ensure target directory exists
+                final Path parent = path.getParent();
+                if (parent != null) {
+                    parent.toFile().mkdirs();
+                }
+
                 return ImmutablePair.of(path, tmp);
             }
         ).thenCompose(
@@ -158,18 +283,49 @@ public final class FileStorage implements Storage {
                 );
             }
         );
+        return result.whenComplete((res, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            final long sizeBytes = content.size().orElse(-1L);
+            if (sizeBytes > 0) {
+                StorageMetricsCollector.record(
+                    "save",
+                    durationNs,
+                    throwable == null,
+                    this.id,
+                    sizeBytes
+                );
+            } else {
+                StorageMetricsCollector.record(
+                    "save",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> move(final Key source, final Key destination) {
+        final long startNs = System.nanoTime();
         return this.keyPath(source).thenCompose(
             src -> this.keyPath(destination).thenApply(dst -> ImmutablePair.of(src, dst))
-        ).thenCompose(pair -> FileStorage.move(pair.getKey(), pair.getValue()));
+        ).thenCompose(pair -> FileStorage.move(pair.getKey(), pair.getValue()))
+        .whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "move",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
     @SuppressWarnings("PMD.ExceptionAsFlowControl")
     public CompletableFuture<Void> delete(final Key key) {
+        final long startNs = System.nanoTime();
         return this.keyPath(key).thenAcceptAsync(
             path -> {
                 if (Files.exists(path) && !Files.isDirectory(path)) {
@@ -183,7 +339,15 @@ public final class FileStorage implements Storage {
                     throw new ValueNotFoundException(key);
                 }
             }
-        );
+        ).whenComplete((result, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            StorageMetricsCollector.record(
+                "delete",
+                durationNs,
+                throwable == null,
+                this.id
+            );
+        });
     }
 
     @Override
@@ -205,6 +369,7 @@ public final class FileStorage implements Storage {
 
     @Override
     public CompletableFuture<Content> value(final Key key) {
+        final long startNs = System.nanoTime();
         final CompletableFuture<Content> res;
         if (Key.ROOT.string().equals(key.string())) {
             res = new CompletableFutureSupport.Failed<Content>(
@@ -225,7 +390,35 @@ public final class FileStorage implements Storage {
                 )
             );
         }
-        return res;
+        return res.whenComplete((content, throwable) -> {
+            final long durationNs = System.nanoTime() - startNs;
+            if (content != null) {
+                final long sizeBytes = content.size().orElse(-1L);
+                if (sizeBytes > 0) {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id,
+                        sizeBytes
+                    );
+                } else {
+                    StorageMetricsCollector.record(
+                        "value",
+                        durationNs,
+                        throwable == null,
+                        this.id
+                    );
+                }
+            } else {
+                StorageMetricsCollector.record(
+                    "value",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            }
+        });
     }
 
     @Override
@@ -243,12 +436,15 @@ public final class FileStorage implements Storage {
 
     /**
      * Removes empty key parts (directories).
+     * Also cleans up the .tmp directory if it's empty.
      * @param target Directory path
      */
     private void deleteEmptyParts(final Path target) {
         final Path dirabs = this.dir.normalize().toAbsolutePath();
         final Path path = target.normalize().toAbsolutePath();
         if (!path.toString().startsWith(dirabs.toString()) || dirabs.equals(path)) {
+            // Clean up .tmp directory if it's empty
+            this.cleanupTmpDir();
             return;
         }
         if (Files.isDirectory(path)) {
@@ -268,6 +464,22 @@ public final class FileStorage implements Storage {
             }
             catch (final IOException err) {
                 throw new ArtipieIOException(err);
+            }
+        }
+    }
+
+    /**
+     * Cleans up the .tmp directory if it exists and is empty.
+     */
+    private void cleanupTmpDir() {
+        final Path tmpDir = this.dir.resolve(".tmp");
+        if (Files.exists(tmpDir) && Files.isDirectory(tmpDir)) {
+            try (Stream<Path> files = Files.list(tmpDir)) {
+                if (!files.findFirst().isPresent()) {
+                    Files.deleteIfExists(tmpDir);
+                }
+            } catch (final IOException ignore) {
+                // Ignore cleanup errors
             }
         }
     }

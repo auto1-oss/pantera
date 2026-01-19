@@ -5,7 +5,7 @@
 package com.artipie.asto.events;
 
 import com.artipie.ArtipieException;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -43,7 +43,13 @@ public final class QuartsService {
                         try {
                             QuartsService.this.scheduler.shutdown();
                         } catch (final SchedulerException error) {
-                            Logger.error(this, error.getMessage());
+                            EcsLogger.error("com.artipie.asto")
+                                .message("Scheduler shutdown failed")
+                                .eventCategory("scheduling")
+                                .eventAction("scheduler_shutdown")
+                                .eventOutcome("failure")
+                                .error(error)
+                                .log();
                         }
                     }
                 }
@@ -79,7 +85,12 @@ public final class QuartsService {
         final JobBuilder job = JobBuilder.newJob(EventsProcessor.class).setJobData(data);
         final int count = Math.min(this.scheduler.getMetaData().getThreadPoolSize(), parallel);
         if (parallel > count) {
-            Logger.warn(this, String.format("Parallel quartz jobs amount is limited to thread pool size %s instead of requested %s", count, parallel));
+            EcsLogger.warn("com.artipie.asto")
+                .message("Parallel quartz jobs amount limited to thread pool size (requested: " + parallel + ", actual: " + count + ", pool size: " + count + ")")
+                .eventCategory("scheduling")
+                .eventAction("job_schedule")
+                .eventOutcome("success")
+                .log();
         }
         for (int item = 0; item < count; item = item + 1) {
             this.scheduler.scheduleJob(

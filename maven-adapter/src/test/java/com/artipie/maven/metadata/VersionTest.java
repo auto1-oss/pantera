@@ -11,6 +11,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Test for {@link Version}.
+ * Uses Maven's ComparableVersion which returns any negative/positive value,
+ * not necessarily -1/+1. Tests check signum of result.
  * @since 0.5
  */
 class VersionTest {
@@ -30,7 +32,7 @@ class VersionTest {
     @ParameterizedTest
     void comparesSimpleVersions(final String first, final String second, final int res) {
         MatcherAssert.assertThat(
-            new Version(first).compareTo(new Version(second)),
+            Integer.signum(new Version(first).compareTo(new Version(second))),
             new IsEqual<>(res)
         );
     }

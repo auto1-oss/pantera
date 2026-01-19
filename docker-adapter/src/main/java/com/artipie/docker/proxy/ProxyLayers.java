@@ -63,26 +63,26 @@ public final class ProxyLayers implements Layers {
         return new ResponseSink<>(
             this.remote.response(new RequestLine(RqMethod.HEAD, blobPath), Headers.EMPTY, Content.EMPTY),
             response -> {
-                final CompletableFuture<Optional<Blob>> result;
-                if (response.status() == RsStatus.OK) {
-                    result = CompletableFuture.completedFuture(
-                        Optional.of(
+                // CRITICAL FIX: Consume response body to prevent Vert.x request leak
+                // HEAD requests may have bodies that need to be consumed for proper completion
+                return response.body().asBytesFuture().thenApply(ignored -> {
+                    final Optional<Blob> result;
+                    if (response.status() == RsStatus.OK) {
+                        result = Optional.of(
                             new ProxyBlob(
                                 this.remote,
                                 this.name,
                                 digest,
                                 new ContentLength(response.headers()).longValue()
                             )
-                        )
-                    );
-                } else if (response.status() == RsStatus.NOT_FOUND) {
-                    result = CompletableFuture.completedFuture(Optional.empty());
-                } else {
-                    result = CompletableFuture.failedFuture(
-                        new IllegalArgumentException("Unexpected status: " + response.status())
-                    );
-                }
-                return result;
+                        );
+                    } else if (response.status() == RsStatus.NOT_FOUND) {
+                        result = Optional.empty();
+                    } else {
+                        throw new IllegalArgumentException("Unexpected status: " + response.status());
+                    }
+                    return result;
+                });
             }
         ).result();
     }

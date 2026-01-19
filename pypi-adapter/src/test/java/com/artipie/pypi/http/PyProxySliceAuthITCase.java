@@ -88,7 +88,10 @@ class PyProxySliceAuthITCase {
                     URI.create(String.format("http://localhost:%d", this.origin.start())),
                     new BasicAuthenticator(bob, pswd),
                     new InMemoryStorage(),
-                    Optional.empty(), "my-proxy"
+                    Optional.empty(),
+                    "my-proxy",
+                    "pypi-proxy",
+                    com.artipie.cooldown.NoopCooldownService.INSTANCE
                 )
             ),
             this.container.port()

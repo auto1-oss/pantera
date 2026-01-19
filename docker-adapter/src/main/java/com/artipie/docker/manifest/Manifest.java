@@ -7,6 +7,7 @@ package com.artipie.docker.manifest;
 import com.artipie.asto.Content;
 import com.artipie.docker.Digest;
 import com.artipie.docker.error.InvalidManifestException;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.Json;
@@ -18,6 +19,7 @@ import javax.json.JsonValue;
 import java.io.ByteArrayInputStream;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +36,16 @@ public final class Manifest {
      * Image Manifest OCI Specification.
      */
     public static final String MANIFEST_OCI_V1 = "application/vnd.oci.image.manifest.v1+json";
+
+    /**
+     * Docker manifest list media type (schemaVersion = 2).
+     */
+    public static final String MANIFEST_LIST_SCHEMA2 = "application/vnd.docker.distribution.manifest.list.v2+json";
+
+    /**
+     * OCI image index media type.
+     */
+    public static final String MANIFEST_OCI_INDEX = "application/vnd.oci.image.index.v1+json";
 
     /**
      * Manifest digest.
@@ -99,12 +111,52 @@ public final class Manifest {
     public Collection<ManifestLayer> layers() {
         JsonArray array = this.json.getJsonArray("layers");
         if (array == null) {
+            if (this.isManifestList()) {
+                return Collections.emptyList();
+            }
             throw new InvalidManifestException("Required field `layers` is absent");
         }
         return array.getValuesAs(JsonValue::asJsonObject)
                 .stream()
                 .map(ManifestLayer::new)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Indicates whether manifest is a manifest list or OCI index (multi-platform).
+     *
+     * @return {@code true} when manifest represents a list/index document.
+     */
+    public boolean isManifestList() {
+        final String media = this.json.getString("mediaType", "");
+        return MANIFEST_LIST_SCHEMA2.equals(media)
+            || MANIFEST_OCI_INDEX.equals(media)
+            || (media.isEmpty() && this.json.containsKey("manifests"));
+    }
+
+    /**
+     * Get child manifest digests from a manifest list (fat manifest).
+     * For multi-platform images, this returns the digests of platform-specific manifests.
+     *
+     * <p>This enables proper caching of multi-arch images by allowing the cache
+     * to fetch and store each platform-specific manifest and its associated blobs.</p>
+     *
+     * @return Collection of child manifest digests, empty if not a manifest list
+     */
+    public Collection<Digest> manifestListChildren() {
+        if (!this.isManifestList()) {
+            return Collections.emptyList();
+        }
+        final JsonArray manifests = this.json.getJsonArray("manifests");
+        if (manifests == null) {
+            return Collections.emptyList();
+        }
+        return manifests.getValuesAs(JsonValue::asJsonObject)
+            .stream()
+            .map(obj -> obj.getString("digest", null))
+            .filter(digest -> digest != null && !digest.isEmpty())
+            .map(Digest.FromString::new)
+            .collect(Collectors.toList());
     }
 
     /**
@@ -131,6 +183,14 @@ public final class Manifest {
      * @return Size of the manifest.
      */
     public long size() {
-        return this.source.length;
+        long size = this.source.length;
+        EcsLogger.debug("com.artipie.docker")
+            .message("Manifest size calculated")
+            .eventCategory("repository")
+            .eventAction("manifest_size")
+            .field("package.checksum", this.manifestDigest.string())
+            .field("package.size", size)
+            .log();
+        return size;
     }
 }

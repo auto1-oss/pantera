@@ -1,9 +1,21 @@
 package keycloak;
 
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyStore;
+import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.Objects;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+import javax.ws.rs.ForbiddenException;
+import javax.ws.rs.ProcessingException;
 import javax.ws.rs.core.Response;
+import org.jboss.resteasy.client.jaxrs.ResteasyClientBuilder;
 import org.keycloak.admin.client.Keycloak;
+import org.keycloak.admin.client.KeycloakBuilder;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.admin.client.resource.UsersResource;
@@ -15,7 +27,7 @@ import org.keycloak.representations.idm.UserRepresentation;
 
 /**
  * Keycloak docker initializer.
- * Initializes docker image: quay.io/keycloak/keycloak:20.0.1
+ * Initializes docker image: quay.io/keycloak/keycloak:26.0.2
  * As follows:
  * 1. Creates new realm
  * 2. Creates new role
@@ -27,7 +39,7 @@ public class KeycloakDockerInitializer {
     /**
      * Keycloak url.
      */
-    private final static String KEYCLOAK_URL = "http://localhost:8080";
+    private static final String KEYCLOAK_URL = "https://localhost:8443";
 
     /**
      * Keycloak admin login.
@@ -80,38 +92,131 @@ public class KeycloakDockerInitializer {
     private final String url;
 
     /**
+     * Path to truststore with Keycloak certificate.
+     */
+    private final String truststorePath;
+
+    /**
+     * Truststore password.
+     */
+    private final String truststorePassword;
+
+    /**
      * Start point of application.
      * @param args Arguments, can contains keycloak server url
      */
-    public static void main(String[] args) {
+    public static void main(final String[] args) {
         final String url;
-        if (!Objects.isNull(args) && args.length > 0) {
+        final String truststore;
+        final String password;
+        if (!Objects.isNull(args) && args.length >= 3) {
             url = args[0];
+            truststore = args[1];
+            password = args[2];
         } else {
             url = KEYCLOAK_URL;
+            truststore = System.getProperty("javax.net.ssl.trustStore");
+            password = System.getProperty("javax.net.ssl.trustStorePassword", "");
         }
-        new KeycloakDockerInitializer(url).init();
+        new KeycloakDockerInitializer(url, truststore, password).init();
     }
 
-    public KeycloakDockerInitializer(final String url) {
+    public KeycloakDockerInitializer(final String url, final String truststore, final String password) {
         this.url = url;
+        this.truststorePath = truststore;
+        this.truststorePassword = password;
     }
 
     /**
      * Using admin connection to keycloak server initializes keycloak instance.
+     * Includes retry logic and better error handling for connection issues.
      */
     public void init() {
-        Keycloak keycloak = Keycloak.getInstance(
-            url,
-            "master",
-            KEYCLOAK_ADMIN_LOGIN,
-            KEYCLOAK_ADMIN_PASSWORD,
-            "admin-cli");
-        createRealm(keycloak);
-        createRealmRole(keycloak);
-        createClient(keycloak);
-        createClientRole(keycloak);
-        createUserNew(keycloak);
+        Keycloak keycloak = null;
+        try {
+            keycloak = adminSessionWithRetry();
+            createRealm(keycloak);
+            createRealmRole(keycloak);
+            createClient(keycloak);
+            createClientRole(keycloak);
+            createUserNew(keycloak);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for Keycloak", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize Keycloak: " + e.getMessage(), e);
+        } finally {
+            if (keycloak != null) {
+                keycloak.close();
+            }
+        }
+    }
+
+    private Keycloak adminSessionWithRetry() throws InterruptedException {
+        final int maxAttempts = 6;
+        final long delayMs = 5_000L;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            Keycloak keycloak = null;
+            try {
+                Thread.sleep(2_000L);
+                keycloak = buildKeycloakClient();
+                keycloak.serverInfo().getInfo();
+                return keycloak;
+            } catch (ForbiddenException | ProcessingException ex) {
+                if (keycloak != null) {
+                    keycloak.close();
+                }
+                if (attempt == maxAttempts) {
+                    throw new RuntimeException("Unable to obtain admin session from Keycloak after "
+                        + maxAttempts + " attempts", ex);
+                }
+            } catch (RuntimeException ex) {
+                if (keycloak != null) {
+                    keycloak.close();
+                }
+                if (attempt == maxAttempts) {
+                    throw ex;
+                }
+            }
+            Thread.sleep(delayMs);
+        }
+        throw new IllegalStateException("Failed to obtain Keycloak admin session");
+    }
+
+    private Keycloak buildKeycloakClient() {
+        try {
+            final ResteasyClientBuilder builder = (ResteasyClientBuilder) ResteasyClientBuilder.newBuilder();
+            builder.sslContext(sslContext());
+            builder.hostnameVerification(ResteasyClientBuilder.HostnameVerificationPolicy.ANY);
+            return KeycloakBuilder.builder()
+                .serverUrl(this.url)
+                .realm("master")
+                .username(KEYCLOAK_ADMIN_LOGIN)
+                .password(KEYCLOAK_ADMIN_PASSWORD)
+                .clientId("admin-cli")
+                .resteasyClient(builder.build())
+                .build();
+        } catch (final RuntimeException ex) {
+            throw ex;
+        } catch (final Exception ex) {
+            throw new RuntimeException("Unable to build Keycloak admin client", ex);
+        }
+    }
+
+    private SSLContext sslContext() throws Exception {
+        if (this.truststorePath == null || this.truststorePath.isEmpty()) {
+            return SSLContext.getDefault();
+        }
+        final Path path = Paths.get(this.truststorePath);
+        final KeyStore store = KeyStore.getInstance("PKCS12");
+        try (InputStream input = Files.newInputStream(path)) {
+            store.load(input, this.truststorePassword.toCharArray());
+        }
+        final TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(store);
+        final SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, tmf.getTrustManagers(), new SecureRandom());
+        return context;
     }
 
     /**

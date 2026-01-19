@@ -1,0 +1,6 @@
+repo:
+  type: conda
+  storage:
+    type: fs
+    path: /var/artipie/data
+  url: http://localhost:8080/conda

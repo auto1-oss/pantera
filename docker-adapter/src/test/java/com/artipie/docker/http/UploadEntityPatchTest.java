@@ -9,7 +9,6 @@ import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.docker.Docker;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.Upload;
-import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.Header;
@@ -33,7 +32,7 @@ class UploadEntityPatchTest {
     @BeforeEach
     void setUp() {
         this.docker = new AstoDocker("test_registry", new InMemoryStorage());
-        this.slice = new DockerSlice(this.docker);
+        this.slice = TestDockerAuth.slice(this.docker);
     }
 
     @Test
@@ -47,7 +46,7 @@ class UploadEntityPatchTest {
         final byte[] data = "data".getBytes();
         final Response response = this.slice.response(
             new RequestLine(RqMethod.PATCH, String.format("%s", path)),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             new Content.From(data)
         ).join();
         ResponseAssert.check(
@@ -64,7 +63,7 @@ class UploadEntityPatchTest {
     void shouldReturnNotFoundWhenUploadNotExists() {
         final Response response = this.slice.response(
             new RequestLine(RqMethod.PATCH, "/v2/test/blobs/uploads/12345"),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(

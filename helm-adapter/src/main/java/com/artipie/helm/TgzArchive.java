@@ -66,6 +66,8 @@ public final class TgzArchive {
      */
     public Map<String, Object> metadata(final Optional<String> baseurl) {
         final Map<String, Object> meta = new HashMap<>();
+        // Include chart name in path: <chart_name>/<chart_name>-<version>.tgz
+        final String urlPath = String.format("%s/%s", this.chart.name(), this.name());
         meta.put(
             "urls",
             new ArrayList<>(
@@ -73,7 +75,7 @@ public final class TgzArchive {
                     String.format(
                         "%s%s",
                         baseurl.orElse(""),
-                        this.name()
+                        urlPath
                     )
                 )
             )
@@ -115,6 +117,11 @@ public final class TgzArchive {
      */
     private String file(final String name) {
         try {
+            if (!this.isGzipFormat()) {
+                throw new ArtipieIOException(
+                    new IOException("Input is not in the .gz format")
+                );
+            }
             final TarArchiveInputStream taris = new TarArchiveInputStream(
                 new GzipCompressorInputStream(new ByteArrayInputStream(this.content))
             );
@@ -130,5 +137,17 @@ public final class TgzArchive {
         } catch (final IOException exc) {
             throw new ArtipieIOException(exc);
         }
+    }
+
+    /**
+     * Check if the content is a valid gzip format.
+     * @return True if valid gzip format, false otherwise
+     */
+    private boolean isGzipFormat() {
+        if (this.content.length < 2) {
+            return false;
+        }
+        // Check gzip magic number: 0x1f, 0x8b
+        return (this.content[0] & 0xFF) == 0x1f && (this.content[1] & 0xFF) == 0x8b;
     }
 }

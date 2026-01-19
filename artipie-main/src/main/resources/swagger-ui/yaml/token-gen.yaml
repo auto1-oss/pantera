@@ -50,16 +50,31 @@ components:
       properties:
         name:
           type: string
+          description: Username for authentication
+          example: "admin"
         pass:
           type: string
+          format: password
+          description: User password
+          example: "secretpassword"
+        mfa_code:
+          type: string
+          description: Multi-factor authentication code (for Okta MFA)
+          example: "123456"
+        permanent:
+          type: boolean
+          description: If true, generates a permanent token (no expiration)
+          default: false
+          example: false
     Token:
       type: object
       required:
         - token
       properties:
         token:
-          type:
-            string
+          type: string
+          description: JWT authentication token
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     Error:
       type: object
       required:
@@ -69,5 +84,7 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Error message

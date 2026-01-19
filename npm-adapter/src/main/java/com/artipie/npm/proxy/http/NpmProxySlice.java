@@ -18,7 +18,10 @@ import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.npm.proxy.NpmProxy;
 import com.artipie.scheduling.ProxyArtifactEvent;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.metadata.CooldownMetadataService;
 
+import java.net.URL;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -37,12 +40,44 @@ public final class NpmProxySlice implements Slice {
      *  or, in other words, repository name
      * @param npm NPM Proxy facade
      * @param packages Queue with uploaded from remote packages
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
+     * @param cooldownMetadata Cooldown metadata filtering service
+     * @param remote Remote slice for security audit endpoints
      */
     public NpmProxySlice(
-        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages
+        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
+        final String repoName, final String repoType, final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote
+    ) {
+        this(path, npm, packages, repoName, repoType, cooldown, cooldownMetadata, remote, Optional.empty());
+    }
+
+    /**
+     * @param path NPM proxy repo path ("" if NPM proxy should handle ROOT context path),
+     *  or, in other words, repository name
+     * @param npm NPM Proxy facade
+     * @param packages Queue with uploaded from remote packages
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param cooldown Cooldown service
+     * @param cooldownMetadata Cooldown metadata filtering service
+     * @param remote Remote slice for security audit endpoints
+     * @param baseUrl Base URL for the repository (from configuration)
+     */
+    public NpmProxySlice(
+        final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
+        final String repoName, final String repoType, final CooldownService cooldown,
+        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote,
+        final Optional<URL> baseUrl
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
+        final NpmCooldownInspector inspector = new NpmCooldownInspector(npm.remoteClient());
+        // Register inspector globally so unblock can invalidate its cache
+        com.artipie.cooldown.InspectorRegistry.instance()
+            .register(repoType, repoName, inspector);
         this.route = new SliceRoute(
             new RtRulePath(
                 new RtRule.All(
@@ -50,7 +85,7 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(ppath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadPackageSlice(npm, ppath)
+                    new DownloadPackageSlice(npm, ppath, baseUrl, cooldownMetadata, repoType, repoName)
                 )
             ),
             new RtRulePath(
@@ -59,7 +94,26 @@ public final class NpmProxySlice implements Slice {
                     new RtRule.ByPath(apath.pattern())
                 ),
                 new LoggingSlice(
-                    new DownloadAssetSlice(npm, apath, packages, path)
+                    new DownloadAssetSlice(npm, apath, packages, repoName, repoType, cooldown, inspector)
+                )
+            ),
+            // Pass-through for npm security audit endpoints to upstream registry
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(auditPattern(path))
+                ),
+                new LoggingSlice(
+                    new SecurityAuditProxySlice(remote, path)
+                )
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.POST,
+                    new RtRule.ByPath(auditPatternNoDash(path))
+                ),
+                new LoggingSlice(
+                    new SecurityAuditProxySlice(remote, path)
                 )
             ),
             new RtRulePath(
@@ -78,5 +132,29 @@ public final class NpmProxySlice implements Slice {
                                                     final Headers headers,
                                                     final Content body) {
         return this.route.response(line, headers, body);
+    }
+
+    private static String auditPattern(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        // Matches: audits (legacy) and audits/quick, and advisories/bulk
+        final String prefixPath = base.isEmpty() ? "" : base;
+        return String.format(
+            "^(?:%1$s/-/npm/v1/security/audits(?:/quick)?|%1$s/-/npm/v1/security/advisories/bulk)$",
+            prefixPath
+        );
+    }
+
+    private static String auditPatternNoDash(final String prefix) {
+        final String base = (prefix == null || prefix.isEmpty())
+            ? ""
+            : String.format("/%s", java.util.regex.Pattern.quote(prefix));
+        // Some clients may call without leading -/, handle audits and advisories/bulk as well
+        final String prefixPath = base.isEmpty() ? "" : base;
+        return String.format(
+            "^(?:%1$s/npm/v1/security/audits(?:/quick)?|%1$s/npm/v1/security/advisories/bulk)$",
+            prefixPath
+        );
     }
 }

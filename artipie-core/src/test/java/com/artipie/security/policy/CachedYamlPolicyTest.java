@@ -12,8 +12,8 @@ import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.security.perms.User;
 import com.artipie.security.perms.UserPermissions;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.nio.charset.StandardCharsets;
 import java.security.PermissionCollection;
 import org.hamcrest.MatcherAssert;
@@ -51,9 +51,9 @@ class CachedYamlPolicyTest {
     @BeforeEach
     void init() {
         this.asto = new BlockingStorage(new InMemoryStorage());
-        this.cache = CacheBuilder.newBuilder().build();
-        this.user = CacheBuilder.newBuilder().build();
-        this.roles = CacheBuilder.newBuilder().build();
+        this.cache = Caffeine.newBuilder().build();
+        this.user = Caffeine.newBuilder().build();
+        this.roles = Caffeine.newBuilder().build();
     }
 
     @Test
@@ -71,17 +71,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 item (default and `java-dev`)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
         this.user.invalidateAll();
@@ -93,17 +93,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user roles and individual permissions has 0 items",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 item (default and `java-dev`)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
     }
@@ -122,17 +122,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions is empty",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(0L)
         );
     }
@@ -152,17 +152,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 items (default role and `java-def` role)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
         MatcherAssert.assertThat(
@@ -173,17 +173,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 items (default and `java-dev`)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
     }
@@ -203,17 +203,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 items (default role and `java-def` role)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
         MatcherAssert.assertThat(
@@ -224,17 +224,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 items (default and `java-dev`)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
     }
@@ -256,17 +256,17 @@ class CachedYamlPolicyTest {
         );
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 3 items (default role from context, `java-dev`, `tester`)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(3L)
         );
     }
@@ -290,17 +290,17 @@ class CachedYamlPolicyTest {
         policy.invalidate("default/env");
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles has 1 item",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 'java-dev' group",
-            this.roles.size() == 1L && this.roles.asMap().containsKey("java-dev")
+            this.roles.estimatedSize() == 1L && this.roles.asMap().containsKey("java-dev")
         );
     }
 
@@ -320,17 +320,17 @@ class CachedYamlPolicyTest {
         policy.invalidate("alice");
         MatcherAssert.assertThat(
             "Cache with UserPermissions has 1 item",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
             "Cache with user individual permissions and roles is empty",
-            this.user.size(),
+            this.user.estimatedSize(),
             new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
             "Cache with role permissions has 2 items (default and `java-def` role)",
-            this.roles.size(),
+            this.roles.estimatedSize(),
             new IsEqual<>(2L)
         );
     }

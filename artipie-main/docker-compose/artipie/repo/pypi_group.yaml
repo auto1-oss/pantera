@@ -1,0 +1,6 @@
+repo:
+  type: "pypi-group"
+  # Existing sample: py.yaml (name: py)
+  members:
+    - pypi_proxy
+    - pypi

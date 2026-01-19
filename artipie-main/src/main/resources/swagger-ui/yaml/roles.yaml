@@ -200,26 +200,116 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Error message
     Role:
       type: object
+      description: Role information returned by GET endpoints
       required:
         - name
       properties:
         name:
           type: string
+          description: Role name (unique identifier)
+          example: "developers"
+        enabled:
+          type: boolean
+          description: Whether the role is enabled
+          example: true
         permissions:
-          type: object
+          $ref: '#/components/schemas/Permissions'
     FullRole:
       type: object
+      description: Full role configuration for creating or updating roles
       required:
         - permissions
       properties:
         permissions:
-          type: object
+          $ref: '#/components/schemas/Permissions'
         enabled:
-          type: string
+          type: boolean
+          description: Whether the role should be enabled
+          default: true
+          example: true
+    Permissions:
+      type: object
+      description: |
+        Permissions configuration object. Supports various permission types:
+        - api_repository_permissions: REST API repository operations
+        - api_user_permissions: REST API user management
+        - api_role_permissions: REST API role management
+        - api_alias_permissions: REST API storage alias management
+        - api_cache_permissions: REST API cache management
+        - adapter_basic_permissions: Repository-level artifact operations
+      properties:
+        api_repository_permissions:
+          oneOf:
+            - type: string
+              description: Wildcard for all permissions
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "create", "update", "delete", "move"]
+          description: Permissions for repository REST API operations
+          example: ["read", "create"]
+        api_user_permissions:
+          oneOf:
+            - type: string
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "create", "update", "delete", "enable", "change_password"]
+          description: Permissions for user REST API operations
+          example: "*"
+        api_role_permissions:
+          oneOf:
+            - type: string
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "create", "update", "delete", "enable"]
+          description: Permissions for role REST API operations
+          example: ["read"]
+        api_alias_permissions:
+          oneOf:
+            - type: string
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "create", "delete"]
+          description: Permissions for storage alias REST API operations
+          example: ["read", "create"]
+        api_cache_permissions:
+          oneOf:
+            - type: string
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "write"]
+          description: Permissions for cache REST API operations
+          example: ["read", "write"]
+        adapter_basic_permissions:
+          type: object
+          description: Repository-specific artifact permissions
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              enum: ["read", "write", "delete", "*"]
+          example:
+            my-maven:
+              - read
+              - write
+            my-npm:
+              - "*"
+      additionalProperties: true
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"

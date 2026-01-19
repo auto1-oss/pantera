@@ -89,7 +89,9 @@ final class CachingProxyITCase {
                                 )
                             )
                         ),
-                        this.cache, Optional.empty()
+                        this.cache,
+                        Optional.empty(),
+                        Optional.empty()
                     )
                 ),
                 local

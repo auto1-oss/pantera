@@ -9,6 +9,8 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.log.LogSanitizer;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -20,22 +22,20 @@ import org.eclipse.jetty.client.Request;
 import org.eclipse.jetty.http.HttpFields;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
  * <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-non-blocking">Docs</a>
  */
 final class JettyClientSlice implements Slice {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(JettyClientSlice.class);
 
     /**
      * HTTP client.
@@ -58,16 +58,28 @@ final class JettyClientSlice implements Slice {
     private final int port;
 
     /**
+     * Max time in milliseconds to wait for connection acquisition.
+     */
+    private final long acquireTimeoutMillis;
+
+    /**
      * @param client HTTP client.
      * @param secure Secure connection flag.
      * @param host Host name.
      * @param port Port.
      */
-    JettyClientSlice(HttpClient client, boolean secure, String host, int port) {
+    JettyClientSlice(
+        HttpClient client,
+        boolean secure,
+        String host,
+        int port,
+        long acquireTimeoutMillis
+    ) {
         this.client = client;
         this.secure = secure;
         this.host = host;
         this.port = port;
+        this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
     public CompletableFuture<Response> response(
@@ -75,12 +87,25 @@ final class JettyClientSlice implements Slice {
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
-        final List<Content.Chunk> buffers = new LinkedList<>();
+        final List<ByteBuffer> buffers = new ArrayList<>();  // Better cache locality than LinkedList
         if (line.method() != RqMethod.HEAD) {
             final AsyncRequestContent async = new AsyncRequestContent();
-            Flowable.fromPublisher(body).doOnComplete(async::close).forEach(
-                buf -> async.write(buf, Callback.NOOP)
-            );
+            Flowable.fromPublisher(body)
+                .doOnError(async::fail)
+                .doOnCancel(
+                    () -> async.fail(new CancellationException("Request body cancelled"))
+                )
+                .doFinally(async::close)
+                .subscribe(
+                    buf -> async.write(buf, Callback.NOOP),
+                    throwable -> EcsLogger.error("com.artipie.http.client")
+                        .message("Failed to stream HTTP request body")
+                        .eventCategory("http")
+                        .eventAction("http_request_body")
+                        .eventOutcome("failure")
+                        .error(throwable)
+                        .log()
+                );
             request.body(async);
         }
         request.onResponseContentSource(
@@ -91,27 +116,35 @@ final class JettyClientSlice implements Slice {
                     demander.run();
                 }
         );
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Send {} {}:{}{} {} \n{}",
-                request.getMethod(), request.getHost(), request.getPort(), request.getPath(), request.getVersion(),
-                request.getHeaders().asString()
-            );
-        }
+        final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
+        EcsLogger.debug("com.artipie.http.client")
+            .message("Sending HTTP request")
+            .eventCategory("http")
+            .eventAction("http_request_send")
+            .field("http.request.method", request.getMethod())
+            .field("url.domain", request.getHost())
+            .field("url.port", request.getPort())
+            .field("url.path", LogSanitizer.sanitizeUrl(request.getPath()))
+            .field("http.version", request.getVersion().toString())
+            .field("http.request.headers", sanitizedHeaders.toString())
+            .log();
         request.send(
                 result -> {
                     if (result.getFailure() == null) {
                         RsStatus status = RsStatus.byCode(result.getResponse().getStatus());
                         Flowable<ByteBuffer> content = Flowable.fromIterable(buffers)
-                            .map(chunk -> {
-                                    final ByteBuffer item = chunk.getByteBuffer();
-                                    chunk.release();
-                                    return item;
-                                }
-                            );
-                        if (LOGGER.isDebugEnabled()) {
-                            LOGGER.debug("Got {}\n{}",
-                                    result.getResponse(), result.getResponse().getHeaders().asString());
-                        }
+                            .map(ByteBuffer::asReadOnlyBuffer);
+                        final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
+                            toHeaders(result.getResponse().getHeaders())
+                        );
+                        EcsLogger.debug("com.artipie.http.client")
+                            .message("Received HTTP response")
+                            .eventCategory("http")
+                            .eventAction("http_response_receive")
+                            .field("http.response.status_code", result.getResponse().getStatus())
+                            .field("http.response.body.content", result.getResponse().getReason())
+                            .field("http.response.headers", sanitizedRespHeaders.toString())
+                            .log();
                         res.complete(
                             ResponseBuilder.from(status)
                                 .headers(toHeaders(result.getResponse().getHeaders()))
@@ -119,7 +152,13 @@ final class JettyClientSlice implements Slice {
                                 .build()
                         );
                     } else {
-                        LOGGER.error("Got failure", result.getFailure());
+                        EcsLogger.error("com.artipie.http.client")
+                            .message("HTTP request failed")
+                            .eventCategory("http")
+                            .eventAction("http_request_send")
+                            .eventOutcome("failure")
+                            .error(result.getFailure())
+                            .log();
                         res.completeExceptionally(result.getFailure());
                     }
                 }
@@ -153,6 +192,9 @@ final class JettyClientSlice implements Slice {
                 .setCustomQuery(uri.getQuery())
                 .toString()
         ).method(req.method().value());
+        if (this.acquireTimeoutMillis > 0) {
+            request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
+        }
         for (Header header : headers) {
             request.headers(mutable -> mutable.add(header.getKey(), header.getValue()));
         }
@@ -181,7 +223,7 @@ final class JettyClientSlice implements Slice {
         /**
          * Content chunks.
          */
-        private final List<Content.Chunk> chunks;
+        private final List<ByteBuffer> chunks;
 
         /**
          * Ctor.
@@ -192,7 +234,7 @@ final class JettyClientSlice implements Slice {
         private Demander(
             final Content.Source source,
             final org.eclipse.jetty.client.Response response,
-            final List<Content.Chunk> chunks
+            final List<ByteBuffer> chunks
         ) {
             this.source = source;
             this.response = response;
@@ -201,7 +243,25 @@ final class JettyClientSlice implements Slice {
 
         @Override
         public void run() {
-            while (true) {
+            final long startTime = System.nanoTime();
+            final long timeoutNanos = TimeUnit.SECONDS.toNanos(30);  // 30 second timeout
+            int iterations = 0;
+            final int maxIterations = 10000;  // Safety limit
+            
+            while (iterations++ < maxIterations) {
+                // Check timeout
+                if (System.nanoTime() - startTime > timeoutNanos) {
+                    EcsLogger.error("com.artipie.http.client")
+                        .message("Response reading timeout (30 seconds)")
+                        .eventCategory("http")
+                        .eventAction("http_response_read")
+                        .eventOutcome("timeout")
+                        .field("url.full", this.response.getRequest().getURI().toString())
+                        .log();
+                    this.response.abort(new TimeoutException("Response reading timeout"));
+                    return;
+                }
+                
                 final Content.Chunk chunk = this.source.read();
                 if (chunk == null) {
                     this.source.demand(this);
@@ -211,27 +271,74 @@ final class JettyClientSlice implements Slice {
                     final Throwable failure = chunk.getFailure();
                     if (chunk.isLast()) {
                         this.response.abort(failure);
-                        LOGGER.error(failure.getMessage());
+                        EcsLogger.error("com.artipie.http.client")
+                            .message("HTTP response read failed")
+                            .eventCategory("http")
+                            .eventAction("http_response_read")
+                            .eventOutcome("failure")
+                            .field("url.full", this.response.getRequest().getURI().toString())
+                            .error(failure)
+                            .log();
                         return;
                     } else {
                         // A transient failure such as a read timeout.
                         if (RsStatus.byCode(this.response.getStatus()).success()) {
+                            // Release chunk before retry to prevent leak
+                            if (chunk.canRetain()) {
+                                chunk.release();
+                            }
                             // Try to read again.
                             continue;
                         } else {
                             // The transient failure is treated as a terminal failure.
                             this.response.abort(failure);
-                            LOGGER.error(failure.getMessage());
+                            EcsLogger.error("com.artipie.http.client")
+                                .message("Transient failure treated as terminal")
+                                .eventCategory("http")
+                                .eventAction("http_response_read")
+                                .eventOutcome("failure")
+                                .field("url.full", this.response.getRequest().getURI().toString())
+                                .error(failure)
+                                .log();
                             return;
                         }
                     }
                 }
-                chunk.retain();
-                this.chunks.add(chunk);
+                final ByteBuffer stored;
+                try {
+                    stored = JettyClientSlice.copyChunk(chunk);
+                } finally {
+                    chunk.release();
+                }
+                this.chunks.add(stored);
                 if (chunk.isLast()) {
                     return;
                 }
             }
+
+            // Max iterations exceeded
+            EcsLogger.error("com.artipie.http.client")
+                .message("Max iterations exceeded while reading response (max: " + maxIterations + ")")
+                .eventCategory("http")
+                .eventAction("http_response_read")
+                .eventOutcome("failure")
+                .field("url.full", this.response.getRequest().getURI().toString())
+                .log();
+            this.response.abort(new IllegalStateException("Too many chunks - possible infinite loop"));
         }
+    }
+
+    private static ByteBuffer copyChunk(final Content.Chunk chunk) {
+        final ByteBuffer original = chunk.getByteBuffer();
+        if (original.hasArray() && original.arrayOffset() == 0 && original.position() == 0
+            && original.remaining() == original.capacity()) {
+            // Fast-path: reuse backing array when buffer fully represents it
+            return ByteBuffer.wrap(original.array()).asReadOnlyBuffer();
+        }
+        final ByteBuffer slice = original.slice();
+        final ByteBuffer copy = ByteBuffer.allocate(slice.remaining());
+        copy.put(slice);
+        copy.flip();
+        return copy;
     }
 }

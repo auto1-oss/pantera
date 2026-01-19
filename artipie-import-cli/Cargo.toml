@@ -1,0 +1,33 @@
+[package]
+name = "artipie-import-cli"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "multipart", "gzip"] }
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+sha2 = "0.10"
+md5 = "0.7"
+sha1 = "0.10"
+hex = "0.4"
+indicatif = "0.17"
+chrono = "0.4"
+anyhow = "1.0"
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+bytes = "1.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+humantime = "2.1"
+num_cpus = "1.16"
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

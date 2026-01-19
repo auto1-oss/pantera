@@ -9,7 +9,7 @@ import com.artipie.asto.misc.Cleanable;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.users.CrudRoles;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
 import java.io.StringReader;
@@ -125,7 +125,14 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.remove(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to remove role")
+                .eventCategory("api")
+                .eventAction("role_remove")
+                .eventOutcome("failure")
+                .field("user.roles", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }
@@ -142,7 +149,14 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.enable(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to enable role")
+                .eventCategory("api")
+                .eventAction("role_enable")
+                .eventOutcome("failure")
+                .field("user.roles", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }
@@ -159,7 +173,14 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.disable(uname);
         } catch (final IllegalStateException err) {
-            Logger.error(this, err.getMessage());
+            EcsLogger.error("com.artipie.api")
+                .message("Failed to disable role")
+                .eventCategory("api")
+                .eventAction("role_disable")
+                .eventOutcome("failure")
+                .field("user.roles", uname)
+                .error(err)
+                .log();
             context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
             return;
         }

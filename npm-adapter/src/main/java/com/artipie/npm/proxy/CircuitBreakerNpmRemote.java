@@ -4,6 +4,7 @@
  */
 package com.artipie.npm.proxy;
 
+import com.artipie.asto.rx.RxFuture;
 import com.artipie.npm.proxy.model.NpmAsset;
 import com.artipie.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
@@ -56,21 +57,23 @@ public final class CircuitBreakerNpmRemote implements NpmRemote {
 
     @Override
     public Maybe<NpmPackage> loadPackage(final String name) {
-        return Maybe.fromFuture(
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
+        return RxFuture.maybe(
             this.breaker.<Maybe<NpmPackage>>executeWithFallback(
                 future -> future.complete(this.wrapped.loadPackage(name)),
                 exception -> Maybe.empty()
-            ).toCompletionStage().toCompletableFuture()
+            ).toCompletionStage()
         ).flatMap(m -> m);
     }
 
     @Override
     public Maybe<NpmAsset> loadAsset(final String path, final Path tmp) {
-        return Maybe.fromFuture(
+        // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
+        return RxFuture.maybe(
             this.breaker.<Maybe<NpmAsset>>executeWithFallback(
                 future -> future.complete(this.wrapped.loadAsset(path, tmp)),
                 exception -> Maybe.empty()
-            ).toCompletionStage().toCompletableFuture()
+            ).toCompletionStage()
         ).flatMap(m -> m);
     }
 }

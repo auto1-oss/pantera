@@ -5,16 +5,20 @@
 package com.artipie.http;
 
 import com.artipie.RepositorySlices;
-import com.artipie.http.rq.RqMethod;
+import com.artipie.importer.ImportService;
+import com.artipie.importer.ImportSessionStore;
+import com.artipie.importer.http.ImportSlice;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtPath;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.misc.ArtipieProperties;
+import com.artipie.scheduling.ArtifactEvent;
+import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.settings.Settings;
-
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
@@ -43,12 +47,26 @@ public final class MainSlice extends Slice.Wrap {
      * Artipie entry point.
      *
      * @param settings Artipie settings.
+     * @param slices Repository slices.
      */
-    public MainSlice(
-        final Settings settings,
-        final RepositorySlices slices
-    ) {
-        super(
+    public MainSlice(final Settings settings, final RepositorySlices slices) {
+        super(MainSlice.buildMainSlice(settings, slices));
+    }
+
+    private static Slice buildMainSlice(final Settings settings, final RepositorySlices slices) {
+        final Optional<ImportSessionStore> sessions = settings.artifactsDatabase()
+            .map(ImportSessionStore::new);
+        final Optional<Queue<ArtifactEvent>> events = settings.artifactMetadata()
+            .map(MetadataEventQueues::eventQueue);
+        final ImportService imports = new ImportService(
+            slices.repositories(),
+            sessions,
+            events,
+            true
+        );
+        // Wrap entire routing in TimeoutSlice to prevent request leaks
+        // Without this, hung requests never timeout and accumulate indefinitely
+        return new TimeoutSlice(
             new SliceRoute(
                 MainSlice.EMPTY_PATH,
                 new RtRulePath(
@@ -63,12 +81,30 @@ public final class MainSlice extends Slice.Wrap {
                     new VersionSlice(new ArtipieProperties())
                 ),
                 new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("/\\.import/.*"),
+                        new RtRule.Any(MethodRule.PUT, MethodRule.POST)
+                    ),
+                    new ImportSlice(imports)
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath("/\\.merge/.*"),
+                        MethodRule.POST
+                    ),
+                    new MergeShardsSlice(slices)
+                ),
+                new RtRulePath(
                     RtRule.FALLBACK,
                     new DockerRoutingSlice(
-                        settings, new SliceByPath(slices)
+                        settings,
+                        new ApiRoutingSlice(
+                            new SliceByPath(slices, settings.prefixes())
+                        )
                     )
                 )
-            )
+            ),
+            settings.httpClientSettings().proxyTimeout()  // Use configured timeout (default 120s)
         );
     }
 }

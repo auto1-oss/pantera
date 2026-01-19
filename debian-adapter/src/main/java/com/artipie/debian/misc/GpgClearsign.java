@@ -6,7 +6,7 @@ package com.artipie.debian.misc;
 
 import com.artipie.ArtipieException;
 import com.artipie.asto.ArtipieIOException;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -92,10 +92,22 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            Logger.error(this, "Error while generating gpg-signature:\n%s", err.getMessage());
+            EcsLogger.error("com.artipie.debian")
+                .message("Error while generating gpg-signature")
+                .eventCategory("repository")
+                .eventAction("gpg_sign")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             throw new ArtipieException(err);
         } catch (final IOException err) {
-            Logger.error(this, "IO error while generating gpg-signature:\n%s", err.getMessage());
+            EcsLogger.error("com.artipie.debian")
+                .message("IO error while generating gpg-signature")
+                .eventCategory("repository")
+                .eventAction("gpg_sign")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             throw new ArtipieIOException(err);
         }
     }
@@ -130,10 +142,22 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            Logger.error(this, "Error while generating gpg-signature:\n%s", err.getMessage());
+            EcsLogger.error("com.artipie.debian")
+                .message("Error while generating gpg-signature")
+                .eventCategory("repository")
+                .eventAction("gpg_sign")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             throw new ArtipieException(err);
         } catch (final IOException err) {
-            Logger.error(this, "IO error while generating gpg-signature:\n%s", err.getMessage());
+            EcsLogger.error("com.artipie.debian")
+                .message("IO error while generating gpg-signature")
+                .eventCategory("repository")
+                .eventAction("gpg_sign")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             throw new ArtipieIOException(err);
         }
     }
