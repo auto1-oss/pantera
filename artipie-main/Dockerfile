@@ -49,7 +49,6 @@ CMD [ "sh", "-c", "\
   exec java \
   -javaagent:/opt/apm/elastic-apm-agent.jar \
   $JVM_ARGS \
-  $VERTX_OPTS \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/artipie/artipie.jar:/usr/lib/artipie/lib/* \

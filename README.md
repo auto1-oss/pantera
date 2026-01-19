@@ -272,38 +272,19 @@ See [Cooldown System Documentation](docs/cooldown-fallback/README.md) for comple
 
 ## Documentation
 
-### User Documentation
-
 | Document | Description |
 |----------|-------------|
-| [User Guide](docs/USER_GUIDE.md) | Complete installation and configuration guide |
-| [API Routing](docs/API_ROUTING.md) | URL patterns and routing configuration |
-| [NPM CLI Compatibility](docs/NPM_CLI_COMPATIBILITY.md) | Complete NPM command reference |
-| [Okta OIDC Integration](docs/OKTA_OIDC_INTEGRATION.md) | Okta authentication with MFA |
-
-### Operations & Performance
-
-| Document | Description |
-|----------|-------------|
-| [S3 Performance Tuning](docs/S3_PERFORMANCE_TUNING.md) | S3 storage optimization |
-| [JVM Optimization](docs/ARTIPIE_JVM_OPTIMIZATION.md) | JVM tuning for production |
-| [Logging Configuration](docs/LOGGING_CONFIGURATION.md) | Log4j2 and ECS JSON setup |
-| [ECS JSON Reference](docs/ECS_JSON_QUICK_REFERENCE.md) | Structured logging format |
-
-### Security
-
-| Document | Description |
-|----------|-------------|
-| [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain attack prevention |
-| [Disk Cache Cleanup](docs/DISK_CACHE_CLEANUP_CONFIG.md) | Cache management configuration |
-
-### Developer Documentation
-
-| Document | Description |
-|----------|-------------|
+| [User Guide](docs/USER_GUIDE.md) | Installation, configuration, and usage |
 | [Developer Guide](docs/DEVELOPER_GUIDE.md) | Architecture and contributing |
-| [S3 Optimizations](docs/s3-optimizations/README.md) | S3 memory and performance fixes |
-| [NPM Proxy Analysis](docs/npm-proxy-complete-analysis.md) | NPM proxy architecture |
+| [API Routing](docs/API_ROUTING.md) | URL patterns and routing |
+| [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain attack prevention |
+| [S3 Storage](docs/s3-optimizations/README.md) | S3 configuration and tuning |
+| [Okta OIDC](docs/OKTA_OIDC_INTEGRATION.md) | Okta authentication with MFA |
+| [JVM Optimization](docs/ARTIPIE_JVM_OPTIMIZATION.md) | JVM tuning for production |
+| [NPM CLI](docs/NPM_CLI_COMPATIBILITY.md) | NPM command reference |
+| [Logging](docs/LOGGING_CONFIGURATION.md) | Log4j2 and ECS JSON setup |
+
+See [docs/README.md](docs/README.md) for the complete documentation index.
 
 ## REST API
 
