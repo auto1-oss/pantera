@@ -10,6 +10,7 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.ResponseBuilder;
@@ -55,6 +56,11 @@ public final class NuGet implements Slice {
     private final Authentication users;
 
     /**
+     * Token authentication.
+     */
+    private final TokenAuthentication tokenAuth;
+
+    /**
      * Repository name.
      */
     private final String name;
@@ -80,10 +86,33 @@ public final class NuGet implements Slice {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(url, repository, policy, users, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param url Base URL.
+     * @param repository Storage for packages.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Events queue
+     */
+    public NuGet(
+        final URL url,
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         this.url = url;
         this.repository = repository;
         this.policy = policy;
-        this.users = users;
+        this.users = basicAuth;
+        this.tokenAuth = tokenAuth;
         this.name = name;
         this.events = events;
     }
@@ -128,13 +157,21 @@ public final class NuGet implements Slice {
     }
 
     /**
-     * Create route supporting basic authentication.
+     * Create route supporting authentication.
      *
      * @param route Route requiring authentication.
      * @param action Action.
      * @return Authenticated route.
      */
     private Route auth(final Route route, final Action action) {
+        if (this.tokenAuth != null) {
+            return new CombinedAuthRoute(
+                route,
+                new OperationControl(this.policy, new AdapterBasicPermission(this.name, action)),
+                this.users,
+                this.tokenAuth
+            );
+        }
         return new BasicAuthRoute(
             route,
             new OperationControl(this.policy, new AdapterBasicPermission(this.name, action)),

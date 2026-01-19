@@ -40,9 +40,11 @@ public final class FromRemoteCache implements Cache {
             (content, throwable) -> {
                 final CompletionStage<Optional<? extends Content>> res;
                 if (throwable == null && content.isPresent()) {
-                    res = this.storage.save(
-                        key, new Content.From(content.get().size(), content.get())
-                    ).thenCompose(nothing -> this.storage.value(key))
+                    // CRITICAL: Don't call content.get() twice - it's a OneTimePublisher!
+                    // Save content as-is (size will be computed during save if needed)
+                    final Content remoteContent = content.get();
+                    res = this.storage.save(key, remoteContent)
+                        .thenCompose(nothing -> this.storage.value(key))
                         .thenApply(Optional::of);
                 } else {
                     final Throwable error;

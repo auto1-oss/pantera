@@ -181,7 +181,7 @@ class SliceIndexTest {
                 Headers.EMPTY,
                 Content.EMPTY
             ).join(),
-            "<!DOCTYPE html>\n<html>\n  </body>\n\n</body>\n</html>".getBytes()
+            RsStatus.NOT_FOUND
         );
     }
 
@@ -193,7 +193,7 @@ class SliceIndexTest {
                 Headers.from(SliceIndexTest.HDR_FULL_PATH, "/username/pypi/def"),
                 Content.EMPTY
             ).join(),
-            "<!DOCTYPE html>\n<html>\n  </body>\n\n</body>\n</html>".getBytes()
+            RsStatus.NOT_FOUND
         );
     }
 
@@ -207,6 +207,216 @@ class SliceIndexTest {
             new RequestLine("GET", "/"), Headers.EMPTY, Content.EMPTY
         ).join();
         ResponseAssert.check(r, RsStatus.OK, ContentType.html(), new ContentLength(179));
+    }
+
+    @Test
+    void returnsIndexFromPypiFolder() {
+        // Create artifact in standard location
+        final String packageName = "mypackage";
+        this.storage.save(
+            new Key.From(packageName, "0.1.0", "mypackage-0.1.0.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        
+        // Create index in .pypi/ folder structure
+        final String indexHtml = "<!DOCTYPE html>\n<html>\n  <body>\n<a href=\"0.1.0/mypackage-0.1.0.whl#sha256=abc\">mypackage-0.1.0.whl</a><br/>\n</body>\n</html>";
+        this.storage.save(
+            new Key.From(".pypi", packageName, packageName + ".html"),
+            new Content.From(indexHtml.getBytes())
+        ).join();
+        
+        Response r = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/" + packageName),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html());
+    }
+
+    @Test
+    void returnsRepoIndexFromPypiFolder() {
+        // Create artifacts
+        this.storage.save(
+            new Key.From("package1", "0.1.0", "package1-0.1.0.whl"),
+            new Content.From("content1".getBytes())
+        ).join();
+        this.storage.save(
+            new Key.From("package2", "0.2.0", "package2-0.2.0.whl"),
+            new Content.From("content2".getBytes())
+        ).join();
+        
+        // Create repo-level index in .pypi/simple.html
+        final String simpleHtml = "<!DOCTYPE html>\n<html>\n  <body>\n<a href=\"package1/\">package1</a><br/>\n<a href=\"package2/\">package2</a><br/>\n</body>\n</html>";
+        this.storage.save(
+            new Key.From(".pypi", "simple.html"),
+            new Content.From(simpleHtml.getBytes())
+        ).join();
+        
+        Response r = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html());
+    }
+
+    @Test
+    void returnsRepoIndexFromPypiFolderForSimplePath() {
+        this.storage.save(
+            new Key.From(".pypi", "simple.html"),
+            new Content.From("<html></html>".getBytes())
+        ).join();
+        Response r = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html());
+    }
+
+    @Test
+    void returnsPackageIndexFromPypiFolderForSimplePath() {
+        final String packageName = "pkg";
+        this.storage.save(
+            new Key.From(".pypi", packageName, packageName + ".html"),
+            new Content.From("<html></html>".getBytes())
+        ).join();
+        Response r = new SliceIndex(this.storage).response(
+            new RequestLine("GET", String.format("/simple/%s/", packageName)),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html());
+    }
+
+    @Test
+    void returnsIndexListForSimplePackageWhenFallbackUsed() {
+        final String gzip = "def/def-0.1.tar.gz";
+        final String wheel = "def/def-0.2.whl";
+        this.storage.save(new Key.From(gzip), new Content.From(gzip.getBytes())).join();
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/def/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithHyphens() {
+        // Package stored with normalized name (hyphens)
+        final String normalized = "sm-pipelines";
+        final String gzip = normalized + "/" + normalized + "-0.1.0.tar.gz";
+        final String wheel = normalized + "/" + normalized + "-0.2.0.whl";
+        this.storage.save(new Key.From(gzip), new Content.From(gzip.getBytes())).join();
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with hyphens should work
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/sm-pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+
+        // Request with underscores should also work (normalized to hyphens)
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/sm_pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+
+        // Request with mixed case should also work (normalized to lowercase)
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/SM-Pipelines/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(gzip, gzip.getBytes()),
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithUnderscores() {
+        // Package stored with normalized name (underscores become hyphens)
+        final String normalized = "my-package";
+        final String wheel = normalized + "/" + normalized + "-1.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with underscores should find the hyphenated storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/my_package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithDots() {
+        // Package stored with normalized name (dots become hyphens)
+        final String normalized = "my-package";
+        final String wheel = normalized + "/" + normalized + "-1.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with dots should find the hyphenated storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/my.package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
+    }
+
+    @Test
+    void normalizesPackageNameWithMixedSeparators() {
+        // Package stored with normalized name (all separators become single hyphen)
+        final String normalized = "my-super-package";
+        final String wheel = normalized + "/" + normalized + "-2.0.0.whl";
+        this.storage.save(new Key.From(wheel), new Content.From(wheel.getBytes())).join();
+
+        // Request with mixed separators should find the normalized storage path
+        ResponseAssert.check(
+            new SliceIndex(this.storage).response(
+                new RequestLine("GET", "/simple/My._Super__Package/"),
+                Headers.EMPTY,
+                Content.EMPTY
+            ).join(),
+            SliceIndexTest.html(
+                new MapEntry<>(wheel, wheel.getBytes())
+            )
+        );
     }
 
     @SafeVarargs

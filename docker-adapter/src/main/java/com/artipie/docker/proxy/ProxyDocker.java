@@ -15,6 +15,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 
+import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -27,13 +28,29 @@ public final class ProxyDocker implements Docker {
      * Remote repository.
      */
     private final Slice remote;
+    
+    /**
+     * Remote registry URI for Docker Hub detection.
+     */
+    private final URI remoteUri;
 
     /**
-     * @param remote Remote repository.
+     * @param registryName Name of the Artipie registry
+     * @param remote Remote repository slice
+     * @param remoteUri Remote registry URI
      */
-    public ProxyDocker(String registryName, Slice remote) {
+    public ProxyDocker(String registryName, Slice remote, URI remoteUri) {
         this.registryName = registryName;
         this.remote = remote;
+        this.remoteUri = remoteUri;
+    }
+    
+    /**
+     * @param registryName Name of the Artipie registry
+     * @param remote Remote repository slice
+     */
+    public ProxyDocker(String registryName, Slice remote) {
+        this(registryName, remote, null);
     }
 
     @Override
@@ -41,9 +58,49 @@ public final class ProxyDocker implements Docker {
         return registryName;
     }
 
+    /**
+     * Get upstream URL.
+     * @return Upstream URL or "unknown" if not set
+     */
+    public String upstreamUrl() {
+        return this.remoteUri != null ? this.remoteUri.toString() : "unknown";
+    }
+
     @Override
     public Repo repo(String name) {
-        return new ProxyRepo(this.remote, name);
+        // Normalize name for Docker Hub
+        String normalizedName = this.normalizeRepoName(name);
+        return new ProxyRepo(this.remote, normalizedName, name);
+    }
+    
+    /**
+     * Normalize repository name for Docker Hub.
+     * Docker Hub uses 'library/' prefix for official images.
+     * @param name Original repository name
+     * @return Normalized repository name
+     */
+    private String normalizeRepoName(String name) {
+        if (this.isDockerHub() && !name.contains("/")) {
+            // For Docker Hub, official images need 'library/' prefix
+            return "library/" + name;
+        }
+        return name;
+    }
+    
+    /**
+     * Check if remote registry is Docker Hub.
+     * @return true if Docker Hub, false otherwise
+     */
+    private boolean isDockerHub() {
+        if (this.remoteUri == null) {
+            return false;
+        }
+        String host = this.remoteUri.getHost();
+        return host != null && (
+            host.equals("registry-1.docker.io") ||
+            host.equals("docker.io") ||
+            host.equals("hub.docker.com")
+        );
     }
 
     @Override
@@ -59,8 +116,11 @@ public final class ProxyDocker implements Docker {
                     Catalog res = response::body;
                     return CompletableFuture.completedFuture(res);
                 }
-                return CompletableFuture.failedFuture(
-                    new IllegalArgumentException("Unexpected status: " + response.status())
+                // CRITICAL: Consume body to prevent Vert.x request leak
+                return response.body().asBytesFuture().thenCompose(
+                    ignored -> CompletableFuture.failedFuture(
+                        new IllegalArgumentException("Unexpected status: " + response.status())
+                    )
                 );
             }
         ).result();

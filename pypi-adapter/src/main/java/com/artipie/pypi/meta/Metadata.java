@@ -5,7 +5,7 @@
 package com.artipie.pypi.meta;
 
 import com.artipie.asto.ArtipieIOException;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -122,7 +122,13 @@ public interface Metadata {
             ) {
                 return FromArchive.readArchive(archive);
             } catch (final IOException ex) {
-                Logger.error(this, ex.getMessage());
+                EcsLogger.error("com.artipie.pypi")
+                    .message("Failed to read metadata from archive")
+                    .eventCategory("repository")
+                    .eventAction("metadata_extraction")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
                 throw FromArchive.error(ex);
             }
         }

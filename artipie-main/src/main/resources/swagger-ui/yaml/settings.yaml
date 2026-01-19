@@ -32,6 +32,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/settings/global_prefixes:
+    get:
+      summary: Get global path prefixes configuration
+      description: Returns the list of global path prefixes and their version
+      operationId: getGlobalPrefixes
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Global prefixes configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalPrefixes'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update global path prefixes configuration
+      description: Updates the global path prefixes list. Validates that prefixes don't conflict with existing repository names.
+      operationId: updateGlobalPrefixes
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefixesList'
+      responses:
+        '200':
+          description: Prefixes updated successfully
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '409':
+          description: Conflict - One or more prefixes match existing repository names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -41,13 +94,61 @@ components:
   schemas:
     Port:
       type: object
+      description: Artipie server port information
       required:
         - port
       properties:
         port:
           type: integer
+          format: int32
+          description: Server port number for repository access
+          minimum: 1
+          maximum: 65535
+          example: 8080
+    GlobalPrefixes:
+      type: object
+      description: Global path prefixes configuration with versioning
+      required:
+        - prefixes
+        - version
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes. These prefixes are used to route requests
+            to repositories under a specific organization or team namespace.
+            Example: With prefix "org1", requests to /org1/my-repo will route to repository "org1/my-repo"
+          example: ["org1", "org2", "team-alpha"]
+        version:
+          type: integer
+          format: int64
+          description: |
+            Configuration version number. Automatically increments on each update.
+            Used for optimistic concurrency control and cache invalidation.
+          example: 5
+    PrefixesList:
+      type: object
+      description: Request body for updating global prefixes
+      required:
+        - prefixes
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes to set. Must not conflict with existing repository names.
+            Prefixes can contain alphanumeric characters, underscores, and hyphens.
+          example: ["org1", "org2", "team-alpha"]
+          minItems: 0
+          uniqueItems: true
     Error:
       type: object
+      description: Error response
       required:
         - code
         - message
@@ -55,5 +156,7 @@ components:
         code:
           type: integer
           format: int32
+          description: HTTP status code
         message:
           type: string
+          description: Human-readable error message

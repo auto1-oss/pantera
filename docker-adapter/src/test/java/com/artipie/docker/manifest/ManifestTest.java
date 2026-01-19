@@ -125,6 +125,22 @@ class ManifestTest {
     }
 
     @Test
+    void shouldDetectManifestListAndReturnNoLayers() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder()
+                .add("mediaType", Manifest.MANIFEST_LIST_SCHEMA2)
+                .add(
+                    "manifests",
+                    Json.createArrayBuilder()
+                        .add(Json.createObjectBuilder().add("digest", "sha256:abc"))
+                ).build().toString().getBytes()
+        );
+        Assertions.assertTrue(manifest.isManifestList());
+        Assertions.assertTrue(manifest.layers().isEmpty());
+    }
+
+    @Test
     void shouldReadDigest() {
         final String digest = "sha256:123";
         final Manifest manifest = new Manifest(

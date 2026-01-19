@@ -104,4 +104,12 @@ All artifacts obtained through this repository will be stored in the directory `
 using structure of folders as it does local maven.
 
 To add a new repository or update an existing repository, you have to simply create or modify repositories 
-configuration `yaml` files in the directory `/var/artipie/repo`.
+configuration `yaml` files in the directory `/var/artipie/repo` or use the [REST API](./Rest-api)
+to create/update repositories dynamically without restart.
+
+## New and notable
+
+- Dynamic repositories: create, update, move and delete repositories at runtime via REST with no restart. See [REST API](./Rest-api).
+- Bearer auth everywhere: all repositories support bearer token authentication for uploads and downloads in addition to Basic auth.
+- PostgreSQL artifacts DB: artifacts metadata are written to PostgreSQL (SQLite support deprecated). See [Artifacts metadata](./Configuration-Metadata).
+- ARM64 support: official Docker images and the service run on `linux/amd64` and `linux/arm64` architectures.

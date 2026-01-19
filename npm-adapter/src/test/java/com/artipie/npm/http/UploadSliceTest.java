@@ -61,6 +61,7 @@ public final class UploadSliceTest {
         );
         final String json = Json.createObjectBuilder()
             .add("name", "@hello/simple-npm-project")
+            .add("version", "1.0.1")
             .add("_id", "1.0.1")
             .add("readme", "Some text")
             .add("versions", Json.createObjectBuilder())
@@ -75,6 +76,17 @@ public final class UploadSliceTest {
                 new Content.From(json.getBytes())
             ).join().status()
         );
+        
+        // Generate meta.json from per-version files
+        final com.artipie.asto.Key packageKey = new KeyFromPath("package");
+        new com.artipie.npm.PerVersionLayout(this.storage).generateMetaJson(packageKey)
+            .thenCompose(meta -> this.storage.save(
+                new KeyFromPath("package/meta.json"),
+                new Content.From(meta.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
+            ))
+            .toCompletableFuture()
+            .join();
+        
         Assertions.assertTrue(
             this.storage.exists(new KeyFromPath("package/meta.json")).get()
         );

@@ -48,21 +48,36 @@ public final class PathPrefixSlice implements Slice {
         final Content body
     ) {
         final URI original = line.uri();
+        final String path = this.normalizePath(this.prefix, original.getRawPath());
         final String uri;
         if (original.getRawQuery() == null) {
-            uri = String.format("%s%s", this.prefix, original.getRawPath());
+            uri = path;
         } else {
-            uri = String.format(
-                "%s%s?%s",
-                this.prefix,
-                original.getRawPath(),
-                original.getRawQuery()
-            );
+            uri = String.format("%s?%s", path, original.getRawQuery());
         }
         return this.origin.response(
             new RequestLine(line.method().value(), uri, line.version()),
             headers,
             body
         );
+    }
+
+    /**
+     * Normalize path by combining prefix and path, avoiding double slashes.
+     * @param prefix Path prefix
+     * @param path Request path
+     * @return Normalized path
+     */
+    private String normalizePath(final String prefix, final String path) {
+        if (prefix == null || prefix.isEmpty()) {
+            return path == null ? "/" : path;
+        }
+        if (path == null || path.isEmpty()) {
+            return prefix;
+        }
+        // Remove trailing slash from prefix and leading slash from path to avoid double slashes
+        final String cleanPrefix = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+        final String cleanPath = path.startsWith("/") ? path : "/" + path;
+        return cleanPrefix + cleanPath;
     }
 }

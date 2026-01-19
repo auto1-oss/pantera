@@ -251,7 +251,7 @@ class SubStorageTest {
         this.asto.save(prefkey, Content.EMPTY).join();
         final Function<Storage, CompletionStage<Boolean>> operation =
             sto -> CompletableFuture.completedFuture(true);
-        final Boolean subfinished = new LoggingStorage(this.asto)
+        final Boolean subfinished = this.asto
             .exclusively(key, operation).toCompletableFuture().join();
         MatcherAssert.assertThat(
             "Runs exclusively a storage key with prefix",

@@ -105,9 +105,10 @@ public final class AstoCreateRepomd {
         return rxsto.list(temp)
             .flatMapObservable(Observable::fromIterable)
             .filter(key -> !key.string().endsWith(this.cnfg.digest().name()))
+            // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
             .<Pair<XmlPackage, String>>flatMapSingle(
                 key -> rxsto.value(key).flatMap(
-                    val -> Single.fromFuture(
+                    val -> com.artipie.asto.rx.RxFuture.single(
                         new ContentDigest(
                             val,
                             () -> this.cnfg.digest().messageDigest()

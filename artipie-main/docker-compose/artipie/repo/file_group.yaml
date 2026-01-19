@@ -1,0 +1,6 @@
+repo:
+  type: "file-group"
+  # Example members; ensure matching file and file-proxy repos exist
+  members:
+    - file
+    - file_proxy

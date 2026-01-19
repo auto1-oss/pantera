@@ -30,7 +30,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -46,6 +48,16 @@ import org.reactivestreams.Subscriber;
  */
 @SuppressWarnings("PMD.CognitiveComplexity")
 public final class StorageValuePipeline<R> {
+
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.asto.pipeline";
+
+    /**
+     * Counter for worker thread naming.
+     */
+    private static final AtomicInteger WORKER_COUNTER = new AtomicInteger(0);
 
     /**
      * Abstract storage.
@@ -141,7 +153,13 @@ public final class StorageValuePipeline<R> {
             )
             .thenCompose(
                 optional -> {
-                    final ExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+                    final ExecutorService executor = Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            final Thread t = new Thread(r, POOL_NAME + ".worker-" + WORKER_COUNTER.incrementAndGet());
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    );
                     final PublishingOutputStream output = new PublishingOutputStream(Schedulers.from(executor));
                     return CompletableFuture.runAsync(
                         () -> res.set(action.apply(optional, output)), executor

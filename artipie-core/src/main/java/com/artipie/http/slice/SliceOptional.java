@@ -70,6 +70,9 @@ public final class SliceOptional<T> implements Slice {
         if (this.predicate.test(target)) {
             return this.slice.apply(target).response(line, head, body);
         }
-        return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        // Consume request body to prevent Vert.x request leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.notFound().build()
+        );
     }
 }

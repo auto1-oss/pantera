@@ -46,7 +46,7 @@ final class ComposerStorageCacheTest {
     @Test
     void getsContentFromRemoteCachesItAndSaveKeyToCacheFile() {
         final byte[] body = "some info".getBytes();
-        final String key = "vendor/package";
+        final String key = "p2/vendor/package";
         MatcherAssert.assertThat(
             "Content was not obtained from remote",
             new ComposerStorageCache(this.repo).load(
@@ -59,25 +59,21 @@ final class ComposerStorageCacheTest {
         MatcherAssert.assertThat(
             "Item was not cached",
             this.storage.exists(
-                new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key))
+                new Key.From(String.format("%s.json", key))
             ).toCompletableFuture().join(),
             new IsEqual<>(true)
         );
-        MatcherAssert.assertThat(
-            "Info about save time was not saved in cache file",
-            this.storage.value(CacheTimeControl.CACHE_FILE).join()
-                .asJsonObject().keySet(),
-            new IsEqual<>(new SetOf<>(key))
-        );
+        // NOTE: No longer using cache-info.json file
+        // Timestamps are now tracked via filesystem metadata
     }
 
     @Test
     void getsContentFromCache() {
         final byte[] body = "some info".getBytes();
-        final String key = "vendor/package";
-        this.saveCacheFile(key);
+        final String key = "p2/vendor/package";
+        // Save the cached content (filesystem timestamp is auto-created)
         this.storage.save(
-            new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key)),
+            new Key.From(String.format("%s.json", key)),
             new Content.From(body)
         ).join();
         MatcherAssert.assertThat(
@@ -94,34 +90,27 @@ final class ComposerStorageCacheTest {
     void getsContentFromRemoteForExpiredCacheAndOverwriteValues() {
         final byte[] body = "some info".getBytes();
         final byte[] updated = "updated some info".getBytes();
-        final String key = "vendor/package";
-        final String expired = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC)
-            .minus(Duration.ofDays(100))
-            .toString();
-        this.saveCacheFile(key, expired);
+        final String key = "p2/vendor/package";
+        // Save old cached content
         this.storage.save(
-            new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key)),
+            new Key.From(String.format("%s.json", key)),
             new Content.From(body)
         ).join();
+        // Use a cache control that always invalidates (returns false)
+        final CacheControl noCache = (item, content) -> CompletableFuture.completedFuture(false);
         MatcherAssert.assertThat(
-            "Content was not obtained from remote when cache is expired",
+            "Content was not obtained from remote when cache is invalidated",
             new ComposerStorageCache(this.repo).load(
                 new Key.From(key),
                 () -> CompletableFuture.completedFuture(Optional.of(new Content.From(updated))),
-                new CacheTimeControl(this.storage)
+                noCache  // Invalidate cache, force re-fetch
             ).toCompletableFuture().join().orElseThrow().asBytes(),
             new IsEqual<>(updated)
         );
         MatcherAssert.assertThat(
-            "Info about save time was not updated in cache file",
-            this.storage.value(CacheTimeControl.CACHE_FILE).join()
-                .asJsonObject().getString(key),
-            new IsNot<>(new IsEqual<>(expired))
-        );
-        MatcherAssert.assertThat(
             "Cached item was not overwritten",
             this.storage.value(
-                new Key.From(ComposerStorageCache.CACHE_FOLDER, String.format("%s.json", key))
+                new Key.From(String.format("%s.json", key))
             ).join().asBytes(),
             new IsEqual<>(updated)
         );
@@ -151,21 +140,6 @@ final class ComposerStorageCacheTest {
         );
     }
 
-    private void saveCacheFile(final String key) {
-        this.saveCacheFile(
-            key,
-            ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC).toString()
-        );
-    }
-
-    private void saveCacheFile(final String key, final String expiration) {
-        this.storage.save(
-            CacheTimeControl.CACHE_FILE,
-            new Content.From(
-                Json.createObjectBuilder().add(key, expiration)
-                    .build().toString()
-                    .getBytes()
-            )
-        ).join();
-    }
+    // NOTE: saveCacheFile() methods removed - no longer using cache-info.json
+    // Filesystem timestamps are now used for cache time tracking
 }

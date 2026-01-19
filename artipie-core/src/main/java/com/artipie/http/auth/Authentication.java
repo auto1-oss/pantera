@@ -5,10 +5,11 @@
 package com.artipie.http.auth;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Authentication mechanism to verify user.
@@ -22,6 +23,24 @@ public interface Authentication {
      * @return User login if found
      */
     Optional<AuthUser> user(String username, String password);
+
+    /**
+     * Check if this authentication provider can handle the given username.
+     * Used for domain-based routing to avoid trying providers that don't apply.
+     * @param username Username to check
+     * @return True if this provider should attempt authentication for this user
+     */
+    default boolean canHandle(final String username) {
+        return true; // Default: handle all users
+    }
+
+    /**
+     * Get configured user domain patterns for this provider.
+     * @return Collection of domain patterns (empty means handle all)
+     */
+    default Collection<String> userDomains() {
+        return Collections.emptyList();
+    }
 
     /**
      * Abstract decorator for Authentication.
@@ -47,6 +66,16 @@ public interface Authentication {
         @Override
         public final Optional<AuthUser> user(final String username, final String password) {
             return this.auth.user(username, password);
+        }
+
+        @Override
+        public boolean canHandle(final String username) {
+            return this.auth.canHandle(username);
+        }
+
+        @Override
+        public Collection<String> userDomains() {
+            return this.auth.userDomains();
         }
     }
 
@@ -130,10 +159,26 @@ public interface Authentication {
 
         @Override
         public Optional<AuthUser> user(final String user, final String pass) {
-            return this.origins.stream()
-                .map(auth -> auth.user(user, pass))
-                .flatMap(opt -> opt.map(Stream::of).orElseGet(Stream::empty))
-                .findFirst();
+            for (final Authentication auth : this.origins) {
+                if (!auth.canHandle(user)) {
+                    // Provider doesn't handle this username domain - skip
+                    continue;
+                }
+                // Provider can handle this user - try authentication
+                final Optional<AuthUser> result = auth.user(user, pass);
+                if (result.isPresent()) {
+                    // Success - return immediately
+                    return result;
+                }
+                // Provider matched domain but auth failed
+                // If provider has specific domains configured, stop here
+                // (don't try other providers for same domain)
+                if (!auth.userDomains().isEmpty()) {
+                    return Optional.empty();
+                }
+                // Provider is a catch-all, continue to next
+            }
+            return Optional.empty();
         }
 
         @Override

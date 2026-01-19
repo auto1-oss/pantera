@@ -6,8 +6,8 @@ package com.artipie.settings.cache;
 
 import com.artipie.http.auth.AuthUser;
 import com.artipie.http.auth.Authentication;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
@@ -40,7 +40,7 @@ final class CachedUsersTest {
 
     @BeforeEach
     void init() {
-        this.cache = CacheBuilder.newBuilder().build();
+        this.cache = Caffeine.newBuilder().build();
         this.auth = new FakeAuth();
         this.users = new CachedUsers(this.auth, this.cache);
     }
@@ -53,7 +53,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 1",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
@@ -62,7 +62,7 @@ final class CachedUsersTest {
         );
         MatcherAssert.assertThat(
             "Cache size should be 1",
-            this.cache.size(),
+            this.cache.estimatedSize(),
             new IsEqual<>(1L)
         );
         MatcherAssert.assertThat(
@@ -73,37 +73,37 @@ final class CachedUsersTest {
     }
 
     @Test
-    void cachesWhenNotAuthenticated() {
+    void doesNotCacheFailedAuth() {
         MatcherAssert.assertThat(
             "David was not authenticated on the first call",
             this.users.user("David", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "olga was not authenticated on the first call",
+            "Olga was not authenticated on the first call",
             this.users.user("Olga", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "Cache size should be 2",
-            this.cache.size(),
-            new IsEqual<>(2L)
+            "Cache size should be 0 - failed auth should not be cached",
+            this.cache.estimatedSize(),
+            new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
             "David was not authenticated on the second call",
             this.users.user("David", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "olga was not authenticated on the second call",
+            "Olga was not authenticated on the second call",
             this.users.user("Olga", "any").isEmpty()
         );
         MatcherAssert.assertThat(
-            "Cache size should be 2",
-            this.cache.size(),
-            new IsEqual<>(2L)
+            "Cache size should still be 0",
+            this.cache.estimatedSize(),
+            new IsEqual<>(0L)
         );
         MatcherAssert.assertThat(
-            "Authenticate method should be called twice",
+            "Authenticate method should be called 4 times (no caching for failures)",
             this.auth.cnt.get(),
-            new IsEqual<>(2)
+            new IsEqual<>(4)
         );
     }
 

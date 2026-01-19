@@ -39,7 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.testcontainers.shaded.com.google.common.collect.Sets;
+import com.google.common.collect.Sets;
 
 import java.security.Permission;
 import java.security.PermissionCollection;
@@ -66,13 +66,18 @@ public final class AuthTest {
     @ParameterizedTest
     @MethodSource("setups")
     void shouldUnauthorizedForAnonymousUser(final Method method, final RequestLine line) {
-        ResponseAssert.check(
-            method.slice(
-                new TestPolicy(
-                    new DockerRepositoryPermission("*", "whatever", DockerActions.PULL.mask())
+        final Response response = method.slice(
+            new TestPolicy(
+                new DockerRepositoryPermission("*", "whatever", DockerActions.PULL.mask())
+            )
+        ).response(line, Headers.EMPTY, Content.EMPTY).join();
+        ResponseAssert.check(response, RsStatus.UNAUTHORIZED);
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("WWW-Authenticate")
+                        && !header.getValue().isBlank()
                 )
-            ).response(line, Headers.EMPTY, Content.EMPTY).join(),
-            RsStatus.UNAUTHORIZED
         );
     }
 
@@ -165,12 +170,14 @@ public final class AuthTest {
             .response(line, Headers.EMPTY, Content.EMPTY).join();
         MatcherAssert.assertThat(
             response,
-            new AllOf<>(
-                Arrays.asList(
-                    new IsNot<>(new RsHasStatus(RsStatus.FORBIDDEN)),
-                    new IsNot<>(new RsHasStatus(RsStatus.UNAUTHORIZED))
+            new RsHasStatus(RsStatus.UNAUTHORIZED)
+        );
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("WWW-Authenticate")
+                        && !header.getValue().isBlank()
                 )
-            )
         );
     }
 

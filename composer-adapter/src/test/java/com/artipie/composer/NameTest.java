@@ -19,7 +19,7 @@ class NameTest {
     void shouldGenerateKey() {
         MatcherAssert.assertThat(
             new Name("vendor/package").key().string(),
-            Matchers.is("vendor/package.json")
+            Matchers.is("p2/vendor/package.json")
         );
     }
 }

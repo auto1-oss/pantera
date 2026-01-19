@@ -54,8 +54,9 @@ public final class AstoChecksumAndName {
             .flatMapObservable(Observable::fromIterable)
             .filter(item -> item.string().endsWith(".rpm"))
             .flatMapSingle(
+                // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
                 item -> rxsto.value(item).flatMap(
-                    cnt -> Single.fromFuture(
+                    cnt -> com.artipie.asto.rx.RxFuture.single(
                         new ContentDigest(cnt, this.dgst::messageDigest).hex().toCompletableFuture()
                     )
                 ).map(hex -> new ImmutablePair<>(keyPart(key, item), hex))

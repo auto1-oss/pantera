@@ -1,8 +1,76 @@
+# Artipie Server Configuration
+# For complete documentation, see: docs/SETTINGS_MASTER_INDEX.md
+
 meta:
+  # Repository layout: 'flat' (default) or 'org' (multi-tenant)
+  layout: flat
+  
+  # Meta storage for configuration files
   storage:
     type: fs
     path: /var/artipie/cfg
+  
+  # Authentication providers (evaluated in order)
   credentials:
-    - type: env
+    - type: env      # Environment variables (ARTIPIE_USER_NAME, ARTIPIE_USER_PASS)
+    - type: artipie  # Native users (_credentials.yaml)
+  
+  # Authorization policy
+  policy:
+    type: artipie
+    storage:
+      type: fs
+      path: /var/artipie/cfg/security
+  
+  # Cooldown service (prevents repeated upstream failures)
+  cooldown:
+    enabled: true
+    minimum_allowed_age: 72h  # 3 days before retrying failed upstream
+  
+  # Artifact metadata database (PostgreSQL)
   artifacts_database:
-    sqlite_data_file_path: /var/artipie/data/database.db
+    postgres_host: localhost
+    postgres_port: 5432
+    postgres_database: artifacts
+    postgres_user: artipie
+    postgres_password: artipie
+  
+  # Global HTTP client settings
+  http_client:
+    proxy_timeout: 120                      # Seconds
+    connect_timeout: 30000                  # Milliseconds
+    max_connections_per_destination: 512
+    idle_timeout: 30000
+    follow_redirects: true
+  
+  # HTTP server settings
+  http_server:
+    request_timeout: PT2M  # 2 minutes
+  
+  # Metrics (Prometheus-compatible)
+  metrics:
+    endpoint: /metrics/vertx
+    port: 8087
+    types: [jvm, storage, http]
+
+# Global cache profiles for all proxy repository types
+# See: docs/MAVEN_SETTINGS_COMPLETE.md (applicable to all proxy types)
+cache:
+  profiles:
+    # Default profile
+    default:
+      metadata:
+        ttl: PT24H
+        maxSize: 10000
+      negative:
+        enabled: true
+        ttl: PT24H
+        maxSize: 50000
+    
+    # Snapshot/pre-release repositories
+    snapshots:
+      metadata:
+        ttl: PT5M
+        maxSize: 25000
+      negative:
+        enabled: false

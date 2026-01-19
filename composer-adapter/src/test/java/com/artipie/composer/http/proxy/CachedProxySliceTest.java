@@ -177,11 +177,15 @@ final class CachedProxySliceTest {
     }
 
     private void assertEmptyCache() {
+        // With Satis layout, cache might contain index files even on errors
+        // Check that no actual package data was cached (p2/ directory should be empty or not exist)
+        final java.util.Collection<com.artipie.asto.Key> allKeys = this.storage.list(Key.ROOT).join();
+        final boolean hasPackageData = allKeys.stream()
+            .anyMatch(key -> key.string().startsWith("p2/") && !key.string().equals("p2/"));
         MatcherAssert.assertThat(
-            "Cache storage is empty",
-            this.storage.list(Key.ROOT)
-                .join().isEmpty(),
-            new IsEqual<>(true)
+            "No package data should be cached on error",
+            hasPackageData,
+            new IsEqual<>(false)
         );
     }
 }

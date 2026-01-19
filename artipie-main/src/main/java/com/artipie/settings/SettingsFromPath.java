@@ -10,7 +10,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.misc.JavaResource;
 import com.artipie.scheduling.QuartzService;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -73,17 +73,19 @@ public final class SettingsFromPath {
                 );
             }
             bsto.save(init, "true".getBytes());
-            Logger.info(
-                VertxMain.class,
-                String.join(
+            EcsLogger.info("com.artipie.settings")
+                .message(String.join(
                     "\n",
                     "", "", "\t+===============================================================+",
                     "\t\t\t\t\tHello!",
                     "\t\tArtipie configuration was not found, created default.",
                     "\t\t\tDefault username/password: `artipie`/`artipie`. ",
                     "\t-===============================================================-", ""
-                )
-            );
+                ))
+                .eventCategory("configuration")
+                .eventAction("default_config_create")
+                .eventOutcome("success")
+                .log();
         }
         return settings;
     }

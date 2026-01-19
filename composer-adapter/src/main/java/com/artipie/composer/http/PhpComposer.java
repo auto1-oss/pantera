@@ -8,7 +8,9 @@ import com.artipie.composer.Repository;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
@@ -42,6 +44,26 @@ public final class PhpComposer extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> events
     ) {
+        this(repository, policy, auth, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param repository Repository
+     * @param policy Access permissions
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param name Repository name
+     * @param events Artifact repository events
+     */
+    public PhpComposer(
+        final Repository repository,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -52,9 +74,10 @@ public final class PhpComposer extends Slice.Wrap {
                         ),
                         MethodRule.GET
                     ),
-                    new BasicAuthzSlice(
+                    PhpComposer.createAuthSlice(
                         new PackageMetadataSlice(repository),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -62,12 +85,27 @@ public final class PhpComposer extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
-                        new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.zip$")),
+                        new RtRule.ByPath(Pattern.compile("^/?artifacts/.*\\.(zip|tar\\.gz|tgz)$")),
                         MethodRule.GET
                     ),
-                    new BasicAuthzSlice(
+                    PhpComposer.createAuthSlice(
                         new DownloadArchiveSlice(repository),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            policy, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    new RtRule.All(
+                        new RtRule.ByPath(Pattern.compile("^/.*\\.(zip|tar\\.gz|tgz)$")),
+                        MethodRule.GET
+                    ),
+                    PhpComposer.createAuthSlice(
+                        new DownloadArchiveSlice(repository),
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -78,9 +116,10 @@ public final class PhpComposer extends Slice.Wrap {
                         new RtRule.ByPath(AddSlice.PATH_PATTERN),
                         MethodRule.PUT
                     ),
-                    new BasicAuthzSlice(
+                    PhpComposer.createAuthSlice(
                         new AddSlice(repository),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -88,12 +127,13 @@ public final class PhpComposer extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     new RtRule.All(
-                        new RtRule.ByPath(AddArchiveSlice.PATH),
+                        new RtRule.ByPath(".*\\.(zip|tar\\.gz|tgz)$"),
                         MethodRule.PUT
                     ),
-                    new BasicAuthzSlice(
+                    PhpComposer.createAuthSlice(
                         new AddArchiveSlice(repository, events, name),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -101,5 +141,23 @@ public final class PhpComposer extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BasicAuthzSlice(origin, basicAuth, control);
     }
 }

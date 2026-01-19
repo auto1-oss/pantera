@@ -9,8 +9,9 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.LogSanitizer;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
-import com.jcabi.log.Logger;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
@@ -51,13 +52,35 @@ public final class LoggingSlice implements Slice {
         RequestLine line, Headers headers, Content body
     ) {
         final StringBuilder msg = new StringBuilder(">> ").append(line);
-        LoggingSlice.append(msg, headers);
-        Logger.log(this.level, this.slice, msg.toString());
+        // Sanitize headers to prevent credential leakage in logs
+        LoggingSlice.append(msg, LogSanitizer.sanitizeHeaders(headers));
+
+        // Log request at DEBUG level (diagnostic only)
+        if (this.level.intValue() <= Level.FINE.intValue()) {
+            EcsLogger.debug("com.artipie.http")
+                .message("HTTP request")
+                .eventCategory("http")
+                .eventAction("request")
+                .field("http.request.body.content", msg.toString())
+                .log();
+        }
+
         return slice.response(line, headers, body)
             .thenApply(res -> {
                 final StringBuilder sb = new StringBuilder("<< ").append(res.status());
-                LoggingSlice.append(sb, res.headers());
-                Logger.log(LoggingSlice.this.level, LoggingSlice.this.slice, sb.toString());
+                // Sanitize response headers as well
+                LoggingSlice.append(sb, LogSanitizer.sanitizeHeaders(res.headers()));
+
+                // Log response at DEBUG level (diagnostic only)
+                if (LoggingSlice.this.level.intValue() <= Level.FINE.intValue()) {
+                    EcsLogger.debug("com.artipie.http")
+                        .message("HTTP response")
+                        .eventCategory("http")
+                        .eventAction("response")
+                        .field("http.response.body.content", sb.toString())
+                        .log();
+                }
+
                 return res;
             });
     }

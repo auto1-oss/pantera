@@ -123,8 +123,10 @@ final class UnpublishPutSlice implements Slice {
                     if (source.getJsonObject("dist-tags").containsKey(diff)) {
                         patch.remove(String.format("/dist-tags/%s", diff));
                     }
+                    // Get latest STABLE version (exclude prereleases like alpha, beta, rc)
                     final String latest = new DescSortedVersions(
-                        update.getJsonObject("versions")
+                        update.getJsonObject("versions"),
+                        true  // excludePrereleases = true
                     ).value().get(0);
                     patch.add("/dist-tags/latest", latest);
                     patch.add("/time/modified", new DateTimeNowStr().value());

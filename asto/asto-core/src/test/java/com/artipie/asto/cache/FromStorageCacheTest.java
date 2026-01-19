@@ -136,7 +136,7 @@ final class FromStorageCacheTest {
                 .thenApply(Content.From::new)
                 .thenApply(Optional::of);
         Observable.range(0, count).flatMapCompletable(
-            num -> SingleInterop.fromFuture(cache.load(key, remote, CacheControl.Standard.ALWAYS))
+            num -> com.artipie.asto.rx.RxFuture.single(cache.load(key, remote, CacheControl.Standard.ALWAYS))
                 .flatMapCompletable(
                     pub -> CompletableInterop.fromFuture(
                         this.storage.save(new Key.From("out", num.toString()), pub.get())

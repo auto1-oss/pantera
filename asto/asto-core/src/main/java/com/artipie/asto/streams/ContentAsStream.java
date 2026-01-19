@@ -5,6 +5,8 @@
 package com.artipie.asto.streams;
 
 import com.artipie.asto.ArtipieIOException;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PipedInputStream;
@@ -12,6 +14,8 @@ import java.io.PipedOutputStream;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Function;
 import org.cqfn.rio.WriteGreed;
 import org.cqfn.rio.stream.ReactiveOutputStream;
@@ -25,6 +29,23 @@ import org.reactivestreams.Publisher;
  * @since 1.4
  */
 public final class ContentAsStream<T> {
+
+    /**
+     * Pool name for metrics identification.
+     */
+    public static final String POOL_NAME = "artipie.io.stream";
+
+    /**
+     * Dedicated executor for blocking stream operations.
+     * CRITICAL: Without this, CompletableFuture.supplyAsync() uses ForkJoinPool.commonPool()
+     * which can block Vert.x event loop threads, causing "Thread blocked" warnings.
+     */
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newCachedThreadPool(
+        new ThreadFactoryBuilder()
+            .setNameFormat(POOL_NAME + ".worker-%d")
+            .setDaemon(true)
+            .build()
+    );
 
     /**
      * Publisher to process.
@@ -45,6 +66,7 @@ public final class ContentAsStream<T> {
      * @return Completion action with the result
      */
     public CompletionStage<T> process(final Function<InputStream, T> action) {
+        // CRITICAL: Use dedicated executor to avoid blocking Vert.x event loop
         return CompletableFuture.supplyAsync(
             () -> {
                 try (
@@ -58,7 +80,8 @@ public final class ContentAsStream<T> {
                 } catch (final IOException err) {
                     throw new ArtipieIOException(err);
                 }
-            }
+            },
+            BLOCKING_EXECUTOR
         ).thenCompose(Function.identity());
     }
 }

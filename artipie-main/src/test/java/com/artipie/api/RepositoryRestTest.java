@@ -225,8 +225,8 @@ public final class RepositoryRestTest extends RestApiServerBase {
                 new JsonObject()
                     .put(
                         "repo", new JsonObject()
-                            .put("type", "fs")
-                            .put("storage", new JsonObject())
+                            .put("type", "docker")
+                            .put("storage", new JsonObject().put("type", "fs"))
                     )
             ),
             resp -> {
@@ -257,7 +257,7 @@ public final class RepositoryRestTest extends RestApiServerBase {
                 HttpMethod.PUT,
                 String.format("/api/v1/repository/%s", rname),
                 new JsonObject().put(
-                    "repo", new JsonObject().put("type", "fs").put("storage", new JsonObject())
+                    "repo", new JsonObject().put("type", "docker").put("storage", new JsonObject().put("type", "fs"))
                 )
             ),
             resp -> {
@@ -284,7 +284,7 @@ public final class RepositoryRestTest extends RestApiServerBase {
             vertx, ctx, new TestRequest(
                 HttpMethod.PUT, "/api/v1/repository/_storages",
                 new JsonObject().put(
-                    "repo", new JsonObject().put("type", "fs").put("storage", new JsonObject())
+                    "repo", new JsonObject().put("type", "file").put("storage", new JsonObject().put("type", "fs"))
                 )
             ),
             res -> MatcherAssert.assertThat(

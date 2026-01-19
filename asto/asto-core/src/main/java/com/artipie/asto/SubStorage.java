@@ -7,11 +7,11 @@ package com.artipie.asto;
 import com.artipie.asto.ext.CompletableFutureSupport;
 import com.artipie.asto.lock.storage.StorageLock;
 import java.util.Collection;
+import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Sub storage is a storage in storage.
@@ -63,6 +63,22 @@ public final class SubStorage implements Storage {
                 .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
                 .collect(Collectors.toList())
         );
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key root, final String delimiter) {
+        final Pattern ptn = Pattern.compile(String.format("^%s/", this.prefix.string()));
+        return this.origin
+            .list(new PrefixedKed(this.prefix, root), delimiter)
+            .thenApply(result -> {
+                final Collection<Key> files = result.files().stream()
+                    .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
+                    .collect(Collectors.toList());
+                final Collection<Key> dirs = result.directories().stream()
+                    .map(key -> new Key.From(ptn.matcher(key.string()).replaceFirst("")))
+                    .collect(Collectors.toList());
+                return new ListResult.Simple(files, dirs);
+            });
     }
 
     @Override

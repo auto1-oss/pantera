@@ -29,9 +29,10 @@ public final class PackageMetadataSlice implements Slice {
     /**
      * RegEx pattern for package metadata path.
      * According to <a href="https://packagist.org/apidoc#get-package-data">docs</a>.
+     * Also handles Satis cache-busting format: /p2/vendor/package$hash.json
      */
     public static final Pattern PACKAGE = Pattern.compile(
-        "/p2?/(?<vendor>[^/]+)/(?<package>[^/]+)\\.json$"
+        "/p2?/(?<vendor>[^/]+)/(?<package>[^/$]+)(?:\\$[a-f0-9]+)?\\.json$"
     );
 
     /**
@@ -50,18 +51,22 @@ public final class PackageMetadataSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return this.packages(line.uri().getPath())
-            .toCompletableFuture()
-            .thenApply(
-                opt -> opt.map(
-                    packages -> packages.content()
-                        .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
-                ).orElse(
-                    CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        // GET requests should have empty body, but we must consume it to complete the request
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.packages(line.uri().getPath())
+                .toCompletableFuture()
+                .thenApply(
+                    opt -> opt.map(
+                        packages -> packages.content()
+                            .thenApply(cnt -> ResponseBuilder.ok().body(cnt).build())
+                    ).orElse(
+                        CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        )
                     )
-                )
-            ).thenCompose(Function.identity());
+                ).thenCompose(Function.identity())
+        );
     }
 
     /**

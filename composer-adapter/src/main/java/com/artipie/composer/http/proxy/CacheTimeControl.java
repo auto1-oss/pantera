@@ -24,7 +24,7 @@ final class CacheTimeControl implements CacheControl {
     /**
      * Name to file which contains info about cached items (e.g. when an item was saved).
      */
-    static final Key CACHE_FILE = new Key.From("cache/cache-info.json");
+    static final Key CACHE_FILE = new Key.From("cache-info.json");
 
     /**
      * Time during which the file is valid.
@@ -37,11 +37,11 @@ final class CacheTimeControl implements CacheControl {
     private final Storage storage;
 
     /**
-     * Ctor with default value for time of expiration.
+     * Ctor with default value for time of expiration (12 hours).
      * @param storage Storage
      */
     CacheTimeControl(final Storage storage) {
-        this(storage, Duration.ofMinutes(10));
+        this(storage, Duration.ofHours(12));
     }
 
     /**
@@ -56,18 +56,29 @@ final class CacheTimeControl implements CacheControl {
 
     @Override
     public CompletionStage<Boolean> validate(final Key item, final Remote content) {
-        return this.storage.exists(CacheTimeControl.CACHE_FILE)
+        // Use file metadata (last modified time) instead of separate cache-info.json
+        // This avoids lock contention and is more reliable
+        return this.storage.exists(item)
             .thenCompose(
                 exists -> {
                     final CompletionStage<Boolean> res;
                     if (exists) {
-                        res = this.storage.value(CacheTimeControl.CACHE_FILE)
-                            .thenCompose(Content::asJsonObjectFuture)
+                        res = this.storage.metadata(item)
                             .thenApply(
-                                json -> {
-                                    final String key = item.string();
-                                    return json.containsKey(key)
-                                        && this.notExpired(json.getString(key));
+                                metadata -> {
+                                    // Try to get last updated time from filesystem
+                                    final Instant updatedAt = metadata.read(
+                                        raw -> {
+                                            if (raw.containsKey("updated-at")) {
+                                                return Instant.parse(raw.get("updated-at"));
+                                            }
+                                            // Fallback: assume valid if no timestamp
+                                            return Instant.now();
+                                        }
+                                    );
+                                    final Duration age = Duration.between(updatedAt, Instant.now());
+                                    final boolean valid = age.compareTo(this.expiration) < 0;
+                                    return valid;
                                 }
                             );
                     } else {

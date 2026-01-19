@@ -4,7 +4,7 @@
  */
 package com.artipie.scheduling;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.Queue;
 import java.util.function.Consumer;
 import org.quartz.JobExecutionContext;
@@ -55,7 +55,13 @@ public final class EventsProcessor<T> extends QuartzJob {
                         cnt = cnt + 1;
                         this.action.accept(item);
                     } catch (final EventProcessingError ex) {
-                        Logger.error(this, ex.getMessage());
+                        EcsLogger.error("com.artipie.scheduling")
+                            .message("Event processing failed (retry " + error + "/" + MAX_RETRY + ")")
+                            .eventCategory("scheduling")
+                            .eventAction("event_process")
+                            .eventOutcome("failure")
+                            .error(ex)
+                            .log();
                         if (error > EventsProcessor.MAX_RETRY) {
                             this.stopJob(context);
                             break;
@@ -66,12 +72,13 @@ public final class EventsProcessor<T> extends QuartzJob {
                     }
                 }
             }
-            Logger.debug(
-                this,
-                String.format(
-                    "%s: Processed %s elements from queue", Thread.currentThread().getName(), cnt
-                )
-            );
+            EcsLogger.debug("com.artipie.scheduling")
+                .message("Processed " + cnt + " elements from queue")
+                .eventCategory("scheduling")
+                .eventAction("event_process")
+                .eventOutcome("success")
+                .field("process.thread.name", Thread.currentThread().getName())
+                .log();
         }
     }
 

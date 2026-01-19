@@ -44,6 +44,16 @@ public final class CacheRepo implements Repo {
     private final String repoName;
 
     /**
+     * Cooldown inspector.
+     */
+    private final Optional<DockerProxyCooldownInspector> inspector;
+
+    /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
      * @param name Repository name.
      * @param origin Origin repository.
      * @param cache Cache repository.
@@ -51,22 +61,48 @@ public final class CacheRepo implements Repo {
      * @param registryName Registry name.
      */
     public CacheRepo(String name, Repo origin, Repo cache,
-                     Optional<Queue<ArtifactEvent>> events, String registryName) {
+                     Optional<Queue<ArtifactEvent>> events, String registryName,
+                     Optional<DockerProxyCooldownInspector> inspector) {
+        this(name, origin, cache, events, registryName, inspector, "unknown");
+    }
+
+    /**
+     * @param name Repository name.
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact events.
+     * @param registryName Registry name.
+     * @param inspector Cooldown inspector.
+     * @param upstreamUrl Upstream URL for metrics.
+     */
+    public CacheRepo(String name, Repo origin, Repo cache,
+                     Optional<Queue<ArtifactEvent>> events, String registryName,
+                     Optional<DockerProxyCooldownInspector> inspector, String upstreamUrl) {
         this.name = name;
         this.origin = origin;
         this.cache = cache;
         this.events = events;
         this.repoName = registryName;
+        this.inspector = inspector;
+        this.upstreamUrl = upstreamUrl;
     }
 
     @Override
     public Layers layers() {
-        return new CacheLayers(this.origin.layers(), this.cache.layers());
+        return new CacheLayers(this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl);
     }
 
     @Override
     public Manifests manifests() {
-        return new CacheManifests(this.name, this.origin, this.cache, this.events, this.repoName);
+        return new CacheManifests(
+            this.name,
+            this.origin,
+            this.cache,
+            this.events,
+            this.repoName,
+            this.inspector,
+            this.upstreamUrl
+        );
     }
 
     @Override

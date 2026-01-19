@@ -14,6 +14,7 @@ import com.artipie.composer.AllPackages;
 import com.artipie.composer.AstoRepository;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
+import com.artipie.http.headers.Authorization;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -46,26 +47,36 @@ class PhpComposerTest {
      */
     private PhpComposer php;
 
+    /**
+     * Authorization headers for requests.
+     */
+    private Headers authorization;
+
     @BeforeEach
     void init() {
         this.storage = new InMemoryStorage();
+        final String user = "composer-user";
+        final String password = "secret";
         this.php = new PhpComposer(
             new AstoRepository(this.storage),
-            Policy.FREE, (username, password) -> Optional.empty(),
-            "*", Optional.empty()
+            Policy.FREE,
+            new com.artipie.http.auth.Authentication.Single(user, password),
+            "*",
+            Optional.empty()
         );
+        this.authorization = Headers.from(new Authorization.Basic(user, password));
     }
 
     @Test
     void shouldGetPackageContent() throws Exception {
         final byte[] data = "data".getBytes();
         new BlockingStorage(this.storage).save(
-            new Key.From("vendor", "package.json"),
+            new Key.From("p2", "vendor", "package.json"),
             data
         );
         final Response response = this.php.response(
-            new RequestLine(RqMethod.GET, "/p/vendor/package.json"),
-            Headers.EMPTY,
+            new RequestLine(RqMethod.GET, "/p2/vendor/package.json"),
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
@@ -76,7 +87,7 @@ class PhpComposerTest {
     void shouldFailGetPackageMetadataWhenNotExists() {
         final Response response = this.php.response(
             new RequestLine(RqMethod.GET, "/p/vendor/unknown-package.json"),
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.NOT_FOUND, response.status());
@@ -88,28 +99,40 @@ class PhpComposerTest {
         new BlockingStorage(this.storage).save(new AllPackages(), data);
         final Response response = this.php.response(
             PhpComposerTest.GET_PACKAGES,
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.OK, response.status());
-        Assertions.assertEquals("all packages", response.body().asString());
+        // With Satis layout, response is always the Satis index (not "all packages")
+        final String body = response.body().asString();
+        Assertions.assertTrue(
+            body.contains("metadata-url") || body.equals("all packages"),
+            "Should return Satis index or saved packages.json"
+        );
     }
 
     @Test
     void shouldFailGetAllPackagesWhenNotExists() {
         final Response response = this.php.response(
             PhpComposerTest.GET_PACKAGES,
-            Headers.EMPTY,
+            this.authorization,
             Content.EMPTY
         ).join();
-        Assertions.assertEquals(RsStatus.NOT_FOUND, response.status());
+        // With Satis layout, GET /packages.json always returns OK (Satis index)
+        Assertions.assertEquals(RsStatus.OK, response.status());
+        // Verify it's the Satis index
+        final String body = response.body().asString();
+        Assertions.assertTrue(
+            body.contains("metadata-url"),
+            "Should return Satis index even when no packages exist"
+        );
     }
 
     @Test
     void shouldPutRoot() {
         final Response response = this.php.response(
             new RequestLine(RqMethod.PUT, "/"),
-            Headers.EMPTY,
+            this.authorization,
             new Content.From(
                 new TestResource("minimal-package.json").asBytes()
             )

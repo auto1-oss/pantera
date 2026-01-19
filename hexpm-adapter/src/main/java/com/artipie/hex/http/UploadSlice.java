@@ -370,7 +370,10 @@ public final class UploadSlice implements Slice {
      * @return CompletionStage with bytes from request body
      */
     private static CompletionStage<byte[]> asBytes(final Publisher<ByteBuffer> body) {
-        return new Concatenation(new OneTimePublisher<>(body)).single()
+        // OPTIMIZATION: Use size hint for efficient pre-allocation when available
+        final long knownSize = body instanceof Content
+            ? ((Content) body).size().orElse(-1L) : -1L;
+        return Concatenation.withSize(new OneTimePublisher<>(body), knownSize).single()
             .to(SingleInterop.get())
             .thenApply(Remaining::new)
             .thenApply(Remaining::bytes);

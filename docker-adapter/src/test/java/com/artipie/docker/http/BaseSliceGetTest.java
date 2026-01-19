@@ -7,7 +7,6 @@ package com.artipie.docker.http;
 import com.artipie.asto.Content;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.docker.asto.AstoDocker;
-import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.headers.Header;
 import com.artipie.http.hm.ResponseAssert;
@@ -27,13 +26,13 @@ class BaseSliceGetTest {
 
     @BeforeEach
     void setUp() {
-        this.slice = new DockerSlice(new AstoDocker("test_registry", new InMemoryStorage()));
+        this.slice = TestDockerAuth.slice(new AstoDocker("test_registry", new InMemoryStorage()));
     }
 
     @Test
     void shouldRespondOkToVersionCheck() {
         final Response response = this.slice
-            .response(new RequestLine(RqMethod.GET, "/v2/"), Headers.EMPTY, Content.EMPTY)
+            .response(new RequestLine(RqMethod.GET, "/v2/"), TestDockerAuth.headers(), Content.EMPTY)
             .join();
         ResponseAssert.check(response, RsStatus.OK,
             new Header("Docker-Distribution-API-Version", "registry/2.0"));

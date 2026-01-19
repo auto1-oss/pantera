@@ -8,10 +8,15 @@ import com.artipie.http.Headers;
 import com.artipie.http.headers.Authorization;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
+import com.artipie.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Basic authentication method.
@@ -33,6 +38,32 @@ public final class BasicAuthScheme implements AuthScheme {
         String.format("%s realm=\"artipie\"", BasicAuthScheme.NAME);
 
     /**
+     * Pool name for metrics identification.
+     */
+    public static final String AUTH_POOL_NAME = "artipie.auth.basic";
+
+    /**
+     * Thread pool for blocking authentication operations.
+     * This offloads potentially slow operations (like Okta MFA) from the event loop.
+     * Pool name: {@value #AUTH_POOL_NAME} (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to auth threads.
+     */
+    private static final ExecutorService AUTH_EXECUTOR = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName(AUTH_POOL_NAME + ".worker-" + counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }
+        )
+    );
+
+    /**
      * Authentication.
      */
     private final Authentication auth;
@@ -49,12 +80,21 @@ public final class BasicAuthScheme implements AuthScheme {
     public CompletionStage<Result> authenticate(
         Headers headers, RequestLine line
     ) {
-        final AuthScheme.Result result = new RqHeaders(headers, Authorization.NAME)
+        final Optional<String> authHeader = new RqHeaders(headers, Authorization.NAME)
             .stream()
-            .findFirst()
-            .map(s -> AuthScheme.result(this.user(s), BasicAuthScheme.CHALLENGE))
-            .orElseGet(() -> AuthScheme.result(AuthUser.ANONYMOUS, BasicAuthScheme.CHALLENGE));
-        return CompletableFuture.completedFuture(result);
+            .findFirst();
+        if (authHeader.isEmpty()) {
+            // No credentials provided - return immediately without blocking
+            return CompletableFuture.completedFuture(
+                AuthScheme.result(AuthUser.ANONYMOUS, BasicAuthScheme.CHALLENGE)
+            );
+        }
+        // Offload auth to worker thread to prevent blocking event loop
+        // This is critical for auth providers that make external calls (Okta, Keycloak, etc.)
+        return CompletableFuture.supplyAsync(
+            () -> AuthScheme.result(this.user(authHeader.get()), BasicAuthScheme.CHALLENGE),
+            AUTH_EXECUTOR
+        );
     }
 
     /**

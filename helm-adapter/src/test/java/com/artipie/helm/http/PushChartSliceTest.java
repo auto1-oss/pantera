@@ -68,7 +68,7 @@ final class PushChartSliceTest {
         MatcherAssert.assertThat(
             "Index was generated",
             this.storage.list(Key.ROOT).join(),
-            new IsEqual<>(new ListOf<Key>(new Key.From(tgz)))
+            new IsEqual<>(new ListOf<Key>(new Key.From("ark", tgz)))
         );
         MatcherAssert.assertThat("No events were added to queue", this.events.isEmpty());
     }

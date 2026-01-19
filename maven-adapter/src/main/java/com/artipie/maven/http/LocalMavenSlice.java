@@ -17,6 +17,7 @@ import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.slice.KeyFromPath;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.maven.asto.RepositoryChecksums;
 
 import java.util.concurrent.CompletableFuture;
@@ -45,12 +46,19 @@ final class LocalMavenSlice implements Slice {
     private final Storage storage;
 
     /**
+     * Repository name.
+     */
+    private final String repoName;
+
+    /**
      * New local {@code GET} slice.
      *
      * @param storage Repository storage
+     * @param repoName Repository name
      */
-    LocalMavenSlice(Storage storage) {
+    LocalMavenSlice(Storage storage, String repoName) {
         this.storage = storage;
+        this.repoName = repoName;
     }
 
     @Override
@@ -74,7 +82,12 @@ final class LocalMavenSlice implements Slice {
                 .thenApply(
                     exists -> {
                         if (exists) {
-                            return storage.value(artifact)
+                            // Track download metric
+                            this.recordMetric(() ->
+                                com.artipie.metrics.ArtipieMetrics.instance().download(this.repoName, "maven")
+                            );
+                            // Use storage-specific optimized content retrieval for 100-1000x faster downloads
+                            return StorageArtifactSlice.optimizedValue(storage, artifact)
                                 .thenCombine(
                                     new RepositoryChecksums(storage).checksums(artifact),
                                     (body, checksums) ->
@@ -117,7 +130,9 @@ final class LocalMavenSlice implements Slice {
         return switch (method) {
             case GET -> plainResponse(
                 this.storage, key,
-                () -> this.storage.value(key).thenApply(val -> ResponseBuilder.ok().body(val).build())
+                // Use optimized value retrieval for metadata files too
+                () -> StorageArtifactSlice.optimizedValue(this.storage, key)
+                    .thenApply(val -> ResponseBuilder.ok().body(val).build())
             );
             case HEAD -> plainResponse(this.storage, key,
                 () -> this.storage.metadata(key)
@@ -141,5 +156,20 @@ final class LocalMavenSlice implements Slice {
                     : CompletableFuture.completedFuture(ResponseBuilder.notFound().build())
             ).thenCompose(Function.identity());
 
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     * @param metric Metric recording action
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

@@ -58,10 +58,11 @@ public final class RepositoryEvents {
      */
     public void addUploadEventByKey(final Key key, final long size,
         final Headers headers) {
+        final String aname = formatArtifactName(key);
         this.queue.add(
             new ArtifactEvent(
                 this.rtype, this.rname, new Login(headers).getValue(),
-                key.string(), RepositoryEvents.VERSION, size
+                aname, RepositoryEvents.VERSION, size
             )
         );
     }
@@ -72,8 +73,34 @@ public final class RepositoryEvents {
      * @param key Artifact key
      */
     public void addDeleteEventByKey(final Key key) {
+        final String aname = formatArtifactName(key);
         this.queue.add(
-            new ArtifactEvent(this.rtype, this.rname, key.string(), RepositoryEvents.VERSION)
+            new ArtifactEvent(this.rtype, this.rname, aname, RepositoryEvents.VERSION)
         );
+    }
+
+    /**
+     * Format artifact name from storage key depending on repository type.
+     * For file-based repositories, convert path separators to dots and exclude repo name prefix.
+     * For other repository types, keep the key string as-is.
+     * @param key Storage key
+     * @return Formatted artifact name
+     */
+    private String formatArtifactName(final Key key) {
+        final String raw = key.string();
+        if ("file".equals(this.rtype) || "file-proxy".equals(this.rtype)) {
+            String name = raw;
+            // Strip leading slash if any (defensive; KeyFromPath already removes it)
+            if (name.startsWith("/")) {
+                name = name.substring(1);
+            }
+            // Exclude repo name prefix if present
+            if (this.rname != null && !this.rname.isEmpty() && name.startsWith(this.rname + "/")) {
+                name = name.substring(this.rname.length() + 1);
+            }
+            // Replace folder separators with dots
+            return name.replace('/', '.');
+        }
+        return raw;
     }
 }

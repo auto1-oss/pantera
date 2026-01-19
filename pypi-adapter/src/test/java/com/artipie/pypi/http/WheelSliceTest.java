@@ -73,11 +73,24 @@ class WheelSliceTest {
         );
         MatcherAssert.assertThat(
             "Saves content to storage",
-                this.asto.value(new Key.From("artipie-sample", filename)).join().asBytes(),
+                this.asto.value(new Key.From("artipie-sample", "0.2", filename)).join().asBytes(),
             new IsEqual<>(body)
         );
         MatcherAssert.assertThat(
             "Added event to queue", this.queue.size() == 1
+        );
+        MatcherAssert.assertThat(
+            "Artifact event stored per package",
+            this.queue.peek().artifactName(),
+            new IsEqual<>("artipie-sample")
+        );
+        MatcherAssert.assertThat(
+            "Creates package index in .pypi folder",
+            this.asto.exists(new Key.From(".pypi", "artipie-sample", "artipie-sample.html")).join()
+        );
+        MatcherAssert.assertThat(
+            "Creates repo index in .pypi folder",
+            this.asto.exists(new Key.From(".pypi", "simple.html")).join()
         );
     }
 
@@ -102,11 +115,16 @@ class WheelSliceTest {
         );
         MatcherAssert.assertThat(
             "Saves content to storage",
-            this.asto.value(new Key.From(path, "abtests", filename)).join().asBytes(),
+            this.asto.value(new Key.From(path, "abtests", "0.0.2.1", filename)).join().asBytes(),
             new IsEqual<>(body)
         );
         MatcherAssert.assertThat(
             "Added event to queue", this.queue.size() == 1
+        );
+        MatcherAssert.assertThat(
+            "Artifact event normalized per package",
+            this.queue.peek().artifactName(),
+            new IsEqual<>("abtests")
         );
     }
 

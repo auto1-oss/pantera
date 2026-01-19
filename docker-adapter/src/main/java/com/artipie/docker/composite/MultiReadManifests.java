@@ -11,8 +11,7 @@ import com.artipie.docker.Tags;
 import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.misc.JoinedTagsSource;
 import com.artipie.docker.misc.Pagination;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.artipie.http.log.EcsLogger;
 
 import java.util.List;
 import java.util.Optional;
@@ -22,8 +21,6 @@ import java.util.concurrent.CompletableFuture;
  * Multi-read {@link Manifests} implementation.
  */
 public final class MultiReadManifests implements Manifests {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(MultiReadManifests.class);
 
     /**
      * Repository name.
@@ -61,7 +58,14 @@ public final class MultiReadManifests implements Manifests {
                         if (throwable == null) {
                             result = manifest;
                         } else {
-                            LOGGER.error("Failed to read manifest " + ref.digest(), throwable);
+                            EcsLogger.error("com.artipie.docker")
+                                .message("Failed to read manifest")
+                                .eventCategory("repository")
+                                .eventAction("manifest_get")
+                                .eventOutcome("failure")
+                                .field("container.image.hash.all", ref.digest())
+                                .error(throwable)
+                                .log();
                             result = Optional.empty();
                         }
                         return result;

@@ -78,7 +78,9 @@ public final class UploadSlice implements Slice {
     ) {
         final String pkg = new PackageNameFromUrl(line).value();
         final Key uploaded = new Key.From(String.format("%s-%s-uploaded", pkg, UUID.randomUUID()));
-        return new Concatenation(body).single()
+        // OPTIMIZATION: Use size hint for efficient pre-allocation
+        final long bodySize = body.size().orElse(-1L);
+        return Concatenation.withSize(body, bodySize).single()
             .map(Remaining::new)
             .map(Remaining::bytes)
             .to(SingleInterop.get())

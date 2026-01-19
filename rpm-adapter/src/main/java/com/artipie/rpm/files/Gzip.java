@@ -4,7 +4,7 @@
  */
 package com.artipie.rpm.files;
 
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -59,7 +59,13 @@ public final class Gzip {
                 }
             }
         }
-        Logger.debug(this, "Unpacked tar.gz %s to %s", this.file, dest);
+        EcsLogger.debug("com.artipie.rpm")
+            .message("Unpacked tar.gz")
+            .eventCategory("repository")
+            .eventAction("archive_extraction")
+            .field("file.path", this.file.toString())
+            .field("destination.address", dest.toString())
+            .log();
     }
 
     /**
@@ -73,6 +79,12 @@ public final class Gzip {
             GZIPInputStream input = new GZIPInputStream(Files.newInputStream(this.file))) {
             IOUtils.copy(input, out);
         }
-        Logger.debug(this, "Unpacked gz %s to %s", this.file, dest);
+        EcsLogger.debug("com.artipie.rpm")
+            .message("Unpacked gz")
+            .eventCategory("repository")
+            .eventAction("archive_extraction")
+            .field("file.path", this.file.toString())
+            .field("destination.address", dest.toString())
+            .log();
     }
 }

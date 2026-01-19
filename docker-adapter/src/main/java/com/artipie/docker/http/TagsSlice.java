@@ -38,15 +38,18 @@ final class TagsSlice extends DockerActionSlice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return this.docker.repo(name(line))
-            .manifests()
-            .tags(Pagination.from(line.uri()))
-            .thenApply(
-                tags -> ResponseBuilder.ok()
-                    .header(ContentType.json())
-                    .body(tags.json())
-                    .build()
-            );
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.repo(name(line))
+                .manifests()
+                .tags(Pagination.from(line.uri()))
+                .thenApply(
+                    tags -> ResponseBuilder.ok()
+                        .header(ContentType.json())
+                        .body(tags.json())
+                        .build()
+                )
+        );
     }
 
     private String name(RequestLine line) {

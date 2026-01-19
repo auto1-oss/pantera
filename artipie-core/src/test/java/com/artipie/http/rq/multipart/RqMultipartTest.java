@@ -65,8 +65,8 @@ final class RqMultipartTest {
                 new Header(ContentType.NAME, "multipart/mixed; boundary=\"simple boundary\""),
                 new Content.From(simple.getBytes(StandardCharsets.US_ASCII))
             ).parts()
-        ).flatMapSingle(
-            part -> Single.fromFuture(new Content.From(part).asStringFuture())
+        ).concatMapSingle(
+            part -> com.artipie.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
         ).toList().blockingGet();
         MatcherAssert.assertThat(
             parsed,
@@ -99,7 +99,7 @@ final class RqMultipartTest {
                 new Content.From(payload.getBytes(StandardCharsets.US_ASCII))
             ).parts()
         ).flatMapSingle(
-            part -> Single.fromFuture(
+            part -> com.artipie.asto.rx.RxFuture.single(
                 new Content.From(part).asStringFuture()
             ).map(body -> String.format("%s: %s", new ContentDisposition(part.headers()).fieldName(), body))
         ).toList().blockingGet();
@@ -247,7 +247,7 @@ final class RqMultipartTest {
                 }
             )
         ).flatMapSingle(
-            part -> Single.fromFuture(new Content.From(part).asStringFuture())
+            part -> com.artipie.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
         ).toList().blockingGet();
         MatcherAssert.assertThat("parts must have one element", parts, Matchers.hasSize(1));
         MatcherAssert.assertThat(

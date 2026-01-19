@@ -6,8 +6,8 @@ package com.artipie.helm.misc;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.testcontainers.shaded.org.hamcrest.MatcherAssert;
-import org.testcontainers.shaded.org.hamcrest.core.IsEqual;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
 
 /**
  * Test for {@link SpaceInBeginning}.

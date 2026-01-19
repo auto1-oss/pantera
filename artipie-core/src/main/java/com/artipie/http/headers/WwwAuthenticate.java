@@ -12,8 +12,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * WWW-Authenticate header.
@@ -61,11 +59,41 @@ public final class WwwAuthenticate extends Header {
      * @return Parameters list.
      */
     public List<Param> params() {
-        return Optional.ofNullable(this.matcher().group("params")).map(
-            params -> Stream.of(params.split(","))
-                .map(Param::new)
-                .collect(Collectors.toList())
-        ).orElseGet(Collections::emptyList);
+        return Optional.ofNullable(this.matcher().group("params"))
+            .map(String::trim)
+            .filter(params -> !params.isEmpty())
+            .map(WwwAuthenticate::splitParams)
+            .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * Split params string into individual parameters, preserving quoted commas.
+     *
+     * @param params Raw params string
+     * @return List of parameter objects
+     */
+    private static List<Param> splitParams(final String params) {
+        final StringBuilder current = new StringBuilder();
+        final List<Param> result = new java.util.ArrayList<>();
+        boolean quoted = false;
+        for (int idx = 0; idx < params.length(); idx++) {
+            final char symbol = params.charAt(idx);
+            if (symbol == '"') {
+                quoted = !quoted;
+                current.append(symbol);
+            } else if (symbol == ',' && !quoted) {
+                if (current.length() > 0) {
+                    result.add(new Param(current.toString().trim()));
+                    current.setLength(0);
+                }
+            } else {
+                current.append(symbol);
+            }
+        }
+        if (current.length() > 0) {
+            result.add(new Param(current.toString().trim()));
+        }
+        return result;
     }
 
     /**
@@ -110,7 +138,7 @@ public final class WwwAuthenticate extends Header {
          * Param RegEx.
          */
         private static final Pattern PATTERN = Pattern.compile(
-            "(?<name>[^=]*)=\"(?<value>[^\"]*)\""
+            "(?<name>[^=\\s]+)\\s*=\\s*\"(?<value>[^\"]*)\""
         );
 
         /**
@@ -149,7 +177,7 @@ public final class WwwAuthenticate extends Header {
          * @return Matcher for param.
          */
         private Matcher matcher() {
-            final String value = this.string;
+            final String value = this.string.trim();
             final Matcher matcher = PATTERN.matcher(value);
             if (!matcher.matches()) {
                 throw new IllegalArgumentException(

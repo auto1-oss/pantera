@@ -7,28 +7,31 @@ package com.artipie.npm.events;
 import com.artipie.asto.Key;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.npm.Publish;
-import com.artipie.npm.TgzArchive;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.trace.TraceContext;
 import com.artipie.npm.http.UploadSlice;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.scheduling.QuartzJob;
-import com.jcabi.log.Logger;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
-import javax.json.Json;
-import javax.json.JsonObject;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.quartz.JobExecutionContext;
 
 /**
- * We can assume that repository actually contains some package, if:
+ * NPM proxy package processor - processes downloaded packages for event tracking.
  * <br/>
- * 1) tgz archive is valid and we obtained package id and version from it<br/>
- * 2) repository has corresponding package json metadata file with such version and
- *   path to tgz
+ * OPTIMIZED: Extracts package name/version from tarball PATH instead of reading
+ * the tgz contents. This eliminates:
+ * - Race conditions (reading incomplete files while being written)
+ * - I/O overhead (no storage reads for validation)
+ * - CPU overhead (no gzip decompression)
  * <br/>
- * When both conditions a met, we can add package record into database.
+ * NPM tarball paths follow convention: {name}/-/{name}-{version}.tgz
  * @since 1.5
  */
 @SuppressWarnings("PMD.DataClass")
@@ -61,26 +64,207 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             || this.events == null) {
             super.stopJob(context);
         } else {
-            while (!this.packages.isEmpty()) {
-                final ProxyArtifactEvent item = this.packages.poll();
-                if (item != null) {
-                    final Optional<Publish.PackageInfo> info = this.info(item.artifactKey());
-                    if (info.isPresent() && this.checkMetadata(info.get(), item)) {
-                        this.events.add(
-                            new ArtifactEvent(
-                                UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
-                                info.get().packageName(), info.get().packageVersion(),
-                                info.get().tarSize()
-                            )
-                        );
-                    } else {
-                        Logger.info(
-                            this,
-                            String.format("Package %s is not valid", item.artifactKey().string())
-                        );
-                    }
-                }
+            this.processPackagesBatch();
+        }
+    }
+
+    /**
+     * Process packages in parallel batches.
+     */
+    private void processPackagesBatch() {
+        // Set trace context for background job
+        final String traceId = TraceContext.generateTraceId();
+        TraceContext.set(traceId);
+
+        final List<ProxyArtifactEvent> batch = new ArrayList<>(100);
+        ProxyArtifactEvent item;
+        while (batch.size() < 100 && (item = this.packages.poll()) != null) {
+            batch.add(item);
+        }
+
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        final long startTime = System.currentTimeMillis();
+
+        EcsLogger.debug("com.artipie.npm")
+            .message("Processing NPM batch (size: " + batch.size() + ")")
+            .eventCategory("repository")
+            .eventAction("batch_processing")
+            .log();
+
+        List<CompletableFuture<Void>> futures = batch.stream()
+            .map(this::processPackageAsync)
+            .collect(Collectors.toList());
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(30, TimeUnit.SECONDS)
+                .join();
+
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.info("com.artipie.npm")
+                .message("NPM batch processing complete (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("success")
+                .duration(duration)
+                .log();
+        } catch (Exception err) {
+            final long duration = System.currentTimeMillis() - startTime;
+            EcsLogger.error("com.artipie.npm")
+                .message("NPM batch processing failed (size: " + batch.size() + ")")
+                .eventCategory("repository")
+                .eventAction("batch_processing")
+                .eventOutcome("failure")
+                .duration(duration)
+                .error(err)
+                .log();
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /**
+     * Process a single package asynchronously.
+     * OPTIMIZED: Extracts name/version from path instead of reading tgz contents.
+     * This eliminates:
+     * - Race conditions (reading incomplete files)
+     * - I/O overhead (no storage reads for validation)
+     * - CPU overhead (no gzip decompression)
+     * @param item Package event
+     * @return CompletableFuture
+     */
+    private CompletableFuture<Void> processPackageAsync(final ProxyArtifactEvent item) {
+        // Parse name/version from path - ZERO I/O, ZERO race conditions
+        final Optional<PackageCoords> coords = parsePackageCoords(item.artifactKey());
+        if (coords.isEmpty()) {
+            EcsLogger.warn("com.artipie.npm")
+                .message("Could not parse package coords from path")
+                .eventCategory("repository")
+                .eventAction("package_validation")
+                .field("package.path", item.artifactKey().string())
+                .log();
+            return CompletableFuture.completedFuture(null);
+        }
+        final String name = coords.get().name;
+        final String version = coords.get().version;
+
+        // Only I/O: get file size from metadata (fast, no content read)
+        return this.asto.metadata(item.artifactKey())
+            .thenApply(meta -> {
+                // Meta.OP_SIZE returns Optional<? extends Long>, need to handle carefully
+                final Optional<Long> sizeOpt = meta.read(Meta.OP_SIZE).map(Long::valueOf);
+                return sizeOpt.orElse(0L);
+            })
+            .thenAccept(size -> {
+                final long created = System.currentTimeMillis();
+                final Long release = item.releaseMillis().orElse(null);
+                this.events.add(
+                    new ArtifactEvent(
+                        UploadSlice.REPO_TYPE, item.repoName(), item.ownerLogin(),
+                        name, version, size.longValue(), created, release
+                    )
+                );
+                EcsLogger.debug("com.artipie.npm")
+                    .message("Package event created from path")
+                    .eventCategory("repository")
+                    .eventAction("package_processing")
+                    .field("package.name", name)
+                    .field("package.version", version)
+                    .log();
+            })
+            .exceptionally(err -> {
+                EcsLogger.error("com.artipie.npm")
+                    .message("Failed to process NPM package")
+                    .eventCategory("repository")
+                    .eventAction("package_processing")
+                    .eventOutcome("failure")
+                    .field("package.path", item.artifactKey().string())
+                    .error(err)
+                    .log();
+                return null;
+            });
+    }
+
+    /**
+     * Parse package name and version from tarball path.
+     * NPM tarball paths follow convention: {name}/-/{name}-{version}.tgz
+     * Examples:
+     * - lodash/-/lodash-4.17.21.tgz → (lodash, 4.17.21)
+     * - @babel/core/-/@babel/core-7.23.0.tgz → (@babel/core, 7.23.0)
+     * - @types/node/-/@types/node-20.10.0.tgz → (@types/node, 20.10.0)
+     * @param key Storage key for tgz file
+     * @return Optional package coordinates
+     */
+    private static Optional<PackageCoords> parsePackageCoords(final Key key) {
+        final String path = key.string();
+        // Find the /-/ separator that NPM uses
+        final int sep = path.indexOf("/-/");
+        if (sep < 0) {
+            return Optional.empty();
+        }
+        final String name = path.substring(0, sep);
+        final String filename = path.substring(sep + 3); // Skip "/-/"
+        // Filename format: {name}-{version}.tgz
+        // For scoped packages: @scope/pkg → @scope/pkg-1.0.0.tgz
+        if (!filename.endsWith(".tgz")) {
+            return Optional.empty();
+        }
+        final String withoutExt = filename.substring(0, filename.length() - 4);
+        // Version is after the last hyphen that's preceded by a digit or after package name
+        // Handle edge cases like: package-name-1.0.0-beta.1
+        // Strategy: The version starts after "{name}-"
+        final String expectedPrefix = name.contains("/")
+            ? name.substring(name.lastIndexOf('/') + 1) + "-"
+            : name + "-";
+        if (!withoutExt.startsWith(expectedPrefix)) {
+            // Fallback: find last hyphen followed by digit
+            return parseVersionFallback(name, withoutExt);
+        }
+        final String version = withoutExt.substring(expectedPrefix.length());
+        if (version.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new PackageCoords(name, version));
+    }
+
+    /**
+     * Fallback version parsing: find the version by looking for semver pattern.
+     * @param name Package name
+     * @param filename Filename without .tgz extension
+     * @return Optional package coordinates
+     */
+    private static Optional<PackageCoords> parseVersionFallback(
+        final String name, final String filename
+    ) {
+        // Find pattern: hyphen followed by digit (start of version)
+        for (int i = filename.length() - 1; i > 0; i--) {
+            if (filename.charAt(i - 1) == '-' && Character.isDigit(filename.charAt(i))) {
+                final String version = filename.substring(i);
+                return Optional.of(new PackageCoords(name, version));
             }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Simple holder for package name and version.
+     */
+    private static final class PackageCoords {
+        /**
+         * Package name.
+         */
+        final String name;
+        /**
+         * Package version.
+         */
+        final String version;
+
+        PackageCoords(final String name, final String version) {
+            this.name = name;
+            this.version = version;
         }
     }
 
@@ -117,94 +301,6 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
         if (this.host.endsWith("/")) {
             this.host = this.host.substring(0, this.host.length() - 2);
         }
-    }
-
-    /**
-     * Method checks that package metadata contains version from package info and
-     * path in `dist` fiend to corresponding tgz package.
-     * @param info Info from tgz to check
-     * @param item Item with tgz file key path in storage
-     * @return True, if package meta.jaon metadata contains the version and path
-     */
-    private boolean checkMetadata(final Publish.PackageInfo info, final ProxyArtifactEvent item) {
-        final Key key = new Key.From(info.packageName(), "meta.json");
-        return this.asto.value(key)
-            .thenCompose(
-                content -> new ContentAsStream<>(content).process(
-                    input -> Json.createReader(input).readObject()
-                )
-            ).thenApply(
-                json -> {
-                    final JsonObject version = ((JsonObject) json).getJsonObject("versions")
-                        .getJsonObject(info.packageVersion());
-                    boolean res = false;
-                    if (version != null) {
-                        final JsonObject dist = version.getJsonObject("dist");
-                        if (dist != null) {
-                            final String tarball = dist.getString("tarball");
-                            res = tarball.equals(String.format("/%s", item.artifactKey().string()))
-                                || tarball.contains(
-                                    String.join(
-                                        "/", this.host, item.repoName(), item.artifactKey().string()
-                                    )
-                                );
-                        }
-                    }
-                    return res;
-                }
-            ).handle(
-                (correct, error) -> {
-                    final boolean res;
-                    if (error == null) {
-                        res = correct;
-                    } else {
-                        Logger.error(
-                            this,
-                            String.format(
-                                "Error while checking %s for dist %s \n%s",
-                                key.string(), item.artifactKey().string(), error.getMessage()
-                            )
-                        );
-                        res = false;
-                    }
-                    return res;
-                }
-            ).join();
-    }
-
-    /**
-     * Read package info, canonical name, version and calc package size for tgz.
-     * @param tgz Tgz storage key
-     * @return Package info
-     */
-    private Optional<Publish.PackageInfo> info(final Key tgz) {
-        return this.asto.value(tgz).thenCompose(
-            content -> new ContentAsStream<>(content).<JsonObject>process(
-                input -> new TgzArchive.JsonFromStream(input).json()
-            )
-        ).thenCombine(
-            this.asto.metadata(tgz).<Long>thenApply(meta -> meta.read(Meta.OP_SIZE).get()),
-            (json, size) -> new Publish.PackageInfo(
-                ((JsonObject) json).getString("name"),
-                ((JsonObject) json).getString("version"), size
-            )
-        ).handle(
-            (info, error) -> {
-                final Optional<Publish.PackageInfo> res;
-                if (error == null) {
-                    res = Optional.of(info);
-                } else {
-                    Logger.error(
-                        this,
-                        String.format(
-                            "Error while reading tgz %s info\n%s", tgz.string(), error.getMessage()
-                        )
-                    );
-                    res = Optional.empty();
-                }
-                return res;
-            }
-        ).join();
     }
 
 }

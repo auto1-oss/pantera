@@ -7,7 +7,7 @@ package com.artipie.asto.factory;
 import com.artipie.ArtipieException;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
-import com.jcabi.log.Logger;
+import com.artipie.asto.log.EcsLogger;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -107,11 +107,12 @@ public abstract class FactoryLoader<F, A, C, O> {
                         }
                         try {
                             res.put(type, (F) element.getDeclaredConstructor().newInstance());
-                            Logger.info(
-                                StoragesLoader.class,
-                                "Initiated factory [type=%s, class=%s]",
-                                type, element.getSimpleName()
-                            );
+                            EcsLogger.debug("com.artipie.asto")
+                                .message("Initiated factory (type: " + type + ", class: " + element.getSimpleName() + ")")
+                                .eventCategory("factory")
+                                .eventAction("factory_init")
+                                .eventOutcome("success")
+                                .log();
                         } catch (final InstantiationException | IllegalAccessException
                             | InvocationTargetException | NoSuchMethodException err) {
                             throw new ArtipieException(err);

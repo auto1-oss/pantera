@@ -7,10 +7,13 @@ package com.artipie.http.rq.multipart;
 import com.artipie.ArtipieException;
 import com.artipie.http.misc.ByteBufferTokenizer;
 import com.artipie.http.misc.Pipeline;
+import com.artipie.http.trace.TraceContextExecutor;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.reactivestreams.Processor;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
@@ -25,9 +28,34 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
     ByteBufferTokenizer.Receiver {
 
     /**
-     * Cached thread pool for parts processing.
+     * Pool name prefix for metrics identification.
      */
-    private static final ExecutorService CACHED_PEXEC = Executors.newCachedThreadPool();
+    public static final String POOL_NAME = "artipie.http.multipart";
+
+    /**
+     * Cached thread pool for parts processing.
+     * Pool name: {@value #POOL_NAME}.parts (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to parts threads.
+     */
+    private static final ExecutorService CACHED_PEXEC = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName(POOL_NAME + ".parts-" + counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }
+        )
+    );
+
+    /**
+     * Counter for subscription executor threads.
+     */
+    private static final AtomicInteger SUB_COUNTER = new AtomicInteger(0);
 
     /**
      * Upstream downstream pipeline.
@@ -86,7 +114,15 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
         this.tokenizer = new ByteBufferTokenizer(
             this, boundary.getBytes(StandardCharsets.US_ASCII)
         );
-        this.exec = Executors.newSingleThreadExecutor();
+        this.exec = TraceContextExecutor.wrap(
+            Executors.newSingleThreadExecutor(
+                r -> {
+                    final Thread thread = new Thread(r, POOL_NAME + ".sub-" + SUB_COUNTER.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            )
+        );
         this.pipeline = new Pipeline<>();
         this.completion = new Completion<>(this.pipeline);
         this.state = new State();

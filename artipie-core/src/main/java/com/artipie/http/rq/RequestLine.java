@@ -65,7 +65,39 @@ public final class RequestLine {
      * @param version The http version.
      */
     public RequestLine(String method, String uri, String version) {
-        this(RqMethod.valueOf(method), URI.create(uri), version);
+        this(RqMethod.valueOf(method.toUpperCase()), URI.create(sanitizeUri(uri)), version);
+    }
+    
+    /**
+     * Sanitize URI by encoding illegal characters.
+     * Handles cases like Maven artifacts with unresolved properties: ${version}
+     * @param uri Raw URI string
+     * @return Sanitized URI string safe for URI.create()
+     */
+    private static String sanitizeUri(String uri) {
+        // Handle empty or malformed URIs
+        if (uri == null || uri.isEmpty()) {
+            return "/";
+        }
+        
+        // Handle "//" which URI parser interprets as start of authority (hostname)
+        // but with no actual authority, causing "Expected authority" error
+        if ("//".equals(uri)) {
+            return "/";
+        }
+        
+        // Replace illegal characters that commonly appear in badly-formed requests
+        // $ is illegal in URI paths without encoding
+        // Maven properties like ${commons-support.version} should be %24%7B...%7D
+        // Maven version ranges like [release] should be %5B...%5D
+        return uri
+            .replace("$", "%24")  // $ → %24
+            .replace("{", "%7B")  // { → %7B
+            .replace("}", "%7D")  // } → %7D
+            .replace("[", "%5B")  // [ → %5B (Maven version ranges)
+            .replace("]", "%5D")  // ] → %5D (Maven version ranges)
+            .replace("|", "%7C")  // | → %7C (also commonly problematic)
+            .replace("\\", "%5C"); // \ → %5C (Windows paths)
     }
 
     public RequestLine(RqMethod method, URI uri, String version) {

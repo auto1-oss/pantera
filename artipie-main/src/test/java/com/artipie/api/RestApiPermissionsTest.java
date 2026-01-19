@@ -73,12 +73,38 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
             new TestRequest(HttpMethod.POST, "/api/v1/roles/tester/enable"),
             new TestRequest(HttpMethod.POST, "/api/v1/roles/tester/disable"),
             new TestRequest(HttpMethod.GET, "/api/v1/repository/my-maven"),
-            new TestRequest(HttpMethod.PUT, "/api/v1/repository/rpm", new JsonObject().put("repo", new JsonObject())),
+            new TestRequest(
+                HttpMethod.PUT,
+                "/api/v1/repository/rpm",
+                new JsonObject().put(
+                    "repo",
+                    new JsonObject()
+                        .put("type", "rpm")
+                        .put(
+                            "storage",
+                            new JsonObject()
+                                .put("type", "fs")
+                                .put("path", "/var/artipie/rpm")
+                        )
+                )
+            ),
             new TestRequest(HttpMethod.DELETE, "/api/v1/repository/my-python"),
             new TestRequest(HttpMethod.PUT, "/api/v1/repository/bin-files/move", new JsonObject().put("new_name", "any")),
-            new TestRequest(HttpMethod.PUT, "/api/v1/repository/my-go/storages/local", new JsonObject().put("alias", "local").put("type", "file")),
+            new TestRequest(
+                HttpMethod.PUT,
+                "/api/v1/repository/my-go/storages/local",
+                new JsonObject()
+                    .put("type", "fs")
+                    .put("path", "/var/artipie/repo-storage")
+            ),
             new TestRequest(HttpMethod.DELETE, "/api/v1/repository/docker/storages/s3sto"),
-            new TestRequest(HttpMethod.PUT, "/api/v1/storages/def", new JsonObject().put("alias", "def").put("type", "file")),
+            new TestRequest(
+                HttpMethod.PUT,
+                "/api/v1/storages/def",
+                new JsonObject()
+                    .put("type", "fs")
+                    .put("path", "/var/artipie/common-storage")
+            ),
             new TestRequest(HttpMethod.DELETE, "/api/v1/storages/local-dir")
         ), RestApiPermissionsTest.GET_DATA.stream()
     ).toList();
@@ -126,7 +152,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
             new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put(
-                    "repo", new JsonObject().put("type", "fs").put("storage", "def")
+                    "repo", new JsonObject().put("type", "file").put("storage", "def")
                 )
             ), Optional.of(token.get()),
             resp -> MatcherAssert.assertThat(
@@ -206,7 +232,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
             vertx, ctx,
             new TestRequest(
                 HttpMethod.PUT, path,
-                new JsonObject().put("type", "file").put("path", "new/alias/path")
+                new JsonObject().put("type", "fs").put("path", "new/alias/path")
             ), Optional.of(token.get()),
             resp -> MatcherAssert.assertThat(
                 resp.statusCode(),

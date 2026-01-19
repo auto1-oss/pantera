@@ -128,7 +128,13 @@ public final class Authorization extends Header {
          * @return Username string.
          */
         public String username() {
-            return this.tokens()[0];
+            final String[] tokens = this.tokens();
+            if (tokens.length < 1) {
+                throw new IllegalArgumentException(
+                    "Invalid Basic auth credentials: missing username"
+                );
+            }
+            return tokens[0];
         }
 
         /**
@@ -137,7 +143,13 @@ public final class Authorization extends Header {
          * @return Password string.
          */
         public String password() {
-            return this.tokens()[1];
+            final String[] tokens = this.tokens();
+            if (tokens.length < 2) {
+                throw new IllegalArgumentException(
+                    "Invalid Basic auth credentials: missing password"
+                );
+            }
+            return tokens[1];
         }
 
         /**
@@ -146,10 +158,15 @@ public final class Authorization extends Header {
          * @return Tokens array.
          */
         private String[] tokens() {
-            return new String(
+            final String decoded = new String(
                 Base64.getDecoder().decode(this.credentials()),
                 StandardCharsets.UTF_8
-            ).split(":");
+            );
+            // Handle empty decoded string or missing colon
+            if (decoded.isEmpty()) {
+                return new String[0];
+            }
+            return decoded.split(":", 2);  // Limit to 2 parts (username:password)
         }
     }
 

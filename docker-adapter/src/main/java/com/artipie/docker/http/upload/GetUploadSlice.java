@@ -36,24 +36,27 @@ public class GetUploadSlice extends UploadSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         UploadRequest request = UploadRequest.from(line);
-        return this.docker.repo(request.name())
-            .uploads()
-            .get(request.uuid())
-            .thenApply(
-                found -> found.map(
-                    upload -> upload.offset()
-                        .thenApply(
-                            offset -> ResponseBuilder.noContent()
-                                .header(new ContentLength("0"))
-                                .header(new Header("Range", String.format("0-%d", offset)))
-                                .header(new Header("Docker-Upload-UUID", request.uuid()))
-                                .build()
-                        )
-                ).orElseGet(
-                    () -> ResponseBuilder.notFound()
-                        .jsonBody(new UploadUnknownError(request.uuid()).json())
-                        .completedFuture()
-                )
-            ).thenCompose(Function.identity());
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.repo(request.name())
+                .uploads()
+                .get(request.uuid())
+                .thenApply(
+                    found -> found.map(
+                        upload -> upload.offset()
+                            .thenApply(
+                                offset -> ResponseBuilder.noContent()
+                                    .header(new ContentLength("0"))
+                                    .header(new Header("Range", String.format("0-%d", offset)))
+                                    .header(new Header("Docker-Upload-UUID", request.uuid()))
+                                    .build()
+                            )
+                    ).orElseGet(
+                        () -> ResponseBuilder.notFound()
+                            .jsonBody(new UploadUnknownError(request.uuid()).json())
+                            .completedFuture()
+                    )
+                ).thenCompose(Function.identity())
+        );
     }
 }

@@ -1,0 +1,31 @@
+{
+    "name": "ayd/helper-lib",
+    "description": "test",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ayd Asraf",
+            "email": "ayd.asraf@auto1.com"
+        }
+    ],
+    "require": {
+        "openai-php/client": "^0.17.1",
+        "symfony/http-client": "^7.3",
+        "nyholm/psr7": "^1.8"
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "http://localhost:8081/test_prefix/php_group"
+        },
+      {
+        "pakagist":  false
+      }
+    ],
+  "config": {
+    "secure-http": false,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+  }
+}

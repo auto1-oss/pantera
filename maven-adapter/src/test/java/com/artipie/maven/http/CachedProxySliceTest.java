@@ -5,7 +5,16 @@
 package com.artipie.maven.http;
 
 import com.artipie.asto.Content;
+import com.artipie.asto.Storage;
+import com.artipie.asto.Key;
 import com.artipie.asto.FailedCompletionStage;
+import com.artipie.asto.memory.InMemoryStorage;
+import com.artipie.cooldown.CooldownDependency;
+import com.artipie.cooldown.CooldownInspector;
+import com.artipie.cooldown.NoopCooldownService;
+import com.artipie.http.Headers;
+import com.artipie.http.cache.CachedArtifactMetadataStore;
+import com.artipie.http.Response;
 import com.artipie.http.hm.RsHasBody;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.hm.SliceHasResponse;
@@ -22,10 +31,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Test case for {@link CachedProxySlice}.
@@ -37,6 +53,11 @@ final class CachedProxySliceTest {
      */
     private Queue<ProxyArtifactEvent> events;
 
+    /**
+     * Optional storage placeholder for tests.
+     */
+    private static final Optional<Storage> NO_STORAGE = Optional.empty();
+
     @BeforeEach
     void init() {
         this.events = new LinkedList<>();
@@ -44,23 +65,38 @@ final class CachedProxySliceTest {
 
     @Test
     void loadsCachedContent() {
-        final byte[] data = "cache".getBytes();
-        MatcherAssert.assertThat(
-            new CachedProxySlice(
-                (line, headers, body) -> ResponseBuilder.ok().textBody("123").completedFuture(),
-                (key, supplier, control) -> CompletableFuture.supplyAsync(
-                    () -> Optional.of(new Content.From(data))
-                ),
-                Optional.of(this.events), "*"
+        final byte[] data = "cache".getBytes(StandardCharsets.UTF_8);
+        final String path = "/com/example/pkg/1.0/pkg-1.0.jar";
+        final InMemoryStorage storage = new InMemoryStorage();
+        final CachedArtifactMetadataStore store = new CachedArtifactMetadataStore(storage);
+        final Key key = new Key.From(path.substring(1));
+        store.save(
+            key,
+            Headers.from("Content-Length", String.valueOf(data.length)),
+            new CachedArtifactMetadataStore.ComputedDigests(data.length, Map.of())
+        ).join();
+        final AtomicBoolean upstream = new AtomicBoolean(false);
+        final CachedProxySlice slice = new CachedProxySlice(
+            (line, headers, body) -> {
+                upstream.set(true);
+                return CompletableFuture.failedFuture(new AssertionError("Upstream should not be hit on cache hit"));
+            },
+            (cacheKey, supplier, control) -> CompletableFuture.completedFuture(
+                Optional.of(new Content.From(data))
             ),
-            new SliceHasResponse(
-                Matchers.allOf(
-                    new RsHasStatus(RsStatus.OK),
-                    new RsHasBody(data)
-                ),
-                new RequestLine(RqMethod.GET, "/foo")
-            )
+            Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
+            NoopCooldownService.INSTANCE,
+            noopInspector(),
+            Optional.of(storage)
         );
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, path),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat("Upstream should not be called on cache hit", upstream.get(), Matchers.is(false));
+        MatcherAssert.assertThat(response.status(), Matchers.is(RsStatus.OK));
+        assertArrayEquals(data, response.body().asBytes());
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
     }
 
@@ -69,7 +105,11 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -86,7 +126,10 @@ final class CachedProxySliceTest {
                 new SliceSimple(ResponseBuilder.internalError().build()),
                 (key, supplier, control)
                     -> new FailedCompletionStage<>(new RuntimeException("Any error")),
-                Optional.of(this.events), "*"
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
@@ -108,7 +151,11 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -133,7 +180,11 @@ final class CachedProxySliceTest {
         MatcherAssert.assertThat(
             new CachedProxySlice(
                 (line, headers, body) -> ResponseBuilder.ok().body(data).completedFuture(),
-                (key, supplier, control) -> supplier.get(), Optional.of(this.events), "*"
+                (key, supplier, control) -> supplier.get(),
+                Optional.of(this.events), "*", "https://repo.maven.apache.org/maven2", "maven-proxy",
+                NoopCooldownService.INSTANCE,
+                noopInspector(),
+                CachedProxySliceTest.NO_STORAGE
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -144,5 +195,19 @@ final class CachedProxySliceTest {
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
+    }
+
+    private static CooldownInspector noopInspector() {
+        return new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
     }
 }

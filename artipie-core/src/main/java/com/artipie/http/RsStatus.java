@@ -35,6 +35,10 @@ public enum RsStatus {
      */
     NO_CONTENT(HttpStatus.SC_NO_CONTENT),
     /**
+     * Partial Content (206) - Range request.
+     */
+    PARTIAL_CONTENT(HttpStatus.SC_PARTIAL_CONTENT),
+    /**
      * Moved Permanently.
      */
     MOVED_PERMANENTLY(HttpStatus.SC_MOVED_PERMANENTLY),
@@ -50,6 +54,10 @@ public enum RsStatus {
      * Temporary Redirect.
      */
     TEMPORARY_REDIRECT(HttpStatus.SC_TEMPORARY_REDIRECT),
+    /**
+     * Proxy Authentication Required.
+     */
+    PROXY_AUTHENTICATION_REQUIRED(HttpStatus.SC_PROXY_AUTHENTICATION_REQUIRED),
     /**
      * Bad Request.
      */
@@ -84,6 +92,10 @@ public enum RsStatus {
      */
     LENGTH_REQUIRED(HttpStatus.SC_LENGTH_REQUIRED),
     /**
+     * Precondition Failed.
+     */
+    PRECONDITION_FAILED(HttpStatus.SC_PRECONDITION_FAILED),
+    /**
      * Payload Too Large.
      */
     REQUEST_TOO_LONG(HttpStatus.SC_REQUEST_TOO_LONG),
@@ -111,7 +123,11 @@ public enum RsStatus {
     /**
      * Service Unavailable.
      */
-    SERVICE_UNAVAILABLE(HttpStatus.SC_SERVICE_UNAVAILABLE);
+    SERVICE_UNAVAILABLE(HttpStatus.SC_SERVICE_UNAVAILABLE),
+    /**
+     * Gateway Timeout (504).
+     */
+    GATEWAY_TIMEOUT(HttpStatus.SC_GATEWAY_TIMEOUT);
 
     /**
      * Code value.

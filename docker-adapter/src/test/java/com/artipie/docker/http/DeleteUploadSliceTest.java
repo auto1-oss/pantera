@@ -10,7 +10,6 @@ import com.artipie.docker.Docker;
 import com.artipie.docker.asto.AstoDocker;
 import com.artipie.docker.asto.Upload;
 import com.artipie.docker.http.upload.DeleteUploadSlice;
-import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.headers.Header;
@@ -39,7 +38,7 @@ final class DeleteUploadSliceTest {
     @BeforeEach
     void setUp() {
         this.docker = new AstoDocker("registry", new InMemoryStorage());
-        this.slice = new DockerSlice(this.docker);
+        this.slice = TestDockerAuth.slice(this.docker);
     }
 
     @Test
@@ -52,7 +51,7 @@ final class DeleteUploadSliceTest {
         final String path = String.format("/v2/%s/blobs/uploads/%s", name, upload.uuid());
         final Response get = this.slice.response(
             new RequestLine(RqMethod.DELETE, String.format("%s", path)),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         ResponseAssert.check(get,
@@ -70,7 +69,7 @@ final class DeleteUploadSliceTest {
         final String path = String.format("/v2/%s/blobs/uploads/%s", name, upload.uuid());
         final Response get = this.slice.response(
             new RequestLine(RqMethod.DELETE, String.format("%s", path)),
-            Headers.EMPTY,
+            TestDockerAuth.headers(),
             Content.EMPTY
         ).join();
         MatcherAssert.assertThat(get,

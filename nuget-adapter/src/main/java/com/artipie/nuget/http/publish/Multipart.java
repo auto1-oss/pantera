@@ -58,8 +58,11 @@ final class Multipart {
      * @return First part content.
      */
     public Content first() {
+        // OPTIMIZATION: Use size hint for efficient pre-allocation when available
+        final long knownSize = (this.body instanceof Content)
+            ? ((Content) this.body).size().orElse(-1L) : -1L;
         return new Content.From(
-            new Concatenation(this.body)
+            Concatenation.withSize(this.body, knownSize)
                 .single()
                 .map(Remaining::new)
                 .map(Remaining::bytes)

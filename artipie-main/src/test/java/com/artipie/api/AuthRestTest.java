@@ -125,7 +125,7 @@ public final class AuthRestTest extends RestApiServerBase {
             new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put(
-                    "repo", new JsonObject().put("type", "fs").put("storage", "def")
+                    "repo", new JsonObject().put("type", "file").put("storage", "def")
                 )
             ), Optional.of(token.get()),
             resp -> MatcherAssert.assertThat(
@@ -205,7 +205,7 @@ public final class AuthRestTest extends RestApiServerBase {
             vertx, ctx,
             new TestRequest(
                 HttpMethod.PUT, path,
-                new JsonObject().put("type", "file").put("path", "new/alias/path")
+                new JsonObject().put("type", "fs").put("path", "new/alias/path")
             ), Optional.of(token.get()),
             resp -> MatcherAssert.assertThat(
                 resp.statusCode(),

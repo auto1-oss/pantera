@@ -159,7 +159,7 @@ final class RolesRestTest extends RestApiServerBase {
                     "permissions", new JsonObject().put(
                         "adapter_basic_permissions",
                         new JsonObject().put("test-maven", JsonArray.of("read"))
-                            .put("test-pypi", JsonArray.of("r", "w"))
+                            .put("test-pypi", JsonArray.of("read", "write"))
                     )
                 )
             ),
@@ -181,8 +181,8 @@ final class RolesRestTest extends RestApiServerBase {
                             "    \"test-maven\":",
                             "      - read",
                             "    \"test-pypi\":",
-                            "      - r",
-                            "      - w"
+                            "      - read",
+                            "      - write"
                         )
                     )
                 );

@@ -38,17 +38,47 @@ public final class CacheDocker implements Docker {
     private final Optional<Queue<ArtifactEvent>> events;
 
     /**
+     * Cooldown inspector to access per-request metadata.
+     */
+    private final Optional<DockerProxyCooldownInspector> inspector;
+
+    /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
      * @param origin Origin repository.
      * @param cache Cache repository.
      * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
      */
     public CacheDocker(Docker origin,
                        Docker cache,
-                       Optional<Queue<ArtifactEvent>> events
+                       Optional<Queue<ArtifactEvent>> events,
+                       Optional<DockerProxyCooldownInspector> inspector
+    ) {
+        this(origin, cache, events, inspector, "unknown");
+    }
+
+    /**
+     * @param origin Origin repository.
+     * @param cache Cache repository.
+     * @param events Artifact metadata events queue
+     * @param inspector Cooldown inspector
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    public CacheDocker(Docker origin,
+                       Docker cache,
+                       Optional<Queue<ArtifactEvent>> events,
+                       Optional<DockerProxyCooldownInspector> inspector,
+                       String upstreamUrl
     ) {
         this.origin = origin;
         this.cache = cache;
         this.events = events;
+        this.inspector = inspector;
+        this.upstreamUrl = upstreamUrl;
     }
 
     @Override
@@ -58,7 +88,15 @@ public final class CacheDocker implements Docker {
 
     @Override
     public Repo repo(final String name) {
-        return new CacheRepo(name, this.origin.repo(name), this.cache.repo(name), this.events, registryName());
+        return new CacheRepo(
+            name,
+            this.origin.repo(name),
+            this.cache.repo(name),
+            this.events,
+            registryName(),
+            this.inspector,
+            this.upstreamUrl
+        );
     }
 
     @Override

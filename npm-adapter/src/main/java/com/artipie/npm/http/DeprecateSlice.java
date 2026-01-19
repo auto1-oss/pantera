@@ -65,7 +65,10 @@ public final class DeprecateSlice implements Slice {
                             }
                         );
                 }
-                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                // Consume request body to prevent Vert.x request leak
+                return new Content.From(publisher).asBytesFuture().thenApply(ignored ->
+                    ResponseBuilder.notFound().build()
+                );
             }
         );
     }

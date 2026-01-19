@@ -32,10 +32,13 @@ public class PostUploadSlice extends UploadSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         UploadRequest request = UploadRequest.from(line);
-        if (request.mount().isPresent() && request.from().isPresent()) {
-            return mount(request.mount().get(), request.from().get(), request.name());
-        }
-        return startUpload(request.name());
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            if (request.mount().isPresent() && request.from().isPresent()) {
+                return mount(request.mount().get(), request.from().get(), request.name());
+            }
+            return startUpload(request.name());
+        });
     }
 
     /**
@@ -49,19 +52,31 @@ public class PostUploadSlice extends UploadSlice {
     private CompletableFuture<Response> mount(
         Digest digest, String source, String target
     ) {
-        return this.docker.repo(source)
-            .layers()
-            .get(digest)
-            .thenCompose(
-                opt -> opt.map(
-                    src -> this.docker.repo(target)
-                        .layers()
-                        .mount(src)
-                        .thenCompose(v -> createdResponse(target, digest))
-                ).orElseGet(
-                    () -> this.startUpload(target)
-                )
-            );
+        final int slash = target.indexOf('/');
+        if (slash > 0) {
+            final String expected = target.substring(0, slash + 1);
+            if (!source.startsWith(expected)) {
+                return this.startUpload(target);
+            }
+        }
+        try {
+            return this.docker.repo(source)
+                .layers()
+                .get(digest)
+                .thenCompose(
+                    opt -> opt.map(
+                        src -> this.docker.repo(target)
+                            .layers()
+                            .mount(src)
+                            .thenCompose(v -> createdResponse(target, digest))
+                    ).orElseGet(
+                        () -> this.startUpload(target)
+                    )
+                );
+        } catch (final IllegalArgumentException ex) {
+            // Source repository belongs to a different prefix; fall back to regular upload.
+            return this.startUpload(target);
+        }
     }
 
     /**

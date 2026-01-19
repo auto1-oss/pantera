@@ -69,26 +69,29 @@ final class UnpublishForceSlice implements Slice {
     ) {
         final String uri = line.uri().getPath();
         final Matcher matcher = UnpublishForceSlice.PTRN.matcher(uri);
-        if (matcher.matches()) {
-            final String pkg = new PackageNameFromUrl(
-                String.format(
-                    "%s %s %s", line.method(),
-                    uri.substring(0, uri.indexOf("/-rev/")),
-                    line.version()
-                )
-            ).value();
-            CompletableFuture<Void> res = this.storage.deleteAll(new Key.From(pkg));
-            if (this.events.isPresent()) {
-                res = res.thenRun(
-                    () -> this.events.map(
-                        queue -> queue.add(
-                            new ArtifactEvent(UploadSlice.REPO_TYPE, this.rname, pkg)
-                        )
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            if (matcher.matches()) {
+                final String pkg = new PackageNameFromUrl(
+                    String.format(
+                        "%s %s %s", line.method(),
+                        uri.substring(0, uri.indexOf("/-rev/")),
+                        line.version()
                     )
-                );
+                ).value();
+                CompletableFuture<Void> res = this.storage.deleteAll(new Key.From(pkg));
+                if (this.events.isPresent()) {
+                    res = res.thenRun(
+                        () -> this.events.map(
+                            queue -> queue.add(
+                                new ArtifactEvent(UploadSlice.REPO_TYPE, this.rname, pkg)
+                            )
+                        )
+                    );
+                }
+                return res.thenApply(nothing -> ResponseBuilder.ok().build());
             }
-            return res.thenApply(nothing -> ResponseBuilder.ok().build());
-        }
-        return ResponseBuilder.badRequest().completedFuture();
+            return ResponseBuilder.badRequest().completedFuture();
+        });
     }
 }

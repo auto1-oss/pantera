@@ -11,9 +11,15 @@ import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.ProxyArtifactEvent;
+import java.time.Instant;
 import java.util.LinkedList;
+import java.util.Optional;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -92,6 +98,12 @@ class PyProxyPackageProcessorTest {
         );
         this.scheduler.start();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 3);
+        MatcherAssert.assertThat(
+            this.events.stream()
+                .map(ArtifactEvent::artifactName)
+                .collect(Collectors.toSet()),
+            Matchers.equalTo(Set.of("artipie-sample"))
+        );
     }
 
     @Test
@@ -111,6 +123,71 @@ class PyProxyPackageProcessorTest {
         );
         this.scheduler.start();
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> this.events.size() == 1);
+    }
+
+    @Test
+    void requeuesWhenArtifactIsMissing() {
+        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(this.packages);
+        processor.setStorage(this.asto);
+        final ProxyArtifactEvent event =
+            new ProxyArtifactEvent(new Key.From("absent-1.0.0.tar.gz"), PyProxyPackageProcessorTest.REPO_NAME);
+        this.packages.add(event);
+        processor.execute(null);
+        MatcherAssert.assertThat("No artifact events should be produced", this.events.isEmpty());
+        MatcherAssert.assertThat("Original package must be re-queued", this.packages.contains(event));
+        MatcherAssert.assertThat(
+            "Queue keeps single pending item",
+            this.packages.size(),
+            Matchers.equalTo(1)
+        );
+    }
+
+    @Test
+    void addsReleaseInformationWhenPresent() {
+        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(this.packages);
+        processor.setStorage(this.asto);
+        final Key wheel = new Key.From("artipie_sample-0.2-py3-none-any.whl");
+        new TestResource("pypi_repo/artipie_sample-0.2-py3-none-any.whl").saveTo(this.asto, wheel);
+        final long release = Instant.now().minusSeconds(90L).toEpochMilli();
+        this.packages.add(
+            new ProxyArtifactEvent(
+                wheel,
+                PyProxyPackageProcessorTest.REPO_NAME,
+                "alice",
+                Optional.of(release)
+            )
+        );
+        processor.execute(null);
+        MatcherAssert.assertThat(this.events.size(), Matchers.equalTo(1));
+        final ArtifactEvent artifact = this.events.peek();
+        MatcherAssert.assertThat(
+            "Release timestamp propagated to artifact event",
+            artifact.releaseDate().orElseThrow(),
+            Matchers.equalTo(release)
+        );
+    }
+
+    @Test
+    void normalizesArtifactName() {
+        final PyProxyPackageProcessor processor = new PyProxyPackageProcessor();
+        processor.setEvents(this.events);
+        processor.setPackages(this.packages);
+        processor.setStorage(this.asto);
+        final Key tarball = new Key.From("AlarmTime-0.1.5.tar.gz");
+        new TestResource("pypi_repo/alarmtime-0.1.5.tar.gz").saveTo(this.asto, tarball);
+        this.packages.add(new ProxyArtifactEvent(tarball, PyProxyPackageProcessorTest.REPO_NAME));
+        processor.execute(null);
+        MatcherAssert.assertThat(this.events.size(), Matchers.equalTo(1));
+        final ArtifactEvent artifact = this.events.peek();
+        MatcherAssert.assertThat(
+            "Artifact name stored in normalized form",
+            artifact.artifactName(),
+            Matchers.equalTo("alarmtime")
+        );
     }
 
     @AfterEach

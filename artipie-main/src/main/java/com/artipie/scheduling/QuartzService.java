@@ -5,7 +5,7 @@
 package com.artipie.scheduling;
 
 import com.artipie.ArtipieException;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -53,7 +53,13 @@ public final class QuartzService {
                         try {
                             QuartzService.this.scheduler.shutdown();
                         } catch (final SchedulerException error) {
-                            Logger.error(this, error.getMessage());
+                            EcsLogger.error("com.artipie.scheduling")
+                                .message("Failed to shutdown Quartz scheduler")
+                                .eventCategory("scheduling")
+                                .eventAction("scheduler_shutdown")
+                                .eventOutcome("failure")
+                                .error(error)
+                                .log();
                         }
                     }
                 }
@@ -174,9 +180,14 @@ public final class QuartzService {
         try {
             this.scheduler.deleteJob(key);
         } catch (final SchedulerException err) {
-            Logger.error(
-                this, "Error while deleting quartz job %s:\n%s", key.toString(), err.getMessage()
-            );
+            EcsLogger.error("com.artipie.scheduling")
+                .message("Error while deleting quartz job")
+                .eventCategory("scheduling")
+                .eventAction("job_delete")
+                .eventOutcome("failure")
+                .field("process.name", key.toString())
+                .error(err)
+                .log();
         }
     }
 
@@ -215,7 +226,11 @@ public final class QuartzService {
             this.scheduler.getMetaData().getThreadPoolSize(), requested
         );
         if (requested > count) {
-            Logger.warn(this, String.format("Parallel quartz jobs amount is limited to thread pool size %s instead of requested %s", count, requested));
+            EcsLogger.warn("com.artipie.scheduling")
+                .message("Parallel quartz jobs amount limited to thread pool size (" + count + " threads, " + requested + " jobs requested)")
+                .eventCategory("scheduling")
+                .eventAction("job_limit")
+                .log();
         }
         return count;
     }
@@ -227,12 +242,12 @@ public final class QuartzService {
      * @param seconds Scheduled interval
      */
     private void log(final int count, final String clazz, final int seconds) {
-        Logger.debug(
-            this,
-            String.format(
-                "%s parallel %s jobs were scheduled to run every %s seconds", count, clazz, seconds
-            )
-        );
+        EcsLogger.debug("com.artipie.scheduling")
+            .message("Parallel jobs scheduled (" + count + " instances of " + clazz + ", interval: " + seconds + "s)")
+            .eventCategory("scheduling")
+            .eventAction("job_schedule")
+            .eventOutcome("success")
+            .log();
     }
 
     /**

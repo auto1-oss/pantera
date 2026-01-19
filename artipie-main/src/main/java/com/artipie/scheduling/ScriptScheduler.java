@@ -12,12 +12,12 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.scripting.ScriptContext;
 import com.artipie.scripting.ScriptRunner;
 import com.artipie.settings.Settings;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.settings.repo.Repositories;
 import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.parser.CronParser;
-import com.jcabi.log.Logger;
 import java.util.Map;
 import org.quartz.Job;
 import org.quartz.JobDataMap;
@@ -101,12 +101,13 @@ public final class ScriptScheduler {
                                     parser.parse(cronexp).validate();
                                     valid = true;
                                 } catch (final IllegalArgumentException exc) {
-                                    Logger.error(
-                                        ScriptScheduler.class,
-                                        "Invalid cron expression %s %[exception]s",
-                                        cronexp,
-                                        exc
-                                    );
+                                    EcsLogger.error("com.artipie.scheduling")
+                                        .message("Invalid cron expression: " + cronexp)
+                                        .eventCategory("scheduling")
+                                        .eventAction("crontab_load")
+                                        .eventOutcome("failure")
+                                        .error(exc)
+                                        .log();
                                 }
                                 if (valid) {
                                     final JobDataMap data = new JobDataMap();

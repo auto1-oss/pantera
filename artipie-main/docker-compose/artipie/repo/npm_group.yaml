@@ -1,0 +1,6 @@
+repo:
+  type: "npm-group"
+  # Resolution order: first match wins
+  members:
+    - npm
+    - npm_proxy

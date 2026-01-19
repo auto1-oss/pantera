@@ -33,22 +33,25 @@ public class DeleteUploadSlice extends UploadSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         UploadRequest request = UploadRequest.from(line);
-        return this.docker.repo(request.name())
-            .uploads()
-            .get(request.uuid())
-            .thenCompose(
-                x -> x.map(
-                    upload -> upload.cancel()
-                        .thenApply(
-                            offset -> ResponseBuilder.ok()
-                                .header("Docker-Upload-UUID", request.uuid())
-                                .build()
-                        )
-                ).orElse(
-                    ResponseBuilder.notFound()
-                        .jsonBody(new UploadUnknownError(request.uuid()).json())
-                        .completedFuture()
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.docker.repo(request.name())
+                .uploads()
+                .get(request.uuid())
+                .thenCompose(
+                    x -> x.map(
+                        upload -> upload.cancel()
+                            .thenApply(
+                                offset -> ResponseBuilder.ok()
+                                    .header("Docker-Upload-UUID", request.uuid())
+                                    .build()
+                            )
+                    ).orElse(
+                        ResponseBuilder.notFound()
+                            .jsonBody(new UploadUnknownError(request.uuid()).json())
+                            .completedFuture()
+                    )
                 )
-            );
+        );
     }
 }

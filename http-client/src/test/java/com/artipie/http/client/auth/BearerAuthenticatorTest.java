@@ -84,6 +84,33 @@ class BearerAuthenticatorTest {
     }
 
     @Test
+    void shouldPreserveCommaInScopeValue() {
+        final AtomicReference<String> querycapture = new AtomicReference<>();
+        final FakeClientSlices fake = new FakeClientSlices(
+            (rsline, rqheaders, rqbody) -> {
+                querycapture.set(rsline.uri().getRawQuery());
+                return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+            }
+        );
+        new BearerAuthenticator(
+            fake,
+            bytes -> "token",
+            Authenticator.ANONYMOUS
+        ).authenticate(
+            Headers.from(
+                new WwwAuthenticate(
+                    "Bearer realm=\"https://auth.docker.io/token\",scope=\"repository:library/ubuntu:pull,push\""
+                )
+            )
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Scope value with comma should be preserved",
+            querycapture.get(),
+            new IsEqual<>("scope=repository:library/ubuntu:pull,push")
+        );
+    }
+
+    @Test
     void shouldRequestTokenUsingAuthenticator() {
         final AtomicReference<Headers> capture;
         capture = new AtomicReference<>();

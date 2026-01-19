@@ -43,17 +43,20 @@ public final class GetDistTagsSlice implements Slice {
             line.toString().replace("/dist-tags", "").replace("/-/package", "")
         ).value();
         final Key key = new Key.From(pkg, "meta.json");
-        return this.storage.exists(key).thenCompose(
-            exists -> {
-                if (exists) {
-                    return this.storage.value(key)
-                        .thenCompose(Content::asJsonObjectFuture)
-                        .thenApply(json -> ResponseBuilder.ok()
-                            .jsonBody(json.getJsonObject("dist-tags"))
-                            .build());
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            this.storage.exists(key).thenCompose(
+                exists -> {
+                    if (exists) {
+                        return this.storage.value(key)
+                            .thenCompose(Content::asJsonObjectFuture)
+                            .thenApply(json -> ResponseBuilder.ok()
+                                .jsonBody(json.getJsonObject("dist-tags"))
+                                .build());
+                    }
+                    return ResponseBuilder.notFound().completedFuture();
                 }
-                return ResponseBuilder.notFound().completedFuture();
-            }
+            )
         );
     }
 }

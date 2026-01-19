@@ -5,6 +5,7 @@
 package com.artipie.asto.ext;
 
 import com.artipie.asto.Content;
+import com.artipie.asto.rx.RxFuture;
 import io.reactivex.Single;
 import io.reactivex.functions.Function;
 import org.reactivestreams.Publisher;
@@ -56,8 +57,9 @@ public final class ContentAs<T>
     public Single<? extends T> apply(
         final Single<? extends Publisher<ByteBuffer>> content
     ) {
+        // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
         return content.flatMap(
-            pub -> Single.fromFuture(new Content.From(pub).asBytesFuture())
+            pub -> RxFuture.single(new Content.From(pub).asBytesFuture())
         ).map(this.transform);
     }
 }

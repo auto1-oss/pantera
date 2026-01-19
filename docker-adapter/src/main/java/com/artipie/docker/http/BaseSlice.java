@@ -32,8 +32,11 @@ public final class BaseSlice extends DockerActionSlice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return ResponseBuilder.ok()
-            .header("Docker-Distribution-API-Version", "registry/2.0")
-            .completedFuture();
+        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.ok()
+                .header("Docker-Distribution-API-Version", "registry/2.0")
+                .build()
+        );
     }
 }

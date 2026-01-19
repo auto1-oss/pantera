@@ -8,13 +8,15 @@ import com.artipie.api.ssl.KeyStore;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.auth.JwtTokens;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.cooldown.CooldownSupport;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.RepoData;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
-import com.jcabi.log.Logger;
+import com.artipie.http.log.EcsLogger;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -72,6 +74,16 @@ public final class RestApi extends AbstractVerticle {
     private final Optional<MetadataEventQueues> events;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
+     * Artipie settings.
+     */
+    private final Settings settings;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -88,7 +100,9 @@ public final class RestApi extends AbstractVerticle {
         final ArtipieSecurity security,
         final Optional<KeyStore> keystore,
         final JWTAuth jwt,
-        final Optional<MetadataEventQueues> events
+        final Optional<MetadataEventQueues> events,
+        final CooldownService cooldown,
+        final Settings settings
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -97,6 +111,8 @@ public final class RestApi extends AbstractVerticle {
         this.keystore = keystore;
         this.jwt = jwt;
         this.events = events;
+        this.cooldown = cooldown;
+        this.settings = settings;
     }
 
     /**
@@ -108,7 +124,9 @@ public final class RestApi extends AbstractVerticle {
     public RestApi(final Settings settings, final int port, final JWTAuth jwt) {
         this(
             settings.caches(), settings.configStorage(),
-            port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata()
+            port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata(),
+            CooldownSupport.create(settings),
+            settings
         );
     }
 
@@ -118,8 +136,10 @@ public final class RestApi extends AbstractVerticle {
             repoRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/users.yaml").compose(
                 userRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
                     tokenRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
-                        settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").onSuccess(
-                            rolesRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb)
+                        settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
+                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/cache.yaml").onSuccess(
+                                cacheRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb)
+                            ).onFailure(Throwable::printStackTrace)
                         ).onFailure(Throwable::printStackTrace)
                     )
                 )
@@ -134,16 +154,20 @@ public final class RestApi extends AbstractVerticle {
      * @param tokenRb Token RouterBuilder
      * @param settingsRb Settings RouterBuilder
      * @param rolesRb Roles RouterBuilder
+     * @param cacheRb Cache RouterBuilder
      */
     private void startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
-        final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb) {
-        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb);
+        final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb,
+        final RouterBuilder cacheRb) {
+        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, cacheRb);
         final BlockingStorage asto = new BlockingStorage(this.configsStorage);
         new RepositoryRest(
             this.caches.filtersCache(),
             new ManageRepoSettings(asto),
             new RepoData(this.configsStorage, this.caches.storagesCache()),
-            this.security.policy(), this.events
+            this.security.policy(), this.events,
+            this.cooldown,
+            this.vertx.eventBus()
         ).init(repoRb);
         new StorageAliasesRest(
             this.caches.storagesCache(), asto, this.security.policy()
@@ -161,30 +185,72 @@ public final class RestApi extends AbstractVerticle {
                 ).init(rolesRb);
             }
         }
-        new SettingsRest(this.port).init(settingsRb);
+        new SettingsRest(this.port, this.settings).init(settingsRb);
+        new CacheRest(this.security.policy()).init(cacheRb);
         final Router router = repoRb.createRouter();
         router.route("/*").subRouter(rolesRb.createRouter());
         router.route("/*").subRouter(userRb.createRouter());
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
+        router.route("/*").subRouter(cacheRb.createRouter());
+        // CRITICAL: Add simple health endpoint BEFORE StaticHandler
+        // This avoids StaticHandler's file-serving leak for health checks
+        router.get("/api/health").handler(ctx -> {
+            ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end("{\"status\":\"ok\"}");
+        });
+
         router.route("/api/*").handler(
-            StaticHandler.create("swagger-ui").setIndexPage("index.html")
+            StaticHandler.create("swagger-ui")
+                .setIndexPage("index.html")
+                .setCachingEnabled(false)
+                .setFilesReadOnly(false)
         );
         final HttpServer server;
         final String schema;
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
-            server = vertx.createHttpServer(
-                this.keystore.get().secureOptions(this.vertx, this.configsStorage)
-            );
+            // SSL server with TCP optimizations for low latency
+            final io.vertx.core.http.HttpServerOptions sslOptions =
+                this.keystore.get().secureOptions(this.vertx, this.configsStorage);
+            sslOptions
+                .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
+                .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
+                .setIdleTimeout(60);      // Close idle connections after 60 seconds
+            server = vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
-            server = this.vertx.createHttpServer();
+            // Non-SSL server with TCP optimizations matching main server config
+            server = this.vertx.createHttpServer(
+                new io.vertx.core.http.HttpServerOptions()
+                    .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
+                    .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
+                    .setIdleTimeout(60)       // Close idle connections after 60 seconds
+                    .setUseAlpn(true)         // Enable ALPN for HTTP/2 negotiation
+                    .setHttp2ClearTextEnabled(true)  // Enable HTTP/2 over cleartext (h2c)
+            );
             schema = "http";
         }
         server.requestHandler(router)
             .listen(this.port)
-            .onComplete(res -> Logger.info(this, "Rest API started on port %d, swagger is available on %s://localhost:%d/api/index.html", this.port, schema, this.port))
-            .onFailure(err -> Logger.error(this, err.getMessage()));
+            .onComplete(res -> EcsLogger.info("com.artipie.api")
+                .message("Rest API started")
+                .eventCategory("api")
+                .eventAction("server_start")
+                .eventOutcome("success")
+                .field("url.port", this.port)
+                .field("url.scheme", schema)
+                .field("url.full", schema + "://localhost:" + this.port + "/api/index.html")
+                .log())
+            .onFailure(err -> EcsLogger.error("com.artipie.api")
+                .message("Failed to start Rest API")
+                .eventCategory("api")
+                .eventAction("server_start")
+                .eventOutcome("failure")
+                .field("url.port", this.port)
+                .error(err)
+                .log());
     }
 
     /**
@@ -195,7 +261,7 @@ public final class RestApi extends AbstractVerticle {
      * @param builders Router builders to add token auth to
      */
     private void addJwtAuth(final RouterBuilder token, final RouterBuilder... builders) {
-        new AuthTokenRest(new JwtTokens(this.jwt), this.security.authentication()).init(token);
+        new AuthTokenRest(new JwtTokens(this.jwt, this.settings.jwtSettings()), this.security.authentication()).init(token);
         Arrays.stream(builders).forEach(
             item -> item.securityHandler(RestApi.SECURITY_SCHEME, JWTAuthHandler.create(this.jwt))
         );

@@ -4,11 +4,13 @@
  */
 package com.artipie.http;
 
+import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.artipie.api.ssl.KeyStore;
 import com.artipie.asto.Content;
 import com.artipie.asto.Storage;
+import com.artipie.cooldown.CooldownSettings;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.headers.Authorization;
 import com.artipie.http.hm.AssertSlice;
@@ -21,6 +23,7 @@ import com.artipie.http.rq.RqMethod;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.ArtipieSecurity;
+import com.artipie.settings.LoggingContext;
 import com.artipie.settings.MetricsContext;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
@@ -33,6 +36,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * Test case for {@link DockerRoutingSlice}.
@@ -182,6 +186,31 @@ final class DockerRoutingSliceTest {
         @Override
         public Optional<YamlSequence> crontab() {
             return Optional.empty();
+        }
+
+        @Override
+        public LoggingContext logging() {
+            return new LoggingContext(Yaml.createYamlMappingBuilder().build());
+        }
+
+        @Override
+        public CooldownSettings cooldown() {
+            return CooldownSettings.defaults();
+        }
+
+        @Override
+        public Optional<DataSource> artifactsDatabase() {
+            return Optional.empty();
+        }
+
+        @Override
+        public com.artipie.settings.PrefixesConfig prefixes() {
+            return new com.artipie.settings.PrefixesConfig();
+        }
+
+        @Override
+        public java.nio.file.Path configPath() {
+            return java.nio.file.Paths.get("/tmp/test-artipie.yaml");
         }
     }
 }

@@ -127,5 +127,12 @@ class NuGetPackageContentTest {
             ), Headers.EMPTY, Content.EMPTY
         ).join();
         Assertions.assertEquals(RsStatus.UNAUTHORIZED, response.status());
+        Assertions.assertTrue(
+            response.headers().stream()
+                .anyMatch(header ->
+                    header.getKey().equalsIgnoreCase("WWW-Authenticate")
+                        && header.getValue().contains("Basic realm=\"artipie\"")
+                )
+        );
     }
 }

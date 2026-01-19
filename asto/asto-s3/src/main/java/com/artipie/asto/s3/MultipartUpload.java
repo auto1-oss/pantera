@@ -10,12 +10,12 @@ import com.artipie.asto.Merging;
 import com.artipie.asto.Splitting;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
-import io.reactivex.Observable;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.reactivestreams.Publisher;
@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartResponse;
+import software.amazon.awssdk.services.s3.model.ChecksumAlgorithm;
 
 /**
  * Multipart upload of S3 object.
@@ -62,17 +63,41 @@ final class MultipartUpload {
     private final List<UploadedPart> parts;
 
     /**
+     * Configured part size.
+     */
+    private final int partsize;
+
+    /**
+     * Max concurrent part uploads.
+     */
+    private final int concurrency;
+
+    /**
+     * Checksum algorithm to use (may be null or unsupported for parts).
+     */
+    private final ChecksumAlgorithm checksum;
+
+    /**
      * Ctor.
      *
      * @param bucket Bucket.
      * @param key S3 object key.
      * @param id ID of this upload.
+     * @param partsize Part size in bytes.
+     * @param concurrency Max concurrent uploads.
+     * @param checksum Checksum algorithm.
      */
-    MultipartUpload(final Bucket bucket, final Key key, final String id) {
+    MultipartUpload(final Bucket bucket, final Key key, final String id,
+        final int partsize, final int concurrency, final ChecksumAlgorithm checksum) {
         this.bucket = bucket;
         this.key = key;
         this.id = id;
-        this.parts = new CopyOnWriteArrayList<>();
+        // Use synchronized ArrayList instead of CopyOnWriteArrayList to avoid
+        // full array copy on every part upload (better memory efficiency)
+        this.parts = Collections.synchronizedList(new ArrayList<>());
+        this.partsize = Math.max(partsize, MultipartUpload.MIN_PART_SIZE);
+        this.concurrency = Math.max(1, concurrency);
+        this.checksum = checksum;
     }
 
     /**
@@ -86,23 +111,26 @@ final class MultipartUpload {
      */
     public CompletionStage<Void> upload(final Content content) {
         final AtomicInteger counter = new AtomicInteger();
-        return new Merging(MultipartUpload.MIN_PART_SIZE, MultipartUpload.MIN_PART_SIZE * 2).mergeFlow(
+        return new Merging(this.partsize, this.partsize * 2).mergeFlow(
             Flowable.fromPublisher(content).concatMap(
                 buffer -> Flowable.fromPublisher(
-                    new Splitting(buffer, MultipartUpload.MIN_PART_SIZE).publisher()
+                    new Splitting(buffer, this.partsize).publisher()
                 )
             )
-        ).doOnNext(payload -> {
+        ).flatMap(payload -> {
             final int pnum = counter.incrementAndGet();
-            this.uploadPart(
-                pnum,
-                Flowable.just(payload)
-            ).thenAccept(
-                response -> this.parts.add(
-                    new UploadedPart(pnum, response.eTag())
-                )
-            ).toCompletableFuture().join();
-        }).serialize().count().to(SingleInterop.get()).thenApply(count -> (Void)null);
+            return Flowable.fromFuture(
+                this.uploadPart(pnum, payload).thenApply(
+                    response -> {
+                        this.parts.add(new UploadedPart(pnum, response.eTag(), response.checksumSHA256()));
+                        return 1;
+                    }
+                ).toCompletableFuture()
+            );
+        }, this.concurrency)
+            .count()
+            .to(SingleInterop.get())
+            .thenApply(count -> (Void) null);
     }
 
     /**
@@ -150,24 +178,32 @@ final class MultipartUpload {
      * @param content Part content to be uploaded.
      * @return Completion stage which is completed when success response received from S3.
      */
-    private CompletionStage<UploadPartResponse> uploadPart(
-        final int part,
-        final Publisher<ByteBuffer> content) {
-        return Observable.fromPublisher(content)
-            .reduce(0L, (total, buf) -> total + buf.remaining())
-            .to(SingleInterop.get())
-            .toCompletableFuture()
-            .thenCompose(
-                length -> this.bucket.uploadPart(
-                    UploadPartRequest.builder()
-                        .key(this.key.string())
-                        .uploadId(this.id)
-                        .partNumber(part)
-                        .contentLength(length)
-                        .build(),
-                    AsyncRequestBody.fromPublisher(content)
-                )
-            );
+    private CompletionStage<UploadPartResponse> uploadPart(final int part, final ByteBuffer payload) {
+        final long length = payload.remaining();
+        final UploadPartRequest.Builder req = UploadPartRequest.builder()
+            .key(this.key.string())
+            .uploadId(this.id)
+            .partNumber(part)
+            .contentLength(length);
+        if (this.checksum == ChecksumAlgorithm.SHA256) {
+            final ByteBuffer dup = payload.asReadOnlyBuffer();
+            final byte[] arr = new byte[dup.remaining()];
+            dup.get(arr);
+            final String b64 = base64Sha256(arr);
+            req.checksumSHA256(b64);
+        }
+        final Publisher<ByteBuffer> body = Flowable.just(payload);
+        return this.bucket.uploadPart(req.build(), AsyncRequestBody.fromPublisher(body));
+    }
+
+    private static String base64Sha256(final byte[] data) {
+        try {
+            final java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            final byte[] digest = md.digest(data);
+            return java.util.Base64.getEncoder().encodeToString(digest);
+        } catch (final Exception err) {
+            throw new IllegalStateException(err);
+        }
     }
 
     /**
@@ -186,14 +222,21 @@ final class MultipartUpload {
         private final String tag;
 
         /**
+         * SHA256 checksum for the part (may be null).
+         */
+        private final String checksum;
+
+        /**
          * Ctor.
          *
          * @param pnum Part's number.
-         * @param tag Entity tag for the uploaded object..
+         * @param tag Entity tag for the uploaded object.
+         * @param checksum SHA256 checksum (may be null).
          */
-        UploadedPart(final int pnum, final String tag) {
+        UploadedPart(final int pnum, final String tag, final String checksum) {
             this.pnum = pnum;
             this.tag = tag;
+            this.checksum = checksum;
         }
 
         /**
@@ -202,10 +245,13 @@ final class MultipartUpload {
          * @return CompletedPart.
          */
         CompletedPart completedPart() {
-            return CompletedPart.builder()
+            final CompletedPart.Builder builder = CompletedPart.builder()
                 .partNumber(this.pnum)
-                .eTag(this.tag)
-                .build();
+                .eTag(this.tag);
+            if (this.checksum != null) {
+                builder.checksumSHA256(this.checksum);
+            }
+            return builder.build();
         }
     }
 }

@@ -11,13 +11,16 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthzSlice;
+import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.OperationControl;
+import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
 import com.artipie.http.slice.SliceDownload;
+import com.artipie.http.slice.StorageArtifactSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.http.slice.SliceWithHeaders;
 import com.artipie.scheduling.ArtifactEvent;
@@ -49,6 +52,26 @@ public final class PySlice extends Slice.Wrap {
         final String name,
         final Optional<Queue<ArtifactEvent>> queue
     ) {
+        this(storage, policy, auth, null, name, queue);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage The storage.
+     * @param policy Access policy.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param queue Events queue
+     */
+    public PySlice(
+        final Storage storage,
+        final Policy<?> policy,
+        final Authentication basicAuth,
+        final TokenAuthentication tokenAuth,
+        final String name,
+        final Optional<Queue<ArtifactEvent>> queue
+    ) {
         super(
             new SliceRoute(
                 new RtRulePath(
@@ -56,12 +79,13 @@ public final class PySlice extends Slice.Wrap {
                         MethodRule.GET,
                         new RtRule.ByPath(".*\\.(whl|tar\\.gz|zip|tar\\.bz2|tar\\.Z|tar|egg)")
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new SliceWithHeaders(
-                            new SliceDownload(storage),
+                            new StorageArtifactSlice(storage),
                             Headers.from(ContentType.mime("application/octet-stream"))
                         ),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -74,9 +98,10 @@ public final class PySlice extends Slice.Wrap {
                             "content-type", Pattern.compile("multipart.*", Pattern.CASE_INSENSITIVE)
                         )
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new WheelSlice(storage, queue, name),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -89,9 +114,10 @@ public final class PySlice extends Slice.Wrap {
                             "content-type", Pattern.compile("text.*", Pattern.CASE_INSENSITIVE)
                         )
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new SearchSlice(storage),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.WRITE)
                         )
@@ -104,7 +130,7 @@ public final class PySlice extends Slice.Wrap {
                     ),
                     new BasicAuthzSlice(
                         new SliceIndex(storage),
-                        auth,
+                        basicAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -114,9 +140,10 @@ public final class PySlice extends Slice.Wrap {
                     new RtRule.All(
                         MethodRule.GET
                     ),
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new RedirectSlice(),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                             policy, new AdapterBasicPermission(name, Action.Standard.READ)
                         )
@@ -124,9 +151,10 @@ public final class PySlice extends Slice.Wrap {
                 ),
                 new RtRulePath(
                     MethodRule.DELETE,
-                    new BasicAuthzSlice(
+                    PySlice.createAuthSlice(
                         new DeleteSlice(storage),
-                        auth,
+                        basicAuth,
+                        tokenAuth,
                         new OperationControl(
                                 policy,
                                 new AdapterBasicPermission(name, Action.Standard.WRITE)
@@ -139,5 +167,23 @@ public final class PySlice extends Slice.Wrap {
                 )
             )
         );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BasicAuthzSlice(origin, basicAuth, control);
     }
 }

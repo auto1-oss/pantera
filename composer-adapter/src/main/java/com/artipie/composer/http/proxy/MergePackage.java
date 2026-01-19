@@ -6,6 +6,7 @@ package com.artipie.composer.http.proxy;
 
 import com.artipie.asto.Content;
 import com.artipie.composer.JsonPackage;
+import com.artipie.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -133,6 +134,12 @@ public interface MergePackage {
         ) {
             final Set<String> vrsns = lcl.keySet();
             final JsonObjectBuilder bldr = Json.createObjectBuilder();
+            EcsLogger.debug("com.artipie.composer")
+                .message("Merging package versions (" + vrsns.size() + " local versions, remote present: " + rmt.isPresent() + ")")
+                .eventCategory("repository")
+                .eventAction("package_merge")
+                .field("package.name", this.name)
+                .log();
             vrsns.forEach(
                 vers -> bldr.add(
                     vers, Json.createObjectBuilder(lcl.getJsonObject(vers))
@@ -141,22 +148,44 @@ public interface MergePackage {
                 )
             );
             if (rmt.isPresent() && rmt.get().containsKey(this.name)) {
-                rmt.get().getJsonArray(this.name).stream()
-                    .map(JsonValue::asJsonObject)
-                    .forEach(
-                        entry -> {
-                            final String vers = entry.getString(JsonPackage.VRSN);
-                            if (!vrsns.contains(vers)) {
-                                final JsonObjectBuilder rmtblbdr;
-                                rmtblbdr = Json.createObjectBuilder(entry);
-                                if (!entry.containsKey("name")) {
-                                    rmtblbdr.add("name", this.name);
+                final JsonValue remotePackage = rmt.get().get(this.name);
+                // Handle both array format (from Packagist) and object format (from cache)
+                if (remotePackage.getValueType() == JsonValue.ValueType.ARRAY) {
+                    // Array format: [{version: "v1.0"}, {version: "v1.1"}, ...]
+                    remotePackage.asJsonArray().stream()
+                        .map(JsonValue::asJsonObject)
+                        .forEach(
+                            entry -> {
+                                final String vers = entry.getString(JsonPackage.VRSN);
+                                if (!vrsns.contains(vers)) {
+                                    final JsonObjectBuilder rmtblbdr;
+                                    rmtblbdr = Json.createObjectBuilder(entry);
+                                    if (!entry.containsKey("name")) {
+                                        rmtblbdr.add("name", this.name);
+                                    }
+                                    rmtblbdr.add("uid", UUID.randomUUID().toString());
+                                    bldr.add(vers, rmtblbdr.build());
                                 }
-                                rmtblbdr.add("uid", UUID.randomUUID().toString());
-                                bldr.add(vers, rmtblbdr.build());
                             }
+                        );
+                } else if (remotePackage.getValueType() == JsonValue.ValueType.OBJECT) {
+                    // Object format: {"v1.0": {...}, "v1.1": {...}}
+                    final JsonObject remoteObj = remotePackage.asJsonObject();
+                    remoteObj.keySet().forEach(vers -> {
+                        if (!vrsns.contains(vers)) {
+                            final JsonObject entry = remoteObj.getJsonObject(vers);
+                            final JsonObjectBuilder rmtblbdr = Json.createObjectBuilder(entry);
+                            if (!entry.containsKey("name")) {
+                                rmtblbdr.add("name", this.name);
+                            }
+                            if (!entry.containsKey(JsonPackage.VRSN)) {
+                                rmtblbdr.add(JsonPackage.VRSN, vers);
+                            }
+                            rmtblbdr.add("uid", UUID.randomUUID().toString());
+                            bldr.add(vers, rmtblbdr.build());
                         }
-                );
+                    });
+                }
             }
             return bldr.build();
         }

@@ -13,6 +13,7 @@ import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.auth.GenericAuthenticator;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.http.group.GroupSlice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.maven.http.MavenProxySlice;
@@ -37,7 +38,8 @@ public final class MavenProxy implements Slice {
      * @param queue Artifact events queue
      */
     public MavenProxy(
-        ClientSlices client, RepoConfig cfg, Optional<Queue<ProxyArtifactEvent>> queue
+        ClientSlices client, RepoConfig cfg, Optional<Queue<ProxyArtifactEvent>> queue,
+        CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         slice = new GroupSlice(
@@ -47,7 +49,10 @@ public final class MavenProxy implements Slice {
                     GenericAuthenticator.create(client, remote.username(), remote.pwd()),
                     asto.<Cache>map(FromStorageCache::new).orElse(Cache.NOP),
                     asto.flatMap(ignored -> queue),
-                    cfg.name()
+                    cfg.name(),
+                    cfg.type(),
+                    cooldown,
+                    asto  // Pass storage for checksum persistence
                 )
             ).collect(Collectors.toList())
         );

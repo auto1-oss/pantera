@@ -5,8 +5,7 @@
 package com.artipie.npm;
 
 import com.artipie.npm.misc.DateTimeNowStr;
-import java.util.ArrayList;
-import java.util.Comparator;
+import com.artipie.npm.misc.DescSortedVersions;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -87,9 +86,23 @@ final class Meta {
         }
         patch.add("/time/modified", now);
         if (!haslatest && !keys.isEmpty()) {
-            final List<String> lst = new ArrayList<>(keys);
-            lst.sort(Comparator.reverseOrder());
-            patch.add("/dist-tags/latest", lst.get(0));
+            // Use semver sorting to find latest STABLE version (exclude prereleases)
+            final List<String> stableVersions = new DescSortedVersions(
+                versions,
+                true  // excludePrereleases = true (exclude canary, beta, alpha, rc)
+            ).value();
+            if (!stableVersions.isEmpty()) {
+                patch.add("/dist-tags/latest", stableVersions.get(0));
+            } else {
+                // No stable versions - use highest prerelease
+                final List<String> allVersions = new DescSortedVersions(
+                    versions,
+                    false
+                ).value();
+                if (!allVersions.isEmpty()) {
+                    patch.add("/dist-tags/latest", allVersions.get(0));
+                }
+            }
         }
         return patch.build().apply(this.json);
     }

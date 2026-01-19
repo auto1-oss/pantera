@@ -11,7 +11,7 @@ import com.artipie.rpm.meta.XmlPackage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.zip.GZIPInputStream;
-import org.testcontainers.shaded.org.apache.commons.io.IOUtils;
+import org.apache.commons.io.IOUtils;
 
 /**
  * Reads and unpacks metadata.

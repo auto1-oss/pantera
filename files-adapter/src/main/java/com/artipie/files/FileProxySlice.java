@@ -9,7 +9,11 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
 import com.artipie.asto.cache.FromRemoteCache;
+import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.cache.Remote;
+import com.artipie.cooldown.CooldownRequest;
+import com.artipie.cooldown.CooldownResponses;
+import com.artipie.cooldown.CooldownService;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
@@ -18,6 +22,7 @@ import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
+import com.artipie.http.headers.Login;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqHeaders;
@@ -63,12 +68,33 @@ public final class FileProxySlice implements Slice {
     private final String rname;
 
     /**
+     * Cooldown service.
+     */
+    private final CooldownService cooldown;
+
+    /**
+     * Cooldown inspector.
+     */
+    private final FilesCooldownInspector inspector;
+
+    /**
+     * Upstream URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
+     * Optional storage for cache-first lookup (offline mode support).
+     */
+    private final Optional<Storage> storage;
+
+    /**
      * New files proxy slice.
      * @param clients HTTP clients
      * @param remote Remote URI
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
-        this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO);
+        this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -82,7 +108,8 @@ public final class FileProxySlice implements Slice {
         final Authenticator auth, final Storage asto) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
-            new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO
+            new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -98,7 +125,8 @@ public final class FileProxySlice implements Slice {
         final Queue<ArtifactEvent> events, final String rname) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
-            new FromRemoteCache(asto), Optional.of(events), rname
+            new FromRemoteCache(asto), Optional.of(events), rname,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -107,7 +135,8 @@ public final class FileProxySlice implements Slice {
      * @param cache Cache
      */
     FileProxySlice(final Slice remote, final Cache cache) {
-        this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO);
+        this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -115,35 +144,160 @@ public final class FileProxySlice implements Slice {
      * @param cache Cache
      * @param events Artifact events
      * @param rname Repository name
+     * @param cooldown Cooldown service
      */
     public FileProxySlice(
         final Slice remote, final Cache cache,
-        final Optional<Queue<ArtifactEvent>> events, final String rname
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown
+    ) {
+        this(remote, cache, events, rname, cooldown, "unknown", Optional.empty());
+    }
+
+    /**
+     * Full constructor with upstream URL for metrics.
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown, final String upstreamUrl
+    ) {
+        this(remote, cache, events, rname, cooldown, upstreamUrl, Optional.empty());
+    }
+
+    /**
+     * Full constructor with upstream URL and storage for cache-first lookup.
+     * @param remote Remote slice
+     * @param cache Cache
+     * @param events Artifact events
+     * @param rname Repository name
+     * @param cooldown Cooldown service
+     * @param upstreamUrl Upstream URL for metrics
+     * @param storage Optional storage for cache-first lookup
+     */
+    public FileProxySlice(
+        final Slice remote, final Cache cache,
+        final Optional<Queue<ArtifactEvent>> events, final String rname,
+        final CooldownService cooldown, final String upstreamUrl,
+        final Optional<Storage> storage
     ) {
         this.remote = remote;
         this.cache = cache;
         this.events = events;
         this.rname = rname;
+        this.cooldown = cooldown;
+        this.inspector = new FilesCooldownInspector(remote);
+        this.upstreamUrl = upstreamUrl;
+        this.storage = storage;
     }
 
     @Override
     public CompletableFuture<Response> response(
-        RequestLine line, Headers ignored, Content pub
+        RequestLine line, Headers rqheaders, Content pub
     ) {
-        final AtomicReference<Headers> headers = new AtomicReference<>();
+        final AtomicReference<Headers> rshdr = new AtomicReference<>();
         final KeyFromPath key = new KeyFromPath(line.uri().getPath());
+        final String artifact = line.uri().getPath();
+        final String user = new Login(rqheaders).getValue();
 
-        return this.cache.load(key,
+        // CRITICAL FIX: Check cache FIRST before any network calls (cooldown/inspector)
+        // This ensures offline mode works - serve cached content even when upstream is down
+        return this.checkCacheFirst(line, key, artifact, user, rshdr);
+    }
+
+    /**
+     * Check cache first before evaluating cooldown. This ensures offline mode works -
+     * cached content is served even when upstream/network is unavailable.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param artifact Artifact path
+     * @param user User name
+     * @param rshdr Response headers reference
+     * @return Response future
+     */
+    private CompletableFuture<Response> checkCacheFirst(
+        final RequestLine line,
+        final KeyFromPath key,
+        final String artifact,
+        final String user,
+        final AtomicReference<Headers> rshdr
+    ) {
+        // If no storage is configured, skip cache-first check and go directly to cooldown
+        if (this.storage.isEmpty()) {
+            return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+        }
+        // Check storage cache FIRST before any network calls
+        // Use FromStorageCache pattern: check storage directly, serve if present
+        return new FromStorageCache(this.storage.get()).load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    // Cache HIT - serve immediately without any network calls
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .body(cached.get())
+                            .build()
+                    );
+                }
+                // Cache MISS - now we need network, evaluate cooldown first
+                return this.evaluateCooldownAndFetch(line, key, artifact, user, rshdr);
+            }).toCompletableFuture();
+    }
+
+    /**
+     * Evaluate cooldown (if applicable) then fetch from upstream.
+     * Only called when cache miss - requires network access.
+     *
+     * @param line Request line
+     * @param key Cache key
+     * @param artifact Artifact path
+     * @param user User name
+     * @param rshdr Response headers reference
+     * @return Response future
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final KeyFromPath key,
+        final String artifact,
+        final String user,
+        final AtomicReference<Headers> rshdr
+    ) {
+        final CooldownRequest request = new CooldownRequest(
+            FileProxySlice.REPO_TYPE,
+            this.rname,
+            artifact,
+            "latest",
+            user,
+            java.time.Instant.now()
+        );
+
+        return this.cooldown.evaluate(request, this.inspector)
+            .thenCompose(result -> {
+                if (result.blocked()) {
+                    return java.util.concurrent.CompletableFuture.completedFuture(
+                        CooldownResponses.forbidden(result.block().orElseThrow())
+                    );
+                }
+                final long startTime = System.currentTimeMillis();
+                return this.cache.load(key,
                 new Remote.WithErrorHandling(
                     () -> {
                         final CompletableFuture<Optional<? extends Content>> promise = new CompletableFuture<>();
                         this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                             .thenApply(
                                 response -> {
+                                    final long duration = System.currentTimeMillis() - startTime;
                                     final CompletableFuture<Void> term = new CompletableFuture<>();
-                                    headers.set(response.headers());
+                                    rshdr.set(response.headers());
 
                                     if (response.status().success()) {
+                                        this.recordProxyMetric("success", duration);
                                         final Flowable<ByteBuffer> body = Flowable.fromPublisher(response.body())
                                             .doOnError(term::completeExceptionally)
                                             .doOnTerminate(() -> term.complete(null));
@@ -152,21 +306,46 @@ public final class FileProxySlice implements Slice {
 
                                         if (this.events.isPresent()) {
                                             final long size =
-                                                new RqHeaders(headers.get(), ContentLength.NAME)
+                                                new RqHeaders(rshdr.get(), ContentLength.NAME)
                                                     .stream().findFirst().map(Long::parseLong)
                                                     .orElse(0L);
+                                            String aname = key.string();
+                                            // Exclude repo name prefix if present
+                                            if (this.rname != null && !this.rname.isEmpty()
+                                                && aname.startsWith(this.rname + "/")) {
+                                                aname = aname.substring(this.rname.length() + 1);
+                                            }
+                                            // Replace folder separators with dots
+                                            aname = aname.replace('/', '.');
                                             this.events.get().add(
                                                 new ArtifactEvent(
-                                                    FileProxySlice.REPO_TYPE, this.rname, "ANONYMOUS",
-                                                    key.string(), "UNKNOWN", size
+                                                    FileProxySlice.REPO_TYPE, this.rname, user,
+                                                    aname, "UNKNOWN", size
                                                 )
                                             );
                                         }
                                     } else {
-                                        promise.complete(Optional.empty());
+                                        // CRITICAL: Consume body to prevent Vert.x request leak
+                                        response.body().asBytesFuture().whenComplete((ignored, error) -> {
+                                            final String metricResult = response.status().code() == 404 ? "not_found" :
+                                                (response.status().code() >= 500 ? "error" : "client_error");
+                                            this.recordProxyMetric(metricResult, duration);
+                                            if (response.status().code() >= 500) {
+                                                this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
+                                            }
+                                            promise.complete(Optional.empty());
+                                            term.complete(null);
+                                        });
                                     }
                                     return term;
-                                });
+                                })
+                            .exceptionally(error -> {
+                                final long duration = System.currentTimeMillis() - startTime;
+                                this.recordProxyMetric("exception", duration);
+                                this.recordUpstreamErrorMetric(error);
+                                promise.complete(Optional.empty());
+                                return null;
+                            });
                         return promise;
                     }
                 ),
@@ -175,12 +354,57 @@ public final class FileProxySlice implements Slice {
             .handle((content, throwable) -> {
                     if (throwable == null && content.isPresent()) {
                         return ResponseBuilder.ok()
-                            .headers(headers.get())
+                            .headers(rshdr.get())
                             .body(content.get())
                             .build();
                     }
                     return ResponseBuilder.notFound().build();
                 }
             );
+            });
+    }
+
+    /**
+     * Record proxy request metric.
+     */
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    /**
+     * Record upstream error metric.
+     */
+    private void recordUpstreamErrorMetric(final Throwable error) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                String errorType = "unknown";
+                if (error instanceof java.util.concurrent.TimeoutException) {
+                    errorType = "timeout";
+                } else if (error instanceof java.net.ConnectException) {
+                    errorType = "connection";
+                }
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
+            }
+        });
+    }
+
+    /**
+     * Record metric safely (only if metrics are enabled).
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            // Ignore metric errors - don't fail requests
+        }
     }
 }

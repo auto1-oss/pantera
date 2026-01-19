@@ -38,6 +38,10 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.TEMPORARY_REDIRECT);
     }
 
+    public static ResponseBuilder proxyAuthenticationRequired() {
+        return new ResponseBuilder(RsStatus.PROXY_AUTHENTICATION_REQUIRED);
+    }
+
     public static ResponseBuilder movedPermanently() {
         return new ResponseBuilder(RsStatus.MOVED_PERMANENTLY);
     }
@@ -86,6 +90,23 @@ public class ResponseBuilder {
     public static ResponseBuilder internalError(Throwable error) {
         return new ResponseBuilder(RsStatus.INTERNAL_ERROR)
             .body(errorBody(error));
+    }
+
+    public static ResponseBuilder partialContent() {
+        return new ResponseBuilder(RsStatus.PARTIAL_CONTENT);
+    }
+
+    public static ResponseBuilder rangeNotSatisfiable() {
+        return new ResponseBuilder(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+    }
+
+    public static ResponseBuilder gatewayTimeout() {
+        return new ResponseBuilder(RsStatus.GATEWAY_TIMEOUT);
+    }
+
+    public static ResponseBuilder serviceUnavailable(String message) {
+        return new ResponseBuilder(RsStatus.SERVICE_UNAVAILABLE)
+            .textBody(message);
     }
 
     private static byte[] errorBody(Throwable error) {
@@ -208,6 +229,7 @@ public class ResponseBuilder {
                 case MOVED_TEMPORARILY -> RSP_MOVED_TEMPORARILY;
                 case NOT_MODIFIED -> RSP_NOT_MODIFIED;
                 case TEMPORARY_REDIRECT -> RSP_TEMPORARY_REDIRECT;
+                case PROXY_AUTHENTICATION_REQUIRED -> RSP_PROXY_AUTH_REQUIRED;
                 case BAD_REQUEST -> RSP_BAD_REQUEST;
                 case UNAUTHORIZED -> RSP_UNAUTHORIZED;
                 case FORBIDDEN -> RSP_FORBIDDEN;
@@ -216,6 +238,7 @@ public class ResponseBuilder {
                 case REQUEST_TIMEOUT -> RSP_REQUEST_TIMEOUT;
                 case CONFLICT -> RSP_CONFLICT;
                 case LENGTH_REQUIRED -> RSP_LENGTH_REQUIRED;
+                case PRECONDITION_FAILED -> RSP_PRECONDITION_FAILED;
                 case REQUEST_TOO_LONG -> RSP_REQUEST_TOO_LONG;
                 case REQUESTED_RANGE_NOT_SATISFIABLE -> RSP_REQUESTED_RANGE_NOT_SATISFIABLE;
                 case EXPECTATION_FAILED -> RSP_EXPECTATION_FAILED;
@@ -223,6 +246,8 @@ public class ResponseBuilder {
                 case INTERNAL_ERROR -> RSP_INTERNAL_ERROR;
                 case NOT_IMPLEMENTED -> RSP_NOT_IMPLEMENTED;
                 case SERVICE_UNAVAILABLE -> RSP_SERVICE_UNAVAILABLE;
+                case PARTIAL_CONTENT -> RSP_PARTIAL_CONTENT;
+                case GATEWAY_TIMEOUT -> RSP_GATEWAY_TIMEOUT;
             };
         }
         return new Response(status, new UnmodifiableHeaders(headers.asList()), body);
@@ -234,6 +259,8 @@ public class ResponseBuilder {
 
     private final static Response RSP_OK = new Response(RsStatus.OK, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_NOT_FOUND = new Response(RsStatus.NOT_FOUND, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PROXY_AUTH_REQUIRED =
+        new Response(RsStatus.PROXY_AUTHENTICATION_REQUIRED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CONTINUE = new Response(RsStatus.CONTINUE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CREATED = new Response(RsStatus.CREATED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_ACCEPTED = new Response(RsStatus.ACCEPTED, Headers.EMPTY, Content.EMPTY);
@@ -249,6 +276,8 @@ public class ResponseBuilder {
     private final static Response RSP_REQUEST_TIMEOUT = new Response(RsStatus.REQUEST_TIMEOUT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_CONFLICT = new Response(RsStatus.CONFLICT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_LENGTH_REQUIRED = new Response(RsStatus.LENGTH_REQUIRED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PRECONDITION_FAILED =
+        new Response(RsStatus.PRECONDITION_FAILED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_REQUEST_TOO_LONG = new Response(RsStatus.REQUEST_TOO_LONG, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_REQUESTED_RANGE_NOT_SATISFIABLE = new Response(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_EXPECTATION_FAILED = new Response(RsStatus.EXPECTATION_FAILED, Headers.EMPTY, Content.EMPTY);
@@ -256,4 +285,6 @@ public class ResponseBuilder {
     private final static Response RSP_INTERNAL_ERROR = new Response(RsStatus.INTERNAL_ERROR, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_NOT_IMPLEMENTED = new Response(RsStatus.NOT_IMPLEMENTED, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_SERVICE_UNAVAILABLE = new Response(RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_PARTIAL_CONTENT = new Response(RsStatus.PARTIAL_CONTENT, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_GATEWAY_TIMEOUT = new Response(RsStatus.GATEWAY_TIMEOUT, Headers.EMPTY, Content.EMPTY);
 }

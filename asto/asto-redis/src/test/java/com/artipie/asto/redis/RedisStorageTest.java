@@ -102,7 +102,8 @@ public final class RedisStorageTest {
     @Test
     @Timeout(15)
     void shouldUploadObjectWhenSaveLargeContent() throws ExecutionException, InterruptedException {
-        final int size = 20 * 1024 * 1024;
+        // Test with 5MB (under the 10MB limit) - Redis storage has size limits for memory safety
+        final int size = 5 * 1024 * 1024;
         final byte[] data = new byte[size];
         new Random().nextBytes(data);
         this.storage.save(
@@ -114,6 +115,25 @@ public final class RedisStorageTest {
                 Single.just(this.storage.value(new Key.From("big/data")).join())
             ).toFuture().get(),
             Matchers.equalTo(data)
+        );
+    }
+
+    @Test
+    void shouldRejectContentExceedingSizeLimit() {
+        // Redis storage has a 10MB limit - test that oversized content is rejected
+        final int size = 15 * 1024 * 1024; // 15MB, exceeds 10MB limit
+        final byte[] data = new byte[size];
+        new Random().nextBytes(data);
+        MatcherAssert.assertThat(
+            "Large content should be rejected with ArtipieIOException",
+            org.junit.jupiter.api.Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> this.storage.save(
+                    new Key.From("too/big"),
+                    new Content.OneTime(new Content.From(data))
+                ).join()
+            ).getCause(),
+            Matchers.instanceOf(ArtipieIOException.class)
         );
     }
 
@@ -220,7 +240,7 @@ public final class RedisStorageTest {
     void returnsIdentifier() {
         MatcherAssert.assertThat(
             this.storage.identifier(),
-            Matchers.stringContainsInOrder("Radis", "id=")
+            Matchers.stringContainsInOrder("Redis", "id=")
         );
     }
 

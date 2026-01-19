@@ -10,6 +10,7 @@ window.onload = function() {
           {url: "./yaml/users.yaml", name: "Users"},
           {url: "./yaml/roles.yaml", name: "Roles"},
           {url: "./yaml/settings.yaml", name: "Settings"},
+          {url: "./yaml/cache.yaml", name: "Cache & Health"},
         ],
     dom_id: '#swagger-ui',
     deepLinking: true,

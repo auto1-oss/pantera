@@ -26,22 +26,28 @@ SOFTWARE.
     <parent>
         <artifactId>artipie</artifactId>
         <groupId>com.artipie</groupId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.20.12</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>artipie-main</artifactId>
     <packaging>jar</packaging>
     <properties>
-        <docker.image.name>artipie/artipie</docker.image.name>
-        <docker.ubuntu.image.name>artipie/artipie-ubuntu</docker.ubuntu.image.name>
-        <docker.tests.image.name>artipie/artipie-tests</docker.tests.image.name>
+        <docker.image.name>auto1-artipie</docker.image.name>
+        <docker.ubuntu.image.name>auto1-artipie-ubuntu</docker.ubuntu.image.name>
+        <docker.tests.image.name>auto1-artipie-tests</docker.tests.image.name>
         <header.license>${project.basedir}/../LICENSE.header</header.license>
     </properties>
     <dependencies>
         <dependency>
             <groupId>com.artipie</groupId>
+            <artifactId>artipie-core</artifactId>
+            <version>1.20.12</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.artipie</groupId>
             <artifactId>asto-core</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
             <exclusions>
                 <exclusion>
@@ -53,22 +59,22 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-etcd</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-redis</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-s3</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-vertx-file</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
         </dependency>
         <dependency>
             <groupId>com.jcabi</groupId>
@@ -92,14 +98,19 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>vertx-server</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>http-client</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.vdurmont</groupId>
+            <artifactId>semver4j</artifactId>
+            <version>3.1.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents.core5</groupId>
@@ -149,12 +160,40 @@ SOFTWARE.
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.12.1</version>
+            <version>${micrometer.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.xerial</groupId>
-            <artifactId>sqlite-jdbc</artifactId>
-            <version>3.44.1.0</version>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <version>${micrometer.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.dasniko</groupId>
+            <artifactId>testcontainers-keycloak</artifactId>
+            <version>3.8.0</version>
+            <scope>test</scope>
         </dependency>
         <!-- Hamcrest is required in the main code for github auth -->
         <dependency>
@@ -167,10 +206,16 @@ SOFTWARE.
             <artifactId>vertx-web-openapi</artifactId>
             <version>${vertx.version}</version>
         </dependency>
+        <!-- Required for Router, JWTAuthHandler, StaticHandler used in tests -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-authz-client</artifactId>
-            <version>24.0.1</version>
+            <version>26.0.2</version>
         </dependency>
         <dependency>
             <groupId>org.quartz-scheduler</groupId>
@@ -192,34 +237,63 @@ SOFTWARE.
             <artifactId>jython-standalone</artifactId>
             <version>2.7.3</version>
         </dependency>
+        <!-- Log4j2 core - required for runtime logging -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.22.1</version>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>org.eclipse.jetty.http3</groupId>
             <artifactId>jetty-http3-server</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.quic</groupId>
+            <artifactId>jetty-quic-quiche-jna</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty.quic</groupId>
+            <artifactId>jetty-quic-quiche-server</artifactId>
             <version>${jetty.version}</version>
         </dependency>
         <!--        adapters      -->
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>files-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>npm-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>hexpm-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>maven-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
+            <scope>compile</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.jcabi</groupId>
+                    <artifactId>jcabi-xml</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.artipie</groupId>
+            <artifactId>gradle-adapter</artifactId>
+            <version>1.20.12</version>
             <scope>compile</scope>
             <exclusions>
                 <exclusion>
@@ -231,67 +305,67 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>rpm-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>gem-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>composer-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>go-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>nuget-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>pypi-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>helm-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>docker-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>debian-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>conda-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>conan-adapter</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.20.12</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -307,6 +381,13 @@ SOFTWARE.
             <version>${httpclient.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Provide URIBuilder and HttpClient expected by main and tests -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <version>4.5.14</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>org.skyscreamer</groupId>
             <artifactId>jsonassert</artifactId>
@@ -321,6 +402,21 @@ SOFTWARE.
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <release>21</release>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.3</version>
+                <configuration>
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+                    <parallel>none</parallel>
+                    <threadCount>1</threadCount>
+                    <systemPropertyVariables>
+                        <testcontainers.reuse.enable>true</testcontainers.reuse.enable>
+                        <testcontainers.checks.disable>true</testcontainers.checks.disable>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>
@@ -363,26 +459,36 @@ SOFTWARE.
                         </configuration>
                     </plugin>
                     <plugin>
-                        <groupId>com.spotify</groupId>
-                        <artifactId>dockerfile-maven-plugin</artifactId>
-                        <version>1.4.13</version>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
-                                <id>default</id>
+                                <id>docker-buildx-multiplatform</id>
+                                <phase>install</phase>
                                 <goals>
-                                    <goal>build</goal>
-                                    <goal>push</goal>
+                                    <goal>exec</goal>
                                 </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <workingDirectory>${project.basedir}</workingDirectory>
+                                    <arguments>
+                                        <argument>buildx</argument>
+                                        <argument>build</argument>
+                                        <argument>--platform</argument>
+                                        <argument>linux/amd64,linux/arm64</argument>
+                                        <argument>--build-arg</argument>
+                                        <argument>JAR_FILE=${project.build.finalName}.jar</argument>
+                                        <argument>-t</argument>
+                                        <argument>${docker.image.name}:${project.version}</argument>
+                                        <argument>--load</argument>
+                                        <argument>-f</argument>
+                                        <argument>Dockerfile</argument>
+                                        <argument>.</argument>
+                                    </arguments>
+                                </configuration>
                             </execution>
                         </executions>
-                        <configuration>
-                            <repository>${docker.image.name}</repository>
-                            <tag>${project.version}</tag>
-                            <dockerfile>Dockerfile</dockerfile>
-                            <buildArgs>
-                                <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
-                            </buildArgs>
-                        </configuration>
                     </plugin>
                     <plugin>
                         <artifactId>maven-deploy-plugin</artifactId>
@@ -435,26 +541,36 @@ SOFTWARE.
                         </configuration>
                     </plugin>
                     <plugin>
-                        <groupId>com.spotify</groupId>
-                        <artifactId>dockerfile-maven-plugin</artifactId>
-                        <version>1.4.13</version>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
-                                <id>default</id>
+                                <id>docker-buildx-multiplatform-ubuntu</id>
+                                <phase>install</phase>
                                 <goals>
-                                    <goal>build</goal>
-                                    <goal>push</goal>
+                                    <goal>exec</goal>
                                 </goals>
+                                <configuration>
+                                    <executable>docker</executable>
+                                    <workingDirectory>${project.basedir}</workingDirectory>
+                                    <arguments>
+                                        <argument>buildx</argument>
+                                        <argument>build</argument>
+                                        <argument>--platform</argument>
+                                        <argument>linux/amd64,linux/arm64</argument>
+                                        <argument>--build-arg</argument>
+                                        <argument>JAR_FILE=${project.build.finalName}.jar</argument>
+                                        <argument>-t</argument>
+                                        <argument>${docker.ubuntu.image.name}:${project.version}</argument>
+                                        <argument>--load</argument>
+                                        <argument>-f</argument>
+                                        <argument>Dockerfile-ubuntu</argument>
+                                        <argument>.</argument>
+                                    </arguments>
+                                </configuration>
                             </execution>
                         </executions>
-                        <configuration>
-                            <repository>${docker.ubuntu.image.name}</repository>
-                            <tag>${project.version}</tag>
-                            <dockerfile>Dockerfile-ubuntu</dockerfile>
-                            <buildArgs>
-                                <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
-                            </buildArgs>
-                        </configuration>
                     </plugin>
                     <plugin>
                         <artifactId>maven-deploy-plugin</artifactId>
@@ -475,9 +591,7 @@ SOFTWARE.
         <profile>
             <id>docker-tests-build</id>
             <activation>
-                <file>
-                    <exists>/var/run/docker.sock</exists>
-                </file>
+                <activeByDefault>false</activeByDefault>
             </activation>
             <build>
                 <plugins>
@@ -509,9 +623,9 @@ SOFTWARE.
                         </configuration>
                     </plugin>
                     <plugin>
-                        <groupId>com.spotify</groupId>
-                        <artifactId>dockerfile-maven-plugin</artifactId>
-                        <version>1.4.13</version>
+                        <groupId>io.fabric8</groupId>
+                        <artifactId>docker-maven-plugin</artifactId>
+                        <version>0.43.0</version>
                         <executions>
                             <execution>
                                 <id>default</id>
@@ -522,12 +636,18 @@ SOFTWARE.
                             </execution>
                         </executions>
                         <configuration>
-                            <repository>${docker.tests.image.name}</repository>
-                            <tag>${project.version}</tag>
-                            <dockerfile>Dockerfile-tests</dockerfile>
-                            <buildArgs>
-                                <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
-                            </buildArgs>
+                            <images>
+                                <image>
+                                    <name>${docker.tests.image.name}:${project.version}</name>
+                                    <build>
+                                        <contextDir>${project.basedir}</contextDir>
+                                        <dockerFile>Dockerfile-tests</dockerFile>
+                                        <args>
+                                            <JAR_FILE>${project.build.finalName}.jar</JAR_FILE>
+                                        </args>
+                                    </build>
+                                </image>
+                            </images>
                         </configuration>
                     </plugin>
                     <plugin>
