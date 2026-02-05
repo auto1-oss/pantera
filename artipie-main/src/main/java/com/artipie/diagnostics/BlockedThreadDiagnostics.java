@@ -103,12 +103,9 @@ public final class BlockedThreadDiagnostics {
             instance = new BlockedThreadDiagnostics();
             instance.start();
             EcsLogger.info("com.artipie.diagnostics")
-                .message("Blocked thread diagnostics initialized")
+                .message(String.format("Blocked thread diagnostics initialized (gc_check=1s, thread_check=5s, gc_pause_threshold=%dms)", GC_PAUSE_THRESHOLD_MS))
                 .eventCategory("system")
                 .eventAction("diagnostics_init")
-                .field("gc.check.interval.sec", 1)
-                .field("thread.check.interval.sec", 5)
-                .field("gc.pause.threshold.ms", GC_PAUSE_THRESHOLD_MS)
                 .log();
         }
         return instance;
@@ -158,13 +155,9 @@ public final class BlockedThreadDiagnostics {
             if (gcTimeDelta > GC_PAUSE_THRESHOLD_MS && gcCountDelta > 0) {
                 final long avgPauseMs = gcTimeDelta / gcCountDelta;
                 EcsLogger.warn("com.artipie.diagnostics")
-                    .message("Long GC pause detected - may cause blocked thread warnings")
+                    .message(String.format("Long GC pause detected (delta=%dms, count=%d, avg=%dms, total=%dms) - may cause blocked thread warnings", gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
                     .eventCategory("system")
                     .eventAction("gc_pause")
-                    .field("gc.time.delta.ms", gcTimeDelta)
-                    .field("gc.count.delta", gcCountDelta)
-                    .field("gc.avg.pause.ms", avgPauseMs)
-                    .field("gc.total.time.ms", totalGcTime)
                     .log();
 
                 // Also log thread states during long GC
@@ -207,12 +200,9 @@ public final class BlockedThreadDiagnostics {
             // Only log if there are blocked event loop threads
             if (blockedCount > 0) {
                 EcsLogger.warn("com.artipie.diagnostics")
-                    .message("Event loop threads in BLOCKED state")
+                    .message(String.format("Event loop threads in BLOCKED state (blocked=%d, waiting=%d, runnable=%d)", blockedCount, waitingCount, runnableCount))
                     .eventCategory("system")
                     .eventAction("thread_state")
-                    .field("eventloop.blocked", blockedCount)
-                    .field("eventloop.waiting", waitingCount)
-                    .field("eventloop.runnable", runnableCount)
                     .log();
                 this.logAllBlockedThreads();
             }
@@ -242,13 +232,11 @@ public final class BlockedThreadDiagnostics {
                     }
 
                     EcsLogger.error("com.artipie.diagnostics")
-                        .message("Blocked event loop thread details")
+                        .message(String.format("Blocked event loop thread: %s on lock %s owned by %s", info.getThreadName(), info.getLockName(), info.getLockOwnerName()))
                         .eventCategory("system")
                         .eventAction("blocked_thread")
-                        .field("thread.name", info.getThreadName())
-                        .field("lock.name", info.getLockName())
-                        .field("lock.owner", info.getLockOwnerName())
-                        .field("stack.trace", sb.toString())
+                        .field("process.thread.name", info.getThreadName())
+                        .field("error.stack_trace", sb.toString())
                         .log();
                 }
             }

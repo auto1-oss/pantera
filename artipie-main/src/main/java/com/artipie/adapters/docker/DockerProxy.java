@@ -143,7 +143,8 @@ public final class DockerProxy implements Slice {
         final Docker proxy = new ProxyDocker(
             cfg.name(),
             AuthClientSlice.withClientSlice(client, remote),
-            remote.uri()
+            remote.uri(),
+            client  // Pass ClientSlices for following CDN redirects
         );
         return cfg.storageOpt().<Docker>map(
             cache -> new CacheDocker(

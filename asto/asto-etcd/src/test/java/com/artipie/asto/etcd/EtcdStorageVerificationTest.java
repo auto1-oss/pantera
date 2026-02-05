@@ -12,11 +12,10 @@ import java.net.URI;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 /**
  * ETCD storage verification test.
@@ -30,11 +29,14 @@ public final class EtcdStorageVerificationTest extends StorageWhiteboxVerificati
     /**
      * Etcd cluster.
      */
-    private static EtcdClusterExtension etcd;
+    @RegisterExtension
+    static final EtcdClusterExtension ETCD = EtcdClusterExtension.builder()
+        .withNodes(1)
+        .build();
 
     @Override
     protected Storage newStorage() {
-        final List<URI> endpoints = EtcdStorageVerificationTest.etcd.getClientEndpoints();
+        final List<URI> endpoints = ETCD.clientEndpoints();
         return new EtcdStorage(
             Client.builder().endpoints(endpoints).build(),
             endpoints.stream().map(URI::toString).collect(Collectors.joining())
@@ -44,22 +46,5 @@ public final class EtcdStorageVerificationTest extends StorageWhiteboxVerificati
     @Override
     protected Optional<Storage> newBaseForRootSubStorage() {
         return Optional.empty();
-    }
-
-    @BeforeAll
-    static void beforeClass() throws Exception {
-        EtcdStorageVerificationTest.etcd = new EtcdClusterExtension(
-            "test-etcd",
-            1,
-            false,
-            "--data-dir",
-            "/data.etcd0"
-        );
-        EtcdStorageVerificationTest.etcd.beforeAll(null);
-    }
-
-    @AfterAll
-    static void afterClass() throws Exception {
-        EtcdStorageVerificationTest.etcd.afterAll(null);
     }
 }

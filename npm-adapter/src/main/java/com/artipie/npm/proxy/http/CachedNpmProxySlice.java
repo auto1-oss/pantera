@@ -18,11 +18,11 @@ import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.slice.KeyFromPath;
 
+import com.artipie.cache.DistributedInFlight;
+
 import java.time.Duration;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * NPM proxy slice with negative and metadata caching.
@@ -69,13 +69,10 @@ public final class CachedNpmProxySlice implements Slice {
     private final String repoType;
 
     /**
-     * In-flight requests map for signal-based deduplication.
-     * Maps request key to a future that completes with a FetchResult signal.
-     * Waiters act on the signal: SUCCESS means read from storage cache,
-     * NOT_FOUND means return 404, ERROR means retry.
-     * This eliminates memory buffering while maintaining full deduplication.
+     * Distributed in-flight tracker for request deduplication.
+     * Uses Pub/Sub for instant notification across cluster nodes.
      */
-    private final Map<Key, CompletableFuture<FetchResult>> inFlight;
+    private final DistributedInFlight inFlight;
 
     /**
      * Ctor with default caching (24h TTL, enabled).
@@ -163,7 +160,8 @@ public final class CachedNpmProxySlice implements Slice {
         // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
         this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
-        this.inFlight = new ConcurrentHashMap<>();
+        // Distributed in-flight with Pub/Sub for cluster-wide deduplication
+        this.inFlight = new DistributedInFlight(repoType + ":" + repoName);
     }
 
     @Override
@@ -271,11 +269,10 @@ public final class CachedNpmProxySlice implements Slice {
     }
 
     /**
-     * Fetches from origin with signal-based request deduplication.
-     * <p>First request fetches from origin (which saves to NpmProxy's storage cache).
-     * Concurrent requests wait for a signal, then fetch from origin again - which
-     * will be served from storage cache. This eliminates memory buffering while
-     * maintaining full deduplication.</p>
+     * Fetches from origin with distributed request deduplication.
+     * Uses DistributedInFlight with Pub/Sub for cluster-wide coordination.
+     * Only one node fetches from upstream; others wait and read from cache.
+     *
      * @param line Request line
      * @param headers Request headers
      * @param body Request body
@@ -288,54 +285,55 @@ public final class CachedNpmProxySlice implements Slice {
         final Content body,
         final Key key
     ) {
-        // Check for existing in-flight request
-        final CompletableFuture<FetchResult> pending = this.inFlight.get(key);
-        if (pending != null) {
-            EcsLogger.debug("com.artipie.npm")
-                .message("NPM proxy: joining in-flight request (signal-based)")
-                .eventCategory("repository")
-                .eventAction("proxy_request")
-                .field("repository.name", this.repoName)
-                .field("package.name", key.string())
-                .log();
-            // Wait for signal, then act accordingly
-            return pending.thenCompose(result -> 
-                this.handleWaiterResult(result, line, headers, key)
-            );
-        }
+        return this.inFlight.tryAcquire(key.string())
+            .thenCompose(result -> {
+                if (result.isLeader()) {
+                    // We are the leader - fetch from upstream
+                    EcsLogger.debug("com.artipie.npm")
+                        .message("NPM proxy: fetching upstream (leader)")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .field("repository.name", this.repoName)
+                        .field("package.name", key.string())
+                        .field("url.original", this.upstreamUrl)
+                        .log();
+                    return this.doFetchAndCache(line, headers, body, key)
+                        .whenComplete((response, error) -> {
+                            // Signal completion to waiters via Pub/Sub
+                            final boolean success = error == null && response != null
+                                && response.status().success();
+                            result.complete(success);
+                        });
+                } else {
+                    // We are a waiter - wait for leader via Pub/Sub, then read from cache
+                    EcsLogger.debug("com.artipie.npm")
+                        .message("NPM proxy: waiting for leader (Pub/Sub)")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .field("repository.name", this.repoName)
+                        .field("package.name", key.string())
+                        .log();
+                    return result.waitForLeader()
+                        .thenCompose(success -> this.handleWaiterResult(success, line, headers, key));
+                }
+            });
+    }
 
+    /**
+     * Internal method that performs the actual fetch from upstream.
+     * Should only be called through fetchAndCache for deduplication.
+     */
+    private CompletableFuture<Response> doFetchAndCache(
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final Key key
+    ) {
         final long startTime = System.currentTimeMillis();
-        final CompletableFuture<FetchResult> newRequest = new CompletableFuture<>();
-        
-        // Try to register as first request
-        final CompletableFuture<FetchResult> existing = this.inFlight.putIfAbsent(key, newRequest);
-        if (existing != null) {
-            EcsLogger.debug("com.artipie.npm")
-                .message("NPM proxy: lost race, joining other request (signal-based)")
-                .eventCategory("repository")
-                .eventAction("proxy_request")
-                .field("repository.name", this.repoName)
-                .field("package.name", key.string())
-                .log();
-            return existing.thenCompose(result -> 
-                this.handleWaiterResult(result, line, headers, key)
-            );
-        }
-
-        EcsLogger.debug("com.artipie.npm")
-            .message("NPM proxy: fetching upstream (first request)")
-            .eventCategory("repository")
-            .eventAction("proxy_request")
-            .field("repository.name", this.repoName)
-            .field("package.name", key.string())
-            .field("url.original", this.upstreamUrl)
-            .log();
-        
-        // First request: fetch from origin
         return this.origin.response(line, headers, body)
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
-                
+
                 if (response.status().code() == 404) {
                     EcsLogger.debug("com.artipie.npm")
                         .message("NPM proxy: caching 404")
@@ -347,19 +345,14 @@ public final class CachedNpmProxySlice implements Slice {
                         .log();
                     this.negativeCache.cacheNotFound(key);
                     this.recordProxyMetric("not_found", duration);
-                    // Signal waiters: NOT_FOUND
-                    newRequest.complete(FetchResult.NOT_FOUND);
                     return ResponseBuilder.notFound().build();
                 }
 
                 if (response.status().success()) {
                     this.recordProxyMetric("success", duration);
-                    // Signal waiters: SUCCESS - they will read from storage cache
-                    newRequest.complete(FetchResult.SUCCESS);
-                    // First request returns the streaming response directly
                     return response;
                 }
-                
+
                 // Error responses (4xx other than 404, 5xx)
                 if (response.status().code() >= 500) {
                     this.recordProxyMetric("error", duration);
@@ -367,8 +360,6 @@ public final class CachedNpmProxySlice implements Slice {
                 } else {
                     this.recordProxyMetric("client_error", duration);
                 }
-                // Signal waiters: ERROR - they should retry
-                newRequest.complete(FetchResult.ERROR);
                 return response;
             })
             .exceptionally(error -> {
@@ -382,75 +373,54 @@ public final class CachedNpmProxySlice implements Slice {
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
                     .field("package.name", key.string())
-                    .field("url.upstream", this.upstreamUrl)
+                    .field("service.target.url.original", this.upstreamUrl)
                     .error(error)
                     .log();
-                // Signal waiters: ERROR
-                newRequest.complete(FetchResult.ERROR);
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error - please retry")
                     .build();
-            })
-            .whenComplete((result, error) -> {
-                this.inFlight.remove(key);
             });
     }
 
     /**
-     * Handle result for a waiter based on the signal from the first request.
-     * @param result Fetch result signal
+     * Handle result for a waiter based on leader completion signal.
+     * @param leaderSuccess True if leader succeeded (content should be in cache)
      * @param line Original request line
      * @param headers Original request headers
      * @param key Cache key
      * @return Response future
      */
     private CompletableFuture<Response> handleWaiterResult(
-        final FetchResult result,
+        final boolean leaderSuccess,
         final RequestLine line,
         final Headers headers,
         final Key key
     ) {
-        switch (result) {
-            case SUCCESS:
-                // Data is now in NpmProxy's storage cache - fetch from origin
-                // which will serve from cache (no upstream request)
-                EcsLogger.debug("com.artipie.npm")
-                    .message("NPM proxy: waiter fetching from cache")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", key.string())
-                    .log();
-                return this.origin.response(line, headers, Content.EMPTY);
-                
-            case NOT_FOUND:
-                // 404 already cached by first request
-                EcsLogger.debug("com.artipie.npm")
-                    .message("NPM proxy: waiter received NOT_FOUND signal")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", key.string())
-                    .log();
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.notFound().build()
-                );
-                
-            case ERROR:
-            default:
-                // First request failed - waiter should retry (which may go to upstream)
-                EcsLogger.debug("com.artipie.npm")
-                    .message("NPM proxy: waiter received ERROR signal, returning 503")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .field("repository.name", this.repoName)
-                    .field("package.name", key.string())
-                    .log();
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.unavailable()
-                        .textBody("Upstream temporarily unavailable - please retry")
-                        .build()
-                );
+        if (leaderSuccess) {
+            // Data is now in NpmProxy's storage cache - fetch from origin
+            // which will serve from cache (no upstream request)
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM proxy: waiter fetching from cache")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
+                .field("package.name", key.string())
+                .log();
+            return this.origin.response(line, headers, Content.EMPTY);
+        } else {
+            // Leader failed - return 503 for retry
+            EcsLogger.debug("com.artipie.npm")
+                .message("NPM proxy: waiter received failure signal, returning 503")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("repository.name", this.repoName)
+                .field("package.name", key.string())
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.unavailable()
+                    .textBody("Upstream temporarily unavailable - please retry")
+                    .build()
+            );
         }
     }
 
@@ -502,29 +472,4 @@ public final class CachedNpmProxySlice implements Slice {
         }
     }
 
-    /**
-     * Result signal for in-flight request deduplication.
-     * <p>Signals the outcome of the first request to waiting requests:</p>
-     * <ul>
-     *   <li>SUCCESS - Data saved to storage, waiters should read from cache</li>
-     *   <li>NOT_FOUND - 404 from upstream, already cached in negative cache</li>
-     *   <li>ERROR - Transient error, waiters should retry or return 503</li>
-     * </ul>
-     */
-    private enum FetchResult {
-        /**
-         * Success - data is now in storage cache.
-         */
-        SUCCESS,
-        
-        /**
-         * Not found - 404 cached in negative cache.
-         */
-        NOT_FOUND,
-        
-        /**
-         * Error - transient failure, retry may help.
-         */
-        ERROR
-    }
 }

@@ -37,7 +37,7 @@ class PfxKeyStore extends YamlBasedKeyStore {
     public HttpServerOptions secureOptions(final Vertx vertx, final Storage storage) {
         return new HttpServerOptions()
             .setSsl(true)
-            .setPfxKeyCertOptions(this.pfxOptions(storage));
+            .setKeyCertOptions(this.pfxOptions(storage));
     }
 
     /**

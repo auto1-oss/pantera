@@ -28,5 +28,4 @@ artipie-main/docker-compose/artipie/artifacts/php/vendor/**
 !.env.example
 artipie-main/docker-compose/.env
 
-# AI agent task/analysis documents - not part of product documentation
-agents/
+artipie-main/docker-compose/artipie/prod_repo/

@@ -4,14 +4,14 @@
  */
 package com.artipie.api;
 
-import com.artipie.group.GroupNegativeCache;
+import com.artipie.group.GroupCacheRegistry;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.security.policy.Policy;
 import com.artipie.api.perms.ApiCachePermission;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import org.eclipse.jetty.http.HttpStatus;
 
 import java.net.URLDecoder;
@@ -55,39 +55,39 @@ public final class CacheRest extends BaseRest {
     @Override
     public void init(final RouterBuilder rbr) {
         // Health check (no auth required)
-        rbr.operation("healthCheck")
-            .handler(this::healthCheck)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        
+        rbr.getRoute("healthCheck")
+            .addHandler(this::healthCheck)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+
         // List all registered groups
-        rbr.operation("listCacheGroups")
-            .handler(new AuthzHandler(this.policy, ApiCachePermission.READ))
-            .handler(this::listGroups)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        
+        rbr.getRoute("listCacheGroups")
+            .addHandler(new AuthzHandler(this.policy, ApiCachePermission.READ))
+            .addHandler(this::listGroups)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+
         // Get stats for a specific group
-        rbr.operation("getCacheStats")
-            .handler(new AuthzHandler(this.policy, ApiCachePermission.READ))
-            .handler(this::groupStats)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        
+        rbr.getRoute("getCacheStats")
+            .addHandler(new AuthzHandler(this.policy, ApiCachePermission.READ))
+            .addHandler(this::groupStats)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+
         // Clear all negative cache for a group
-        rbr.operation("clearGroupCache")
-            .handler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
-            .handler(this::clearGroup)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        
+        rbr.getRoute("clearGroupCache")
+            .addHandler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
+            .addHandler(this::clearGroup)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+
         // Invalidate specific package in a group
-        rbr.operation("invalidatePackageInGroup")
-            .handler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
-            .handler(this::invalidatePackageInGroup)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        
+        rbr.getRoute("invalidatePackageInGroup")
+            .addHandler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
+            .addHandler(this::invalidatePackageInGroup)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+
         // Invalidate package in ALL groups
-        rbr.operation("invalidatePackageGlobally")
-            .handler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
-            .handler(this::invalidatePackageGlobally)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("invalidatePackageGlobally")
+            .addHandler(new AuthzHandler(this.policy, ApiCachePermission.WRITE))
+            .addHandler(this::invalidatePackageGlobally)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -138,7 +138,7 @@ public final class CacheRest extends BaseRest {
      * GET /api/cache/negative/groups
      */
     private void listGroups(final RoutingContext ctx) {
-        final List<String> groups = GroupNegativeCache.registeredGroups();
+        final List<String> groups = GroupCacheRegistry.registeredGroups();
         
         final JsonObject response = new JsonObject()
             .put("groups", new JsonArray(groups))
@@ -157,7 +157,7 @@ public final class CacheRest extends BaseRest {
     private void groupStats(final RoutingContext ctx) {
         final String groupName = ctx.pathParam("groupName");
         
-        final var instance = GroupNegativeCache.getInstance(groupName);
+        final var instance = GroupCacheRegistry.getInstance(groupName);
         if (instance.isEmpty()) {
             ctx.response()
                 .setStatusCode(404)
@@ -169,7 +169,7 @@ public final class CacheRest extends BaseRest {
             return;
         }
         
-        final GroupNegativeCache cache = instance.get();
+        final GroupCacheRegistry.GroupCacheEntry cache = instance.get();
         final JsonObject response = new JsonObject()
             .put("group", groupName)
             .put("l1Size", cache.size())
@@ -195,7 +195,7 @@ public final class CacheRest extends BaseRest {
             .field("group.name", groupName)
             .log();
         
-        GroupNegativeCache.clearGroup(groupName)
+        GroupCacheRegistry.clearGroup(groupName)
             .whenComplete((v, err) -> {
                 if (err != null) {
                     EcsLogger.error("com.artipie.api")
@@ -249,7 +249,7 @@ public final class CacheRest extends BaseRest {
             .field("package.name", decodedPath)
             .log();
         
-        GroupNegativeCache.invalidatePackageInGroup(groupName, decodedPath)
+        GroupCacheRegistry.invalidatePackageInGroup(groupName, decodedPath)
             .whenComplete((v, err) -> {
                 if (err != null) {
                     EcsLogger.error("com.artipie.api")
@@ -303,7 +303,7 @@ public final class CacheRest extends BaseRest {
             .field("package.name", decodedPath)
             .log();
         
-        GroupNegativeCache.invalidatePackageGlobally(decodedPath)
+        GroupCacheRegistry.invalidatePackageGlobally(decodedPath)
             .whenComplete((v, err) -> {
                 if (err != null) {
                     EcsLogger.error("com.artipie.api")
@@ -323,7 +323,7 @@ public final class CacheRest extends BaseRest {
                             .put("message", err.getMessage())
                             .encode());
                 } else {
-                    final List<String> groups = GroupNegativeCache.registeredGroups();
+                    final List<String> groups = GroupCacheRegistry.registeredGroups();
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Type", "application/json")
@@ -339,7 +339,7 @@ public final class CacheRest extends BaseRest {
     private Optional<String> readPackagePath(final RoutingContext ctx) {
         final JsonObject body;
         try {
-            body = ctx.body().asJsonObject();
+            body = BaseRest.getBodyAsJson(ctx);
         } catch (final Exception e) {
             ctx.response()
                 .setStatusCode(400)

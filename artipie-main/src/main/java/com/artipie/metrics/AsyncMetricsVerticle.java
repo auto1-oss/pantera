@@ -6,7 +6,7 @@ package com.artipie.metrics;
 
 import com.artipie.http.log.EcsLogger;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServer;
@@ -152,16 +152,15 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
 
         this.server.requestHandler(this::handleRequest);
 
-        this.server.listen(ar -> {
+        this.server.listen().onComplete(ar -> {
             if (ar.succeeded()) {
                 EcsLogger.info("com.artipie.metrics.AsyncMetricsVerticle")
-                    .message("Async metrics server started")
+                    .message(String.format("Async metrics server started (cache_ttl_ms=%d)", this.cacheTtlMs))
                     .eventCategory("configuration")
                     .eventAction("metrics_server_start")
                     .eventOutcome("success")
                     .field("destination.port", this.port)
                     .field("url.path", this.path)
-                    .field("cache.ttl.ms", this.cacheTtlMs)
                     .log();
                 startPromise.complete();
             } else {
@@ -180,7 +179,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
     @Override
     public void stop(final Promise<Void> stopPromise) {
         if (this.server != null) {
-            this.server.close(ar -> {
+            this.server.close().onComplete(ar -> {
                 if (ar.succeeded()) {
                     EcsLogger.info("com.artipie.metrics.AsyncMetricsVerticle")
                         .message("Async metrics server stopped")
@@ -240,12 +239,12 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
 
         // Cache miss or stale - need to scrape
         // Execute scrape on worker pool (this verticle already runs as worker)
-        vertx.executeBlocking(promise -> {
+        vertx.<String>executeBlocking(() -> {
             try {
                 final String metrics = scrapeMetrics();
                 final CachedMetrics newCache = new CachedMetrics(metrics, System.currentTimeMillis());
                 this.cachedMetrics.set(newCache);
-                promise.complete(metrics);
+                return metrics;
             } catch (Exception e) {
                 EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
                     .message("Metrics scrape failed, using stale cache")
@@ -258,14 +257,14 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 // Return stale cache on error
                 final CachedMetrics stale = this.cachedMetrics.get();
                 if (stale.content != null && !stale.content.isEmpty()) {
-                    promise.complete(stale.content);
+                    return stale.content;
                 } else {
-                    promise.fail(e);
+                    throw e;
                 }
             }
-        }, false, ar -> { // false = don't order results, allow concurrent execution
+        }, false).onComplete(ar -> { // false = don't order results, allow concurrent execution
             if (ar.succeeded()) {
-                respondWithMetrics(request, ar.result().toString(), false,
+                respondWithMetrics(request, ar.result(), false,
                     System.currentTimeMillis() - startTime);
             } else {
                 request.response()
@@ -338,7 +337,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 .eventAction("scrape")
                 .eventOutcome("slow")
                 .field("event.duration", scrapeDuration)
-                .field("metrics.size.bytes", result.getBytes(StandardCharsets.UTF_8).length)
+                .field("http.response.body.bytes", result.getBytes(StandardCharsets.UTF_8).length)
                 .log();
         }
 
@@ -422,16 +421,12 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
      * Force cache refresh.
      */
     public void refreshCache() {
-        vertx.executeBlocking(promise -> {
-            try {
-                final String metrics = scrapeMetrics();
-                final CachedMetrics newCache = new CachedMetrics(metrics, System.currentTimeMillis());
-                this.cachedMetrics.set(newCache);
-                promise.complete();
-            } catch (Exception e) {
-                promise.fail(e);
-            }
-        }, false, ar -> {
+        vertx.<Void>executeBlocking(() -> {
+            final String metrics = scrapeMetrics();
+            final CachedMetrics newCache = new CachedMetrics(metrics, System.currentTimeMillis());
+            this.cachedMetrics.set(newCache);
+            return null;
+        }, false).onComplete(ar -> {
             if (ar.failed()) {
                 EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
                     .message("Cache refresh failed")

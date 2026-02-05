@@ -12,12 +12,15 @@ import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
+import com.artipie.http.rq.RqMethod;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.trace.TraceContextExecutor;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.reactivestreams.Publisher;
 
 import java.io.IOException;
+import java.lang.ref.PhantomReference;
+import java.lang.ref.ReferenceQueue;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -25,8 +28,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Ultra-fast filesystem artifact serving using direct Java NIO.
@@ -131,8 +138,30 @@ public final class FileSystemArtifactSlice implements Slice {
                     return ResponseBuilder.notFound().build();
                 }
 
-                // Stream file content directly from filesystem
                 final long fileSize = Files.size(filePath);
+
+                // HEAD request optimization: Return headers only, no body preparation.
+                // This prevents buffer allocation for HEAD requests, which only need
+                // metadata (Content-Length) to check artifact existence.
+                // Critical for Maven/Gradle clients that do mass HEAD checks.
+                if (line.method() == RqMethod.HEAD) {
+                    final long elapsed = System.currentTimeMillis() - startTime;
+                    EcsLogger.debug("com.artipie.http")
+                        .message("FileSystem artifact HEAD: " + key.string())
+                        .eventCategory("storage")
+                        .eventAction("artifact_head")
+                        .eventOutcome("success")
+                        .duration(elapsed)
+                        .field("file.size", fileSize)
+                        .log();
+
+                    return ResponseBuilder.ok()
+                        .header("Content-Length", String.valueOf(fileSize))
+                        .header("Accept-Ranges", "bytes")
+                        .build();
+                }
+
+                // Stream file content directly from filesystem (GET requests only)
                 final Content fileContent = streamFromFilesystem(filePath, fileSize);
 
                 final long elapsed = System.currentTimeMillis() - startTime;
@@ -211,8 +240,136 @@ public final class FileSystemArtifactSlice implements Slice {
      * Direct buffers MUST be explicitly cleaned up to avoid memory leaks, as they are
      * not subject to normal garbage collection pressure. The cleanup is performed in
      * {@link #cleanup()} which is called on cancel, complete, or error.</p>
+     *
+     * <p>FIX for January 22, 2026 OOM incident: Uses PhantomReference-based cleanup
+     * to detect and clean orphaned subscriptions when HTTP connections are abandoned
+     * without calling cancel().</p>
+     *
+     * @since 1.20.13
      */
     private static final class BackpressureFileSubscription implements org.reactivestreams.Subscription {
+
+        /**
+         * Inactivity timeout for subscriptions (seconds).
+         * If no request(n) is received for this duration after buffer allocation,
+         * the subscription is cleaned up to prevent memory leaks.
+         * This provides deterministic cleanup without relying on GC.
+         *
+         * Configurable via system property: artipie.filesystem.subscription.timeout
+         * Default: 60 seconds (production), can be reduced for testing
+         */
+        private static final long INACTIVITY_TIMEOUT_SECONDS = Long.getLong(
+            "artipie.filesystem.subscription.timeout", 60);
+
+        /**
+         * Scheduler for inactivity timeout tasks.
+         */
+        private static final ScheduledExecutorService TIMEOUT_SCHEDULER =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "artipie-subscription-timeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+        /**
+         * Queue for detecting orphaned subscriptions via PhantomReference.
+         * When a subscription becomes unreachable (client abandoned without cancel),
+         * its phantom reference is enqueued here for cleanup.
+         */
+        private static final ReferenceQueue<BackpressureFileSubscription> ORPHAN_QUEUE =
+            new ReferenceQueue<>();
+
+        /**
+         * Registry mapping phantom references to their associated direct buffers.
+         * This allows cleanup of orphaned buffers even after the subscription is GC'd.
+         */
+        private static final ConcurrentHashMap<PhantomReference<BackpressureFileSubscription>, BufferCleanupInfo>
+            BUFFER_REGISTRY = new ConcurrentHashMap<>();
+
+        /**
+         * Counter for orphaned buffer cleanups (for monitoring).
+         */
+        private static final java.util.concurrent.atomic.AtomicLong ORPHAN_CLEANUP_COUNT =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
+        /**
+         * Background cleaner thread that monitors for orphaned subscriptions.
+         * Uses PhantomReference to detect when subscriptions become unreachable
+         * and cleans up their direct buffers to prevent memory leaks.
+         */
+        static {
+            Thread cleaner = new Thread(() -> {
+                while (true) {
+                    try {
+                        // Block until an orphaned subscription is detected
+                        @SuppressWarnings("unchecked")
+                        PhantomReference<BackpressureFileSubscription> ref =
+                            (PhantomReference<BackpressureFileSubscription>) ORPHAN_QUEUE.remove();
+
+                        // Get the buffer info for this orphaned subscription
+                        BufferCleanupInfo info = BUFFER_REGISTRY.remove(ref);
+                        if (info != null && info.buffer != null) {
+                            // Close file channel if still open
+                            if (info.channel != null) {
+                                try {
+                                    info.channel.close();
+                                } catch (IOException e) {
+                                    // Ignore close errors
+                                }
+                            }
+
+                            // Clean the orphaned direct buffer
+                            cleanDirectBuffer(info.buffer);
+                            ORPHAN_CLEANUP_COUNT.incrementAndGet();
+
+                            EcsLogger.warn("com.artipie.http")
+                                .message(String.format("Cleaned orphaned direct buffer via PhantomReference (total=%d)", ORPHAN_CLEANUP_COUNT.get()))
+                                .eventCategory("memory")
+                                .eventAction("orphan_cleanup")
+                                .eventOutcome("success")
+                                .log();
+                        }
+
+                        // Clear the reference
+                        ref.clear();
+
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        // Log but continue - cleanup thread must not die
+                        EcsLogger.error("com.artipie.http")
+                            .message("Error in orphan buffer cleanup thread")
+                            .eventCategory("memory")
+                            .eventAction("orphan_cleanup")
+                            .eventOutcome("failure")
+                            .error(e)
+                            .log();
+                    }
+                }
+            }, "artipie-orphan-buffer-cleaner");
+            cleaner.setDaemon(true);
+            cleaner.setPriority(Thread.MIN_PRIORITY);
+            cleaner.start();
+
+            EcsLogger.info("com.artipie.http")
+                .message("Started orphan buffer cleanup thread for FileSystemArtifactSlice")
+                .eventCategory("memory")
+                .eventAction("cleaner_start")
+                .eventOutcome("success")
+                .log();
+        }
+
+        /**
+         * Get the count of orphaned buffers cleaned up.
+         * Useful for monitoring and alerting.
+         *
+         * @return Total orphan cleanup count
+         */
+        public static long getOrphanCleanupCount() {
+            return ORPHAN_CLEANUP_COUNT.get();
+        }
+
         private final org.reactivestreams.Subscriber<? super ByteBuffer> subscriber;
         private final Path filePath;
         private final long fileSize;
@@ -234,6 +391,12 @@ public final class FileSystemArtifactSlice implements Slice {
         // Reusable direct buffer - allocated once per subscription, cleaned on close
         // CRITICAL: Must be cleaned up explicitly to prevent direct memory leak
         private volatile ByteBuffer directBuffer;
+
+        // PhantomReference for orphan detection - registered when buffer is allocated
+        private volatile PhantomReference<BackpressureFileSubscription> phantomRef;
+
+        // Inactivity timeout task - fires if no activity for INACTIVITY_TIMEOUT_SECONDS
+        private volatile ScheduledFuture<?> inactivityTimeout;
 
         BackpressureFileSubscription(
             org.reactivestreams.Subscriber<? super ByteBuffer> subscriber,
@@ -258,7 +421,10 @@ public final class FileSystemArtifactSlice implements Slice {
             if (cancelled.get() || completed.get()) {
                 return;
             }
-            
+
+            // Reset inactivity timeout on each request - subscriber is still active
+            resetInactivityTimeout();
+
             // Add to demand (handle overflow by capping at Long.MAX_VALUE)
             long current;
             long updated;
@@ -269,9 +435,51 @@ public final class FileSystemArtifactSlice implements Slice {
                     updated = Long.MAX_VALUE; // Overflow protection
                 }
             } while (!demanded.compareAndSet(current, updated));
-            
+
             // Drain if not already draining
             drain();
+        }
+
+        /**
+         * Reset (or start) the inactivity timeout.
+         * Called on each request(n) to indicate the subscriber is still active.
+         */
+        private void resetInactivityTimeout() {
+            // Cancel existing timeout
+            ScheduledFuture<?> existing = inactivityTimeout;
+            if (existing != null) {
+                existing.cancel(false);
+            }
+
+            // Schedule new timeout (only if buffer has been allocated)
+            if (directBuffer != null && !cancelled.get() && !completed.get()) {
+                inactivityTimeout = TIMEOUT_SCHEDULER.schedule(() -> {
+                    if (!cancelled.get() && !completed.get() && !cleanedUp.get()) {
+                        EcsLogger.warn("com.artipie.http")
+                            .message(String.format("Subscription inactivity timeout - cleaning up orphaned buffer (timeout=%ds)", INACTIVITY_TIMEOUT_SECONDS))
+                            .eventCategory("memory")
+                            .eventAction("inactivity_timeout")
+                            .eventOutcome("cleanup")
+                            .field("file.path", filePath.toString())
+                            .log();
+
+                        // Force cleanup - this releases the direct buffer
+                        cleanup();
+
+                        // Notify subscriber of timeout
+                        if (!completed.get()) {
+                            completed.set(true);
+                            try {
+                                subscriber.onError(new java.util.concurrent.TimeoutException(
+                                    "Subscription timed out after " + INACTIVITY_TIMEOUT_SECONDS +
+                                    " seconds of inactivity"));
+                            } catch (Exception e) {
+                                // Subscriber may be gone, ignore
+                            }
+                        }
+                    }
+                }, INACTIVITY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            }
         }
 
         @Override
@@ -315,6 +523,15 @@ public final class FileSystemArtifactSlice implements Slice {
                     // allocated on every drainLoop() call
                     if (directBuffer == null && !cancelled.get()) {
                         directBuffer = ByteBuffer.allocateDirect(chunkSize);
+
+                        // Register for orphan detection - if this subscription is abandoned
+                        // without cleanup(), the PhantomReference will detect it
+                        phantomRef = new PhantomReference<>(this, ORPHAN_QUEUE);
+                        BUFFER_REGISTRY.put(phantomRef, new BufferCleanupInfo(directBuffer, channel));
+
+                        // Start inactivity timeout - CRITICAL for deterministic cleanup
+                        // If subscriber stops requesting, buffer will be released after timeout
+                        resetInactivityTimeout();
                     }
                 }
 
@@ -398,6 +615,22 @@ public final class FileSystemArtifactSlice implements Slice {
             if (!cleanedUp.compareAndSet(false, true)) {
                 return; // Already cleaned up
             }
+
+            // Cancel inactivity timeout - we're cleaning up now
+            ScheduledFuture<?> timeout = inactivityTimeout;
+            if (timeout != null) {
+                timeout.cancel(false);
+                inactivityTimeout = null;
+            }
+
+            // Remove from orphan registry since we're cleaning up properly
+            // This prevents the cleanup thread from doing duplicate work
+            if (phantomRef != null) {
+                BUFFER_REGISTRY.remove(phantomRef);
+                phantomRef.clear();
+                phantomRef = null;
+            }
+
             synchronized (channelLock) {
                 // Close file channel
                 if (channel != null) {
@@ -458,6 +691,21 @@ public final class FileSystemArtifactSlice implements Slice {
                         .log();
                 }
             }
+        }
+    }
+
+    /**
+     * Holds buffer and channel reference for orphan cleanup.
+     * This is stored in the BUFFER_REGISTRY so the cleanup thread can
+     * release resources even after the subscription is garbage collected.
+     */
+    private static final class BufferCleanupInfo {
+        final ByteBuffer buffer;
+        final FileChannel channel;
+
+        BufferCleanupInfo(final ByteBuffer buffer, final FileChannel channel) {
+            this.buffer = buffer;
+            this.channel = channel;
         }
     }
 

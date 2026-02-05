@@ -1,6 +1,6 @@
 # Artipie Developer Guide
 
-**Version:** 1.20.11
+**Version:** 1.21.0
 **Last Updated:** January 2026
 
 ---
@@ -13,12 +13,13 @@
 4. [Build System](#build-system)
 5. [Project Structure](#project-structure)
 6. [Core Concepts](#core-concepts)
-7. [Adding New Features](#adding-new-features)
-8. [Testing](#testing)
-9. [Code Style & Standards](#code-style--standards)
-10. [Debugging](#debugging)
-11. [Contributing](#contributing)
-12. [Roadster (Rust) Development](#roadster-rust-development)
+7. [Group Repository Internals](#group-repository-internals)
+8. [Adding New Features](#adding-new-features)
+9. [Testing](#testing)
+10. [Code Style & Standards](#code-style--standards)
+11. [Debugging](#debugging)
+12. [Contributing](#contributing)
+13. [Roadster (Rust) Development](#roadster-rust-development)
 
 ---
 
@@ -32,15 +33,17 @@ This guide is for developers who want to contribute to Artipie or understand its
 |-----------|------------|---------|
 | **Language** | Java | 21+ |
 | **Build** | Apache Maven | 3.2+ |
-| **HTTP Framework** | Vert.x | 4.5.22 |
+| **HTTP Framework** | Vert.x | 5.x |
 | **Async I/O** | CompletableFuture | Java 21 |
-| **HTTP Client** | Jetty | 12.1.4 |
+| **HTTP Client** | Vert.x WebClient | 5.x |
 | **Serialization** | Jackson | 2.16.2 |
-| **Caching** | Guava/Caffeine | 33.0.0 |
+| **Caching** | Caffeine (L1) + Valkey (L2) | 3.x / 8.x |
 | **Metrics** | Micrometer | 1.12.1 |
 | **Logging** | Log4j 2 | 2.22.1 |
 | **Testing** | JUnit 5 | 5.10.0 |
 | **Containers** | TestContainers | 2.0.2 |
+
+> **Note:** As of v1.21.0, all HTTP client operations use Vert.x WebClient exclusively. The previous Jetty HTTP client has been removed. This consolidation improves performance by sharing the Vert.x event loop and reduces memory overhead.
 
 ---
 
@@ -449,6 +452,194 @@ public interface RepoConfig {
 
 ---
 
+## Group Repository Internals
+
+Group repositories aggregate multiple member repositories, providing unified access to packages across local and proxy repositories. As of v1.21.0, Artipie implements intelligent metadata merging with a two-tier caching architecture.
+
+### Architecture Overview
+
+```
+Request
+  |
+  v
+GroupSlice (e.g., NpmGroupSlice, GoGroupSlice)
+  |
+  v
+UnifiedGroupCache
+  |
+  +-- MergedMetadataCache (L1 Caffeine + L2 Valkey)
+  |     |-- Cache key: "meta:{group}:{adapter}:{package}"
+  |     |-- Stores merged metadata from all members
+  |     +-- Configurable TTL with background refresh
+  |
+  +-- PackageLocationIndex (L1 Caffeine + L2 Valkey)
+        |-- Cache key: "idx:{group}:{package}"
+        |-- Tracks which members have which packages
+        +-- Event-driven updates for local repos
+          |
+          v
+Member Repositories
+  |-- Metadata: Parallel fetch from known locations, merge results
+  +-- Artifacts: Cascade by priority until found
+```
+
+### Key Components
+
+#### 1. UnifiedGroupCache
+
+The central orchestrator for group caching operations. Located in `artipie-core/src/main/java/com/artipie/cache/UnifiedGroupCache.java`.
+
+**Responsibilities:**
+- Coordinates `PackageLocationIndex` and `MergedMetadataCache`
+- Handles metadata fetch and merge operations
+- Processes local publish/delete events for immediate index updates
+- Provides `MemberFetcher` interface for parallel member queries
+
+```java
+// Example: Getting merged metadata
+UnifiedGroupCache cache = new UnifiedGroupCache("my-npm-group", settings);
+
+CompletableFuture<Optional<byte[]>> result = cache.getMetadata(
+    "npm",           // adapter type
+    "lodash",        // package name
+    memberFetchers,  // list of member fetchers
+    new NpmMetadataMerger()
+);
+```
+
+#### 2. PackageLocationIndex
+
+Tracks which member repositories contain which packages. This prevents unnecessary upstream calls by knowing exactly where to look.
+
+**Key features:**
+- **Two-tier caching**: L1 (Caffeine) for microsecond lookups, L2 (Valkey) for distributed state
+- **Event-driven updates**: Local repo changes are immediately reflected (no TTL)
+- **Negative caching**: Remembers 404s to avoid repeated failed lookups
+- **TTL-based expiration**: Remote locations expire after configurable TTL
+
+```java
+// Mark package exists in a member
+locationIndex.markExists("npm-local", "lodash");
+
+// Mark package not found (negative cache)
+locationIndex.markNotExists("npm-proxy-2", "lodash");
+
+// Get known locations
+PackageLocations locations = locationIndex.getLocations("lodash").join();
+List<String> knownMembers = locations.knownLocations();  // ["npm-local", "npm-proxy-1"]
+```
+
+#### 3. MergedMetadataCache
+
+Stores merged metadata from all group members with configurable TTL.
+
+**Key features:**
+- Caches merged results to avoid repeated fetch+merge operations
+- Supports background refresh before expiry
+- Automatic L1-to-L2 promotion on cache miss
+- Invalidation on local publish/delete events
+
+#### 4. MetadataMerger Interface
+
+Adapter-specific implementations for merging metadata from multiple sources.
+
+```java
+@FunctionalInterface
+public interface MetadataMerger {
+    /**
+     * Merge metadata from multiple members.
+     * @param responses Map of member name -> metadata bytes (priority order)
+     * @return Merged metadata bytes
+     */
+    byte[] merge(LinkedHashMap<String, byte[]> responses);
+}
+```
+
+**Available implementations:**
+
+| Adapter | Class | Merge Strategy |
+|---------|-------|----------------|
+| NPM | `NpmMetadataMerger` | Union of `versions` object, priority wins conflicts |
+| Go | `GoMetadataMerger` | Sorted union of `@v/list` entries |
+| PyPI | `PypiMetadataMerger` | Union of `/simple/` HTML links |
+| Docker | Uses manifest merging | Tag union with digest-based deduplication |
+| Composer | Similar to NPM | Union of `packages` object |
+
+### Metadata vs Artifact Strategy
+
+Group repositories use different strategies for metadata and artifacts:
+
+| Request Type | Strategy | Reason |
+|--------------|----------|--------|
+| **Metadata** | Parallel fetch + merge | Need ALL versions from ALL members |
+| **Artifact** | Cascade by priority | Large files, stop at first success |
+
+```
+Metadata (e.g., package.json, @v/list, /simple/):
+  1. Check MergedMetadataCache -> HIT: return cached
+  2. Check PackageLocationIndex for known locations
+  3. Fetch from known members in parallel
+  4. Merge results using adapter-specific merger
+  5. Cache merged result
+  6. Return merged metadata
+
+Artifact (e.g., .tgz, .jar, .whl):
+  1. Check PackageLocationIndex for known locations
+  2. Try priority-1 member first
+  3. If 404, try priority-2, etc.
+  4. Update index on success/failure
+  5. Return artifact from first successful member
+```
+
+### Cache Configuration
+
+Group cache settings can be configured at both global and repository levels:
+
+```java
+// Default settings
+GroupSettings defaults = new GroupSettings();
+defaults.remoteExistsTtl();      // Duration.ofMinutes(15)
+defaults.remoteNotExistsTtl();   // Duration.ofMinutes(5)
+defaults.metadataTtl();          // Duration.ofMinutes(5)
+defaults.upstreamTimeout();      // Duration.ofSeconds(5)
+defaults.maxParallelFetches();   // 10
+defaults.l1MaxEntries();         // 10,000
+defaults.l2MaxEntries();         // 1,000,000
+
+// Parse from YAML with repo-level override
+GroupSettings settings = GroupSettings.fromYaml(globalYaml, repoYaml);
+```
+
+### Event-Driven Index Updates
+
+For local repositories, the index is updated immediately on publish/delete events:
+
+```java
+// On local publish - immediate update, no TTL
+cache.onLocalPublish("npm-local", "my-package");
+
+// On local delete - remove from index
+cache.onLocalDelete("npm-local", "my-package");
+```
+
+This ensures zero-delay visibility for internal packages while still caching remote lookups.
+
+### Valkey/Redis Integration
+
+For multi-instance deployments, connect Valkey/Redis for shared L2 cache:
+
+```java
+// With Valkey L2 cache
+ValkeyConnection valkey = new ValkeyConnection("redis://localhost:6379");
+UnifiedGroupCache cache = new UnifiedGroupCache(
+    "my-group",
+    settings,
+    Optional.of(valkey)
+);
+```
+
+---
+
 ## Adding New Features
 
 ### Adding a New Repository Adapter
@@ -542,6 +733,298 @@ class MyFormatSliceTest {
         );
     }
 }
+```
+
+### Adding Group Support for a New Adapter
+
+To add group repository support with metadata merging for a new adapter, follow these steps:
+
+#### Step 1: Create MetadataMerger Implementation
+
+Create an adapter-specific metadata merger in the adapter module:
+
+```java
+// myformat-adapter/src/main/java/com/artipie/myformat/metadata/MyFormatMetadataMerger.java
+package com.artipie.myformat.metadata;
+
+import com.artipie.cache.MetadataMerger;
+import java.util.LinkedHashMap;
+
+/**
+ * Metadata merger for MyFormat repositories.
+ * Merges metadata from multiple group members.
+ *
+ * @since 1.21.0
+ */
+public final class MyFormatMetadataMerger implements MetadataMerger {
+
+    @Override
+    public byte[] merge(final LinkedHashMap<String, byte[]> responses) {
+        if (responses.isEmpty()) {
+            return new byte[0];
+        }
+
+        // Merge logic depends on your metadata format:
+        // - JSON: merge objects/arrays, priority member wins conflicts
+        // - XML: merge elements, deduplicate
+        // - Text list: concatenate, sort, deduplicate
+
+        // Example for text-based version list:
+        Set<String> versions = new TreeSet<>();
+        for (byte[] response : responses.values()) {
+            String text = new String(response, StandardCharsets.UTF_8);
+            for (String line : text.split("\\n")) {
+                String version = line.trim();
+                if (!version.isEmpty()) {
+                    versions.add(version);
+                }
+            }
+        }
+        return String.join("\n", versions).getBytes(StandardCharsets.UTF_8);
+    }
+}
+```
+
+#### Step 2: Create Adapter-Specific GroupSlice
+
+Create a group slice that knows which requests are metadata vs artifacts:
+
+```java
+// artipie-main/src/main/java/com/artipie/group/MyFormatGroupSlice.java
+package com.artipie.group;
+
+import com.artipie.cache.GroupSettings;
+import com.artipie.cache.MetadataMerger;
+import com.artipie.cache.UnifiedGroupCache;
+import com.artipie.http.Slice;
+import com.artipie.myformat.metadata.MyFormatMetadataMerger;
+
+/**
+ * Group slice for MyFormat repositories with metadata merging.
+ *
+ * @since 1.21.0
+ */
+public final class MyFormatGroupSlice implements Slice {
+
+    private final String name;
+    private final List<GroupMember> members;
+    private final UnifiedGroupCache cache;
+    private final MetadataMerger merger;
+
+    public MyFormatGroupSlice(
+        final String name,
+        final List<GroupMember> members,
+        final GroupSettings settings
+    ) {
+        this.name = name;
+        this.members = members;
+        this.cache = new UnifiedGroupCache(name, settings);
+        this.merger = new MyFormatMetadataMerger();
+    }
+
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        final String path = line.uri().getPath();
+
+        if (isMetadataRequest(path)) {
+            return handleMetadataRequest(path, headers);
+        } else {
+            return handleArtifactRequest(path, headers);
+        }
+    }
+
+    /**
+     * Determine if request is for metadata.
+     * Customize based on your adapter's URL patterns.
+     */
+    private boolean isMetadataRequest(final String path) {
+        // Example: metadata files end with .json or specific paths
+        return path.endsWith("/metadata.json")
+            || path.contains("/index/");
+    }
+
+    private CompletableFuture<Response> handleMetadataRequest(
+        final String path,
+        final Headers headers
+    ) {
+        final String packageName = extractPackageName(path);
+
+        // Create fetchers for each member
+        List<UnifiedGroupCache.MemberFetcher> fetchers = this.members.stream()
+            .map(member -> new UnifiedGroupCache.MemberFetcher() {
+                @Override
+                public String memberName() {
+                    return member.name();
+                }
+
+                @Override
+                public CompletableFuture<Optional<byte[]>> fetch() {
+                    return member.slice()
+                        .response(new RequestLine("GET", path), headers, Content.EMPTY)
+                        .thenCompose(response -> {
+                            if (response.status().code() == 200) {
+                                return response.body().asBytes()
+                                    .thenApply(Optional::of);
+                            }
+                            return CompletableFuture.completedFuture(Optional.empty());
+                        });
+                }
+            })
+            .toList();
+
+        // Get merged metadata (cached or fresh)
+        return this.cache.getMetadata("myformat", packageName, fetchers, this.merger)
+            .thenApply(result -> {
+                if (result.isPresent()) {
+                    return new RsWithBody(
+                        StandardRs.OK,
+                        new Content.From(result.get())
+                    );
+                }
+                return StandardRs.NOT_FOUND;
+            });
+    }
+
+    private CompletableFuture<Response> handleArtifactRequest(
+        final String path,
+        final Headers headers
+    ) {
+        // Cascade through members by priority
+        return cascadeRequest(path, headers, 0);
+    }
+
+    private CompletableFuture<Response> cascadeRequest(
+        final String path,
+        final Headers headers,
+        final int index
+    ) {
+        if (index >= this.members.size()) {
+            return CompletableFuture.completedFuture(StandardRs.NOT_FOUND);
+        }
+
+        final GroupMember member = this.members.get(index);
+        return member.slice()
+            .response(new RequestLine("GET", path), headers, Content.EMPTY)
+            .thenCompose(response -> {
+                if (response.status().code() == 200) {
+                    // Update location index on hit
+                    this.cache.recordMemberHit(member.name(), extractPackageName(path));
+                    return CompletableFuture.completedFuture(response);
+                }
+                // Try next member
+                return cascadeRequest(path, headers, index + 1);
+            });
+    }
+
+    private String extractPackageName(final String path) {
+        // Implement based on your URL structure
+        // e.g., /myformat/com/example/pkg/1.0/file.ext -> com.example.pkg
+        return path.split("/")[2];
+    }
+}
+```
+
+#### Step 3: Wire Up in RepositorySlices
+
+Register the new group slice in `RepositorySlices.java`:
+
+```java
+// In RepositorySlices.java slice() method
+case "myformat-group":
+    return new MyFormatGroupSlice(
+        name,
+        groupMembers(config, settings),
+        groupSettings(config, settings)
+    );
+```
+
+#### Step 4: Add Tests
+
+Create unit tests for the merger:
+
+```java
+// myformat-adapter/src/test/java/com/artipie/myformat/metadata/MyFormatMetadataMergerTest.java
+class MyFormatMetadataMergerTest {
+
+    @Test
+    void mergesMetadataFromMultipleMembers() {
+        final LinkedHashMap<String, byte[]> responses = new LinkedHashMap<>();
+        responses.put("local", "v1.0.0\nv1.1.0".getBytes());
+        responses.put("proxy", "v1.1.0\nv1.2.0".getBytes());
+
+        final MyFormatMetadataMerger merger = new MyFormatMetadataMerger();
+        final byte[] result = merger.merge(responses);
+        final String text = new String(result, StandardCharsets.UTF_8);
+
+        assertTrue(text.contains("v1.0.0"));
+        assertTrue(text.contains("v1.1.0"));
+        assertTrue(text.contains("v1.2.0"));
+    }
+
+    @Test
+    void priorityMemberWinsForConflicts() {
+        // Test that first member (highest priority) wins for conflicts
+    }
+
+    @Test
+    void handlesEmptyResponses() {
+        final MyFormatMetadataMerger merger = new MyFormatMetadataMerger();
+        final byte[] result = merger.merge(new LinkedHashMap<>());
+        assertEquals(0, result.length);
+    }
+}
+```
+
+Create integration tests for the group slice:
+
+```java
+// artipie-main/src/test/java/com/artipie/group/MyFormatGroupSliceTest.java
+class MyFormatGroupSliceTest {
+
+    @Test
+    void mergesMetadataFromAllMembers() {
+        // Set up local and proxy members
+        // Send metadata request
+        // Verify merged response contains all versions
+    }
+
+    @Test
+    void cascadesArtifactRequestsByPriority() {
+        // Set up members with different artifacts
+        // Send artifact request
+        // Verify first available member wins
+    }
+
+    @Test
+    void cachesMetadataOnSubsequentRequests() {
+        // Send same metadata request twice
+        // Verify cache hit on second request
+    }
+}
+```
+
+#### Configuration Example
+
+Users can then configure the group:
+
+```yaml
+# myformat-group.yaml
+repo:
+  type: myformat-group
+  members:
+    - myformat-local    # Priority 1
+    - myformat-proxy    # Priority 2
+
+  # Optional: override cache settings
+  group:
+    metadata:
+      ttl: 10m
+    resolution:
+      upstream_timeout: 15s
 ```
 
 ### Adding a New API Endpoint
@@ -1072,4 +1555,4 @@ asto-s3
 
 ---
 
-*This guide covers Artipie development for version 1.20.11. For the latest updates, see the repository.*
+*This guide covers Artipie development for version 1.21.0. For the latest updates, see the repository.*

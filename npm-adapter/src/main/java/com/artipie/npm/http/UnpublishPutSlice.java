@@ -96,7 +96,10 @@ final class UnpublishPutSlice implements Slice {
                             )
                         ).thenApply(nothing -> ResponseBuilder.ok().build());
                 } else {
-                    res = ResponseBuilder.notFound().completedFuture();
+                    // Consume request body to prevent Vert.x connection leak
+                    res = publisher.asBytesFuture().thenApply(ignored ->
+                        ResponseBuilder.notFound().build()
+                    );
                 }
                 return res;
             }

@@ -110,7 +110,7 @@ final class PushChartSlice implements Slice {
                         )
                     );
                 }
-            ).andThen(Single.just(ResponseBuilder.ok().build()))
+            ).andThen(Single.just(ResponseBuilder.created().build()))
             .to(SingleInterop.get())
             .toCompletableFuture();
     }

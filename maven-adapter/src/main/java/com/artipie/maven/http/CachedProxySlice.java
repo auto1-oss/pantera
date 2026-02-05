@@ -21,6 +21,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.cache.CachedArtifactMetadataStore;
+import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
@@ -207,9 +208,9 @@ public final class CachedProxySlice implements Slice {
             valkeyConn,
             rname
         );
-        // Use unified NegativeCacheConfig for consistent settings across all adapters
-        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
-        this.negativeCache = new NegativeCache(rname);
+        // Use core NegativeCache with "maven" type for consistent settings
+        // TTL, maxSize, and Valkey settings come from global NegativeCacheConfig
+        this.negativeCache = new NegativeCache("maven", rname);
     }
 
     /**

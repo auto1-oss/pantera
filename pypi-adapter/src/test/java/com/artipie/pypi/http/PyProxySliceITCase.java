@@ -8,7 +8,7 @@ import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
 import com.artipie.http.slice.LoggingSlice;
@@ -48,7 +48,7 @@ final class PyProxySliceITCase {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices(
+    private final VertxClientSlices client = new VertxClientSlices(
         new HttpClientSettings().setFollowRedirects(true)
     );
 

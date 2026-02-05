@@ -14,7 +14,7 @@ import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.settings.users.CrudUsers;
 import com.artipie.http.log.EcsLogger;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.io.StringReader;
 import java.security.PermissionCollection;
 import java.util.Optional;
@@ -87,57 +87,57 @@ public final class UsersRest extends BaseRest {
 
     @Override
     public void init(final RouterBuilder rbr) {
-        rbr.operation("listAllUsers")
-            .handler(
+        rbr.getRoute("listAllUsers")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.READ)
                 )
             )
-            .handler(this::listAllUsers)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("getUser")
-            .handler(
+            .addHandler(this::listAllUsers)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("getUser")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.READ)
                 )
             )
-            .handler(this::getUser)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("putUser")
-            .handler(this::putUser)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("deleteUser")
-            .handler(
+            .addHandler(this::getUser)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("putUser")
+            .addHandler(this::putUser)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("deleteUser")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.DELETE)
                 )
             )
-            .handler(this::deleteUser)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("alterPassword")
-            .handler(
+            .addHandler(this::deleteUser)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("alterPassword")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.CHANGE_PASSWORD)
                 )
             )
-            .handler(this::alterPassword)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("enable")
-            .handler(
+            .addHandler(this::alterPassword)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("enable")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.ENABLE)
                 )
             )
-            .handler(this::enableUser)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("disable")
-            .handler(
+            .addHandler(this::enableUser)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("disable")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiUserPermission(ApiUserPermission.UserAction.ENABLE)
                 )
             )
-            .handler(this::disableUser)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+            .addHandler(this::disableUser)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -232,7 +232,7 @@ public final class UsersRest extends BaseRest {
         if (existing.isPresent() && perms.implies(UsersRest.UPDATE)
             || existing.isEmpty() && perms.implies(UsersRest.CREATE)) {
             this.users.addOrUpdate(
-                Json.createReader(new StringReader(context.body().asString())).readObject(), uname
+                BaseRest.readJsonObject(context), uname
             );
             this.ucache.invalidate(uname);
             this.pcache.invalidate(uname);

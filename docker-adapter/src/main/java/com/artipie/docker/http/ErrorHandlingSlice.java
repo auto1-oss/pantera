@@ -51,9 +51,12 @@ final class ErrorHandlingSlice implements Slice {
                     }
                 ).thenCompose(Function.identity());
         } catch (Exception error) {
-            return handle(error)
-                .map(CompletableFuture::completedFuture)
-                .orElseGet(() -> CompletableFuture.failedFuture(error));
+            // Consume request body to prevent Vert.x connection leak
+            return body.asBytesFuture().thenCompose(ignored ->
+                handle(error)
+                    .map(CompletableFuture::completedFuture)
+                    .orElseGet(() -> CompletableFuture.failedFuture(error))
+            );
         }
     }
 

@@ -52,6 +52,9 @@ final class AddSlice implements Slice {
                 new Content.From(body), Optional.ofNullable(matcher.group("version"))
             ).thenApply(nothing -> ResponseBuilder.created().build());
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 }

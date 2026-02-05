@@ -88,7 +88,7 @@ public final class PrefixesRest {
      */
     public void validate(final RoutingContext ctx) {
         try {
-            final JsonObject body = ctx.body().asJsonObject();
+            final JsonObject body = BaseRest.getBodyAsJson(ctx);
             if (body == null || !body.containsKey("global_prefixes")) {
                 ctx.response()
                     .setStatusCode(400)
@@ -160,7 +160,7 @@ public final class PrefixesRest {
      */
     public void update(final RoutingContext ctx) {
         try {
-            final JsonObject body = ctx.body().asJsonObject();
+            final JsonObject body = BaseRest.getBodyAsJson(ctx);
             if (body == null || !body.containsKey("global_prefixes")) {
                 ctx.response()
                     .setStatusCode(400)

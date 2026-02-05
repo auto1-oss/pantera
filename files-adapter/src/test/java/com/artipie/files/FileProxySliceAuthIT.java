@@ -12,7 +12,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.client.auth.BasicAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -43,7 +43,7 @@ final class FileProxySliceAuthIT {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices();
+    private final VertxClientSlices client = new VertxClientSlices();
 
     /**
      * Maven proxy.

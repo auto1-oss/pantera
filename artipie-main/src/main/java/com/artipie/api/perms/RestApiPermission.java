@@ -6,7 +6,7 @@ package com.artipie.api.perms;
 
 import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
-import io.vertx.core.impl.ConcurrentHashSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.security.Permission;
 import java.security.PermissionCollection;
 import java.util.Collection;
@@ -173,7 +173,7 @@ public abstract class RestApiPermission extends Permission {
          */
         RestApiPermissionCollection(final Class<?> clazz) {
             this.clazz = clazz;
-            this.perms = new ConcurrentHashSet<>(1);
+            this.perms = ConcurrentHashMap.newKeySet(1);
         }
 
         @Override

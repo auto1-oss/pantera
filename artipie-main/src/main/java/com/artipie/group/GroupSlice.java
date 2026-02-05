@@ -6,11 +6,14 @@ package com.artipie.group;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.cache.MetadataMerger;
+import com.artipie.cache.UnifiedGroupCache;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
+import com.artipie.http.cache.NegativeCache;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.log.EcsLogEvent;
 import com.artipie.http.log.EcsLogger;
@@ -18,6 +21,7 @@ import com.artipie.http.slice.KeyFromPath;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -25,6 +29,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 import org.slf4j.MDC;
 
@@ -69,8 +74,48 @@ public final class GroupSlice implements Slice {
 
     /**
      * Negative cache for member 404s.
+     * Uses core NegativeCache with "group" repo type.
      */
-    private final GroupNegativeCache negativeCache;
+    private final NegativeCache negativeCache;
+
+    /**
+     * Optional unified group cache for metadata merging.
+     * When present, metadata requests are routed through the cache.
+     */
+    private final Optional<UnifiedGroupCache> unifiedCache;
+
+    /**
+     * Optional metadata merger for the adapter type.
+     * Required when unifiedCache is present.
+     */
+    private final Optional<MetadataMerger> metadataMerger;
+
+    /**
+     * Adapter type for this group (e.g., "npm", "maven", "pypi").
+     * Used for metadata merging operations.
+     */
+    private final String adapterType;
+
+    /**
+     * Predicate to detect metadata requests for this adapter type.
+     * If null, all requests use race strategy.
+     */
+    private final Predicate<String> metadataPathDetector;
+
+    /**
+     * Slice resolver for creating member fetchers.
+     */
+    private final SliceResolver sliceResolver;
+
+    /**
+     * Server port for member resolution.
+     */
+    private final int serverPort;
+
+    /**
+     * Member names for fetcher creation.
+     */
+    private final List<String> memberNames;
 
     /**
      * Request context for enhanced logging (client IP, username, trace ID, package).
@@ -105,8 +150,8 @@ public final class GroupSlice implements Slice {
          * @return Enhanced logger builder
          */
         EcsLogger addTo(final EcsLogger logger) {
+            // Note: client.ip is added automatically by EcsLogger from MDC
             EcsLogger result = logger
-                .field("client.ip", this.clientIp)
                 .field("trace.id", this.traceId)
                 .field("package.name", this.packageName);
             // Only add user.name if authenticated (not null)
@@ -171,12 +216,57 @@ public final class GroupSlice implements Slice {
         final int depth,
         final long timeoutSeconds
     ) {
+        this(resolver, group, members, port, depth, timeoutSeconds,
+            Optional.empty(), Optional.empty(), "generic", null);
+    }
+
+    /**
+     * Full constructor with UnifiedGroupCache support for metadata merging.
+     *
+     * <p>When unifiedCache and metadataMerger are provided, metadata requests
+     * (as detected by metadataPathDetector) will be routed through the cache
+     * for proper merging from all members. Non-metadata requests use the
+     * standard race strategy (first success wins).
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param unifiedCache Optional unified group cache for metadata merging
+     * @param metadataMerger Optional metadata merger (required if unifiedCache is present)
+     * @param adapterType Adapter type (e.g., "npm", "maven", "pypi")
+     * @param metadataPathDetector Predicate to detect metadata requests by path
+     */
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final Optional<UnifiedGroupCache> unifiedCache,
+        final Optional<MetadataMerger> metadataMerger,
+        final String adapterType,
+        final Predicate<String> metadataPathDetector
+    ) {
         this.group = Objects.requireNonNull(group, "group");
         this.timeout = Duration.ofSeconds(timeoutSeconds);
-        this.negativeCache = new GroupNegativeCache(group);
+        // Use core NegativeCache with "group" type for cache key namespacing
+        this.negativeCache = new NegativeCache("group", group);
+        // Register with GroupCacheRegistry for global invalidation support
+        GroupCacheRegistry.register(group, this.negativeCache);
+        this.unifiedCache = Objects.requireNonNull(unifiedCache, "unifiedCache");
+        this.metadataMerger = Objects.requireNonNull(metadataMerger, "metadataMerger");
+        this.adapterType = Objects.requireNonNull(adapterType, "adapterType");
+        this.metadataPathDetector = metadataPathDetector;
+        this.sliceResolver = resolver;
+        this.serverPort = port;
 
         // Deduplicate members (simple flattening for now)
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
+        this.memberNames = flatMembers;
 
         // Create MemberSlice wrappers with circuit breakers
         this.members = flatMembers.stream()
@@ -186,12 +276,46 @@ public final class GroupSlice implements Slice {
             ))
             .toList();
 
+        final boolean cacheEnabled = unifiedCache.isPresent() && metadataMerger.isPresent();
         EcsLogger.debug("com.artipie.group")
-            .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total)")
+            .message(String.format("GroupSlice initialized with members (%d unique, %d total, cache_enabled=%b)", this.members.size(), members.size(), cacheEnabled))
             .eventCategory("repository")
             .eventAction("group_init")
             .field("repository.name", group)
+            .field("repository.type", adapterType)
             .log();
+    }
+
+    /**
+     * Factory method to create GroupSlice with metadata merging support.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param unifiedCache Unified group cache for metadata merging
+     * @param metadataMerger Metadata merger for this adapter type
+     * @param adapterType Adapter type (e.g., "npm", "maven", "pypi")
+     * @param metadataPathDetector Predicate to detect metadata requests by path
+     * @return GroupSlice with metadata merging enabled
+     */
+    public static GroupSlice withMetadataMerging(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final UnifiedGroupCache unifiedCache,
+        final MetadataMerger metadataMerger,
+        final String adapterType,
+        final Predicate<String> metadataPathDetector
+    ) {
+        return new GroupSlice(
+            resolver, group, members, port, 0, DEFAULT_TIMEOUT_SECONDS,
+            Optional.of(unifiedCache),
+            Optional.of(metadataMerger),
+            adapterType,
+            metadataPathDetector
+        );
     }
 
     @Override
@@ -225,6 +349,20 @@ public final class GroupSlice implements Slice {
 
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
+
+        // Check if this is a metadata request that should be merged
+        final boolean isMetadataRequest = this.metadataPathDetector != null
+            && this.metadataPathDetector.test(path)
+            && "GET".equals(method);
+
+        // Route metadata requests through UnifiedGroupCache for merging
+        if (isMetadataRequest && this.unifiedCache.isPresent() && this.metadataMerger.isPresent()) {
+            return body.asBytesFuture().thenCompose(requestBytes ->
+                handleMetadataRequest(line, headers, path, ctx, requestStartTime)
+            );
+        }
+
+        // Standard race strategy for artifact requests
         return queryAllMembersInParallel(line, headers, body, ctx)
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - requestStartTime;
@@ -236,6 +374,193 @@ public final class GroupSlice implements Slice {
                     recordGroupRequest("not_found", duration);
                 }
             });
+    }
+
+    /**
+     * Handle metadata request using UnifiedGroupCache for merging.
+     *
+     * @param line Request line
+     * @param headers Request headers
+     * @param path Request path (package name for metadata)
+     * @param ctx Request context for logging
+     * @param requestStartTime Request start timestamp
+     * @return Response future with merged metadata or 404
+     */
+    private CompletableFuture<Response> handleMetadataRequest(
+        final RequestLine line,
+        final Headers headers,
+        final String path,
+        final RequestContext ctx,
+        final long requestStartTime
+    ) {
+        ctx.addTo(EcsLogger.debug("com.artipie.group")
+            .message("Metadata request detected, using UnifiedGroupCache")
+            .eventCategory("repository")
+            .eventAction("metadata_merge")
+            .field("repository.name", this.group)
+            .field("repository.type", this.adapterType)
+            .field("url.path", path))
+            .log();
+
+        // Extract package name from path (adapter-specific logic may be needed)
+        final String packageName = extractPackageName(path);
+
+        // Create member fetchers for UnifiedGroupCache
+        final List<UnifiedGroupCache.MemberFetcher> fetchers = createMemberFetchers(
+            line, headers, packageName
+        );
+
+        return this.unifiedCache.get()
+            .getMetadata(this.adapterType, packageName, fetchers, this.metadataMerger.get())
+            .thenApply(mergedOpt -> {
+                final long duration = System.currentTimeMillis() - requestStartTime;
+                if (mergedOpt.isPresent()) {
+                    final byte[] merged = mergedOpt.get();
+                    ctx.addTo(EcsLogger.debug("com.artipie.group")
+                        .message(String.format("Metadata merged successfully (merged_size=%d)", merged.length))
+                        .eventCategory("repository")
+                        .eventAction("metadata_merge")
+                        .eventOutcome("success")
+                        .field("repository.name", this.group)
+                        .duration(duration))
+                        .log();
+                    recordGroupRequest("success", duration);
+                    recordMetadataOperation("merge", duration);
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", getContentTypeForAdapter())
+                        .body(merged)
+                        .build();
+                } else {
+                    ctx.addTo(EcsLogger.debug("com.artipie.group")
+                        .message("No metadata found in any member")
+                        .eventCategory("repository")
+                        .eventAction("metadata_merge")
+                        .eventOutcome("not_found")
+                        .field("repository.name", this.group)
+                        .duration(duration))
+                        .log();
+                    recordGroupRequest("not_found", duration);
+                    return ResponseBuilder.notFound().build();
+                }
+            })
+            .exceptionally(err -> {
+                final long duration = System.currentTimeMillis() - requestStartTime;
+                ctx.addTo(EcsLogger.error("com.artipie.group")
+                    .message("Metadata merge failed")
+                    .eventCategory("repository")
+                    .eventAction("metadata_merge")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group)
+                    .field("error.message", err.getMessage())
+                    .duration(duration))
+                    .log();
+                recordGroupRequest("error", duration);
+                return ResponseBuilder.internalError()
+                    .textBody("Metadata merge failed: " + err.getMessage())
+                    .build();
+            });
+    }
+
+    /**
+     * Create member fetchers for UnifiedGroupCache.
+     *
+     * @param line Original request line
+     * @param headers Request headers
+     * @param packageName Package name being requested
+     * @return List of member fetchers
+     */
+    private List<UnifiedGroupCache.MemberFetcher> createMemberFetchers(
+        final RequestLine line,
+        final Headers headers,
+        final String packageName
+    ) {
+        final List<UnifiedGroupCache.MemberFetcher> fetchers = new ArrayList<>();
+        for (final MemberSlice member : this.members) {
+            fetchers.add(new UnifiedGroupCache.MemberFetcher() {
+                @Override
+                public String memberName() {
+                    return member.name();
+                }
+
+                @Override
+                public CompletableFuture<Optional<byte[]>> fetch() {
+                    // Check circuit breaker
+                    if (member.isCircuitOpen()) {
+                        return CompletableFuture.completedFuture(Optional.empty());
+                    }
+
+                    // Rewrite path for member
+                    final RequestLine rewritten = member.rewritePath(line);
+
+                    return member.slice()
+                        .response(rewritten, dropFullPathHeader(headers), Content.EMPTY)
+                        .orTimeout(GroupSlice.this.timeout.getSeconds(),
+                            java.util.concurrent.TimeUnit.SECONDS)
+                        .thenCompose(resp -> {
+                            if (resp.status() == RsStatus.OK) {
+                                member.recordSuccess();
+                                return resp.body().asBytesFuture()
+                                    .thenApply(Optional::of);
+                            } else {
+                                // Consume body to prevent leak
+                                return resp.body().asBytesFuture()
+                                    .thenApply(ignored -> Optional.<byte[]>empty());
+                            }
+                        })
+                        .exceptionally(err -> {
+                            member.recordFailure();
+                            return Optional.<byte[]>empty();
+                        });
+                }
+            });
+        }
+        return fetchers;
+    }
+
+    /**
+     * Extract package name from request path.
+     * This is a simplified implementation - adapters may need custom logic.
+     *
+     * @param path Request path
+     * @return Package name
+     */
+    private String extractPackageName(final String path) {
+        // For most adapters, the path is the package name
+        // NPM: /@scope/package or /package
+        // Maven: /group/id/artifact/version/maven-metadata.xml -> /group/id/artifact
+        // PyPI: /simple/package/
+        String normalized = path;
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        // Remove trailing slash
+        if (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        // For Maven, strip maven-metadata.xml
+        if (normalized.endsWith("/maven-metadata.xml")) {
+            normalized = normalized.substring(0, normalized.lastIndexOf("/maven-metadata.xml"));
+        }
+        // For PyPI simple, strip /simple/ prefix
+        if (normalized.startsWith("simple/")) {
+            normalized = normalized.substring("simple/".length());
+        }
+        return normalized;
+    }
+
+    /**
+     * Get content type for metadata responses based on adapter type.
+     *
+     * @return Content-Type header value
+     */
+    private String getContentTypeForAdapter() {
+        return switch (this.adapterType) {
+            case "npm" -> "application/json";
+            case "maven" -> "application/xml";
+            case "pypi" -> "text/html";
+            case "go" -> "text/plain";
+            default -> "application/octet-stream";
+        };
     }
 
     /**
@@ -294,9 +619,11 @@ public final class GroupSlice implements Slice {
         final RequestContext ctx
     ) {
         final Key pathKey = new KeyFromPath(line.uri().getPath());
+        // Create combined key for negative cache: member:path
+        final Key cacheKey = new Key.From(member.name() + ":" + pathKey.string());
 
         // Check negative cache FIRST (L1 then L2 if miss)
-        return this.negativeCache.isNotFoundAsync(member.name(), pathKey)
+        return this.negativeCache.isNotFoundAsync(cacheKey)
             .thenCompose(isNotFound -> {
                 if (isNotFound) {
                     ctx.addTo(EcsLogger.debug("com.artipie.group")
@@ -342,8 +669,8 @@ public final class GroupSlice implements Slice {
                     .eventAction("group_forward")
                     .field("repository.name", this.group)
                     .field("member.name", member.name())
-                    .field("original.path", line.uri().getPath())
-                    .field("rewritten.path", rewritten.uri().getPath())
+                    .field("url.original", line.uri().getPath())
+                    .field("url.path", rewritten.uri().getPath())
                     .log();
 
                 return member.slice().response(
@@ -420,7 +747,9 @@ public final class GroupSlice implements Slice {
             }
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: Cache in negative cache and try next member
-            this.negativeCache.cacheNotFound(member.name(), pathKey);
+            // Create combined key for negative cache: member:path
+            final Key cacheKey = new Key.From(member.name() + ":" + pathKey.string());
+            this.negativeCache.cacheNotFound(cacheKey);
             ctx.addTo(EcsLogger.info("com.artipie.group")
                 .message("Member returned 404, cached in negative cache")
                 .eventCategory("repository")
@@ -594,6 +923,15 @@ public final class GroupSlice implements Slice {
         if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
             com.artipie.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberLatency(this.group, memberName, result, latencyMs);
+        }
+    }
+
+    private void recordMetadataOperation(final String operation, final long duration) {
+        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataOperation(this.group, this.adapterType, operation);
+            com.artipie.metrics.MicrometerMetrics.getInstance()
+                .recordMetadataGenerationDuration(this.group, this.adapterType, duration);
         }
     }
 }

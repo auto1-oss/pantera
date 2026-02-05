@@ -173,7 +173,10 @@ public final class UploadSlice implements Slice {
                     }
                 ).toCompletableFuture();
         } else {
-            res = ResponseBuilder.badRequest().completedFuture();
+            // Consume request body to prevent Vert.x connection leak
+            res = body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.badRequest().build()
+            );
         }
         return res;
     }

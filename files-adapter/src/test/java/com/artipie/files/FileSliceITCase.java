@@ -13,7 +13,7 @@ import com.artipie.http.headers.ContentType;
 import com.artipie.security.policy.Policy;
 import com.artipie.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.hamcrest.MatcherAssert;

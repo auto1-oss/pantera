@@ -63,7 +63,7 @@ public final class MultiReadManifests implements Manifests {
                                 .eventCategory("repository")
                                 .eventAction("manifest_get")
                                 .eventOutcome("failure")
-                                .field("container.image.hash.all", ref.digest())
+                                .field("container.image.digest", ref.digest())
                                 .error(throwable)
                                 .log();
                             result = Optional.empty();

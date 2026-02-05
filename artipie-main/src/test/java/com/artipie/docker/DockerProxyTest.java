@@ -11,7 +11,7 @@ import com.artipie.asto.Key;
 import com.artipie.cache.StoragesCache;
 import com.artipie.http.Headers;
 import com.artipie.http.Slice;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
@@ -80,7 +80,7 @@ class DockerProxyTest {
         StoragesCache cache, String yaml
     ) throws IOException {
         return new DockerProxy(
-            new JettyClientSlices(),
+            new VertxClientSlices(),
             RepoConfig.from(
                 Yaml.createYamlInput(yaml).readYamlMapping(),
                 new StorageByAlias(Yaml.createYamlMappingBuilder().build()),

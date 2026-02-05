@@ -33,7 +33,7 @@ public final class DeleteSlice implements Slice {
                 exists -> {
                     if (exists) {
                         return this.asto.delete(key).thenApply(
-                                nothing -> ResponseBuilder.ok().build()
+                                nothing -> ResponseBuilder.noContent().build()
                         ).toCompletableFuture();
                     } else {
                         // Consume request body to prevent Vert.x request leak

@@ -1,5 +1,13 @@
 repo:
   type: gem-group
   url: http://localhost:8081/test_prefix/gem_group
+  # Members are listed in priority order - first match wins
   members:
-    - gem
+    - gem            # local repository
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

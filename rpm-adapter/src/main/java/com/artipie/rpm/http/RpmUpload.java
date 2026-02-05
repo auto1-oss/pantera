@@ -88,7 +88,9 @@ public final class RpmUpload implements Slice {
                 conflicts -> {
                     final CompletionStage<RsStatus> status;
                     if (conflicts) {
-                        status = CompletableFuture.completedFuture(RsStatus.CONFLICT);
+                        // Consume request body to prevent Vert.x connection leak
+                        status = body.asBytesFuture()
+                            .thenApply(ignored -> RsStatus.CONFLICT);
                     } else {
                         status = this.asto.save(
                             new Key.From(RpmUpload.TO_ADD, key), new Content.From(body)

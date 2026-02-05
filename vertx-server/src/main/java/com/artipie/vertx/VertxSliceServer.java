@@ -20,10 +20,11 @@ import co.elastic.apm.api.Transaction;
 import com.artipie.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpVersion;
+import io.vertx.core.net.SocketAddress;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.core.http.HttpServer;
 import io.vertx.reactivex.core.http.HttpServerRequest;
 import io.vertx.reactivex.core.http.HttpServerResponse;
@@ -212,12 +213,12 @@ public final class VertxSliceServer implements Closeable {
     public int start() {
         HttpServer server = this.vertx.createHttpServer(this.options);
         server.requestHandler(this.proxyHandler());
-        
+
         // Set atomically before blocking - fails if already started
         if (!this.serverRef.compareAndSet(null, server)) {
             throw new IllegalStateException("Server was already started");
         }
-        
+
         // Block OUTSIDE of any lock
         server.rxListen().blockingGet();
         return server.actualPort();
@@ -966,9 +967,7 @@ public final class VertxSliceServer implements Closeable {
      * @return Enriched logger
      */
     private static EcsLogger addRequestContext(final EcsLogger logger, final RequestLogContext ctx) {
-        if (ctx.clientIp() != null && !ctx.clientIp().isEmpty()) {
-            logger.field("client.ip", ctx.clientIp());
-        }
+        // Note: client.ip is added automatically by EcsLogger from MDC
         if (ctx.remotePort() >= 0) {
             logger.field("client.port", ctx.remotePort());
         }
@@ -1011,7 +1010,7 @@ public final class VertxSliceServer implements Closeable {
         }
 
         static RequestLogContext from(final HttpServerRequest req, final Headers headers) {
-            final io.vertx.reactivex.core.net.SocketAddress remote = req.remoteAddress();
+            final SocketAddress remote = req.remoteAddress();
             final String host = remote == null ? "unknown" : remote.host();
             final int port = remote == null ? -1 : remote.port();
             final String clientIp = EcsLogEvent.extractClientIp(headers, host);

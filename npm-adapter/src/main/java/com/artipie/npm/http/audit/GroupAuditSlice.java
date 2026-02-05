@@ -94,12 +94,10 @@ public final class GroupAuditSlice implements Slice {
             .orElse("(none)");
 
         EcsLogger.info("com.artipie.npm")
-            .message("NPM Group Audit - START - querying " + this.members.size() + " members: [" + memberList + "]")
+            .message(String.format("NPM Group Audit - START - querying %d members: [%s]", this.members.size(), memberList))
             .eventCategory("repository")
             .eventAction("group_audit_start")
             .field("url.path", line.uri().getPath())
-            .field("members.count", this.members.size())
-            .field("members.names", memberList)
             .log();
 
         // Read the body once (it will be reused for all members)
@@ -143,13 +141,11 @@ public final class GroupAuditSlice implements Slice {
                     final long duration = System.currentTimeMillis() - startTime;
                     if (merged.isEmpty()) {
                         EcsLogger.info("com.artipie.npm")
-                            .message("NPM Group Audit - no vulnerabilities found (empty=" + emptyCount + ", non-empty=" + nonEmptyCount + ")")
+                            .message(String.format("NPM Group Audit - no vulnerabilities found (empty=%d, non-empty=%d)", emptyCount, nonEmptyCount))
                             .eventCategory("repository")
                             .eventAction("group_audit")
                             .eventOutcome("success")
                             .duration(duration)
-                            .field("members.empty", emptyCount)
-                            .field("members.non_empty", nonEmptyCount)
                             .log();
                         return ResponseBuilder.ok()
                             .jsonBody(Json.createObjectBuilder().build())
@@ -157,14 +153,11 @@ public final class GroupAuditSlice implements Slice {
                     }
 
                     EcsLogger.info("com.artipie.npm")
-                        .message("NPM Group Audit - found " + merged.size() + " vulnerabilities")
+                        .message(String.format("NPM Group Audit - found %d vulnerabilities (empty=%d, non-empty=%d)", merged.size(), emptyCount, nonEmptyCount))
                         .eventCategory("repository")
                         .eventAction("group_audit")
                         .eventOutcome("success")
                         .duration(duration)
-                        .field("vulnerabilities.count", merged.size())
-                        .field("members.empty", emptyCount)
-                        .field("members.non_empty", nonEmptyCount)
                         .log();
 
                     // Build merged response
@@ -249,11 +242,10 @@ public final class GroupAuditSlice implements Slice {
                         try (JsonReader reader = Json.createReader(new StringReader(json))) {
                             final JsonObject result = reader.readObject();
                             EcsLogger.debug("com.artipie.npm")
-                                .message("Member returned audit data with " + result.size() + " entries")
+                                .message(String.format("Member returned audit data with %d entries", result.size()))
                                 .eventCategory("repository")
                                 .eventAction("group_audit")
                                 .field("member.name", member.name)
-                                .field("entries.count", result.size())
                                 .log();
                             return result;
                         }

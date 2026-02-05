@@ -224,7 +224,7 @@ public class NpmProxy {
             Maybe.defer(
                 () -> this.remote.loadAsset(path, null).flatMap(
                     asset -> this.storage.save(asset)
-                        .andThen(Maybe.defer(() -> this.storage.getAsset(path)))
+                        .andThen(Maybe.just(asset))
                 )
             )
         );

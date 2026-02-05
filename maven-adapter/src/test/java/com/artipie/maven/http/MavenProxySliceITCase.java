@@ -10,7 +10,7 @@ import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
 import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.RsStatus;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.scheduling.ProxyArtifactEvent;
@@ -41,7 +41,7 @@ final class MavenProxySliceITCase {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices();
+    private final VertxClientSlices client = new VertxClientSlices();
 
     /**
      * Test storage.

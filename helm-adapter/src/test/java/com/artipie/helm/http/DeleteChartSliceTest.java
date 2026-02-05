@@ -82,7 +82,7 @@ final class DeleteChartSliceTest {
             new DeleteChartSlice(this.storage, Optional.of(this.events), DeleteChartSliceTest.RNAME)
                 .response(new RequestLine(RqMethod.DELETE, "/charts/ark"), Headers.EMPTY, Content.EMPTY)
                 .join(),
-            RsStatus.OK
+            RsStatus.NO_CONTENT
         );
         Assertions.assertTrue(
             new ContentOfIndex(this.storage).index()
@@ -110,7 +110,7 @@ final class DeleteChartSliceTest {
             new DeleteChartSlice(this.storage, Optional.of(this.events), DeleteChartSliceTest.RNAME)
                 .response(new RequestLine(RqMethod.DELETE, "/charts/ark/1.0.1"), Headers.EMPTY, Content.EMPTY)
                 .join(),
-            RsStatus.OK
+            RsStatus.NO_CONTENT
         );
         final IndexYamlMapping index = new ContentOfIndex(this.storage).index();
         MatcherAssert.assertThat(

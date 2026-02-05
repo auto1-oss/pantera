@@ -37,6 +37,7 @@ import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
 import io.vertx.core.DeploymentOptions;
+import io.vertx.core.ThreadingModel;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.ext.auth.PubSecKeyOptions;
@@ -152,7 +153,7 @@ public final class VertxMain {
         final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt, jwtSettings));
         if (settings.metrics().http()) {
             try {
-                slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
+                slices.enableVertxMetrics(BackendRegistries.getDefaultNow());
             } catch (final IllegalStateException ex) {
                 EcsLogger.warn("com.artipie")
                     .message("HTTP metrics enabled but MeterRegistry unavailable")
@@ -299,26 +300,25 @@ public final class VertxMain {
             .setInstances(apiInstances);
         vertx.deployVerticle(
             () -> new RestApi(settings, apiPort, jwt),
-            deployOpts,
-            result -> {
-                if (result.succeeded()) {
-                    EcsLogger.info("com.artipie.api")
-                        .message("RestApi deployed with " + apiInstances + " instances")
-                        .eventCategory("api")
-                        .eventAction("api_deploy")
-                        .eventOutcome("success")
-                        .log();
-                } else {
-                    EcsLogger.error("com.artipie.api")
-                        .message("Failed to deploy RestApi")
-                        .eventCategory("api")
-                        .eventAction("api_deploy")
-                        .eventOutcome("failure")
-                        .error(result.cause())
-                        .log();
-                }
+            deployOpts
+        ).onComplete(result -> {
+            if (result.succeeded()) {
+                EcsLogger.info("com.artipie.api")
+                    .message("RestApi deployed with " + apiInstances + " instances")
+                    .eventCategory("api")
+                    .eventAction("api_deploy")
+                    .eventOutcome("success")
+                    .log();
+            } else {
+                EcsLogger.error("com.artipie.api")
+                    .message("Failed to deploy RestApi")
+                    .eventCategory("api")
+                    .eventAction("api_deploy")
+                    .eventOutcome("failure")
+                    .error(result.cause())
+                    .log();
             }
-        );
+        });
 
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
@@ -335,7 +335,7 @@ public final class VertxMain {
                 final MeterRegistry metricsRegistry = BackendRegistries.getDefaultNow();
                 
                 final DeploymentOptions metricsOpts = new DeploymentOptions()
-                    .setWorker(true)
+                    .setThreadingModel(ThreadingModel.WORKER)
                     .setWorkerPoolName("metrics-scraper")
                     .setWorkerPoolSize(2);
                 
@@ -343,29 +343,27 @@ public final class VertxMain {
                     () -> new com.artipie.metrics.AsyncMetricsVerticle(
                         metricsRegistry, metricsPort, metricsPath, metricsCacheTtlMs
                     ),
-                    metricsOpts,
-                    metricsResult -> {
-                        if (metricsResult.succeeded()) {
-                            EcsLogger.info("com.artipie.metrics")
-                                .message("AsyncMetricsVerticle deployed as worker verticle")
-                                .eventCategory("metrics")
-                                .eventAction("metrics_verticle_deploy")
-                                .eventOutcome("success")
-                                .field("destination.port", metricsPort)
-                                .field("url.path", metricsPath)
-                                .field("cache.ttl.ms", metricsCacheTtlMs)
-                                .log();
-                        } else {
-                            EcsLogger.error("com.artipie.metrics")
-                                .message("Failed to deploy AsyncMetricsVerticle")
-                                .eventCategory("metrics")
-                                .eventAction("metrics_verticle_deploy")
-                                .eventOutcome("failure")
-                                .error(metricsResult.cause())
-                                .log();
-                        }
+                    metricsOpts
+                ).onComplete(metricsResult -> {
+                    if (metricsResult.succeeded()) {
+                        EcsLogger.info("com.artipie.metrics")
+                            .message(String.format("AsyncMetricsVerticle deployed as worker verticle (cache_ttl_ms=%d)", metricsCacheTtlMs))
+                            .eventCategory("metrics")
+                            .eventAction("metrics_verticle_deploy")
+                            .eventOutcome("success")
+                            .field("destination.port", metricsPort)
+                            .field("url.path", metricsPath)
+                            .log();
+                    } else {
+                        EcsLogger.error("com.artipie.metrics")
+                            .message("Failed to deploy AsyncMetricsVerticle")
+                            .eventCategory("metrics")
+                            .eventAction("metrics_verticle_deploy")
+                            .eventOutcome("failure")
+                            .error(metricsResult.cause())
+                            .log();
                     }
-                );
+                });
             }
         }
 
@@ -668,9 +666,8 @@ public final class VertxMain {
                 .addLabels(io.vertx.micrometer.Label.EB_SIDE)
                 .addLabels(io.vertx.micrometer.Label.EB_FAILURE);
 
-            if (apm != null) {
-                micrometer.setMicrometerRegistry(apm);
-            }
+            // NOTE: Custom APM registry removed - setMicrometerRegistry no longer available in Vert.x 5
+            // Use VertxBuilder.withMetrics(MicrometerMetricsFactory) if custom registry needed
 
             if (endpoint.isPresent()) {
                 // CRITICAL FIX: Disable embedded Prometheus server to prevent event loop blocking.

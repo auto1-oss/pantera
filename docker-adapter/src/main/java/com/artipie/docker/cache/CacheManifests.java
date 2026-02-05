@@ -144,7 +144,7 @@ public final class CacheManifests implements Manifests {
                                 .eventOutcome("failure")
                                 .field("repository.name", this.rname)
                                 .field("container.image.name", this.name)
-                                .field("container.image.hash.all", ref.digest())
+                                .field("container.image.digest", ref.digest())
                                 .field("file.type", manifest.mediaType())
                                 .log();
                             result = CompletableFuture.completedFuture(original);
@@ -163,8 +163,8 @@ public final class CacheManifests implements Manifests {
                         .eventOutcome("failure")
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
-                        .field("container.image.hash.all", ref.digest())
-                        .field("url.upstream", this.upstreamUrl)
+                        .field("container.image.digest", ref.digest())
+                        .field("service.target.url.original", this.upstreamUrl)
                         .error(throwable)
                         .log();
                     result = this.cache.manifests().get(ref);
@@ -201,7 +201,7 @@ public final class CacheManifests implements Manifests {
                             .eventOutcome("failure")
                             .field("repository.name", this.rname)
                             .field("container.image.name", this.name)
-                            .field("container.image.hash.all", ref.digest())
+                            .field("container.image.digest", ref.digest())
                             .error(ex)
                             .log();
                     }
@@ -233,7 +233,7 @@ public final class CacheManifests implements Manifests {
                         .eventOutcome("failure")
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
-                        .field("container.image.hash.all", ref.digest())
+                        .field("container.image.digest", ref.digest())
                         .field("error.message", ex.getMessage())
                         .log();
                     return Optional.empty();
@@ -292,7 +292,7 @@ public final class CacheManifests implements Manifests {
                         .eventOutcome("not_found")
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
-                        .field("container.image.hash.all", digest.string())
+                        .field("container.image.digest", digest.string())
                         .log();
                     return CompletableFuture.completedFuture(null);
                 }
@@ -310,7 +310,7 @@ public final class CacheManifests implements Manifests {
                             .eventOutcome("success")
                             .field("repository.name", this.rname)
                             .field("container.image.name", this.name)
-                            .field("container.image.hash.all", digest.string())
+                            .field("container.image.digest", digest.string())
                             .log()
                     );
             })
@@ -322,7 +322,7 @@ public final class CacheManifests implements Manifests {
                     .eventOutcome("failure")
                     .field("repository.name", this.rname)
                     .field("container.image.name", this.name)
-                    .field("container.image.hash.all", digest.string())
+                    .field("container.image.digest", digest.string())
                     .error(ex)
                     .log();
                 return null;

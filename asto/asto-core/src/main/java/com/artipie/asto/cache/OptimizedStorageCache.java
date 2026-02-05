@@ -240,7 +240,7 @@ public final class OptimizedStorageCache {
                                 .eventOutcome("cancelled")
                                 .field("file.path", filePath.toString())
                                 .field("file.size", fileSize)
-                                .field("bytes.sent", totalRead)
+                                .field("destination.bytes", totalRead)
                                 .log();
                             cancelled = true;
                             break;

@@ -17,7 +17,7 @@ import com.artipie.npm.proxy.NpmProxy;
 import com.artipie.vertx.VertxSliceServer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.hamcrest.MatcherAssert;

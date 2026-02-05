@@ -47,7 +47,7 @@ class PemKeyStore extends YamlBasedKeyStore {
     public HttpServerOptions secureOptions(final Vertx vertx, final Storage storage) {
         return new HttpServerOptions()
             .setSsl(true)
-            .setPemKeyCertOptions(this.pemOptions(storage));
+            .setKeyCertOptions(this.pemOptions(storage));
     }
 
     /**

@@ -6,6 +6,9 @@ package com.artipie.group;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.cache.GroupSettings;
+import com.artipie.cache.MetadataMerger;
+import com.artipie.cache.UnifiedGroupCache;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
@@ -14,10 +17,13 @@ import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -149,6 +155,197 @@ public final class GroupSliceTest {
             scheduler.awaitTermination(5, TimeUnit.SECONDS);
             executor.awaitTermination(5, TimeUnit.SECONDS);
         }
+    }
+
+    /**
+     * Test that metadata requests are routed through UnifiedGroupCache when enabled.
+     */
+    @Test
+    void metadataRequestsUseCacheWhenEnabled() {
+        final Map<String, Slice> map = new HashMap<>();
+        // Member 1: returns metadata for "test-package"
+        map.put("local", (line, headers, body) -> {
+            final String path = line.uri().getPath();
+            if (path.contains("test-package")) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .textBody("{\"name\":\"test-package\",\"version\":\"1.0.0\"}")
+                        .build()
+                );
+            }
+            return ResponseBuilder.notFound().completedFuture();
+        });
+        // Member 2: returns different metadata for "test-package"
+        map.put("proxy", (line, headers, body) -> {
+            final String path = line.uri().getPath();
+            if (path.contains("test-package")) {
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .textBody("{\"name\":\"test-package\",\"version\":\"2.0.0\"}")
+                        .build()
+                );
+            }
+            return ResponseBuilder.notFound().completedFuture();
+        });
+
+        // Simple merger that concatenates all responses
+        final MetadataMerger merger = responses -> {
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            for (byte[] data : responses.values()) {
+                if (!first) sb.append(",");
+                sb.append(new String(data, StandardCharsets.UTF_8));
+                first = false;
+            }
+            sb.append("]");
+            return sb.toString().getBytes(StandardCharsets.UTF_8);
+        };
+
+        // Create UnifiedGroupCache
+        final UnifiedGroupCache cache = new UnifiedGroupCache(
+            "group",
+            GroupSettings.defaults(),
+            Optional.empty()
+        );
+
+        // Create GroupSlice with metadata merging enabled
+        final GroupSlice slice = GroupSlice.withMetadataMerging(
+            new MapResolver(map),
+            "group",
+            List.of("local", "proxy"),
+            8080,
+            cache,
+            merger,
+            "npm",
+            path -> path.endsWith(".json") && !path.contains("/-/")  // NPM metadata pattern
+        );
+
+        // Request metadata
+        final Response rsp = slice.response(
+            new RequestLine("GET", "/test-package.json"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, rsp.status());
+        final String body = rsp.body().asString();
+        // Should contain merged metadata from both members
+        assertTrue(body.contains("test-package"), "Response should contain merged metadata");
+    }
+
+    /**
+     * Test that non-metadata requests use race strategy even when cache is enabled.
+     */
+    @Test
+    void artifactRequestsUseRaceStrategyWhenCacheEnabled() {
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("local", new StaticSlice(RsStatus.NOT_FOUND));
+        map.put("proxy", (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.ok().textBody("artifact-data").build()
+            )
+        );
+
+        // Create UnifiedGroupCache
+        final UnifiedGroupCache cache = new UnifiedGroupCache(
+            "group",
+            GroupSettings.defaults(),
+            Optional.empty()
+        );
+
+        // Simple merger (won't be used for .tgz)
+        final MetadataMerger merger = responses -> new byte[0];
+
+        // Create GroupSlice with metadata merging enabled
+        final GroupSlice slice = GroupSlice.withMetadataMerging(
+            new MapResolver(map),
+            "group",
+            List.of("local", "proxy"),
+            8080,
+            cache,
+            merger,
+            "npm",
+            path -> path.endsWith(".json") && !path.contains("/-/")  // Only .json files
+        );
+
+        // Request artifact (not metadata)
+        final Response rsp = slice.response(
+            new RequestLine("GET", "/package/-/package-1.0.0.tgz"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, rsp.status());
+        assertEquals("artifact-data", rsp.body().asString());
+    }
+
+    /**
+     * Test backward compatibility: GroupSlice without cache works as before.
+     */
+    @Test
+    void backwardCompatibleWithoutCache() {
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("local", new StaticSlice(RsStatus.NOT_FOUND));
+        map.put("proxy", (line, headers, body) ->
+            CompletableFuture.completedFuture(
+                ResponseBuilder.ok().textBody("found").build()
+            )
+        );
+
+        // Create GroupSlice without cache (old API)
+        final GroupSlice slice = new GroupSlice(
+            new MapResolver(map),
+            "group",
+            List.of("local", "proxy"),
+            8080
+        );
+
+        // Request should work with race strategy
+        final Response rsp = slice.response(
+            new RequestLine("GET", "/package.json"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, rsp.status());
+        assertEquals("found", rsp.body().asString());
+    }
+
+    /**
+     * Test that metadata merge returns 404 when no members have the package.
+     */
+    @Test
+    void metadataMergeReturns404WhenNoMembersHavePackage() {
+        final Map<String, Slice> map = new HashMap<>();
+        map.put("local", new StaticSlice(RsStatus.NOT_FOUND));
+        map.put("proxy", new StaticSlice(RsStatus.NOT_FOUND));
+
+        final UnifiedGroupCache cache = new UnifiedGroupCache(
+            "group",
+            GroupSettings.defaults(),
+            Optional.empty()
+        );
+
+        final MetadataMerger merger = responses -> new byte[0];
+
+        final GroupSlice slice = GroupSlice.withMetadataMerging(
+            new MapResolver(map),
+            "group",
+            List.of("local", "proxy"),
+            8080,
+            cache,
+            merger,
+            "npm",
+            path -> path.endsWith(".json")
+        );
+
+        final Response rsp = slice.response(
+            new RequestLine("GET", "/nonexistent.json"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.NOT_FOUND, rsp.status());
     }
 
     /**

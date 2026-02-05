@@ -36,10 +36,10 @@ public class DeleteSliceTest {
         this.asto.save(new Key.From(key), new Content.From(content)).join();
 
         MatcherAssert.assertThat(
-                "Response is OK",
+                "Response is NO_CONTENT for successful delete",
                 new DeleteSlice(this.asto),
                 new SliceHasResponse(
-                        new RsHasStatus(RsStatus.OK),
+                        new RsHasStatus(RsStatus.NO_CONTENT),
                         new RequestLine(RqMethod.DELETE, "simple/test-pack-1.0.0.tar.gz")
                 )
         );

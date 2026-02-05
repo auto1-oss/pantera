@@ -195,12 +195,12 @@ public final class MemberSlice {
         );
 
         EcsLogger.info("com.artipie.group")
-            .message("MemberSlice rewritePath")
+            .message(String.format("MemberSlice rewritePath: %s -> %s", raw, result.uri().getPath()))
             .eventCategory("repository")
             .eventAction("path_rewrite")
             .field("member.name", this.name)
-            .field("original.path", raw)
-            .field("rewritten.path", result.uri().getPath())
+            .field("url.original", raw)
+            .field("url.path", result.uri().getPath())
             .log();
 
         return result;

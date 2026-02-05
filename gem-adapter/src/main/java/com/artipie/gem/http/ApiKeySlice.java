@@ -41,7 +41,7 @@ final class ApiKeySlice implements Slice {
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         return new BasicAuthScheme(this.auth)
                 .authenticate(headers)
-                .thenApply(
+                .thenCompose(
                     result -> {
                         if (result.status() == AuthScheme.AuthStatus.AUTHENTICATED) {
                             final Optional<String> key = new RqHeaders(headers, Authorization.NAME)
@@ -50,12 +50,18 @@ final class ApiKeySlice implements Slice {
                                 .map(val -> val.substring(BasicAuthScheme.NAME.length() + 1))
                                 .findFirst();
                             if (key.isPresent()) {
-                                return ResponseBuilder.ok()
-                                    .textBody(key.get(), StandardCharsets.US_ASCII)
-                                    .build();
+                                // Consume body then return response
+                                return body.asBytesFuture().thenApply(ignored ->
+                                    ResponseBuilder.ok()
+                                        .textBody(key.get(), StandardCharsets.US_ASCII)
+                                        .build()
+                                );
                             }
                         }
-                        return ResponseBuilder.unauthorized().build();
+                        // Consume request body to prevent Vert.x request leak
+                        return body.asBytesFuture().thenApply(ignored ->
+                            ResponseBuilder.unauthorized().build()
+                        );
                     }
                 ).toCompletableFuture();
     }

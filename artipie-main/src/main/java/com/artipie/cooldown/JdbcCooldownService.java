@@ -374,15 +374,11 @@ final class JdbcCooldownService implements CooldownService {
             if (record.isPresent()) {
                 final DbBlockRecord rec = record.get();
                 EcsLogger.info("com.artipie.cooldown")
-                    .message("Block record found in database")
+                    .message(String.format("Block record found in database (status=%s, reason=%s, blocked_at=%s, blocked_until=%s)", rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))
                     .eventCategory("cooldown")
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
-                    .field("block.status", rec.status().name())
-                    .field("block.reason", rec.reason().name())
-                    .field("block.blockedAt", rec.blockedAt().toString())
-                    .field("block.blockedUntil", rec.blockedUntil().toString())
                     .log();
                 
                 if (rec.status() == BlockStatus.ACTIVE) {
@@ -390,12 +386,11 @@ final class JdbcCooldownService implements CooldownService {
                     final Instant now = Instant.now();
                     if (rec.blockedUntil().isBefore(now)) {
                         EcsLogger.info("com.artipie.cooldown")
-                            .message("Block has EXPIRED - allowing artifact")
+                            .message(String.format("Block has EXPIRED - allowing artifact (blocked_until=%s)", rec.blockedUntil()))
                             .eventCategory("cooldown")
                             .eventAction("block_expired")
                             .field("package.name", request.artifact())
                             .field("package.version", request.version())
-                            .field("block.blockedUntil", rec.blockedUntil().toString())
                             .log();
                         // Expire the block
                         this.expire(rec, now);

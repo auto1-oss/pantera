@@ -242,13 +242,11 @@ public final class DownloadAssetSlice implements Slice {
                 if (result.blocked()) {
                     final var block = result.block().orElseThrow();
                     EcsLogger.info("com.artipie.npm")
-                        .message("Asset download blocked by cooldown")
+                        .message(String.format("Asset download blocked by cooldown (reason=%s, until=%s)", block.reason(), block.blockedUntil()))
                         .eventCategory("cooldown")
                         .eventAction("asset_blocked")
                         .field("package.name", req.artifact())
                         .field("package.version", req.version())
-                        .field("block.reason", block.reason().toString())
-                        .field("block.blockedUntil", block.blockedUntil().toString())
                         .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponses.forbidden(block)

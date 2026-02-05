@@ -26,7 +26,7 @@ SOFTWARE.
   <parent>
     <artifactId>asto</artifactId>
     <groupId>com.artipie</groupId>
-    <version>1.20.12</version>
+    <version>1.21.0</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>asto-etcd</artifactId>
@@ -37,14 +37,14 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.12</version>
+      <version>1.21.0</version>
       <scope>compile</scope>
     </dependency>
     <!-- etcd client -->
     <dependency>
       <groupId>io.etcd</groupId>
       <artifactId>jetcd-core</artifactId>
-      <version>0.7.1</version>
+      <version>0.8.6</version>
       <optional>true</optional>
     </dependency>
   </dependencies>

@@ -19,6 +19,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
+import com.artipie.http.client.RedirectFollowingSlice;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
@@ -93,8 +94,11 @@ public final class FileProxySlice implements Slice {
      * @param remote Remote URI
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
-        this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+        this(
+            new RedirectFollowingSlice(new UriClientSlice(clients, remote), clients),
+            Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
+            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty()
+        );
     }
 
     /**
@@ -107,7 +111,10 @@ public final class FileProxySlice implements Slice {
     public FileProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Storage asto) {
         this(
-            new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+            new RedirectFollowingSlice(
+                new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+                clients
+            ),
             new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
             com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
@@ -124,7 +131,10 @@ public final class FileProxySlice implements Slice {
     public FileProxySlice(final ClientSlices clients, final URI remote, final Storage asto,
         final Queue<ArtifactEvent> events, final String rname) {
         this(
-            new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
+            new RedirectFollowingSlice(
+                new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
+                clients
+            ),
             new FromRemoteCache(asto), Optional.of(events), rname,
             com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );

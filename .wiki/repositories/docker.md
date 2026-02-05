@@ -60,3 +60,33 @@ docker pull {host}:5463/myubuntuimage
 
 In the examples above `{host}` and `{port}` are Artipie service host and port, `{repository-name}`
 is the name of Docker repository.
+
+## Docker Group Repository
+
+A Docker group aggregates multiple Docker registries into a single virtual registry.
+Artipie merges manifest lists for multi-architecture image support.
+
+```yaml
+repo:
+  type: docker-group
+  port: 5000
+  settings:
+    repositories:
+      - docker-local      # local registry
+      - dockerhub-proxy   # proxy to Docker Hub
+    group:
+      index:
+        remote_exists_ttl: 15m
+        remote_not_exists_ttl: 5m
+      metadata:
+        ttl: 5m
+```
+
+Members are listed in priority order - if an image exists in multiple registries,
+the first member is used. Pull from the group:
+
+```bash
+docker pull {host}:5000/myimage:latest
+```
+
+See [Group Cache Configuration](../Configuration-Group-Cache) for detailed cache settings.

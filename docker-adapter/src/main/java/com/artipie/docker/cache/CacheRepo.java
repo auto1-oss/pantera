@@ -89,7 +89,7 @@ public final class CacheRepo implements Repo {
 
     @Override
     public Layers layers() {
-        return new CacheLayers(this.origin.layers(), this.cache.layers(), this.repoName, this.upstreamUrl);
+        return new CacheLayers(this.origin.layers(), this.cache.layers());
     }
 
     @Override

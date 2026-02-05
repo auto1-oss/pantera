@@ -1,6 +1,13 @@
 repo:
   type: "file-group"
-  # Example members; ensure matching file and file-proxy repos exist
+  # Members are listed in priority order - first match wins
   members:
-    - file
-    - file_proxy
+    - file           # local repository (highest priority)
+    - file_proxy     # proxy to upstream
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

@@ -9,15 +9,18 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.google.common.base.Strings;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.StreamSupport;
 
 /**
- * Http client settings for Jetty-based HTTP client.
- * 
+ * HTTP client settings for Vert.x-based HTTP client.
+ *
  * <p>Default values are tuned for production workloads targeting 1000+ req/s:</p>
  * <ul>
  *   <li>{@code connectTimeout}: 15 seconds - reasonable for most networks</li>
@@ -25,11 +28,18 @@ import java.util.stream.StreamSupport;
  *   <li>{@code connectionAcquireTimeout}: 30 seconds - fail fast under back-pressure</li>
  *   <li>{@code maxConnectionsPerDestination}: 64 - balanced for typical proxy scenarios</li>
  *   <li>{@code maxRequestsQueuedPerDestination}: 256 - prevents unbounded queuing</li>
+ *   <li>{@code http2Enabled}: true - HTTP/2 with ALPN for HTTPS, h2c for HTTP</li>
+ *   <li>{@code retryMaxAttempts}: 3 - exponential backoff retry</li>
+ *   <li>{@code circuitBreakerEnabled}: true - per-destination circuit breaker</li>
  * </ul>
- * 
+ *
+ * <p>HTTP/2 uses ALPN negotiation for HTTPS connections, which automatically falls back
+ * to HTTP/1.1 if the server doesn't support HTTP/2. For cleartext HTTP, h2c upgrade
+ * mechanism is used.</p>
+ *
  * <p>These defaults prevent "pseudo-leaks" where requests queue indefinitely
  * under back-pressure, making it appear as if connections are leaking.</p>
- * 
+ *
  * @since 0.2
  */
 public class HttpClientSettings {
@@ -93,6 +103,69 @@ public class HttpClientSettings {
                             );
                         }
                     });
+            }
+            // HTTP/2 and read idle timeout
+            final String http2 = mapping.string("http2_enabled");
+            if (!Strings.isNullOrEmpty(http2)) {
+                res.setHttp2Enabled(Boolean.parseBoolean(http2));
+            }
+            final String readIdle = mapping.string("read_idle_timeout");
+            if (!Strings.isNullOrEmpty(readIdle)) {
+                res.setReadIdleTimeout(Long.parseLong(readIdle));
+            }
+            // Retry settings
+            final YamlMapping retry = mapping.yamlMapping("retry");
+            if (retry != null) {
+                final String maxAttempts = retry.string("max_attempts");
+                if (!Strings.isNullOrEmpty(maxAttempts)) {
+                    res.setRetryMaxAttempts(Integer.parseInt(maxAttempts));
+                }
+                final String initialDelay = retry.string("initial_delay");
+                if (!Strings.isNullOrEmpty(initialDelay)) {
+                    res.setRetryInitialDelay(Long.parseLong(initialDelay));
+                }
+                final String maxDelay = retry.string("max_delay");
+                if (!Strings.isNullOrEmpty(maxDelay)) {
+                    res.setRetryMaxDelay(Long.parseLong(maxDelay));
+                }
+                final String multiplier = retry.string("multiplier");
+                if (!Strings.isNullOrEmpty(multiplier)) {
+                    res.setRetryMultiplier(Double.parseDouble(multiplier));
+                }
+                final String jitter = retry.string("jitter");
+                if (!Strings.isNullOrEmpty(jitter)) {
+                    res.setRetryJitter(Double.parseDouble(jitter));
+                }
+                final YamlSequence codes = retry.yamlSequence("retryable_status_codes");
+                if (codes != null) {
+                    final Set<Integer> statusCodes = new HashSet<>();
+                    codes.forEach(code -> statusCodes.add(Integer.parseInt(code.asScalar().value())));
+                    res.setRetryableStatusCodes(statusCodes);
+                }
+            }
+            // Circuit breaker settings
+            final YamlMapping cb = mapping.yamlMapping("circuit_breaker");
+            if (cb != null) {
+                final String enabled = cb.string("enabled");
+                if (!Strings.isNullOrEmpty(enabled)) {
+                    res.setCircuitBreakerEnabled(Boolean.parseBoolean(enabled));
+                }
+                final String failureRate = cb.string("failure_rate_threshold");
+                if (!Strings.isNullOrEmpty(failureRate)) {
+                    res.setCircuitBreakerFailureRateThreshold(Integer.parseInt(failureRate));
+                }
+                final String windowSize = cb.string("sliding_window_size");
+                if (!Strings.isNullOrEmpty(windowSize)) {
+                    res.setCircuitBreakerSlidingWindowSize(Integer.parseInt(windowSize));
+                }
+                final String timeout = cb.string("timeout");
+                if (!Strings.isNullOrEmpty(timeout)) {
+                    res.setCircuitBreakerTimeout(Long.parseLong(timeout));
+                }
+                final String successThreshold = cb.string("success_threshold");
+                if (!Strings.isNullOrEmpty(successThreshold)) {
+                    res.setCircuitBreakerSuccessThreshold(Integer.parseInt(successThreshold));
+                }
             }
         }
         return res;
@@ -195,14 +268,79 @@ public class HttpClientSettings {
 
     /**
      * Max queued requests per destination.
-     * 
+     *
      * <p>When the connection pool is exhausted, requests queue up to this limit.
      * Very high values (2048+) can cause memory pressure and long latencies.
      * Lower values (256) cause faster failure under back-pressure.</p>
-     * 
+     *
      * Default: 256
      */
     private int maxRequestsQueuedPerDestination;
+
+    /**
+     * Read idle timeout in milliseconds (for slow downloads).
+     */
+    private long readIdleTimeout;
+
+    /**
+     * Enable HTTP/2 with ALPN support.
+     */
+    private boolean http2Enabled;
+
+    /**
+     * Retry max attempts.
+     */
+    private int retryMaxAttempts;
+
+    /**
+     * Retry initial delay in milliseconds.
+     */
+    private long retryInitialDelay;
+
+    /**
+     * Retry max delay in milliseconds.
+     */
+    private long retryMaxDelay;
+
+    /**
+     * Retry multiplier for exponential backoff.
+     */
+    private double retryMultiplier;
+
+    /**
+     * Retry jitter factor.
+     */
+    private double retryJitter;
+
+    /**
+     * Retryable HTTP status codes.
+     */
+    private Set<Integer> retryableStatusCodes;
+
+    /**
+     * Circuit breaker enabled.
+     */
+    private boolean circuitBreakerEnabled;
+
+    /**
+     * Circuit breaker failure rate threshold percentage.
+     */
+    private int circuitBreakerFailureRateThreshold;
+
+    /**
+     * Circuit breaker sliding window size.
+     */
+    private int circuitBreakerSlidingWindowSize;
+
+    /**
+     * Circuit breaker timeout in milliseconds.
+     */
+    private long circuitBreakerTimeout;
+
+    /**
+     * Circuit breaker success threshold.
+     */
+    private int circuitBreakerSuccessThreshold;
 
     /**
      * Default connect timeout in milliseconds.
@@ -238,16 +376,99 @@ public class HttpClientSettings {
      */
     public static final long DEFAULT_PROXY_TIMEOUT = 60L;
 
+    /**
+     * Default read idle timeout in milliseconds.
+     */
+    public static final long DEFAULT_READ_IDLE_TIMEOUT = 60_000L;
+
+    /**
+     * Default HTTP/2 enabled.
+     * HTTP/2 is enabled by default with ALPN support for HTTPS connections.
+     * ALPN negotiation provides automatic fallback to HTTP/1.1 if server doesn't support HTTP/2.
+     */
+    public static final boolean DEFAULT_HTTP2_ENABLED = true;
+
+    /**
+     * Default retry max attempts.
+     */
+    public static final int DEFAULT_RETRY_MAX_ATTEMPTS = 3;
+
+    /**
+     * Default retry initial delay in milliseconds.
+     */
+    public static final long DEFAULT_RETRY_INITIAL_DELAY = 100L;
+
+    /**
+     * Default retry max delay in milliseconds.
+     */
+    public static final long DEFAULT_RETRY_MAX_DELAY = 1000L;
+
+    /**
+     * Default retry multiplier.
+     */
+    public static final double DEFAULT_RETRY_MULTIPLIER = 2.0;
+
+    /**
+     * Default retry jitter factor.
+     */
+    public static final double DEFAULT_RETRY_JITTER = 0.2;
+
+    /**
+     * Default retryable status codes.
+     */
+    public static final Set<Integer> DEFAULT_RETRYABLE_STATUS_CODES =
+        Set.of(502, 503, 504);
+
+    /**
+     * Default circuit breaker enabled.
+     */
+    public static final boolean DEFAULT_CIRCUIT_BREAKER_ENABLED = true;
+
+    /**
+     * Default circuit breaker failure rate threshold (80%).
+     */
+    public static final int DEFAULT_CIRCUIT_BREAKER_FAILURE_RATE = 80;
+
+    /**
+     * Default circuit breaker sliding window size.
+     */
+    public static final int DEFAULT_CIRCUIT_BREAKER_WINDOW_SIZE = 10;
+
+    /**
+     * Default circuit breaker timeout in milliseconds.
+     */
+    public static final long DEFAULT_CIRCUIT_BREAKER_TIMEOUT = 30_000L;
+
+    /**
+     * Default circuit breaker success threshold.
+     */
+    public static final int DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD = 3;
+
     public HttpClientSettings() {
         this.trustAll = false;
         this.followRedirects = true;
         this.connectTimeout = DEFAULT_CONNECT_TIMEOUT;
         this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
+        this.readIdleTimeout = DEFAULT_READ_IDLE_TIMEOUT;
         this.http3 = false;
+        this.http2Enabled = DEFAULT_HTTP2_ENABLED;
         this.proxyTimeout = DEFAULT_PROXY_TIMEOUT;
         this.connectionAcquireTimeout = DEFAULT_CONNECTION_ACQUIRE_TIMEOUT;
         this.maxConnectionsPerDestination = DEFAULT_MAX_CONNECTIONS_PER_DESTINATION;
         this.maxRequestsQueuedPerDestination = DEFAULT_MAX_REQUESTS_QUEUED_PER_DESTINATION;
+        // Retry settings
+        this.retryMaxAttempts = DEFAULT_RETRY_MAX_ATTEMPTS;
+        this.retryInitialDelay = DEFAULT_RETRY_INITIAL_DELAY;
+        this.retryMaxDelay = DEFAULT_RETRY_MAX_DELAY;
+        this.retryMultiplier = DEFAULT_RETRY_MULTIPLIER;
+        this.retryJitter = DEFAULT_RETRY_JITTER;
+        this.retryableStatusCodes = new HashSet<>(DEFAULT_RETRYABLE_STATUS_CODES);
+        // Circuit breaker settings
+        this.circuitBreakerEnabled = DEFAULT_CIRCUIT_BREAKER_ENABLED;
+        this.circuitBreakerFailureRateThreshold = DEFAULT_CIRCUIT_BREAKER_FAILURE_RATE;
+        this.circuitBreakerSlidingWindowSize = DEFAULT_CIRCUIT_BREAKER_WINDOW_SIZE;
+        this.circuitBreakerTimeout = DEFAULT_CIRCUIT_BREAKER_TIMEOUT;
+        this.circuitBreakerSuccessThreshold = DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD;
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
@@ -398,6 +619,123 @@ public class HttpClientSettings {
 
     public HttpClientSettings setMaxRequestsQueuedPerDestination(final int maxRequestsQueuedPerDestination) {
         this.maxRequestsQueuedPerDestination = maxRequestsQueuedPerDestination;
+        return this;
+    }
+
+    public long readIdleTimeout() {
+        return readIdleTimeout;
+    }
+
+    public HttpClientSettings setReadIdleTimeout(final long readIdleTimeout) {
+        this.readIdleTimeout = readIdleTimeout;
+        return this;
+    }
+
+    public boolean http2Enabled() {
+        return http2Enabled;
+    }
+
+    public HttpClientSettings setHttp2Enabled(final boolean http2Enabled) {
+        this.http2Enabled = http2Enabled;
+        return this;
+    }
+
+    public int retryMaxAttempts() {
+        return retryMaxAttempts;
+    }
+
+    public HttpClientSettings setRetryMaxAttempts(final int retryMaxAttempts) {
+        this.retryMaxAttempts = retryMaxAttempts;
+        return this;
+    }
+
+    public long retryInitialDelay() {
+        return retryInitialDelay;
+    }
+
+    public HttpClientSettings setRetryInitialDelay(final long retryInitialDelay) {
+        this.retryInitialDelay = retryInitialDelay;
+        return this;
+    }
+
+    public long retryMaxDelay() {
+        return retryMaxDelay;
+    }
+
+    public HttpClientSettings setRetryMaxDelay(final long retryMaxDelay) {
+        this.retryMaxDelay = retryMaxDelay;
+        return this;
+    }
+
+    public double retryMultiplier() {
+        return retryMultiplier;
+    }
+
+    public HttpClientSettings setRetryMultiplier(final double retryMultiplier) {
+        this.retryMultiplier = retryMultiplier;
+        return this;
+    }
+
+    public double retryJitter() {
+        return retryJitter;
+    }
+
+    public HttpClientSettings setRetryJitter(final double retryJitter) {
+        this.retryJitter = retryJitter;
+        return this;
+    }
+
+    public Set<Integer> retryableStatusCodes() {
+        return Collections.unmodifiableSet(retryableStatusCodes);
+    }
+
+    public HttpClientSettings setRetryableStatusCodes(final Set<Integer> retryableStatusCodes) {
+        this.retryableStatusCodes = new HashSet<>(retryableStatusCodes);
+        return this;
+    }
+
+    public boolean circuitBreakerEnabled() {
+        return circuitBreakerEnabled;
+    }
+
+    public HttpClientSettings setCircuitBreakerEnabled(final boolean circuitBreakerEnabled) {
+        this.circuitBreakerEnabled = circuitBreakerEnabled;
+        return this;
+    }
+
+    public int circuitBreakerFailureRateThreshold() {
+        return circuitBreakerFailureRateThreshold;
+    }
+
+    public HttpClientSettings setCircuitBreakerFailureRateThreshold(final int circuitBreakerFailureRateThreshold) {
+        this.circuitBreakerFailureRateThreshold = circuitBreakerFailureRateThreshold;
+        return this;
+    }
+
+    public int circuitBreakerSlidingWindowSize() {
+        return circuitBreakerSlidingWindowSize;
+    }
+
+    public HttpClientSettings setCircuitBreakerSlidingWindowSize(final int circuitBreakerSlidingWindowSize) {
+        this.circuitBreakerSlidingWindowSize = circuitBreakerSlidingWindowSize;
+        return this;
+    }
+
+    public long circuitBreakerTimeout() {
+        return circuitBreakerTimeout;
+    }
+
+    public HttpClientSettings setCircuitBreakerTimeout(final long circuitBreakerTimeout) {
+        this.circuitBreakerTimeout = circuitBreakerTimeout;
+        return this;
+    }
+
+    public int circuitBreakerSuccessThreshold() {
+        return circuitBreakerSuccessThreshold;
+    }
+
+    public HttpClientSettings setCircuitBreakerSuccessThreshold(final int circuitBreakerSuccessThreshold) {
+        this.circuitBreakerSuccessThreshold = circuitBreakerSuccessThreshold;
         return this;
     }
 }

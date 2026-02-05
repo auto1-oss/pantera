@@ -8,7 +8,7 @@ import com.artipie.docker.ManifestReference;
 import com.artipie.docker.manifest.Manifest;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;
@@ -25,7 +25,7 @@ class AuthClientSliceIT {
     /**
      * HTTP client used for proxy.
      */
-    private JettyClientSlices client;
+    private VertxClientSlices client;
 
     /**
      * Repository URL.
@@ -34,7 +34,7 @@ class AuthClientSliceIT {
 
     @BeforeEach
     void setUp() {
-        this.client = new JettyClientSlices();
+        this.client = new VertxClientSlices();
         this.client.start();
         this.slice = new AuthClientSlice(
             this.client.https("registry-1.docker.io"),

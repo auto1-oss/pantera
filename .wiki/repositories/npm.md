@@ -48,3 +48,34 @@ or it's possible to set Artipie as a default registry:
 ```bash
 npm set registry http://{host}:{port}/{repository-name}
 ```
+
+## NPM Group Repository
+
+An NPM group aggregates multiple NPM repositories into a single virtual registry.
+Artipie merges package.json metadata, combining versions and dist-tags from all members.
+
+```yaml
+repo:
+  type: npm-group
+  url: http://{host}:{port}/npm-group
+  settings:
+    repositories:
+      - npm-local         # local repository
+      - npmjs-proxy       # proxy to npmjs.org
+    group:
+      index:
+        remote_exists_ttl: 15m
+        remote_not_exists_ttl: 5m
+      metadata:
+        ttl: 5m
+```
+
+Members are listed in priority order - if the same package version exists in multiple members,
+the first member's metadata wins. Use the group as your npm registry:
+
+```bash
+npm set registry http://{host}:{port}/npm-group
+npm install lodash
+```
+
+See [Group Cache Configuration](../Configuration-Group-Cache) for detailed cache settings.

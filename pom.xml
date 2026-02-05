@@ -26,7 +26,7 @@ SOFTWARE.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.artipie</groupId>
   <artifactId>artipie</artifactId>
-  <version>1.20.12</version>
+  <version>1.21.0</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
@@ -80,19 +80,19 @@ SOFTWARE.
     <maven.compiler.release>21</maven.compiler.release>
     <!-- Tests enabled by default; set -Dmaven.test.skip=true to skip locally -->
     <header.license>LICENSE.header</header.license>
-    <junit-platform.version>5.10.0</junit-platform.version>
-    <vertx.version>4.5.22</vertx.version>
-    <guava.version>33.0.0-jre</guava.version>
+    <junit-platform.version>5.11.4</junit-platform.version>
+    <vertx.version>5.0.7</vertx.version>
+    <guava.version>33.5.0-jre</guava.version>
     <javax.json.version>1.1.4</javax.json.version>
-    <jetty.version>12.1.4</jetty.version>
+    <jetty.version>12.1.5</jetty.version>
     <s3mock.version>3.5.2</s3mock.version>
-    <bouncycastle-lts.version>2.73.9</bouncycastle-lts.version>
-    <httpclient.version>5.3.1</httpclient.version>
-    <httpcore5.version>5.2.4</httpcore5.version>
-    <httpcore5-h2.version>5.2.4</httpcore5-h2.version>
-    <fasterxml.jackson.version>2.16.2</fasterxml.jackson.version>
-    <micrometer.version>1.12.1</micrometer.version>
-    <testcontainers.version>2.0.2</testcontainers.version>
+    <bouncycastle-lts.version>2.73.10</bouncycastle-lts.version>
+    <httpclient.version>5.6</httpclient.version>
+    <httpcore5.version>5.4</httpcore5.version>
+    <httpcore5-h2.version>5.4</httpcore5-h2.version>
+    <fasterxml.jackson.version>2.21.0</fasterxml.jackson.version>
+    <micrometer.version>1.16.2</micrometer.version>
+    <testcontainers.version>2.0.3</testcontainers.version>
   </properties>
   <developers>
     <!-- Required for publishing to central -->
@@ -129,6 +129,14 @@ SOFTWARE.
   </repositories>
   <dependencyManagement>
   <dependencies>
+      <!-- Jackson BOM first to ensure consistent versions across all modules -->
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${fasterxml.jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
       <dependency>
         <groupId>io.vertx</groupId>
         <artifactId>vertx-dependencies</artifactId>
@@ -279,12 +287,7 @@ SOFTWARE.
       <version>${vertx.version}</version>
       <scope>test</scope>
     </dependency>
-    <dependency>
-      <groupId>io.vertx</groupId>
-      <artifactId>vertx-maven-service-factory</artifactId>
-      <version>4.5.22</version>
-      <scope>test</scope>
-    </dependency>
+    <!-- vertx-maven-service-factory removed in Vert.x 5.0.0 -->
     <dependency>
       <groupId>wtf.g4s8</groupId>
       <artifactId>matchers-json</artifactId>
@@ -307,18 +310,6 @@ SOFTWARE.
         <configuration>
           <release>${maven.compiler.release}</release>
         </configuration>
-        <executions>
-          <execution>
-            <id>test-compile</id>
-            <phase>process-test-sources</phase>
-            <goals>
-              <goal>testCompile</goal>
-            </goals>
-            <configuration>
-              <release>${maven.compiler.release}</release>
-            </configuration>
-          </execution>
-        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

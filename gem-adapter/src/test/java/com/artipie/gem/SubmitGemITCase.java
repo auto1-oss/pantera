@@ -11,7 +11,7 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.policy.Policy;
 import com.artipie.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;

@@ -5,6 +5,8 @@
 package com.artipie.vertx;
 
 import com.artipie.http.log.EcsLogger;
+import com.artipie.metrics.ArtipieMetrics;
+import com.artipie.metrics.MicrometerMetrics;
 import io.vertx.reactivex.core.http.HttpServerResponse;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -109,25 +111,27 @@ public final class GuardedHttpServerResponse {
             } catch (Exception e) {
                 // Response may have been ended by Vert.x internally
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Response end() failed (likely already ended by Vert.x)")
+                    .message("Response end() failed by " + caller + " (likely already ended by Vert.x)")
                     .eventCategory("http")
                     .eventAction("response_end")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
             }
         } else {
-            // Already terminated by another path
+            // Already terminated by another path - this is a race condition
+            final String winner = this.terminatedBy.get();
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message("Response race: " + caller + " lost to " + winner + " for " + this.requestId)
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .eventOutcome("failure")
+                .field("http.request.id", this.requestId)
+                .field("event.reason", "Race condition: " + caller + " attempted end() but " + winner + " already completed")
                 .log();
+            // Record race condition metric for monitoring
+            recordRaceMetric(caller, winner);
             return false;
         }
     }
@@ -149,24 +153,26 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Response end(body) failed (likely already ended by Vert.x)")
+                    .message("Response end(body) failed by " + caller + " (likely already ended by Vert.x)")
                     .eventCategory("http")
                     .eventAction("response_end")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
             }
         } else {
+            final String winner = this.terminatedBy.get();
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message("Response race: " + caller + " lost to " + winner + " for " + this.requestId)
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .eventOutcome("failure")
+                .field("http.request.id", this.requestId)
+                .field("event.reason", "Race condition: " + caller + " attempted end() but " + winner + " already completed")
                 .log();
+            // Record race condition metric for monitoring
+            recordRaceMetric(caller, winner);
             return false;
         }
     }
@@ -193,24 +199,28 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Error response failed (likely already ended)")
+                    .message("Error response failed by " + caller + " (likely already ended)")
                     .eventCategory("http")
                     .eventAction("response_error")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
+                    .field("http.response.status_code", statusCode)
                     .error(e)
                     .log();
                 return false;
             }
         } else {
+            final String winner = this.terminatedBy.get();
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message("Response race: " + caller + " lost to " + winner + " for " + this.requestId)
                 .eventCategory("http")
                 .eventAction("response_error_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .eventOutcome("failure")
+                .field("http.request.id", this.requestId)
+                .field("http.response.status_code", statusCode)
+                .field("event.reason", "Race condition: " + caller + " attempted sendError() but " + winner + " already completed")
                 .log();
+            // Record race condition metric for monitoring
+            recordRaceMetric(caller, winner);
             return false;
         }
     }
@@ -228,5 +238,22 @@ public final class GuardedHttpServerResponse {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Record race condition metric safely.
+     *
+     * @param loser The code path that lost the race
+     * @param winner The code path that won the race
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void recordRaceMetric(final String loser, final String winner) {
+        try {
+            if (ArtipieMetrics.isEnabled() && MicrometerMetrics.isInitialized()) {
+                MicrometerMetrics.getInstance().recordResponseRace(loser, winner);
+            }
+        } catch (final Exception e) {
+            // Ignore metric errors - don't let metrics break the response flow
+        }
     }
 }

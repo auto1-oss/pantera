@@ -12,6 +12,7 @@ import com.artipie.docker.misc.Pagination;
 import com.artipie.http.Headers;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
+import com.artipie.http.client.ClientSlices;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 
@@ -20,6 +21,9 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Proxy {@link Docker} implementation.
+ * <p>
+ * Proxies Docker registry API calls to a remote registry, with support for
+ * following HTTP redirects to CDN URLs (which Docker Hub uses for blob downloads).
  */
 public final class ProxyDocker implements Docker {
 
@@ -28,11 +32,17 @@ public final class ProxyDocker implements Docker {
      * Remote repository.
      */
     private final Slice remote;
-    
+
     /**
      * Remote registry URI for Docker Hub detection.
      */
     private final URI remoteUri;
+
+    /**
+     * Client slices for following redirects to CDN URLs.
+     * May be null if redirect following is not supported.
+     */
+    private final ClientSlices clients;
 
     /**
      * @param registryName Name of the Artipie registry
@@ -40,11 +50,22 @@ public final class ProxyDocker implements Docker {
      * @param remoteUri Remote registry URI
      */
     public ProxyDocker(String registryName, Slice remote, URI remoteUri) {
+        this(registryName, remote, remoteUri, null);
+    }
+
+    /**
+     * @param registryName Name of the Artipie registry
+     * @param remote Remote repository slice
+     * @param remoteUri Remote registry URI
+     * @param clients Client slices for following redirects to CDN URLs
+     */
+    public ProxyDocker(String registryName, Slice remote, URI remoteUri, ClientSlices clients) {
         this.registryName = registryName;
         this.remote = remote;
         this.remoteUri = remoteUri;
+        this.clients = clients;
     }
-    
+
     /**
      * @param registryName Name of the Artipie registry
      * @param remote Remote repository slice
@@ -70,7 +91,7 @@ public final class ProxyDocker implements Docker {
     public Repo repo(String name) {
         // Normalize name for Docker Hub
         String normalizedName = this.normalizeRepoName(name);
-        return new ProxyRepo(this.remote, normalizedName, name);
+        return new ProxyRepo(this.remote, normalizedName, name, this.clients);
     }
     
     /**

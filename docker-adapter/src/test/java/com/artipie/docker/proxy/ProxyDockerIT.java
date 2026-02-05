@@ -7,7 +7,7 @@ package com.artipie.docker.proxy;
 import com.artipie.docker.Catalog;
 import com.artipie.docker.misc.Pagination;
 import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsAnything;
 import org.junit.jupiter.api.AfterEach;
@@ -24,7 +24,7 @@ final class ProxyDockerIT {
     /**
      * HTTP client used for proxy.
      */
-    private JettyClientSlices client;
+    private VertxClientSlices client;
 
     /**
      * Proxy docker.
@@ -33,7 +33,7 @@ final class ProxyDockerIT {
 
     @BeforeEach
     void setUp() {
-        this.client = new JettyClientSlices(
+        this.client = new VertxClientSlices(
             new HttpClientSettings().setFollowRedirects(true)
         );
         this.client.start();

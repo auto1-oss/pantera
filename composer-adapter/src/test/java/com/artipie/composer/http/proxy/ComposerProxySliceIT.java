@@ -16,7 +16,7 @@ import com.artipie.composer.test.ComposerSimple;
 import com.artipie.composer.test.PackageSimple;
 import com.artipie.composer.test.SourceServer;
 import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.misc.RandomFreePort;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.vertx.VertxSliceServer;
@@ -55,7 +55,7 @@ final class ComposerProxySliceIT {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices();
+    private final VertxClientSlices client = new VertxClientSlices();
 
     /**
      * Temporary directory.

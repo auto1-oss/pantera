@@ -205,6 +205,7 @@ public class RestApiServerBase {
         this.asto = new BlockingStorage(storage);
         this.caches = new TestArtipieCaches();
         this.ssto = new InMemoryStorage();
+        // Wait for deployment to complete before proceeding
         vertx.deployVerticle(
             new RestApi(
                 this.caches, storage, this.prt,
@@ -218,10 +219,10 @@ public class RestApiServerBase {
                 Optional.empty(),
                 NoopCooldownService.INSTANCE,
                 this.settings()
-            ),
-            context.succeedingThenComplete()
-        );
+            )
+        ).toCompletionStage().toCompletableFuture().get(MAX_WAIT_TIME, TimeUnit.SECONDS);
         this.waitServer(vertx);
+        context.completeNow();
     }
 
     /**
@@ -244,6 +245,8 @@ public class RestApiServerBase {
 
     /**
      * Perform the request and check the result.
+     * This method uses blocking operations and completes the context automatically.
+     * For tests making multiple sequential requests, use {@link #request} directly.
      * @param vertx Text vertx server instance
      * @param ctx Vertx Test Context
      * @param rqs Request parameters: method and path
@@ -254,19 +257,27 @@ public class RestApiServerBase {
     final void requestAndAssert(final Vertx vertx, final VertxTestContext ctx,
         final TestRequest rqs, final Optional<String> token,
         final Consumer<HttpResponse<Buffer>> assertion) throws Exception {
+        assertion.accept(this.request(vertx, rqs, token));
+        ctx.completeNow();
+    }
+
+    /**
+     * Perform HTTP request without completing the test context.
+     * Use this for tests that need multiple sequential requests.
+     * @param vertx Text vertx server instance
+     * @param rqs Request parameters: method and path
+     * @param token Jwt auth token
+     * @return HTTP response
+     * @throws Exception On error
+     */
+    final HttpResponse<Buffer> request(final Vertx vertx, final TestRequest rqs,
+        final Optional<String> token) throws Exception {
         final HttpRequest<Buffer> request = WebClient.create(vertx, this.webClientOptions())
             .request(rqs.method, this.port(), RestApiServerBase.HOST, rqs.path);
         token.ifPresent(request::bearerTokenAuthentication);
-        rqs.body
+        return rqs.body
             .map(request::sendJsonObject)
             .orElseGet(request::send)
-            .onSuccess(
-                res -> {
-                    assertion.accept(res);
-                    ctx.completeNow();
-                }
-            )
-            .onFailure(ctx::failNow)
             .toCompletionStage().toCompletableFuture()
             .get(RestApiServerBase.TEST_TIMEOUT, TimeUnit.SECONDS);
     }
@@ -286,32 +297,48 @@ public class RestApiServerBase {
 
     /**
      * Obtain jwt auth token for given username and password.
+     * This method does NOT complete the test context - use for tests making multiple requests.
+     * @param vertx Text vertx server instance
+     * @param name Username
+     * @param pass Password
+     * @return Jwt token string
+     * @throws Exception On error
+     */
+    final String obtainToken(final Vertx vertx, final String name, final String pass)
+        throws Exception {
+        final HttpResponse<Buffer> response = this.request(
+            vertx,
+            new TestRequest(
+                HttpMethod.POST, "/api/v1/oauth/token",
+                new JsonObject().put("name", name).put("pass", pass)
+            ),
+            Optional.empty()
+        );
+        MatcherAssert.assertThat(
+            "Failed to get token",
+            response.statusCode(),
+            new IsEqual<>(HttpStatus.OK_200)
+        );
+        return response.bodyAsJsonObject().getString("token");
+    }
+
+    /**
+     * Obtain jwt auth token for given username and password.
      * @param vertx Text vertx server instance
      * @param ctx Vertx Test Context
      * @param name Username
      * @param pass Password
-     * @return Jwt token
+     * @return Jwt token (wrapped in AtomicReference for backward compatibility)
      * @throws Exception On error
+     * @deprecated Use {@link #obtainToken(Vertx, String, String)} for tests with multiple requests
      */
+    @Deprecated
     final AtomicReference<String> getToken(
         final Vertx vertx, final VertxTestContext ctx, final String name, final String pass
     ) throws Exception {
-        final AtomicReference<String> token = new AtomicReference<>();
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(
-                HttpMethod.POST, "/api/v1/oauth/token",
-                new JsonObject().put("name", name).put("pass", pass)
-            ), Optional.empty(),
-            response -> {
-                MatcherAssert.assertThat(
-                    "Failed to get token",
-                    response.statusCode(),
-                    new IsEqual<>(HttpStatus.OK_200)
-                );
-                token.set(((JsonObject) response.body().toJson()).getString("token"));
-            }
-        );
-        return token;
+        final String token = this.obtainToken(vertx, name, pass);
+        ctx.completeNow();
+        return new AtomicReference<>(token);
     }
 
     /**
@@ -320,27 +347,37 @@ public class RestApiServerBase {
      * @param vertx Vertx instance
      */
     final void waitServer(final Vertx vertx) {
-        final AtomicReference<Boolean> available = new AtomicReference<>(false);
         final NetClient client = vertx.createNetClient();
         final long max = System.currentTimeMillis() + RestApiServerBase.MAX_WAIT;
-        while (!available.get() && System.currentTimeMillis() < max) {
-            client.connect(
-                this.prt, RestApiServerBase.HOST,
-                ar -> {
-                    if (ar.succeeded()) {
-                        available.set(true);
-                    }
-                }
-            );
-            if (!available.get()) {
+        boolean available = false;
+        try {
+            while (!available && System.currentTimeMillis() < max) {
                 try {
-                    TimeUnit.MILLISECONDS.sleep(RestApiServerBase.SLEEP_DURATION);
+                    client.connect(this.prt, RestApiServerBase.HOST)
+                        .toCompletionStage()
+                        .toCompletableFuture()
+                        .get(RestApiServerBase.SLEEP_DURATION, TimeUnit.MILLISECONDS);
+                    available = true;
+                } catch (final java.util.concurrent.TimeoutException ignored) {
+                    // Connection timed out, retry
+                } catch (final java.util.concurrent.ExecutionException ex) {
+                    // Connection failed (refused), retry after sleep
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(RestApiServerBase.SLEEP_DURATION);
+                    } catch (final InterruptedException err) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 } catch (final InterruptedException err) {
+                    Thread.currentThread().interrupt();
                     break;
                 }
             }
+        } finally {
+            // Close the client to prevent resource leaks
+            client.close();
         }
-        if (!available.get()) {
+        if (!available) {
             Assertions.fail(
                 String.format(
                     "Server's port %s:%s is not reachable",

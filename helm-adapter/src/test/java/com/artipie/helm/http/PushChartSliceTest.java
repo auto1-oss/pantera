@@ -56,10 +56,10 @@ final class PushChartSliceTest {
     void shouldNotUpdateAfterUpload() {
         final String tgz = "ark-1.0.1.tgz";
         MatcherAssert.assertThat(
-            "Wrong status, expected OK",
+            "Wrong status, expected CREATED",
             new PushChartSlice(this.storage, Optional.of(this.events), "my-helm"),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.OK),
+                new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.GET, "/?updateIndex=false"),
                 Headers.EMPTY,
                 new Content.From(new TestResource(tgz).asBytes())
@@ -78,10 +78,10 @@ final class PushChartSliceTest {
     void shouldUpdateIndexAfterUpload(final String uri) {
         final String tgz = "ark-1.0.1.tgz";
         MatcherAssert.assertThat(
-            "Wrong status, expected OK",
+            "Wrong status, expected CREATED",
             new PushChartSlice(this.storage, Optional.of(this.events), "test-helm"),
             new SliceHasResponse(
-                new RsHasStatus(RsStatus.OK),
+                new RsHasStatus(RsStatus.CREATED),
                 new RequestLine(RqMethod.GET, uri),
                 Headers.EMPTY,
                 new Content.From(new TestResource(tgz).asBytes())

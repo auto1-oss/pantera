@@ -72,7 +72,10 @@ public final class SearchSlice implements Slice {
                         .body(content)
                         .build();
                 }
-                return ResponseBuilder.internalError(throwable).build();
+                // Return clean error message without stacktrace
+                return ResponseBuilder.internalError()
+                    .textBody("Search failed: " + throwable.getMessage())
+                    .build();
             }
         ).toCompletableFuture();
     }

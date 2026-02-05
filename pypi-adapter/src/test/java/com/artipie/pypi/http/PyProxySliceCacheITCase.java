@@ -10,7 +10,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
 import com.artipie.http.ResponseBuilder;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.http.slice.SliceSimple;
 import com.artipie.pypi.PypiDeployment;
@@ -43,7 +43,7 @@ final class PyProxySliceCacheITCase {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices();
+    private final VertxClientSlices client = new VertxClientSlices();
 
     /**
      * Vertx slice server instance.

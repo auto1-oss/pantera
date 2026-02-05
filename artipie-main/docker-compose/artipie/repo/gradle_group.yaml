@@ -1,5 +1,13 @@
 repo:
   type: gradle-group
+  # Members are listed in priority order - first match wins
   members:
-    - gradle_proxy
-    - gradle
+    - gradle         # local repository (highest priority)
+    - gradle_proxy   # proxy to Gradle Plugin Portal
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

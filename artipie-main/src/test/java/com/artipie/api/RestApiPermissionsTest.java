@@ -21,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.eclipse.jetty.http.HttpStatus;
 import org.hamcrest.MatcherAssert;
@@ -112,140 +111,110 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
     @Test
     void returnsForbiddenIfUserDoesNotHavePermissions(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token = this.getToken(vertx, ctx, "john", "whatever");
+        final String token = this.obtainToken(vertx, "john", "whatever");
         for (final TestRequest item : RestApiPermissionsTest.RQST) {
-            this.requestAndAssert(
-                vertx, ctx, item, Optional.of(token.get()),
-                response -> MatcherAssert.assertThat(
-                    String.format("%s failed", item),
-                    response.statusCode(),
-                    new IsEqual<>(HttpStatus.FORBIDDEN_403)
-                )
+            final var response = this.request(vertx, item, Optional.of(token));
+            MatcherAssert.assertThat(
+                String.format("%s failed", item),
+                response.statusCode(),
+                new IsEqual<>(HttpStatus.FORBIDDEN_403)
             );
         }
+        ctx.completeNow();
     }
 
     @Test
     void returnsOkIfUserHasPermissions(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token = this.getToken(vertx, ctx, "artipie", "whatever");
+        final String token = this.obtainToken(vertx, "artipie", "whatever");
         for (final TestRequest item : RestApiPermissionsTest.GET_DATA) {
-            this.requestAndAssert(
-                vertx, ctx, item, Optional.of(token.get()),
-                response -> MatcherAssert.assertThat(
-                    String.format("%s failed", item),
-                    response.statusCode(),
-                    new IsEqual<>(HttpStatus.OK_200)
-                )
+            final var response = this.request(vertx, item, Optional.of(token));
+            MatcherAssert.assertThat(
+                String.format("%s failed", item),
+                response.statusCode(),
+                new IsEqual<>(HttpStatus.OK_200)
             );
         }
+        ctx.completeNow();
     }
 
     @Test
     void createsAndRemovesRepoWithPerms(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token =
-            this.getToken(vertx, ctx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
+        final String token =
+            this.obtainToken(vertx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
         final String path = "/api/v1/repository/my-docker";
-        this.requestAndAssert(
-            vertx, ctx,
+        var resp = this.request(
+            vertx,
             new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put(
                     "repo", new JsonObject().put("type", "file").put("storage", "def")
                 )
-            ), Optional.of(token.get()),
-            resp -> MatcherAssert.assertThat(
-                resp.statusCode(),
-                new IsEqual<>(HttpStatus.OK_200)
-            )
+            ), Optional.of(token)
         );
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token.get()),
-            resp -> MatcherAssert.assertThat(
-                resp.statusCode(),
-                new IsEqual<>(HttpStatus.OK_200)
-            )
-        );
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.OK_200));
+        resp = this.request(vertx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token));
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.OK_200));
+        ctx.completeNow();
     }
 
     @Test
     void createsAndRemovesUserWithPerms(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token =
-            this.getToken(vertx, ctx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
+        final String token =
+            this.obtainToken(vertx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
         final String path = "/api/v1/users/Alice";
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(
+        var resp = this.request(
+            vertx, new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put("type", "plain").put("pass", "wonderland")
                     .put("roles", JsonArray.of("readers", "tags"))
-            ), Optional.of(token.get()),
-            response -> MatcherAssert.assertThat(
-                response.statusCode(),
-                new IsEqual<>(HttpStatus.CREATED_201)
-            )
+            ), Optional.of(token)
         );
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token.get()),
-            response -> MatcherAssert.assertThat(
-                response.statusCode(),
-                new IsEqual<>(HttpStatus.OK_200)
-            )
-        );
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.CREATED_201));
+        resp = this.request(vertx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token));
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.OK_200));
+        ctx.completeNow();
     }
 
     @Test
     void createsAndRemovesRoleWithPerms(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token =
-            this.getToken(vertx, ctx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
+        final String token =
+            this.obtainToken(vertx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
         final String path = "/api/v1/roles/admin";
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(
+        var resp = this.request(
+            vertx, new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put(
                     "permissions", new JsonObject().put("all_permission", new JsonObject())
                 )
-            ), Optional.of(token.get()),
-            response -> MatcherAssert.assertThat(
-                response.statusCode(),
-                new IsEqual<>(HttpStatus.CREATED_201)
-            )
+            ), Optional.of(token)
         );
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token.get()),
-            response -> MatcherAssert.assertThat(
-                response.statusCode(),
-                new IsEqual<>(HttpStatus.OK_200)
-            )
-        );
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.CREATED_201));
+        resp = this.request(vertx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token));
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.OK_200));
+        ctx.completeNow();
     }
 
     @Test
     void createsAndRemovesStorageAliasWithPerms(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token =
-            this.getToken(vertx, ctx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
+        final String token =
+            this.obtainToken(vertx, RestApiPermissionsTest.NAME, RestApiPermissionsTest.PASS);
         final String path = "/api/v1/storages/new-alias";
-        this.requestAndAssert(
-            vertx, ctx,
+        var resp = this.request(
+            vertx,
             new TestRequest(
                 HttpMethod.PUT, path,
                 new JsonObject().put("type", "fs").put("path", "new/alias/path")
-            ), Optional.of(token.get()),
-            resp -> MatcherAssert.assertThat(
-                resp.statusCode(),
-                new IsEqual<>(HttpStatus.CREATED_201)
-            )
+            ), Optional.of(token)
         );
-        this.requestAndAssert(
-            vertx, ctx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token.get()),
-            response -> MatcherAssert.assertThat(
-                response.statusCode(),
-                new IsEqual<>(HttpStatus.OK_200)
-            )
-        );
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.CREATED_201));
+        resp = this.request(vertx, new TestRequest(HttpMethod.DELETE, path), Optional.of(token));
+        MatcherAssert.assertThat(resp.statusCode(), new IsEqual<>(HttpStatus.OK_200));
+        ctx.completeNow();
     }
 
     /**

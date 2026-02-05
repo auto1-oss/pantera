@@ -7,10 +7,10 @@ package com.artipie.http;
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.http.client.ClientSlices;
+import com.artipie.http.client.RedirectFollowingSlice;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRule;
 import com.artipie.http.rt.RtRulePath;
@@ -57,7 +57,7 @@ public final class GoProxySlice extends Slice.Wrap {
      * @param authenticator Auth
      */
     GoProxySlice(
-        final JettyClientSlices client,
+        final ClientSlices client,
         final URI uri,
         final Authenticator authenticator
     ) {
@@ -160,18 +160,24 @@ public final class GoProxySlice extends Slice.Wrap {
     }
 
     /**
-     * Build client slice for target URI.
+     * Build client slice for target URI with redirect support.
+     * <p>
+     * Wraps the remote slice with RedirectFollowingSlice to handle
+     * cross-domain CDN redirects that some registries use.
      *
      * @param client Client slices.
      * @param remote Remote URI.
      * @param auth Authenticator.
-     * @return Client slice for target URI.
+     * @return Client slice for target URI with redirect support.
      */
     private static Slice remote(
         final ClientSlices client,
         final URI remote,
         final Authenticator auth
     ) {
-        return new AuthClientSlice(new UriClientSlice(client, remote), auth);
+        return new RedirectFollowingSlice(
+            new AuthClientSlice(new UriClientSlice(client, remote), auth),
+            client
+        );
     }
 }

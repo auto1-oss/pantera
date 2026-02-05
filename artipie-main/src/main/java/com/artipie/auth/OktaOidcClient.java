@@ -135,7 +135,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", response.statusCode())
+                .field("http.response.status_code", response.statusCode())
                 .field("okta.url", this.authnUrl)
                 .field("okta.error_code", errorCode)
                 .field("okta.error_summary", errorSummary)
@@ -367,7 +367,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
+                .field("http.response.status_code", resp.statusCode())
                 .field("okta.authorize_url", this.authorizeUrl)
                 .field("okta.issuer", this.issuer)
                 .log();
@@ -381,7 +381,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
+                .field("http.response.status_code", resp.statusCode())
                 .log();
             return null;
         }
@@ -479,7 +479,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
+                .field("http.response.status_code", resp.statusCode())
                 .log();
             return null;
         }
@@ -628,7 +628,7 @@ public final class OktaOidcClient {
                     .eventAction("userinfo")
                     .eventOutcome("failure")
                     .field("user.name", username)
-                    .field("http.status", resp.statusCode())
+                    .field("http.response.status_code", resp.statusCode())
                     .field("okta.userinfo_url", this.userinfoUrl)
                     .log();
                 return null;

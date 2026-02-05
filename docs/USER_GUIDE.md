@@ -1,6 +1,6 @@
 # Artipie User Guide
 
-**Version:** 1.20.11
+**Version:** 1.21.0
 **Last Updated:** January 2026
 
 ---
@@ -12,13 +12,14 @@
 3. [Installation](#installation)
 4. [Configuration](#configuration)
 5. [Repository Types](#repository-types)
-6. [Storage Backends](#storage-backends)
-7. [Authentication & Authorization](#authentication--authorization)
-8. [REST API](#rest-api)
-9. [Metrics & Monitoring](#metrics--monitoring)
-10. [Logging](#logging)
-11. [Performance Tuning](#performance-tuning)
-12. [Troubleshooting](#troubleshooting)
+6. [Group Repositories](#group-repositories)
+7. [Storage Backends](#storage-backends)
+8. [Authentication & Authorization](#authentication--authorization)
+9. [REST API](#rest-api)
+10. [Metrics & Monitoring](#metrics--monitoring)
+11. [Logging](#logging)
+12. [Performance Tuning](#performance-tuning)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -149,7 +150,7 @@ Services available:
 
 ```bash
 # Download from releases
-wget https://github.com/artipie/artipie/releases/download/v1.20.11/artipie.jar
+wget https://github.com/artipie/artipie/releases/download/v1.21.0/artipie.jar
 
 # Run
 java -jar artipie.jar \
@@ -492,6 +493,260 @@ curl http://localhost:8080/files/
 
 ---
 
+## Group Repositories
+
+Group repositories aggregate multiple local and/or proxy repositories into a single unified endpoint. When a client requests a package, Artipie searches through all member repositories in priority order and returns the first match.
+
+### What is Metadata Merging?
+
+Starting with v1.21.0, Artipie supports **metadata merging** for group repositories. Instead of just returning the first match, Artipie can intelligently merge metadata from all member repositories, providing clients with a complete view of available packages and versions.
+
+**Without metadata merging:**
+- Client requests `lodash` from npm-group
+- Artipie checks npm-local, finds `lodash@4.17.20`
+- Returns only local version, even though npm-proxy has `lodash@4.17.21`
+
+**With metadata merging:**
+- Client requests `lodash` metadata from npm-group
+- Artipie fetches metadata from all members in parallel
+- Merges versions: `4.17.20` (local) + `4.17.21` (proxy)
+- Client sees all available versions
+
+### Supported Adapters for Metadata Merging
+
+| Adapter | Metadata Format | Merge Strategy |
+|---------|-----------------|----------------|
+| **NPM** | `package.json` | Union of versions, priority wins conflicts |
+| **Go** | `@v/list` | Sorted union of versions |
+| **PyPI** | `/simple/` HTML | Union of package links |
+| **Docker** | Manifest list | Tag union, digest-based dedup |
+| **Composer** | `packages.json` | Version union with priority |
+
+### Group Repository Configuration
+
+**Basic NPM Group:**
+```yaml
+repo:
+  type: npm-group
+  members:
+    - npm-local       # Priority 1 (highest)
+    - npm-proxy-1     # Priority 2
+    - npm-proxy-2     # Priority 3
+```
+
+**Group with Cache Settings Override:**
+```yaml
+repo:
+  type: npm-group
+  members:
+    - npm-local
+    - npm-proxy
+  group:
+    metadata:
+      ttl: 10m        # Override default 5m TTL
+    resolution:
+      upstream_timeout: 10s
+```
+
+### Group Cache Configuration
+
+Artipie uses a two-tier caching system for group repositories:
+- **L1 Cache**: In-memory (Caffeine) - fast, limited size
+- **L2 Cache**: Valkey/Redis (optional) - larger, shared across instances
+
+#### Global Configuration (artipie.yaml)
+
+Configure default settings for all group repositories:
+
+```yaml
+meta:
+  storage:
+    type: fs
+    path: /var/artipie/repo
+
+  # Global group repository settings
+  group:
+    index:
+      remote_exists_ttl: 15m      # Cache "package exists" for 15 min
+      remote_not_exists_ttl: 5m   # Cache "package not found" for 5 min (negative cache)
+      local_event_driven: true    # Instant updates for local repo changes
+
+    metadata:
+      ttl: 5m                     # Merged metadata cache TTL
+      stale_serve: 1h             # Serve stale if upstream down
+      background_refresh_at: 0.8  # Refresh at 80% of TTL expiry
+
+    resolution:
+      upstream_timeout: 5s        # Timeout per upstream request
+      max_parallel: 10            # Max parallel upstream requests
+
+    cache_sizing:
+      l1_max_entries: 10000       # L1 in-memory cache entries
+      l2_max_entries: 1000000     # L2 Valkey cache entries
+```
+
+#### Configuration Options Reference
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **index.remote_exists_ttl** | `15m` | How long to cache that a remote repository has a package |
+| **index.remote_not_exists_ttl** | `5m` | How long to cache negative lookups (404s) from remote repos |
+| **index.local_event_driven** | `true` | Update index instantly when local repos change (no TTL) |
+| **metadata.ttl** | `5m` | TTL for merged metadata cache |
+| **metadata.stale_serve** | `1h` | Continue serving stale metadata if upstream is down |
+| **metadata.background_refresh_at** | `0.8` | Trigger background refresh at 80% of TTL |
+| **resolution.upstream_timeout** | `5s` | Timeout for each upstream metadata request |
+| **resolution.max_parallel** | `10` | Maximum parallel requests to upstream repos |
+| **cache_sizing.l1_max_entries** | `10,000` | Maximum entries in L1 (Caffeine) cache |
+| **cache_sizing.l2_max_entries** | `1,000,000` | Maximum entries in L2 (Valkey) cache |
+
+#### Duration Format
+
+Durations can be specified in multiple formats:
+- `5s` - 5 seconds
+- `15m` - 15 minutes
+- `1h` - 1 hour
+- `7d` - 7 days
+- `PT5M` - ISO-8601 format (5 minutes)
+
+#### Repository-Level Override
+
+Override global settings for specific repositories:
+
+```yaml
+# my-npm-group.yaml
+repo:
+  type: npm-group
+  members:
+    - npm-internal
+    - npm-proxy-npmjs
+
+  # Override global group settings for this repo
+  group:
+    metadata:
+      ttl: 10m                    # Longer TTL for stable registry
+    resolution:
+      upstream_timeout: 30s       # Longer timeout for slow upstream
+      max_parallel: 5             # Fewer parallel requests
+```
+
+### How Caching Works
+
+```
+Request for package metadata
+         │
+         ▼
+┌─────────────────────┐
+│   L1 Cache Check    │──Hit──► Return cached
+│   (Caffeine)        │
+└─────────────────────┘
+         │ Miss
+         ▼
+┌─────────────────────┐
+│   L2 Cache Check    │──Hit──► Promote to L1, return
+│   (Valkey/Redis)    │
+└─────────────────────┘
+         │ Miss
+         ▼
+┌─────────────────────┐
+│  Check Location     │
+│  Index              │──Known locations──► Fetch only from known members
+└─────────────────────┘
+         │ Unknown
+         ▼
+┌─────────────────────┐
+│  Fetch from all     │
+│  members (parallel) │
+└─────────────────────┘
+         │
+         ▼
+┌─────────────────────┐
+│  Merge metadata     │
+│  (adapter-specific) │
+└─────────────────────┘
+         │
+         ▼
+┌─────────────────────┐
+│  Cache result       │
+│  (L1 + L2)          │
+└─────────────────────┘
+         │
+         ▼
+    Return merged result
+```
+
+### Event-Driven Index Updates
+
+When `local_event_driven: true` (default), changes to local repositories immediately update the location index:
+
+- **Publish**: Package immediately appears in group
+- **Delete**: Package immediately removed from group (falls through to proxy)
+- **No TTL**: Local entries never expire (only explicit events)
+
+This ensures zero-delay visibility for internal packages while still caching remote lookups.
+
+### Example: Complete Group Setup
+
+```yaml
+# artipie.yaml - Global configuration
+meta:
+  storage:
+    type: fs
+    path: /var/artipie/repo
+
+  group:
+    index:
+      remote_exists_ttl: 30m
+      remote_not_exists_ttl: 10m
+    metadata:
+      ttl: 5m
+      stale_serve: 2h
+    resolution:
+      upstream_timeout: 10s
+      max_parallel: 20
+```
+
+```yaml
+# npm-local.yaml - Local NPM repository
+repo:
+  type: npm
+  url: http://artipie:8080/npm-local
+  storage:
+    type: fs
+    path: /var/artipie/data/npm-local
+```
+
+```yaml
+# npm-proxy.yaml - Proxy to npmjs.org
+repo:
+  type: npm-proxy
+  storage:
+    type: fs
+    path: /var/artipie/data/npm-proxy
+  remotes:
+    - url: https://registry.npmjs.org
+```
+
+```yaml
+# npm.yaml - Group combining local + proxy
+repo:
+  type: npm-group
+  members:
+    - npm-local    # Internal packages first
+    - npm-proxy    # Public packages as fallback
+```
+
+**Client usage:**
+```bash
+# Configure npm to use the group
+npm config set registry http://artipie:8080/npm
+
+# Install packages (transparently uses local or proxy)
+npm install lodash @mycompany/internal-lib
+```
+
+---
+
 ## Storage Backends
 
 ### Filesystem Storage
@@ -821,7 +1076,7 @@ curl http://localhost:8080/.health
 **Version Endpoint:**
 ```bash
 curl http://localhost:8080/.version
-# Returns: 1.20.11
+# Returns: 1.21.0
 ```
 
 ---
@@ -993,6 +1248,61 @@ cache:
 Vert.x thread pools are automatically sized:
 - **Event loop threads**: 2x CPU cores
 - **Worker threads**: max(20, 4x CPU cores)
+
+### HTTP Client Configuration (Vert.x)
+
+Starting with v1.21.0, Artipie uses **Vert.x WebClient** exclusively for all outbound HTTP requests (proxy operations). This replaces the previous Jetty HTTP client implementation.
+
+**Benefits:**
+- Single HTTP client framework (reduced complexity)
+- Native HTTP/2 support with ALPN
+- Shared event loop with Vert.x server (no context switching)
+- Built-in backpressure for streaming
+
+**Configuration in artipie.yaml:**
+```yaml
+meta:
+  http_client:
+    # Connection settings
+    connection_timeout: 15000         # ms (default: 15s)
+    idle_timeout: 30000               # ms (default: 30s)
+    read_idle_timeout: 60000          # ms for slow downloads
+
+    # Pool settings
+    max_connections_per_destination: 64
+    max_total_connections: 512
+
+    # Protocol
+    http2_enabled: true               # HTTP/2 with HTTP/1.1 fallback
+    trust_all: false                  # Trust all SSL certs (dev only!)
+    follow_redirects: true
+
+    # Retry with exponential backoff
+    retry:
+      max_attempts: 3
+      initial_delay: 100              # ms
+      max_delay: 1000                 # ms cap
+      multiplier: 2.0
+      jitter: 0.2                     # +/- 20%
+      retryable_status_codes: [502, 503, 504]
+
+    # Circuit breaker (per destination)
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 5
+      success_threshold: 3
+      timeout: 30000                  # ms before half-open
+      failure_rate_threshold: 80      # percentage to open
+
+    # Proxy configuration
+    proxy_timeout: 120                # seconds
+```
+
+**Migration Notes (from Jetty):**
+- Configuration format is compatible - no changes required for basic setups
+- HTTP/3 support removed (Vert.x 5 does not support HTTP/3 client)
+- Circuit breaker is now per-destination instead of global
+- Connection pools are managed by Vert.x automatically
 
 ---
 
@@ -1170,4 +1480,4 @@ docker logs artipie | grep "event.outcome=blocked"
 
 ---
 
-*This guide covers Artipie version 1.20.11. For the latest updates, see the [GitHub repository](https://github.com/artipie/artipie).*
+*This guide covers Artipie version 1.21.0. For the latest updates, see the [GitHub repository](https://github.com/artipie/artipie).*

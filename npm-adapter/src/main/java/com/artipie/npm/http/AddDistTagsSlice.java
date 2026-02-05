@@ -76,12 +76,16 @@ final class AddDistTagsSlice implements Slice {
                                 }
                             );
                     }
-                    return CompletableFuture.completedFuture(
+                    // Consume request body to prevent Vert.x connection leak
+                    return new Content.From(body).asBytesFuture().thenApply(ignored ->
                         ResponseBuilder.notFound().build()
                     );
                 }
             );
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 }

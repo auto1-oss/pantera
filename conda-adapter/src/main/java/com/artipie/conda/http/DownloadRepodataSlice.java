@@ -71,6 +71,9 @@ public final class DownloadRepodataSlice implements Slice {
                     .build()
             );
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 }

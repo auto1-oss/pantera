@@ -31,6 +31,7 @@ public final class SliceSimple implements Slice {
 
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
-        return CompletableFuture.completedFuture(this.res.get());
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored -> this.res.get());
     }
 }

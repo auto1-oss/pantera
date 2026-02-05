@@ -13,7 +13,7 @@ import com.artipie.http.GoProxySlice;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.auth.GenericAuthenticator;
 import com.artipie.http.group.GroupSlice;
 import com.artipie.http.rq.RequestLine;
@@ -47,7 +47,7 @@ public final class GoProxy implements Slice {
      * @param cooldown Cooldown service
      */
     public GoProxy(
-        final JettyClientSlices client,
+        final ClientSlices client,
         final RepoConfig cfg,
         final Optional<Queue<ProxyArtifactEvent>> events,
         final CooldownService cooldown

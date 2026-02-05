@@ -86,9 +86,12 @@ final class AddArchiveSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", uri)
                 .log();
-            return ResponseBuilder.badRequest()
-                .textBody("Path traversal not allowed")
-                .completedFuture();
+            // Consume request body to prevent Vert.x connection leak
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.badRequest()
+                    .textBody("Path traversal not allowed")
+                    .build()
+            );
         }
 
         // Validate archive format - support .zip, .tar.gz, .tgz
@@ -104,9 +107,12 @@ final class AddArchiveSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.path", uri)
                 .log();
-            return ResponseBuilder.badRequest()
-                .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
-                .completedFuture();
+            // Consume request body to prevent Vert.x connection leak
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.badRequest()
+                    .textBody("Only .zip, .tar.gz, and .tgz archives are supported for Composer packages")
+                    .build()
+            );
         }
         
         // Extract the filename from the URI for initial storage

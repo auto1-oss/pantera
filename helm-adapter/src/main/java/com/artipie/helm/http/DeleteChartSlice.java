@@ -83,7 +83,10 @@ final class DeleteChartSlice implements Slice {
                 .to(SingleInterop.get())
                 .toCompletableFuture();
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 
     /**
@@ -138,7 +141,7 @@ final class DeleteChartSlice implements Slice {
                                         )
                                     )
                                 );
-                                return ResponseBuilder.ok().build();
+                                return ResponseBuilder.noContent().build();
                             }
                             return ResponseBuilder.notFound().build();
                         }

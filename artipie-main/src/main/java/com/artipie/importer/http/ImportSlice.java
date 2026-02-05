@@ -82,7 +82,10 @@ public final class ImportSlice implements Slice {
                         .eventOutcome("failure")
                         .error(cause)
                         .log();
-                    return ResponseBuilder.internalError(cause).build();
+                    // Return clean error message without stacktrace
+                    return ResponseBuilder.internalError()
+                        .textBody("Import failed: " + cause.getMessage())
+                        .build();
                 }).toCompletableFuture();
         } catch (final ResponseException rex) {
             return CompletableFuture.completedFuture(rex.response());
@@ -94,7 +97,12 @@ public final class ImportSlice implements Slice {
                 .eventOutcome("failure")
                 .error(ex)
                 .log();
-            return CompletableFuture.completedFuture(ResponseBuilder.internalError(ex).build());
+            // Return clean error message without stacktrace
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.internalError()
+                    .textBody("Import failed: " + ex.getMessage())
+                    .build()
+            );
         }
     }
 

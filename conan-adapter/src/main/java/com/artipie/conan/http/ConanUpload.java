@@ -226,20 +226,22 @@ public final class ConanUpload {
             if (token.isPresent()) {
                 return this.tokenizer.authenticateToken(token.get())
                     .toCompletableFuture()
-                    .thenApply(
+                    .thenCompose(
                         item -> {
                             if (item.isPresent() && item.get().getHostname().equals(hostname)
                                 && item.get().getPath().equals(path)) {
                                 return new SliceUpload(this.storage)
                                     .response(line, headers, body);
                             }
-                            return CompletableFuture.completedFuture(
+                            // Consume request body to prevent Vert.x request leak
+                            return body.asBytesFuture().thenApply(ignored ->
                                 ResponseBuilder.unauthorized().build()
                             );
                         }
-                    ).thenCompose(Function.identity());
+                    );
             }
-            return CompletableFuture.completedFuture(
+            // Consume request body to prevent Vert.x request leak
+            return body.asBytesFuture().thenApply(ignored ->
                 ResponseBuilder.unauthorized().build()
             );
         }

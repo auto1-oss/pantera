@@ -41,9 +41,11 @@ final class SafeSlice implements Slice {
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            return CompletableFuture.completedFuture(ResponseBuilder.internalError()
-                .textBody("Failed to respond to request: " + err.getMessage())
-                .build()
+            // Consume request body to prevent Vert.x connection leak
+            return body.asBytesFuture().thenApply(ignored ->
+                ResponseBuilder.internalError()
+                    .textBody("Failed to respond to request: " + err.getMessage())
+                    .build()
             );
         }
     }

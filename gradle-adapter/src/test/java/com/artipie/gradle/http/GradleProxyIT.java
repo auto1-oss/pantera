@@ -10,7 +10,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.hm.SliceHasResponse;
 import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
@@ -33,13 +33,13 @@ import java.net.URI;
 class GradleProxyIT {
 
     private Vertx vertx;
-    private JettyClientSlices client;
+    private VertxClientSlices client;
     private VertxSliceServer server;
 
     @BeforeEach
     void setUp() {
         this.vertx = Vertx.vertx();
-        this.client = new JettyClientSlices();
+        this.client = new VertxClientSlices();
         this.client.start();
     }
 

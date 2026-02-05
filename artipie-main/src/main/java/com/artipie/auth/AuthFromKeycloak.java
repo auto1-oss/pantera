@@ -51,10 +51,7 @@ public final class AuthFromKeycloak implements Authentication {
             if (traceId != null) {
                 logger.field("trace.id", traceId);
             }
-            final String clientIp = MDC.get("client.ip");
-            if (clientIp != null) {
-                logger.field("client.ip", clientIp);
-            }
+            // Note: client.ip is added automatically by EcsLogger from MDC
             final String urlPath = MDC.get("url.path");
             if (urlPath != null) {
                 logger.field("url.path", urlPath);

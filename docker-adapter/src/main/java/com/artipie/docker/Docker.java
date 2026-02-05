@@ -5,8 +5,10 @@
 
 package com.artipie.docker;
 
+import com.artipie.asto.Storage;
 import com.artipie.docker.misc.Pagination;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -37,4 +39,14 @@ public interface Docker {
      * @return Catalog.
      */
     CompletableFuture<Catalog> catalog(Pagination pagination);
+
+    /**
+     * Get underlying storage if available.
+     * Used for stream-through caching optimization.
+     *
+     * @return Optional storage
+     */
+    default Optional<Storage> storage() {
+        return Optional.empty();
+    }
 }

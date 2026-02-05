@@ -134,7 +134,10 @@ public final class UpdateSlice implements Slice {
                 )
             ).toCompletableFuture();
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 
     /**

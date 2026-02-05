@@ -9,21 +9,17 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
-import com.github.dockerjava.api.DockerClient;
 import io.etcd.jetcd.Client;
-import io.etcd.jetcd.launcher.EtcdContainer;
 import io.etcd.jetcd.test.EtcdClusterExtension;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
-import org.testcontainers.DockerClientFactory;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -40,40 +36,23 @@ final class EtcdStorageITCase {
     /**
      * Test cluster.
      */
-    static final EtcdClusterExtension ETCD = new EtcdClusterExtension(
-        "test-etcd",
-        1,
-        false,
-        "--data-dir",
-        "/data.etcd0"
-    );
+    @RegisterExtension
+    static final EtcdClusterExtension ETCD = EtcdClusterExtension.builder()
+        .withNodes(1)
+        .build();
 
     /**
      * Storage.
      */
     private Storage storage;
 
-    @BeforeAll
-    static void beforeAll() throws InterruptedException {
-        final DockerClient client = DockerClientFactory.instance().client();
-        client.pullImageCmd(EtcdContainer.ETCD_DOCKER_IMAGE_NAME)
-            .start()
-            .awaitCompletion();
-        ETCD.start();
-    }
-
     @BeforeEach
     void setUp() {
-        final List<URI> endpoints = ETCD.getClientEndpoints();
+        final List<URI> endpoints = ETCD.clientEndpoints();
         this.storage = new EtcdStorage(
             Client.builder().endpoints(endpoints).build(),
             endpoints.stream().map(URI::toString).collect(Collectors.joining())
         );
-    }
-
-    @AfterAll
-    static void afterAll() {
-        ETCD.close();
     }
 
     @Test
@@ -177,7 +156,7 @@ final class EtcdStorageITCase {
             this.storage.identifier(),
             Matchers.stringContainsInOrder(
                 "Etcd",
-                ETCD.getClientEndpoints().stream().map(URI::toString).collect(Collectors.joining())
+                ETCD.clientEndpoints().stream().map(URI::toString).collect(Collectors.joining())
             )
         );
     }

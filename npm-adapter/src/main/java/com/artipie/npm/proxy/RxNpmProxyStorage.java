@@ -90,23 +90,20 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             // (added for pnpm compatibility). No separate cache needed - cooldown filtering
             // parses dates directly from abbreviated metadata.
             EcsLogger.debug("com.artipie.npm")
-                .message("Generated abbreviated metadata")
+                .message(String.format("Generated abbreviated metadata (abbreviated_size=%d, full_size=%d)", result.length, fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("success")
                 .field("package.name", packageName)
-                .field("abbreviated.size", result.length)
-                .field("full.size", fullContent.length())
                 .log();
             return result;
         } catch (final Exception e) {
             EcsLogger.error("com.artipie.npm")
-                .message("Failed to generate abbreviated metadata")
+                .message(String.format("Failed to generate abbreviated metadata (full_size=%d)", fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("failure")
                 .field("package.name", packageName)
-                .field("full.size", fullContent.length())
                 .error(e)
                 .log();
             return new byte[0];

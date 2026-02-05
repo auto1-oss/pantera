@@ -6,7 +6,7 @@ package com.artipie.http;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.cache.Cache;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.hm.SliceHasResponse;
 import com.artipie.http.rq.RequestLine;
@@ -26,11 +26,11 @@ import java.util.Optional;
  */
 class GoProxySliceTest {
 
-    private JettyClientSlices client;
+    private VertxClientSlices client;
 
     @BeforeEach
     void setUp() {
-        this.client = new JettyClientSlices();
+        this.client = new VertxClientSlices();
         this.client.start();
     }
 

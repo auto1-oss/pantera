@@ -529,11 +529,9 @@ public final class YamlSettings implements Settings {
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {
             EcsLogger.info("com.artipie.settings")
-                .message("Initializing auth cache with Valkey L2 cache and JWT TTL cap")
+                .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap (jwt_expires=%s, jwt_expiry_seconds=%d)", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
-                .field("jwt_expires", jwtSettings.expires())
-                .field("jwt_expiry_seconds", jwtSettings.expirySeconds())
                 .log();
             return new CachedUsers(res, valkey.get(), jwtSettings);
         } else {

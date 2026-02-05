@@ -6,12 +6,15 @@ package com.artipie.api;
 
 import com.artipie.http.log.EcsLogger;
 import io.vertx.core.Handler;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.HttpException;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.OpenAPIRoute;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
+import io.vertx.openapi.validation.RequestParameter;
+import io.vertx.openapi.validation.ValidatedRequest;
 import java.io.StringReader;
 import javax.json.Json;
-import javax.json.JsonObject;
 
 /**
  * Base class for rest-api operations.
@@ -105,11 +108,61 @@ abstract class BaseRest {
     }
 
     /**
-     * Read body as JsonObject.
+     * Read body as javax.json JsonObject (Vert.x 5 compatible).
      * @param context RoutingContext
      * @return JsonObject
      */
-    protected static JsonObject readJsonObject(final RoutingContext context) {
-        return Json.createReader(new StringReader(context.body().asString())).readObject();
+    protected static javax.json.JsonObject readJsonObject(final RoutingContext context) {
+        final JsonObject body = getBodyAsJson(context);
+        if (body == null) {
+            throw new IllegalStateException("Request body is null");
+        }
+        return Json.createReader(new StringReader(body.encode())).readObject();
+    }
+
+    /**
+     * Get request body as Vert.x JsonObject using Vert.x 5 ValidatedRequest API.
+     * @param context RoutingContext
+     * @return JsonObject or null if no body
+     */
+    protected static JsonObject getBodyAsJson(final RoutingContext context) {
+        // Try ValidatedRequest first (Vert.x 5 OpenAPI router)
+        final ValidatedRequest validatedRequest = context.get(RouterBuilder.KEY_META_DATA_VALIDATED_REQUEST);
+        if (validatedRequest != null) {
+            final Object body = validatedRequest.getBody();
+            if (body instanceof JsonObject) {
+                return (JsonObject) body;
+            } else if (body instanceof RequestParameter) {
+                // Vert.x 5 OpenAPI router wraps body in RequestParameter
+                final RequestParameter param = (RequestParameter) body;
+                if (param.isJsonObject()) {
+                    return param.getJsonObject();
+                } else if (param.isBuffer()) {
+                    return param.getBuffer().toJsonObject();
+                } else if (param.isString()) {
+                    return new JsonObject(param.getString());
+                }
+            } else if (body instanceof io.vertx.core.buffer.Buffer) {
+                return ((io.vertx.core.buffer.Buffer) body).toJsonObject();
+            } else if (body instanceof String) {
+                return new JsonObject((String) body);
+            } else if (body instanceof java.util.Map) {
+                return new JsonObject((java.util.Map<String, Object>) body);
+            }
+        }
+        // Try direct body access
+        final io.vertx.ext.web.RequestBody requestBody = context.body();
+        if (requestBody != null) {
+            // Try buffer first - most reliable
+            final io.vertx.core.buffer.Buffer buffer = requestBody.buffer();
+            if (buffer != null && buffer.length() > 0) {
+                try {
+                    return buffer.toJsonObject();
+                } catch (final Exception e) {
+                    // Not JSON, continue trying other methods
+                }
+            }
+        }
+        return null;
     }
 }

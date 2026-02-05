@@ -30,3 +30,37 @@ To use packages from Artipie repository in PHP project, add requirement and repo
   "require": { "log": "1.1.4" }
 }
 ```
+
+## Composer Group Repository
+
+A Composer group aggregates multiple PHP package repositories into a single virtual repository.
+Artipie merges `packages.json` metadata from all members.
+
+```yaml
+repo:
+  type: php-group
+  url: http://{host}:{port}/php-group
+  settings:
+    repositories:
+      - php-local         # local repository
+      - packagist-proxy   # proxy to packagist.org
+    group:
+      index:
+        remote_exists_ttl: 15m
+        remote_not_exists_ttl: 5m
+      metadata:
+        ttl: 5m
+```
+
+Members are listed in priority order - if the same package version exists in multiple members,
+the first member's metadata is used. Configure in `composer.json`:
+
+```json
+{
+  "repositories": [
+    { "type": "composer", "url": "http://{host}:{port}/php-group" }
+  ]
+}
+```
+
+See [Group Cache Configuration](../Configuration-Group-Cache) for detailed cache settings.

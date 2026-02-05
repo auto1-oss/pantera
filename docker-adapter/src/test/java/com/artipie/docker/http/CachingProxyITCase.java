@@ -20,7 +20,7 @@ import com.artipie.docker.proxy.ProxyDocker;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.google.common.base.Stopwatch;
 import org.hamcrest.Matcher;
 import org.hamcrest.MatcherAssert;
@@ -59,7 +59,7 @@ final class CachingProxyITCase {
     /**
      * HTTP client used for proxy.
      */
-    private JettyClientSlices client;
+    private VertxClientSlices client;
 
     /**
      * Docker repository.
@@ -69,7 +69,7 @@ final class CachingProxyITCase {
     @BeforeEach
     void setUp() throws Exception {
         this.img = new Image.ForOs();
-        this.client = new JettyClientSlices(
+        this.client = new VertxClientSlices(
             new HttpClientSettings().setFollowRedirects(true)
         );
         this.client.start();

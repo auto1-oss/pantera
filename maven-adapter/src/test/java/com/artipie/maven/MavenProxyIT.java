@@ -9,7 +9,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.maven.http.MavenProxySlice;
 import com.artipie.vertx.VertxSliceServer;
@@ -74,7 +74,7 @@ final class MavenProxyIT {
 
     @BeforeEach
     void setUp() throws Exception {
-        final JettyClientSlices slices = new JettyClientSlices();
+        final VertxClientSlices slices = new VertxClientSlices();
         slices.start();
         this.storage = new InMemoryStorage();
         this.server = new VertxSliceServer(

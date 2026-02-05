@@ -10,7 +10,7 @@ import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.Tokens;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.util.Optional;
 import org.eclipse.jetty.http.HttpStatus;
 
@@ -53,9 +53,9 @@ public final class AuthTokenRest extends BaseRest {
 
     @Override
     public void init(final RouterBuilder rbr) {
-        rbr.operation("getJwtToken")
-            .handler(this::getJwtToken)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("getJwtToken")
+            .addHandler(this::getJwtToken)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -63,7 +63,7 @@ public final class AuthTokenRest extends BaseRest {
      * @param routing Request context
      */
     private void getJwtToken(final RoutingContext routing) {
-        final JsonObject body = routing.body().asJsonObject();
+        final JsonObject body = BaseRest.getBodyAsJson(routing);
         final String mfa = body.getString("mfa_code");
         final String name = body.getString("name");
         final String pass = body.getString("pass");

@@ -37,26 +37,47 @@ final class DockerAuthSlice implements Slice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         return this.origin.response(line, headers, body)
-            .thenApply(response -> {
+            .thenCompose(response -> {
                 if (response.status() == RsStatus.UNAUTHORIZED) {
-                    return ResponseBuilder.unauthorized()
-                        .headers(response.headers())
-                        .jsonBody(new UnauthorizedError().json())
-                        .build();
+                    // CRITICAL: Drain original response body before creating new response
+                    return drainBody(response).thenApply(ignored ->
+                        ResponseBuilder.unauthorized()
+                            .headers(response.headers())
+                            .jsonBody(new UnauthorizedError().json())
+                            .build()
+                    );
                 }
                 if (response.status() == RsStatus.PROXY_AUTHENTICATION_REQUIRED) {
-                    return ResponseBuilder.proxyAuthenticationRequired()
-                        .headers(response.headers())
-                        .jsonBody(new UnauthorizedError().json())
-                        .build();
+                    return drainBody(response).thenApply(ignored ->
+                        ResponseBuilder.proxyAuthenticationRequired()
+                            .headers(response.headers())
+                            .jsonBody(new UnauthorizedError().json())
+                            .build()
+                    );
                 }
                 if (response.status() == RsStatus.FORBIDDEN) {
-                    return ResponseBuilder.forbidden()
-                        .headers(response.headers())
-                        .jsonBody(new DeniedError().json())
-                        .build();
+                    return drainBody(response).thenApply(ignored ->
+                        ResponseBuilder.forbidden()
+                            .headers(response.headers())
+                            .jsonBody(new DeniedError().json())
+                            .build()
+                    );
                 }
-                return response;
+                return CompletableFuture.completedFuture(response);
             });
+    }
+
+    /**
+     * Drain response body to prevent resource leaks.
+     * @param response Response to drain
+     * @return Future completed when body is drained
+     */
+    private static CompletableFuture<Void> drainBody(final Response response) {
+        if (response.body() != null) {
+            return response.body().asBytesFuture()
+                .<Void>thenApply(bytes -> null)
+                .exceptionally(err -> null);
+        }
+        return CompletableFuture.completedFuture(null);
     }
 }

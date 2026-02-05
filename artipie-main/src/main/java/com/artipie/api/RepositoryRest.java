@@ -18,7 +18,7 @@ import com.artipie.settings.repo.CrudRepoSettings;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.security.PermissionCollection;
 import java.util.Optional;
 import javax.json.JsonObject;
@@ -161,80 +161,80 @@ public final class RepositoryRest extends BaseRest {
     @Override
     @SuppressWarnings("PMD.ExcessiveMethodLength")
     public void init(final RouterBuilder rbr) {
-        rbr.operation("listAll")
-            .handler(
+        rbr.getRoute("listAll")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ)
                 )
             )
-            .handler(this::listAll)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("getRepo")
-            .handler(
+            .addHandler(this::listAll)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("getRepo")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ)
                 )
             )
-            .handler(this::getRepo)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("existRepo")
-            .handler(
+            .addHandler(this::getRepo)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("existRepo")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.READ)
                 )
             )
-            .handler(this::existRepo)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("createOrUpdateRepo")
-            .handler(this::createOrUpdateRepo)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("removeRepo")
-            .handler(
+            .addHandler(this::existRepo)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("createOrUpdateRepo")
+            .addHandler(this::createOrUpdateRepo)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("removeRepo")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE)
                 )
             )
-            .handler(this::removeRepo)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("unblockCooldown")
-            .handler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
-            .handler(this::unblockCooldown)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("unblockAllCooldown")
-            .handler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
-            .handler(this::unblockAllCooldown)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("deleteArtifact")
-            .handler(
+            .addHandler(this::removeRepo)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("unblockCooldown")
+            .addHandler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
+            .addHandler(this::unblockCooldown)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("unblockAllCooldown")
+            .addHandler(new AuthzHandler(this.policy, RepositoryRest.UPDATE))
+            .addHandler(this::unblockAllCooldown)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("deleteArtifact")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE)
                 )
             )
-            .handler(this::deleteArtifact)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("deletePackageFolder")
-            .handler(
+            .addHandler(this::deleteArtifact)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("deletePackageFolder")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.DELETE)
                 )
             )
-            .handler(this::deletePackageFolder)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("moveRepo")
-            .handler(
+            .addHandler(this::deletePackageFolder)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("moveRepo")
+            .addHandler(
                 new AuthzHandler(
                     this.policy,
                     new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.MOVE)
                 )
             )
-            .handler(this::moveRepo)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+            .addHandler(this::moveRepo)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -450,7 +450,7 @@ public final class RepositoryRest extends BaseRest {
                             .eventAction("artifact_delete")
                             .eventOutcome("failure")
                             .field("repository.name", rname.toString())
-                            .field("artifact.path", path)
+                            .field("package.path", path)
                             .userName(actor)
                             .error(error)
                             .log();
@@ -463,7 +463,7 @@ public final class RepositoryRest extends BaseRest {
                             .eventAction("artifact_delete")
                             .eventOutcome("success")
                             .field("repository.name", rname.toString())
-                            .field("artifact.path", path)
+                            .field("package.path", path)
                             .userName(actor)
                             .log();
                         context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();

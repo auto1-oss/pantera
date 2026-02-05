@@ -13,7 +13,7 @@ import io.vertx.core.file.OpenOptions;
 import io.vertx.reactivex.RxHelper;
 import io.vertx.reactivex.core.Promise;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
+import io.vertx.core.buffer.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;

@@ -100,7 +100,7 @@ public final class UploadSlice implements Slice {
                 ).orElseGet(() -> this.npm.publish(new Key.From(pkg), uploaded))
             )
             .thenCompose(ignored -> this.storage.delete(uploaded))
-            .thenApply(ignored -> ResponseBuilder.ok().build())
+            .thenApply(ignored -> ResponseBuilder.created().build())
             .toCompletableFuture();
     }
 }

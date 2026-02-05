@@ -102,9 +102,12 @@ public final class AuthzSlice implements Slice {
                             ResponseBuilder.forbidden().build()
                         );
                     }
-                    return ResponseBuilder.unauthorized()
-                        .header(new WwwAuthenticate(result.challenge()))
-                        .completedFuture();
+                    // Consume request body to prevent Vert.x request leak
+                    return body.asBytesFuture().thenApply(ignored3 ->
+                        ResponseBuilder.unauthorized()
+                            .header(new WwwAuthenticate(result.challenge()))
+                            .build()
+                    );
                 }
         );
     }

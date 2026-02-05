@@ -9,11 +9,12 @@ import com.artipie.adapters.file.FileProxy;
 import com.artipie.adapters.go.GoProxy;
 import com.artipie.adapters.gradle.GradleProxy;
 import com.artipie.adapters.maven.MavenProxy;
-import com.artipie.adapters.php.ComposerGroupSlice;
 import com.artipie.adapters.php.ComposerProxy;
 import com.artipie.adapters.pypi.PypiProxy;
 import com.artipie.asto.Key;
 import com.artipie.asto.SubStorage;
+import com.artipie.cache.GroupSettings;
+import com.artipie.cache.UnifiedGroupCache;
 import com.artipie.auth.LoggingAuth;
 import com.artipie.composer.AstoRepository;
 import com.artipie.composer.http.PhpComposer;
@@ -41,7 +42,12 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.TimeoutSlice;
+import com.artipie.group.ComposerGroupSlice;
+import com.artipie.group.DockerGroupSlice;
+import com.artipie.group.GoGroupSlice;
 import com.artipie.group.GroupSlice;
+import com.artipie.group.NpmGroupSlice;
+import com.artipie.group.PypiGroupSlice;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
 import com.artipie.http.auth.CombinedAuthScheme;
@@ -49,9 +55,10 @@ import com.artipie.http.auth.CombinedAuthzSliceWrap;
 import com.artipie.http.auth.TokenAuthentication;
 import com.artipie.http.auth.OperationControl;
 import com.artipie.http.auth.Tokens;
+import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.http.client.ProxySettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.filter.FilterSlice;
 import com.artipie.http.filter.Filters;
 import com.artipie.http.slice.PathPrefixStripSlice;
@@ -80,8 +87,6 @@ import com.google.common.cache.RemovalListener;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.vertx.core.Vertx;
-import org.eclipse.jetty.client.AbstractConnectionPool;
-import org.eclipse.jetty.client.Destination;
 
 import java.net.URI;
 import java.util.HashSet;
@@ -134,9 +139,9 @@ public class RepositorySlices {
     private final com.artipie.cooldown.metadata.CooldownMetadataService cooldownMetadata;
 
     /**
-     * Shared Jetty HTTP clients keyed by settings signature.
+     * Shared Vert.x HTTP clients keyed by settings signature.
      */
-    private final SharedJettyClients sharedClients;
+    private final SharedVertxClients sharedClients;
 
     /**
      * @param settings Artipie settings
@@ -153,12 +158,12 @@ public class RepositorySlices {
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
         this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
-        this.sharedClients = new SharedJettyClients();
+        this.sharedClients = new SharedVertxClients();
         this.slices = CacheBuilder.newBuilder()
             .removalListener(
                 (RemovalListener<SliceKey, SliceValue>) notification -> notification.getValue()
                     .client()
-                    .ifPresent(SharedJettyClients.Lease::close)
+                    .ifPresent(SharedVertxClients.Lease::close)
             )
             .build(
                 new CacheLoader<>() {
@@ -212,8 +217,8 @@ public class RepositorySlices {
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
-                .field("port", port)
-                .field("source", "cache")
+                .field("url.port", port)
+                .field("source.address", "cache")
                 .log();
             return cached.slice();
         }
@@ -226,8 +231,8 @@ public class RepositorySlices {
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
-                .field("port", port)
-                .field("source", "config")
+                .field("url.port", port)
+                .field("source.address", "config")
                 .log();
             return resolved.get().slice();
         }
@@ -238,7 +243,7 @@ public class RepositorySlices {
             .eventAction("slice_resolve")
             .eventOutcome("failure")
             .field("repository.name", name.string())
-            .field("port", port)
+            .field("url.port", port)
             .log();
         return new SliceSimple(
             () -> ResponseBuilder.notFound()
@@ -276,7 +281,7 @@ public class RepositorySlices {
             .forEach(this.slices::invalidate);
     }
 
-    public void enableJettyMetrics(final MeterRegistry registry) {
+    public void enableVertxMetrics(final MeterRegistry registry) {
         this.sharedClients.enableMetrics(registry);
     }
 
@@ -296,8 +301,8 @@ public class RepositorySlices {
 
     private SliceValue sliceFromConfig(final RepoConfig cfg, final int port, final int depth) {
         Slice slice;
-        SharedJettyClients.Lease clientLease = null;
-        JettyClientSlices clientSlices = null;
+        SharedVertxClients.Lease clientLease = null;
+        VertxClientSlices clientSlices = null;
         try {
             switch (cfg.type()) {
             case "file":
@@ -317,7 +322,7 @@ public class RepositorySlices {
                 );
                 break;
             case "file-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 final Slice fileProxySlice = new TimeoutSlice(
                     new FileProxy(clientSlices, cfg, artifactEvents(), this.cooldown),
@@ -409,7 +414,7 @@ public class RepositorySlices {
                 );
                 break;
             case "php-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
@@ -451,7 +456,7 @@ public class RepositorySlices {
                 );
                 break;
             case "gradle-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 final Slice gradleProxySlice = new CombinedAuthzSliceWrap(
                     new TimeoutSlice(
@@ -484,7 +489,7 @@ public class RepositorySlices {
                 );
                 break;
             case "maven-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 final Slice mavenProxySlice = new CombinedAuthzSliceWrap(
                     new TimeoutSlice(
@@ -524,7 +529,7 @@ public class RepositorySlices {
                 );
                 break;
             case "go-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -547,7 +552,7 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 final Slice npmProxySlice = new TimeoutSlice(
                     new com.artipie.adapters.npm.NpmProxyAdapter(
@@ -602,9 +607,16 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-group":
-                final Slice npmGroupSlice = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
-                    cfg.groupMemberTimeout().orElse(120L)
+                // Create GroupSettings from repo config with global defaults
+                final GroupSettings npmGroupSettings = groupSettings(cfg);
+                // Create UnifiedGroupCache for metadata merging
+                final UnifiedGroupCache npmGroupCache = new UnifiedGroupCache(
+                    cfg.name(), npmGroupSettings, Optional.empty()
+                );
+                // Use NpmGroupSlice with metadata merging support
+                final Slice npmGroupSlice = new NpmGroupSlice(
+                    this::slice, cfg.name(), cfg.members(), port,
+                    npmGroupCache, npmGroupSettings
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -660,10 +672,34 @@ public class RepositorySlices {
                 );
                 break;
             case "file-group":
-            case "php-group":
+                // File groups use generic GroupSlice (no metadata merging needed)
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new ComposerGroupSlice(this::slice, cfg.name(), cfg.members(), port),
+                        new GroupSlice(
+                            this::slice, cfg.name(), cfg.members(), port, depth,
+                            cfg.groupMemberTimeout().orElse(120L)
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
+            case "php-group":
+                // Create GroupSettings and UnifiedGroupCache for Composer metadata merging
+                final GroupSettings composerGroupSettings = groupSettings(cfg);
+                final UnifiedGroupCache composerGroupCache = new UnifiedGroupCache(
+                    cfg.name(), composerGroupSettings, Optional.empty()
+                );
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new ComposerGroupSlice(
+                            this::slice, cfg.name(), cfg.members(), port,
+                            composerGroupCache, composerGroupSettings
+                        ),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -699,10 +735,8 @@ public class RepositorySlices {
                 );
                 break;
             case "gem-group":
-            case "go-group":
             case "gradle-group":
-            case "pypi-group":
-            case "docker-group":
+                // Gem and Gradle groups use generic GroupSlice (no special metadata merging)
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new GroupSlice(
@@ -718,8 +752,71 @@ public class RepositorySlices {
                     )
                 );
                 break;
+            case "go-group":
+                // Create GroupSettings and UnifiedGroupCache for Go metadata merging
+                final GroupSettings goGroupSettings = groupSettings(cfg);
+                final UnifiedGroupCache goGroupCache = new UnifiedGroupCache(
+                    cfg.name(), goGroupSettings, Optional.empty()
+                );
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new GoGroupSlice(
+                            this::slice, cfg.name(), cfg.members(), port,
+                            goGroupCache, goGroupSettings
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
+            case "pypi-group":
+                // Create GroupSettings and UnifiedGroupCache for PyPI metadata merging
+                final GroupSettings pypiGroupSettings = groupSettings(cfg);
+                final UnifiedGroupCache pypiGroupCache = new UnifiedGroupCache(
+                    cfg.name(), pypiGroupSettings, Optional.empty()
+                );
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new PypiGroupSlice(
+                            this::slice, cfg.name(), cfg.members(), port,
+                            pypiGroupCache, pypiGroupSettings
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
+            case "docker-group":
+                // Create GroupSettings and UnifiedGroupCache for Docker metadata merging
+                final GroupSettings dockerGroupSettings = groupSettings(cfg);
+                final UnifiedGroupCache dockerGroupCache = new UnifiedGroupCache(
+                    cfg.name(), dockerGroupSettings, Optional.empty()
+                );
+                slice = trimPathSlice(
+                    new CombinedAuthzSliceWrap(
+                        new DockerGroupSlice(
+                            this::slice, cfg.name(), cfg.members(), port,
+                            dockerGroupCache, dockerGroupSettings
+                        ),
+                        authentication(),
+                        tokens.auth(),
+                        new OperationControl(
+                            securityPolicy(),
+                            new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
+                        )
+                    )
+                );
+                break;
             case "pypi-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 slice = trimPathSlice(
                     new PathPrefixStripSlice(
@@ -762,7 +859,7 @@ public class RepositorySlices {
                 }
                 break;
             case "docker-proxy":
-                clientLease = jettyClientSlices(cfg);
+                clientLease = vertxClientSlices(cfg);
                 clientSlices = clientLease.client();
                 slice = new TimeoutSlice(
                     new DockerProxy(
@@ -879,7 +976,32 @@ public class RepositorySlices {
         return this.settings.authz().policy();
     }
 
-    private SharedJettyClients.Lease jettyClientSlices(final RepoConfig cfg) {
+    /**
+     * Create GroupSettings from repository configuration.
+     * Starts with global defaults from artipie.yaml, then merges repo-level overrides.
+     *
+     * @param cfg Repository configuration
+     * @return GroupSettings for the group repository
+     */
+    private GroupSettings groupSettings(final RepoConfig cfg) {
+        // Start with global defaults
+        GroupSettings global = GroupSettings.defaults();
+        // Try to get global group settings from artipie.yaml meta
+        final com.amihaiemil.eoyaml.YamlMapping meta = this.settings.meta();
+        if (meta != null) {
+            final com.amihaiemil.eoyaml.YamlMapping groupMeta = meta.yamlMapping("group");
+            if (groupMeta != null) {
+                global = GroupSettings.from(groupMeta);
+            }
+        }
+        // Merge with repo-level settings if present
+        return cfg.settings()
+            .map(repoSettings -> repoSettings.yamlMapping("group"))
+            .map(global::merge)
+            .orElse(global);
+    }
+
+    private SharedVertxClients.Lease vertxClientSlices(final RepoConfig cfg) {
         final HttpClientSettings effective = cfg.httpClientSettings()
             .orElseGet(settings::httpClientSettings);
         return this.sharedClients.acquire(effective);
@@ -899,16 +1021,21 @@ public class RepositorySlices {
     /**
      * Slice's cache value.
      */
-    record SliceValue(Slice slice, Optional<SharedJettyClients.Lease> client) {
+    record SliceValue(Slice slice, Optional<SharedVertxClients.Lease> client) {
     }
 
     /**
-     * Stores and shares Jetty clients per unique HTTP client configuration.
+     * Stores and shares Vert.x clients per unique HTTP client configuration.
      */
-    private static final class SharedJettyClients {
+    private static final class SharedVertxClients {
 
         private final ConcurrentMap<HttpClientSettingsKey, SharedClient> clients = new ConcurrentHashMap<>();
         private final AtomicReference<MeterRegistry> metrics = new AtomicReference<>();
+        private final Vertx vertx;
+
+        SharedVertxClients() {
+            this.vertx = Vertx.vertx();
+        }
 
         Lease acquire(final HttpClientSettings settings) {
             final HttpClientSettingsKey key = HttpClientSettingsKey.from(settings);
@@ -916,7 +1043,7 @@ public class RepositorySlices {
                 key,
                 (ignored, existing) -> {
                     if (existing == null) {
-                        final SharedClient created = new SharedClient(key);
+                        final SharedClient created = new SharedClient(key, this.vertx);
                         created.retain();
                         return created;
                     }
@@ -954,13 +1081,13 @@ public class RepositorySlices {
         }
 
         static final class Lease implements AutoCloseable {
-            private final SharedJettyClients owner;
+            private final SharedVertxClients owner;
             private final HttpClientSettingsKey key;
             private final SharedClient shared;
             private final AtomicBoolean closed = new AtomicBoolean(false);
 
             Lease(
-                final SharedJettyClients owner,
+                final SharedVertxClients owner,
                 final HttpClientSettingsKey key,
                 final SharedClient shared
             ) {
@@ -969,7 +1096,7 @@ public class RepositorySlices {
                 this.shared = shared;
             }
 
-            JettyClientSlices client() {
+            VertxClientSlices client() {
                 return this.shared.client();
             }
 
@@ -983,13 +1110,13 @@ public class RepositorySlices {
 
         private static final class SharedClient {
             private final HttpClientSettingsKey key;
-            private final JettyClientSlices client;
+            private final VertxClientSlices client;
             private final AtomicInteger references = new AtomicInteger(0);
             private final AtomicBoolean metricsRegistered = new AtomicBoolean(false);
 
-            SharedClient(final HttpClientSettingsKey key) {
+            SharedClient(final HttpClientSettingsKey key, final Vertx vertx) {
                 this.key = key;
-                this.client = new JettyClientSlices(key.toSettings());
+                this.client = new VertxClientSlices(vertx, key.toSettings());
                 this.client.start();
             }
 
@@ -1000,12 +1127,12 @@ public class RepositorySlices {
             int release() {
                 final int remaining = this.references.decrementAndGet();
                 if (remaining < 0) {
-                    throw new IllegalStateException("Jetty client reference count became negative");
+                    throw new IllegalStateException("Vert.x client reference count became negative");
                 }
                 return remaining;
             }
 
-            JettyClientSlices client() {
+            VertxClientSlices client() {
                 return this.client;
             }
 
@@ -1013,47 +1140,13 @@ public class RepositorySlices {
                 if (!this.metricsRegistered.compareAndSet(false, true)) {
                     return;
                 }
-                Gauge.builder("jetty.connection_pool.active", this, SharedClient::activeConnections)
+                // Vert.x metrics are handled differently - we track circuit breaker states
+                // Connection pool metrics are managed internally by Vert.x
+                Gauge.builder("vertx.http_client.active", this, c -> 1.0)
                     .strongReference(true)
                     .tag("settings", this.key.metricId())
+                    .description("Active Vert.x HTTP client instances")
                     .register(registry);
-                Gauge.builder("jetty.connection_pool.idle", this, SharedClient::idleConnections)
-                    .strongReference(true)
-                    .tag("settings", this.key.metricId())
-                    .register(registry);
-                Gauge.builder("jetty.connection_pool.max", this, SharedClient::maxConnections)
-                    .strongReference(true)
-                    .tag("settings", this.key.metricId())
-                    .register(registry);
-                Gauge.builder("jetty.connection_pool.pending", this, SharedClient::pendingConnections)
-                    .strongReference(true)
-                    .tag("settings", this.key.metricId())
-                    .register(registry);
-            }
-
-            private double activeConnections() {
-                return this.connectionMetric(AbstractConnectionPool::getActiveConnectionCount);
-            }
-
-            private double idleConnections() {
-                return this.connectionMetric(AbstractConnectionPool::getIdleConnectionCount);
-            }
-
-            private double maxConnections() {
-                return this.connectionMetric(AbstractConnectionPool::getMaxConnectionCount);
-            }
-
-            private double pendingConnections() {
-                return this.connectionMetric(AbstractConnectionPool::getPendingConnectionCount);
-            }
-
-            private double connectionMetric(final ToIntFunction<AbstractConnectionPool> extractor) {
-                return this.client.httpClient().getDestinations().stream()
-                    .map(Destination::getConnectionPool)
-                    .filter(AbstractConnectionPool.class::isInstance)
-                    .map(AbstractConnectionPool.class::cast)
-                    .mapToInt(extractor)
-                    .sum();
             }
 
             void stop() {

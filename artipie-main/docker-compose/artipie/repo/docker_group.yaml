@@ -1,6 +1,13 @@
 repo:
   type: "docker-group"
-  # Example members; ensure corresponding docker and docker-proxy repos exist
+  # Members are listed in priority order - first match wins
   members:
-    - docker_proxy
-    - docker_local
+    - docker_local   # local registry (highest priority)
+    - docker_proxy   # proxy to Docker Hub
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

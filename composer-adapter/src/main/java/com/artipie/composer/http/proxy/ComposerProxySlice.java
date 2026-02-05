@@ -12,6 +12,7 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
+import com.artipie.http.client.RedirectFollowingSlice;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
@@ -189,11 +190,25 @@ public class ComposerProxySlice extends Slice.Wrap {
      * @param auth Authenticator
      * @return Client slice for target URI.
      */
+    /**
+     * Build client slice for target URI with redirect support.
+     * <p>
+     * Wraps the remote slice with RedirectFollowingSlice to handle
+     * cross-domain CDN redirects that some registries use.
+     *
+     * @param client Client slices.
+     * @param remote Remote URI.
+     * @param auth Authenticator.
+     * @return Client slice for target URI with redirect support.
+     */
     private static Slice remote(
         final ClientSlices client,
         final URI remote,
         final Authenticator auth
     ) {
-        return new AuthClientSlice(new UriClientSlice(client, remote), auth);
+        return new RedirectFollowingSlice(
+            new AuthClientSlice(new UriClientSlice(client, remote), auth),
+            client
+        );
     }
 }

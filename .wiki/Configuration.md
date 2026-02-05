@@ -8,10 +8,11 @@ of this file is `/etc/artipie/artipie.yml`.
 Yaml configuration file contains server meta configuration, such as:
  - `storage` - repositories definition storage config, required;
  - `credentials` - user [credentials config](./Configuration-Credentials);
- - `configs` - repository config files location, not required, the storage key relative to the 
+ - `configs` - repository config files location, not required, the storage key relative to the
 main storage, or, in file system storage terms, subdirectory where repo configs are located relatively to the storage;
  - `metrics` - enable and set [metrics collection](./Configuration-Metrics), not required.
  - `cooldown` - optional cooldown policy for proxy repositories (see below).
+ - `group` - optional cache and resolution settings for group repositories (see below).
 
 Example: 
 ```yaml
@@ -98,14 +99,44 @@ Cooldown decisions are persisted to the configured artefacts database. Once a co
 administrator manually unblocks the artefact via the REST API, that version becomes permanently allowed.
 
 ### Http client settings
+
+Starting with v1.21.0, Artipie uses Vert.x WebClient for all outbound HTTP requests (replacing Jetty).
+
 The http client settings can be overridden in `xxx-proxy` repository config.
 Proxy servers can be defined by system properties as it's described in [Java documentation](https://docs.oracle.com/javase/8/docs/technotes/guides/net/proxies.html).
 Default values:
  - connection_timeout: 15_000
- - idle_timeout: 0 
+ - idle_timeout: 0
  - trust_all: false
  - follow_redirects: true
- - http3: false
+ - http2_enabled: true (HTTP/2 with HTTP/1.1 fallback)
+
+> **Note:** HTTP/3 client support was removed in v1.21.0. The `http3` setting is ignored.
+
+### Group repository settings
+
+Configure caching and resolution settings for group repositories globally. These can be overridden per-repository.
+
+```yaml
+meta:
+  group:
+    index:
+      remote_exists_ttl: 15m      # Cache positive lookups (default: 15m)
+      remote_not_exists_ttl: 5m   # Cache negative lookups (default: 5m)
+      local_event_driven: true    # Instant updates for local repos (default: true)
+    metadata:
+      ttl: 5m                     # Merged metadata cache TTL (default: 5m)
+      stale_serve: 1h             # Serve stale if upstream down (default: 1h)
+      background_refresh_at: 0.8  # Refresh at 80% of TTL (default: 0.8)
+    resolution:
+      upstream_timeout: 5s        # Timeout per upstream (default: 5s)
+      max_parallel: 10            # Max parallel requests (default: 10)
+    cache_sizing:
+      l1_max_entries: 10000       # In-memory cache size (default: 10000)
+      l2_max_entries: 1000000     # Valkey/Redis cache size (default: 1000000)
+```
+
+See [User Guide - Group Repositories](../docs/USER_GUIDE.md#group-repositories) for detailed documentation.
 
 ## Additional configuration 
 

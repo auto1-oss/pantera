@@ -69,7 +69,7 @@ public final class UploadSliceTest {
             .add("_attachments", Json.createObjectBuilder())
             .build().toString();
         Assertions.assertEquals(
-            RsStatus.OK,
+            RsStatus.CREATED,
             slice.response(
                 RequestLine.from("PUT /ctx/package HTTP/1.1"),
                 Headers.EMPTY,

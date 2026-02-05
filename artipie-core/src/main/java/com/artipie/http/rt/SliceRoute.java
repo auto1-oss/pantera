@@ -65,8 +65,11 @@ public final class SliceRoute implements Slice {
             .filter(Optional::isPresent)
             .map(Optional::get)
             .findFirst()
-            .orElse(CompletableFuture.completedFuture(
-                ResponseBuilder.notFound().build()
-            ));
+            .orElseGet(() ->
+                // Consume request body to prevent Vert.x connection leak
+                body.asBytesFuture().thenApply(ignored ->
+                    ResponseBuilder.notFound().build()
+                )
+            );
     }
 }

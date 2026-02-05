@@ -10,7 +10,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.Tags;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import com.artipie.http.log.EcsLogger;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -426,6 +426,282 @@ public final class MicrometerMetrics {
             .tags("group_name", groupName)
             .register(registry)
             .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    // ========== Timeout & Streaming Metrics (Stall Prevention) ==========
+
+    /**
+     * Record request timeout event.
+     * Tracks when TimeoutSlice fires during body streaming (the fix for the stall issue).
+     *
+     * @param phase Phase where timeout occurred (response_future, body_streaming)
+     * @param elapsedMs Elapsed time before timeout in milliseconds
+     */
+    public void recordRequestTimeout(String phase, long elapsedMs) {
+        Counter.builder("artipie.request.timeout")
+            .description("Request timeouts - indicates potential stall prevention")
+            .tags("phase", phase)
+            .register(registry)
+            .increment();
+
+        Timer.builder("artipie.request.timeout.elapsed")
+            .description("Elapsed time when timeout fired")
+            .tags("phase", phase)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(elapsedMs));
+    }
+
+    /**
+     * Record body streaming completion.
+     * Tracks the full lifecycle of body streaming (critical for monitoring the stall fix).
+     *
+     * @param bytes Bytes streamed
+     * @param durationMs Duration of body streaming in milliseconds
+     * @param result Result: success, error, cancelled
+     */
+    public void recordBodyStreaming(long bytes, long durationMs, String result) {
+        Counter.builder("artipie.body.streaming.completed")
+            .description("Body streaming completions")
+            .tags("result", result)
+            .register(registry)
+            .increment();
+
+        if (bytes > 0) {
+            DistributionSummary.builder("artipie.body.streaming.bytes")
+                .description("Bytes streamed in body")
+                .tags("result", result)
+                .baseUnit("bytes")
+                .register(registry)
+                .record(bytes);
+        }
+
+        Timer.builder("artipie.body.streaming.duration")
+            .description("Body streaming duration")
+            .tags("result", result)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Record stream closed event (HttpClosedException).
+     * This was the root cause of the stall incident - upstream closing mid-stream.
+     */
+    public void recordStreamClosed() {
+        Counter.builder("artipie.upstream.stream.closed")
+            .description("Upstream stream closed unexpectedly (HttpClosedException) - potential stall trigger")
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record response race condition detection.
+     * Tracks "End has already been called" warnings - the symptom of the stall issue.
+     *
+     * @param requestId Request identifier
+     * @param winner The code path that won the race (for debugging)
+     */
+    public void recordResponseRace(String requestId, String winner) {
+        Counter.builder("artipie.response.race.detected")
+            .description("Response race condition detected - multiple paths tried to end response")
+            .tags("winner", winner)
+            .register(registry)
+            .increment();
+    }
+
+    // ========== Circuit Breaker Metrics ==========
+
+    /**
+     * Record circuit breaker state change.
+     * Tracks when circuit opens/closes for upstream protection.
+     *
+     * @param upstream Upstream identifier (repo name or URL)
+     * @param state State: closed, open, half_open
+     */
+    public void recordCircuitBreakerState(String upstream, String state) {
+        // Use a gauge that can be updated
+        Counter.builder("artipie.circuit.breaker.state.change")
+            .description("Circuit breaker state changes")
+            .tags("upstream", upstream, "state", state)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record circuit breaker call result.
+     *
+     * @param upstream Upstream identifier
+     * @param result Result: success, failure, rejected (circuit open)
+     * @param durationMs Call duration in milliseconds
+     */
+    public void recordCircuitBreakerCall(String upstream, String result, long durationMs) {
+        Counter.builder("artipie.circuit.breaker.calls")
+            .description("Circuit breaker protected calls")
+            .tags("upstream", upstream, "result", result)
+            .register(registry)
+            .increment();
+
+        if (!"rejected".equals(result)) {
+            Timer.builder("artipie.circuit.breaker.call.duration")
+                .description("Circuit breaker protected call duration")
+                .tags("upstream", upstream, "result", result)
+                .register(registry)
+                .record(java.time.Duration.ofMillis(durationMs));
+        }
+    }
+
+    /**
+     * Record when circuit breaker rejects a call (circuit is open).
+     *
+     * @param upstream Upstream identifier
+     */
+    public void recordCircuitBreakerRejection(String upstream) {
+        Counter.builder("artipie.circuit.breaker.rejections")
+            .description("Calls rejected because circuit is open")
+            .tags("upstream", upstream)
+            .register(registry)
+            .increment();
+    }
+
+    // ========== Enterprise Proxy Metrics ==========
+
+    /**
+     * Record proxy retry attempt.
+     *
+     * @param repoName Repository name
+     * @param upstream Upstream URL
+     * @param attempt Retry attempt number
+     */
+    public void recordProxyRetry(String repoName, String upstream, int attempt) {
+        Counter.builder("artipie.proxy.retries")
+            .description("Proxy request retry attempts")
+            .tags("repo_name", repoName, "upstream", upstream, "attempt", String.valueOf(attempt))
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record in-flight request count as gauge.
+     *
+     * @param repoName Repository name
+     * @param supplier Supplier for current in-flight count
+     */
+    public void registerInFlightGauge(String repoName, java.util.function.Supplier<Number> supplier) {
+        Gauge.builder("artipie.proxy.inflight", supplier)
+            .description("Currently in-flight proxy requests (request deduplication)")
+            .tags("repo_name", repoName)
+            .register(registry);
+    }
+
+    /**
+     * Record request deduplication (waiter joined existing in-flight request).
+     *
+     * @param repoName Repository name
+     * @param upstream Upstream URL
+     */
+    public void recordProxyDeduplication(String repoName, String upstream) {
+        Counter.builder("artipie.proxy.deduplications")
+            .description("Requests deduplicated (joined existing in-flight request)")
+            .tags("repo_name", repoName, "upstream", upstream)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record backpressure queue event.
+     *
+     * @param repoName Repository name
+     * @param result Result: queued, executed, rejected
+     */
+    public void recordBackpressure(String repoName, String result) {
+        Counter.builder("artipie.proxy.backpressure")
+            .description("Backpressure control events")
+            .tags("repo_name", repoName, "result", result)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record backpressure queue wait time.
+     *
+     * @param repoName Repository name
+     * @param durationMs Wait duration in milliseconds
+     */
+    public void recordBackpressureWait(String repoName, long durationMs) {
+        Timer.builder("artipie.proxy.backpressure.wait")
+            .description("Time spent waiting in backpressure queue")
+            .tags("repo_name", repoName)
+            .register(registry)
+            .record(java.time.Duration.ofMillis(durationMs));
+    }
+
+    /**
+     * Register backpressure utilization gauge.
+     *
+     * @param repoName Repository name
+     * @param supplier Supplier for utilization (0.0 to 1.0)
+     */
+    public void registerBackpressureUtilization(String repoName, java.util.function.Supplier<Number> supplier) {
+        Gauge.builder("artipie.proxy.backpressure.utilization", supplier)
+            .description("Backpressure utilization (active/max concurrent)")
+            .tags("repo_name", repoName)
+            .register(registry);
+    }
+
+    /**
+     * Register backpressure queue depth gauge.
+     *
+     * @param repoName Repository name
+     * @param supplier Supplier for queue depth
+     */
+    public void registerBackpressureQueueDepth(String repoName, java.util.function.Supplier<Number> supplier) {
+        Gauge.builder("artipie.proxy.backpressure.queue", supplier)
+            .description("Requests waiting in backpressure queue")
+            .tags("repo_name", repoName)
+            .register(registry);
+    }
+
+    /**
+     * Record auto-block state change.
+     *
+     * @param repoName Repository name
+     * @param upstream Upstream URL
+     * @param blocked True if upstream is now blocked
+     */
+    public void recordAutoBlock(String repoName, String upstream, boolean blocked) {
+        Counter.builder("artipie.proxy.autoblock.changes")
+            .description("Auto-block state changes")
+            .tags("repo_name", repoName, "upstream", upstream, "blocked", String.valueOf(blocked))
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record request rejected due to auto-block.
+     *
+     * @param repoName Repository name
+     * @param upstream Upstream URL
+     */
+    public void recordAutoBlockRejection(String repoName, String upstream) {
+        Counter.builder("artipie.proxy.autoblock.rejections")
+            .description("Requests rejected due to auto-blocked upstream")
+            .tags("repo_name", repoName, "upstream", upstream)
+            .register(registry)
+            .increment();
+    }
+
+    /**
+     * Record distributed lock operation (for cluster coordination).
+     *
+     * @param repoName Repository name
+     * @param operation Operation: acquire, release, wait
+     * @param result Result: success, timeout, error
+     */
+    public void recordDistributedLock(String repoName, String operation, String result) {
+        Counter.builder("artipie.proxy.distributed.lock")
+            .description("Distributed lock operations for request deduplication")
+            .tags("repo_name", repoName, "operation", operation, "result", result)
+            .register(registry)
+            .increment();
     }
 }
 

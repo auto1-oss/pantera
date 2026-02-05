@@ -9,7 +9,7 @@ import com.artipie.settings.Settings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import javax.json.Json;
 import javax.json.JsonObjectBuilder;
 import org.eclipse.jetty.http.HttpStatus;
@@ -43,15 +43,15 @@ public final class SettingsRest extends BaseRest {
     @Override
     @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     public void init(final RouterBuilder rbr) {
-        rbr.operation("port")
-            .handler(this::portRest)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("getGlobalPrefixes")
-            .handler(this::getGlobalPrefixes)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("updateGlobalPrefixes")
-            .handler(this::updateGlobalPrefixes)
-            .failureHandler(this.errorHandler(HttpStatus.BAD_REQUEST_400));
+        rbr.getRoute("port")
+            .addHandler(this::portRest)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("getGlobalPrefixes")
+            .addHandler(this::getGlobalPrefixes)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("updateGlobalPrefixes")
+            .addHandler(this::updateGlobalPrefixes)
+            .addFailureHandler(this.errorHandler(HttpStatus.BAD_REQUEST_400));
     }
 
     /**
@@ -86,7 +86,7 @@ public final class SettingsRest extends BaseRest {
      */
     private void updateGlobalPrefixes(final RoutingContext context) {
         try {
-            final JsonObject body = context.body().asJsonObject();
+            final JsonObject body = BaseRest.getBodyAsJson(context);
             if (body == null || !body.containsKey("prefixes")) {
                 context.response()
                     .setStatusCode(HttpStatus.BAD_REQUEST_400)

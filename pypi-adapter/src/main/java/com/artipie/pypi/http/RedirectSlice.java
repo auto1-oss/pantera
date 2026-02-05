@@ -36,15 +36,18 @@ public final class RedirectSlice implements Slice {
     ) {
         final String rqline = line.uri().toString();
         final String last = rqline.split("/")[rqline.split("/").length - 1];
-        return Single.fromCallable(() -> last)
-            .map(name -> new NormalizedProjectName.Simple(name).value())
-            .map(
-                normalized -> new RqHeaders(headers, RedirectSlice.HDR_FULL_PATH).stream()
-                    .findFirst()
-                    .orElse(rqline).replaceAll(String.format("(%s\\/?)$", last), normalized)
-            )
-            .map(
-                url -> ResponseBuilder.movedPermanently().header("Location", url).build()
-            ).to(SingleInterop.get()).toCompletableFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenCompose(ignored ->
+            Single.fromCallable(() -> last)
+                .map(name -> new NormalizedProjectName.Simple(name).value())
+                .map(
+                    normalized -> new RqHeaders(headers, RedirectSlice.HDR_FULL_PATH).stream()
+                        .findFirst()
+                        .orElse(rqline).replaceAll(String.format("(%s\\/?)$", last), normalized)
+                )
+                .map(
+                    url -> ResponseBuilder.movedPermanently().header("Location", url).build()
+                ).to(SingleInterop.get()).toCompletableFuture()
+        );
     }
 }

@@ -95,6 +95,9 @@ public final class PostStageCommitSlice implements Slice {
                 ).read(), StandardCharsets.UTF_8
             ).completedFuture();
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 }

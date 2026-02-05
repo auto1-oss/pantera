@@ -11,7 +11,7 @@ import com.artipie.docker.proxy.ProxyLayers;
 import com.artipie.http.client.HttpClientSettings;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.slice.LoggingSlice;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -33,11 +33,11 @@ class MultiReadLayersIT {
     /**
      * HTTP client used for proxy.
      */
-    private JettyClientSlices slices;
+    private VertxClientSlices slices;
 
     @BeforeEach
     void setUp() throws Exception {
-        this.slices = new JettyClientSlices(
+        this.slices = new VertxClientSlices(
             new HttpClientSettings().setFollowRedirects(true)
         );
         this.slices.start();

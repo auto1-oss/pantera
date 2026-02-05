@@ -11,6 +11,7 @@ import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.client.ClientSlices;
+import com.artipie.http.client.RedirectFollowingSlice;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
@@ -118,7 +119,10 @@ public final class PyProxySlice extends Slice.Wrap {
                     new ProxySlice(
                         clients,
                         auth,
-                        new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+                        new RedirectFollowingSlice(
+                            new AuthClientSlice(new UriClientSlice(clients, remote), auth),
+                            clients
+                        ),
                         cache,
                         new FromStorageCache(cache),
                         events,

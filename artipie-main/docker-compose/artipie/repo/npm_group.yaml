@@ -1,6 +1,13 @@
 repo:
   type: "npm-group"
-  # Resolution order: first match wins
+  # Members are listed in priority order - first match wins
   members:
-    - npm
-    - npm_proxy
+    - npm           # local repository (highest priority)
+    - npm_proxy     # proxy to npmjs.org
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

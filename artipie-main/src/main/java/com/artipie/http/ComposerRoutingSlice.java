@@ -6,7 +6,7 @@ package com.artipie.http;
 
 import com.artipie.asto.Content;
 import com.artipie.http.rq.RequestLine;
-import org.apache.http.client.utils.URIBuilder;
+import org.apache.hc.core5.net.URIBuilder;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;

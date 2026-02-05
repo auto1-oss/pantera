@@ -76,11 +76,17 @@ final class DownloadIndexSlice implements Slice {
                             .thenCompose(content -> new UpdateIndexUrls(content, this.base).value())
                             .thenApply(content -> ResponseBuilder.ok().body(content).build());
                     }
-                    return ResponseBuilder.notFound().completedFuture();
+                    // Consume request body to prevent Vert.x connection leak
+                    return body.asBytesFuture().thenApply(ignored ->
+                        ResponseBuilder.notFound().build()
+                    );
                 }
             );
         }
-        return ResponseBuilder.badRequest().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.badRequest().build()
+        );
     }
 
     /**

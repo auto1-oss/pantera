@@ -20,3 +20,19 @@ meta:
   metrics:
     port: 8087
     endpoint: "/metrics"
+  # Group repository cache settings (global defaults)
+  group:
+    index:
+      remote_exists_ttl: 15m       # Cache positive lookups
+      remote_not_exists_ttl: 5m    # Cache negative lookups
+      local_event_driven: true     # Instant updates for local repos
+    metadata:
+      ttl: 5m                      # Merged metadata cache TTL
+      stale_serve: 1h              # Serve stale if upstream down
+      background_refresh_at: 0.8   # Refresh at 80% of TTL
+    resolution:
+      upstream_timeout: 5s         # Timeout per upstream
+      max_parallel: 10             # Max parallel requests
+    cache_sizing:
+      l1_max_entries: 10000        # In-memory cache size
+      l2_max_entries: 1000000      # Valkey/Redis cache size

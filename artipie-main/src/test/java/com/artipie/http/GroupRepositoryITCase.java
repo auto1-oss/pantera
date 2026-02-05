@@ -5,7 +5,7 @@
 package com.artipie.http;
 
 import com.artipie.files.FileProxySlice;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.group.GroupSlice;
 import com.artipie.http.hm.RsHasStatus;
 import com.artipie.http.hm.SliceHasResponse;
@@ -14,7 +14,7 @@ import com.artipie.http.rq.RqMethod;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import org.apache.http.client.utils.URIBuilder;
+import org.apache.hc.core5.net.URIBuilder;
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +34,7 @@ final class GroupRepositoryITCase {
     /**
      * Http clients for proxy slice.
      */
-    private final JettyClientSlices clients = new JettyClientSlices();
+    private final VertxClientSlices clients = new VertxClientSlices();
 
     @BeforeEach
     void setUp() throws Exception {

@@ -11,7 +11,7 @@ import io.netty.handler.codec.http.HttpHeaderNames;
 import io.reactivex.Flowable;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.reactivex.core.Vertx;
-import io.vertx.reactivex.core.buffer.Buffer;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.client.HttpResponse;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.hamcrest.Description;

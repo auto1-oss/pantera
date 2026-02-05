@@ -86,35 +86,20 @@ public final class NpmProxyTest {
 
     @Test
     public void getsAsset() {
+        // Stream-through behavior: returns remote asset directly instead of re-reading from storage
         final String path = "asdas/-/asdas-1.0.0.tgz";
         final NpmAsset loaded = defaultAsset();
-        final NpmAsset expected = defaultAsset();
-        Mockito.when(this.storage.getAsset(path)).thenAnswer(
-            new Answer<Maybe<NpmAsset>>() {
-                private boolean first = true;
-
-                @Override
-                public Maybe<NpmAsset> answer(final InvocationOnMock invocation) {
-                    final Maybe<NpmAsset> result;
-                    if (this.first) {
-                        this.first = false;
-                        result = Maybe.empty();
-                    } else {
-                        result = Maybe.just(expected);
-                    }
-                    return result;
-                }
-            }
-        );
+        // First call returns empty (cache miss), triggering remote fetch
+        Mockito.when(this.storage.getAsset(path)).thenReturn(Maybe.empty());
         Mockito.when(
             this.remote.loadAsset(Mockito.eq(path), Mockito.any())
         ).thenReturn(Maybe.just(loaded));
         Mockito.when(this.storage.save(loaded)).thenReturn(Completable.complete());
         MatcherAssert.assertThat(
             this.npm.getAsset(path).blockingGet(),
-            new IsSame<>(expected)
+            new IsSame<>(loaded)  // Stream-through returns remote asset directly
         );
-        Mockito.verify(this.storage, Mockito.times(2)).getAsset(path);
+        Mockito.verify(this.storage).getAsset(path);
         Mockito.verify(this.remote).loadAsset(Mockito.eq(path), Mockito.any());
         Mockito.verify(this.storage).save(loaded);
     }

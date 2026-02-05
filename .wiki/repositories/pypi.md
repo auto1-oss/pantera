@@ -24,5 +24,34 @@ $ pip install --index-url http://{username}:{password}@{host}:{port}/{repository
 ```
 
 In the examples above `{host}` and `{port}` are Artipie service host and port, `{repository-name}`
-is the name of the repository (and repository name is the name of the repo config yaml file), 
+is the name of the repository (and repository name is the name of the repo config yaml file),
 `username` and `password` are credentials of Artipie user.
+
+## PyPI Group Repository
+
+A PyPI group aggregates multiple Python repositories into a single virtual index.
+Artipie merges `/simple/` HTML index pages, deduplicating package links by filename.
+
+```yaml
+repo:
+  type: pypi-group
+  settings:
+    repositories:
+      - pypi-local        # local repository
+      - pypi-proxy        # proxy to pypi.org
+    group:
+      index:
+        remote_exists_ttl: 15m
+        remote_not_exists_ttl: 5m
+      metadata:
+        ttl: 5m
+```
+
+Members are listed in priority order - if the same package file exists in multiple members,
+the first member's link is used. Install from the group:
+
+```bash
+pip install --index-url http://{username}:{password}@{host}:{port}/pypi-group my-package
+```
+
+See [Group Cache Configuration](../Configuration-Group-Cache) for detailed cache settings.

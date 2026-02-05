@@ -6,6 +6,9 @@ package com.artipie.group;
 
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.cache.GlobalCacheConfig;
+import com.artipie.cache.GroupSettings;
+import com.artipie.cache.MergedMetadataCache;
 import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
@@ -75,8 +78,9 @@ public final class MavenGroupSlice implements Slice {
 
     /**
      * Two-tier metadata cache (L1: Caffeine, L2: Valkey).
+     * Uses MergedMetadataCache from core cache infrastructure.
      */
-    private final GroupMetadataCache metadataCache;
+    private final MergedMetadataCache metadataCache;
 
     /**
      * Constructor.
@@ -101,7 +105,12 @@ public final class MavenGroupSlice implements Slice {
         this.resolver = resolver;
         this.port = port;
         this.depth = depth;
-        this.metadataCache = new GroupMetadataCache(group);
+        // Use MergedMetadataCache from core infrastructure with default settings
+        this.metadataCache = new MergedMetadataCache(
+            group,
+            GroupSettings.defaults(),
+            GlobalCacheConfig.valkeyConnection()
+        );
     }
 
     @Override
@@ -197,10 +206,13 @@ public final class MavenGroupSlice implements Slice {
         final Content body,
         final String path
     ) {
-        final String cacheKey = path;
+        // Extract package path for caching (strip maven-metadata.xml suffix)
+        final String packagePath = path.endsWith("/maven-metadata.xml")
+            ? path.substring(0, path.lastIndexOf("/maven-metadata.xml"))
+            : path;
 
         // Check two-tier cache (L1 then L2 if miss)
-        return this.metadataCache.get(cacheKey).thenCompose(cached -> {
+        return this.metadataCache.get("maven", packagePath).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
                 EcsLogger.debug("com.artipie.maven")
@@ -284,13 +296,12 @@ public final class MavenGroupSlice implements Slice {
 
                 if (metadataList.isEmpty()) {
                     EcsLogger.warn("com.artipie.maven")
-                        .message("No metadata found in any member")
+                        .message(String.format("No metadata found in any member (fetch_duration=%dms)", fetchDuration))
                         .eventCategory("repository")
                         .eventAction("metadata_merge")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
                         .field("url.path", path)
-                        .field("fetch.duration.ms", fetchDuration)
                         .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.notFound().build()
@@ -308,7 +319,7 @@ public final class MavenGroupSlice implements Slice {
                         final long totalDuration = fetchDuration + mergeDuration;
 
                         // Cache the merged result (L1 + L2)
-                        MavenGroupSlice.this.metadataCache.put(cacheKey, mergedBytes);
+                        MavenGroupSlice.this.metadataCache.put("maven", packagePath, mergedBytes);
 
                         // Record metadata merge metrics (total for backward compatibility)
                         recordMetadataOperation("merge", totalDuration);
@@ -316,28 +327,24 @@ public final class MavenGroupSlice implements Slice {
                         // Log slow fetches (>500ms) - expected for proxy repos
                         if (fetchDuration > 500) {
                             EcsLogger.info("com.artipie.maven")
-                                .message("Slow member fetch (" + metadataList.size() + " members)")
+                                .message(String.format("Slow member fetch (%d members, fetch=%dms, merge=%dms)", metadataList.size(), fetchDuration, mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_fetch")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
                                 .log();
                         }
 
                         // Log slow merges (>50ms) - indicates actual performance issue
                         if (mergeDuration > 50) {
                             EcsLogger.warn("com.artipie.maven")
-                                .message("Slow metadata merge (" + metadataList.size() + " members)")
+                                .message(String.format("Slow metadata merge (%d members, fetch=%dms, merge=%dms)", metadataList.size(), fetchDuration, mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_merge")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
                                 .log();
                         }
 

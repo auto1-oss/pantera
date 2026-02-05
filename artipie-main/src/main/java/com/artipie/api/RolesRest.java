@@ -11,7 +11,7 @@ import com.artipie.security.policy.Policy;
 import com.artipie.settings.users.CrudRoles;
 import com.artipie.http.log.EcsLogger;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.io.StringReader;
 import java.security.PermissionCollection;
 import java.util.Optional;
@@ -71,49 +71,49 @@ public final class RolesRest extends BaseRest {
 
     @Override
     public void init(final RouterBuilder rbr) {
-        rbr.operation("listAllRoles")
-            .handler(
+        rbr.getRoute("listAllRoles")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiRolePermission(ApiRolePermission.RoleAction.READ)
                 )
             )
-            .handler(this::listAllRoles)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("getRole")
-            .handler(
+            .addHandler(this::listAllRoles)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("getRole")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiRolePermission(ApiRolePermission.RoleAction.READ)
                 )
             )
-            .handler(this::getRole)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("putRole")
-            .handler(this::putRole)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("deleteRole")
-            .handler(
+            .addHandler(this::getRole)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("putRole")
+            .addHandler(this::putRole)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("deleteRole")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiRolePermission(ApiRolePermission.RoleAction.DELETE)
                 )
             )
-            .handler(this::deleteRole)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("enable")
-            .handler(
+            .addHandler(this::deleteRole)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("enable")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiRolePermission(ApiRolePermission.RoleAction.ENABLE)
                 )
             )
-            .handler(this::enableRole)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rbr.operation("disable")
-            .handler(
+            .addHandler(this::enableRole)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rbr.getRoute("disable")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiRolePermission(ApiRolePermission.RoleAction.ENABLE)
                 )
             )
-            .handler(this::disableRole)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+            .addHandler(this::disableRole)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -204,7 +204,7 @@ public final class RolesRest extends BaseRest {
         if (existing.isPresent() && perms.implies(RolesRest.UPDATE)
             || existing.isEmpty() && perms.implies(RolesRest.CREATE)) {
             this.roles.addOrUpdate(
-                Json.createReader(new StringReader(context.body().asString())).readObject(),
+                BaseRest.readJsonObject(context),
                 uname
             );
             this.cache.invalidate(uname);

@@ -76,7 +76,7 @@ public final class AstoManifests implements Manifests {
             .message("AstoManifests.get() called")
             .eventCategory("repository")
             .eventAction("manifest_get")
-            .field("container.image.hash.all", ref.digest())
+            .field("container.image.digest", ref.digest())
             .log();
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
@@ -85,7 +85,7 @@ public final class AstoManifests implements Manifests {
                         .message("Found link for manifest reference")
                         .eventCategory("repository")
                         .eventAction("manifest_get")
-                        .field("container.image.hash.all", ref.digest())
+                        .field("container.image.digest", ref.digest())
                         .field("package.checksum", digest.string())
                         .log();
                     return this.blobs.blob(digest)
@@ -124,7 +124,7 @@ public final class AstoManifests implements Manifests {
                     .eventCategory("repository")
                     .eventAction("manifest_get")
                     .eventOutcome("failure")
-                    .field("container.image.hash.all", ref.digest())
+                    .field("container.image.digest", ref.digest())
                     .log();
                 return CompletableFuture.completedFuture(Optional.empty());
             })

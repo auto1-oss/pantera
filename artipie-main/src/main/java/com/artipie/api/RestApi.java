@@ -18,12 +18,15 @@ import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.http.log.EcsLogger;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.JWTAuthHandler;
 import io.vertx.ext.web.handler.StaticHandler;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
+import io.vertx.openapi.contract.OpenAPIContract;
 import java.util.Arrays;
 import java.util.Optional;
 
@@ -84,6 +87,11 @@ public final class RestApi extends AbstractVerticle {
     private final Settings settings;
 
     /**
+     * HTTP server instance for cleanup.
+     */
+    private HttpServer server;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -131,20 +139,43 @@ public final class RestApi extends AbstractVerticle {
     }
 
     @Override
-    public void start() throws Exception {
-        RouterBuilder.create(this.vertx, "swagger-ui/yaml/repo.yaml").compose(
-            repoRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/users.yaml").compose(
-                userRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
-                    tokenRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
-                        settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
-                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/cache.yaml").onSuccess(
-                                cacheRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb)
-                            ).onFailure(Throwable::printStackTrace)
-                        ).onFailure(Throwable::printStackTrace)
+    public void start(final Promise<Void> startPromise) {
+        OpenAPIContract.from(this.vertx, "swagger-ui/yaml/repo.yaml").compose(
+            repoContract -> OpenAPIContract.from(this.vertx, "swagger-ui/yaml/users.yaml").compose(
+                userContract -> OpenAPIContract.from(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
+                    tokenContract -> OpenAPIContract.from(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
+                        settingsContract -> OpenAPIContract.from(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
+                            rolesContract -> OpenAPIContract.from(this.vertx, "swagger-ui/yaml/cache.yaml").compose(
+                                cacheContract -> {
+                                    final RouterBuilder repoRb = RouterBuilder.create(this.vertx, repoContract);
+                                    final RouterBuilder userRb = RouterBuilder.create(this.vertx, userContract);
+                                    final RouterBuilder tokenRb = RouterBuilder.create(this.vertx, tokenContract);
+                                    final RouterBuilder settingsRb = RouterBuilder.create(this.vertx, settingsContract);
+                                    final RouterBuilder rolesRb = RouterBuilder.create(this.vertx, rolesContract);
+                                    final RouterBuilder cacheRb = RouterBuilder.create(this.vertx, cacheContract);
+                                    return this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb);
+                                }
+                            )
+                        )
                     )
                 )
             )
-        );
+        ).onSuccess(v -> startPromise.complete())
+         .onFailure(err -> {
+             err.printStackTrace();
+             startPromise.fail(err);
+         });
+    }
+
+    @Override
+    public void stop(final Promise<Void> stopPromise) {
+        if (this.server != null) {
+            this.server.close()
+                .onSuccess(v -> stopPromise.complete())
+                .onFailure(stopPromise::fail);
+        } else {
+            stopPromise.complete();
+        }
     }
 
     /**
@@ -155,8 +186,9 @@ public final class RestApi extends AbstractVerticle {
      * @param settingsRb Settings RouterBuilder
      * @param rolesRb Roles RouterBuilder
      * @param cacheRb Cache RouterBuilder
+     * @return Future that completes when server is listening
      */
-    private void startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
+    private Future<Void> startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
         final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb,
         final RouterBuilder cacheRb) {
         this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, cacheRb);
@@ -208,7 +240,6 @@ public final class RestApi extends AbstractVerticle {
                 .setCachingEnabled(false)
                 .setFilesReadOnly(false)
         );
-        final HttpServer server;
         final String schema;
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
             // SSL server with TCP optimizations for low latency
@@ -218,11 +249,11 @@ public final class RestApi extends AbstractVerticle {
                 .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
                 .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
                 .setIdleTimeout(60);      // Close idle connections after 60 seconds
-            server = vertx.createHttpServer(sslOptions);
+            this.server = vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
             // Non-SSL server with TCP optimizations matching main server config
-            server = this.vertx.createHttpServer(
+            this.server = this.vertx.createHttpServer(
                 new io.vertx.core.http.HttpServerOptions()
                     .setTcpNoDelay(true)      // Disable Nagle's algorithm for low latency
                     .setTcpKeepAlive(true)    // Enable keep-alive for connection reuse
@@ -232,16 +263,17 @@ public final class RestApi extends AbstractVerticle {
             );
             schema = "http";
         }
-        server.requestHandler(router)
+        final String finalSchema = schema;
+        return this.server.requestHandler(router)
             .listen(this.port)
-            .onComplete(res -> EcsLogger.info("com.artipie.api")
+            .onSuccess(s -> EcsLogger.info("com.artipie.api")
                 .message("Rest API started")
                 .eventCategory("api")
                 .eventAction("server_start")
                 .eventOutcome("success")
                 .field("url.port", this.port)
-                .field("url.scheme", schema)
-                .field("url.full", schema + "://localhost:" + this.port + "/api/index.html")
+                .field("url.scheme", finalSchema)
+                .field("url.full", finalSchema + "://localhost:" + this.port + "/api/index.html")
                 .log())
             .onFailure(err -> EcsLogger.error("com.artipie.api")
                 .message("Failed to start Rest API")
@@ -250,7 +282,8 @@ public final class RestApi extends AbstractVerticle {
                 .eventOutcome("failure")
                 .field("url.port", this.port)
                 .error(err)
-                .log());
+                .log())
+            .mapEmpty();
     }
 
     /**
@@ -263,7 +296,7 @@ public final class RestApi extends AbstractVerticle {
     private void addJwtAuth(final RouterBuilder token, final RouterBuilder... builders) {
         new AuthTokenRest(new JwtTokens(this.jwt, this.settings.jwtSettings()), this.security.authentication()).init(token);
         Arrays.stream(builders).forEach(
-            item -> item.securityHandler(RestApi.SECURITY_SCHEME, JWTAuthHandler.create(this.jwt))
+            item -> item.security(RestApi.SECURITY_SCHEME).httpHandler(JWTAuthHandler.create(this.jwt))
         );
     }
 }

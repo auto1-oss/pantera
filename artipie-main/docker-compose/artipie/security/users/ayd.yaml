@@ -1,3 +1,5 @@
 enabled: true
+type: plain
+pass: pass
 roles:
   - admin

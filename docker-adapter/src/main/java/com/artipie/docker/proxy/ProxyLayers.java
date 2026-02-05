@@ -12,6 +12,7 @@ import com.artipie.docker.asto.BlobSource;
 import com.artipie.http.Headers;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
+import com.artipie.http.client.ClientSlices;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
@@ -21,6 +22,9 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Proxy implementation of {@link Layers}.
+ * <p>
+ * Handles layer blob operations with support for following HTTP redirects
+ * to CDN URLs (which Docker Hub uses for blob downloads).
  *
  * @since 0.3
  */
@@ -37,14 +41,32 @@ public final class ProxyLayers implements Layers {
     private final String name;
 
     /**
+     * Client slices for following redirects to CDN URLs.
+     * May be null if redirect following is not supported.
+     */
+    private final ClientSlices clients;
+
+    /**
      * Ctor.
      *
      * @param remote Remote repository.
      * @param name Repository name.
      */
     public ProxyLayers(Slice remote, String name) {
+        this(remote, name, null);
+    }
+
+    /**
+     * Ctor with ClientSlices for redirect support.
+     *
+     * @param remote Remote repository.
+     * @param name Repository name.
+     * @param clients Client slices for following redirects.
+     */
+    public ProxyLayers(Slice remote, String name, ClientSlices clients) {
         this.remote = remote;
         this.name = name;
+        this.clients = clients;
     }
 
     @Override
@@ -73,7 +95,8 @@ public final class ProxyLayers implements Layers {
                                 this.remote,
                                 this.name,
                                 digest,
-                                new ContentLength(response.headers()).longValue()
+                                new ContentLength(response.headers()).longValue(),
+                                this.clients
                             )
                         );
                     } else if (response.status() == RsStatus.NOT_FOUND) {

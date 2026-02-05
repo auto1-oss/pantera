@@ -10,7 +10,7 @@ import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.asto.test.TestResource;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.client.auth.BasicAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.pypi.PypiDeployment;
 import com.artipie.security.policy.PolicyByUsername;
@@ -43,7 +43,7 @@ class PyProxySliceAuthITCase {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices();
+    private final VertxClientSlices client = new VertxClientSlices();
 
     /**
      * Vertx slice origin server instance.

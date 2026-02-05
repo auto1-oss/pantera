@@ -1,6 +1,14 @@
 repo:
   type: php-group
+  # Members are listed in priority order - first match wins
   members:
-     - php
-     - php_proxy
+    - php            # local repository (highest priority)
+    - php_proxy      # proxy to packagist.org
   url: http://localhost:8081/php_group
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

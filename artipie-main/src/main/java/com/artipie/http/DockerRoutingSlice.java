@@ -13,7 +13,7 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.security.perms.EmptyPermissions;
 import com.artipie.security.perms.FreePermissions;
 import com.artipie.settings.Settings;
-import org.apache.http.client.utils.URIBuilder;
+import org.apache.hc.core5.net.URIBuilder;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
@@ -65,9 +65,12 @@ public final class DockerRoutingSlice implements Slice {
             final String group = matcher.group(1);
             if (group.isEmpty() || group.equals("/")) {
                 return new BasicAuthzSlice(
-                    (l, h, b) -> ResponseBuilder.ok()
-                        .header("Docker-Distribution-API-Version", "registry/2.0")
-                        .completedFuture(),
+                    // CRITICAL: Consume body to prevent Vert.x connection leak
+                    (l, h, b) -> b.asBytesFuture().thenApply(ignored ->
+                        ResponseBuilder.ok()
+                            .header("Docker-Distribution-API-Version", "registry/2.0")
+                            .build()
+                    ),
                     this.settings.authz().authentication(),
                     new OperationControl(
                         user -> user.isAnonymous() ? EmptyPermissions.INSTANCE

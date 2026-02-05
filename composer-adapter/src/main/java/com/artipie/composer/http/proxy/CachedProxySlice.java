@@ -29,13 +29,17 @@ import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.scheduling.ProxyArtifactEvent;
 
+import com.artipie.cache.DistributedInFlight;
+
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -92,6 +96,12 @@ final class CachedProxySlice implements Slice {
      * Upstream URL for metrics.
      */
     private final String upstreamUrl;
+
+    /**
+     * Distributed in-flight tracker for request deduplication.
+     * Uses Pub/Sub for instant notification across cluster nodes.
+     */
+    private final DistributedInFlight inFlight;
 
     /**
      * @param remote Remote slice
@@ -170,6 +180,8 @@ final class CachedProxySlice implements Slice {
         this.inspector = inspector;
         this.baseUrl = baseUrl;
         this.upstreamUrl = upstreamUrl;
+        // Distributed in-flight with Pub/Sub for cluster-wide deduplication
+        this.inFlight = new DistributedInFlight(rtype + ":" + rname);
     }
 
     @Override
@@ -330,7 +342,9 @@ final class CachedProxySlice implements Slice {
     }
     
     /**
-     * Fetch package through cache.
+     * Fetch package through cache with distributed request deduplication.
+     * Uses DistributedInFlight with Pub/Sub for cluster-wide coordination.
+     * Only one node fetches from upstream; others wait and read from cache.
      *
      * @param line Request line
      * @param name Package name
@@ -338,6 +352,96 @@ final class CachedProxySlice implements Slice {
      * @return Response future
      */
     private CompletableFuture<Response> fetchThroughCache(
+        final RequestLine line,
+        final String name,
+        final Headers headers
+    ) {
+        return this.inFlight.tryAcquire(name)
+            .thenCompose(result -> {
+                if (result.isLeader()) {
+                    // We are the leader - fetch from upstream
+                    return this.doFetchThroughCache(line, name, headers)
+                        .orTimeout(90, TimeUnit.SECONDS)
+                        .whenComplete((response, error) -> {
+                            // Signal completion to waiters via Pub/Sub
+                            final boolean success = error == null && response != null
+                                && response.status().success();
+                            result.complete(success);
+                        });
+                } else {
+                    // We are a waiter - wait for leader via Pub/Sub, then read from cache
+                    return result.waitForLeader()
+                        .thenCompose(success -> this.serveFromCacheForWaiter(name, success, headers));
+                }
+            });
+    }
+
+    /**
+     * Serve content from storage cache for waiting requests.
+     * Called after leader completes - reads from storage instead of re-fetching.
+     *
+     * @param name Package name
+     * @param leaderSuccess True if leader succeeded (content should be in cache)
+     * @param headers Request headers for cooldown evaluation
+     * @return Response future with content from storage or fallback
+     */
+    private CompletableFuture<Response> serveFromCacheForWaiter(
+        final String name,
+        final boolean leaderSuccess,
+        final Headers headers
+    ) {
+        if (!leaderSuccess) {
+            // Leader failed - return not found
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        }
+        // Read fresh content from storage cache (rewritten metadata was saved to name.json)
+        final Key metadataKey = new Key.From(name + ".json");
+        return this.repo.storage().exists(metadataKey).thenCompose(exists -> {
+            if (exists) {
+                return this.repo.storage().value(metadataKey).thenCompose(content ->
+                    content.asBytesFuture().thenCompose(bytes ->
+                        this.evaluateMetadataCooldown(name, headers, bytes)
+                            .thenApply(result -> {
+                                if (result.blocked()) {
+                                    return CooldownResponses.forbidden(result.block().orElseThrow());
+                                }
+                                return ResponseBuilder.ok()
+                                    .header("Content-Type", "application/json")
+                                    .body(new Content.From(bytes))
+                                    .build();
+                            })
+                    )
+                );
+            }
+            // Fallback to raw cache if rewritten metadata not found
+            return new FromStorageCache(this.repo.storage()).load(
+                new Key.From(name),
+                Remote.EMPTY,
+                CacheControl.Standard.ALWAYS
+            ).thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    return cached.get().asBytesFuture().thenCompose(bytes -> {
+                        final Content rewritten = this.rewriteMetadata(bytes, headers);
+                        return rewritten.asBytesFuture().thenApply(rewrittenBytes ->
+                            ResponseBuilder.ok()
+                                .header("Content-Type", "application/json")
+                                .body(new Content.From(rewrittenBytes))
+                                .build()
+                        );
+                    });
+                }
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            }).toCompletableFuture();
+        });
+    }
+
+    /**
+     * Internal method that performs the actual fetch through cache.
+     * Should only be called through fetchThroughCache for deduplication.
+     */
+    private CompletableFuture<Response> doFetchThroughCache(
         final RequestLine line,
         final String name,
         final Headers headers

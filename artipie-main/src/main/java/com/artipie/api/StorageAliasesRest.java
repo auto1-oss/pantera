@@ -10,7 +10,7 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.cache.StoragesCache;
 import com.artipie.security.policy.Policy;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.openapi.RouterBuilder;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.io.StringReader;
 import java.util.Optional;
 import javax.json.Json;
@@ -59,54 +59,54 @@ public final class StorageAliasesRest extends BaseRest {
 
     @Override
     public void init(final RouterBuilder rtrb) {
-        rtrb.operation("addRepoAlias")
-            .handler(
+        rtrb.getRoute("addRepoAlias")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.READ)
                 )
             )
-            .handler(this::addRepoAlias)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rtrb.operation("getRepoAliases")
-            .handler(
+            .addHandler(this::addRepoAlias)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rtrb.getRoute("getRepoAliases")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.READ)
                 )
             )
-            .handler(this::getRepoAliases)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rtrb.operation("deleteRepoAlias")
-            .handler(
+            .addHandler(this::getRepoAliases)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rtrb.getRoute("deleteRepoAlias")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.DELETE)
                 )
             )
-            .handler(this::deleteRepoAlias)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rtrb.operation("getAliases")
-            .handler(
+            .addHandler(this::deleteRepoAlias)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rtrb.getRoute("getAliases")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.READ)
                 )
             )
-            .handler(this::getAliases)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rtrb.operation("addAlias")
-            .handler(
+            .addHandler(this::getAliases)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rtrb.getRoute("addAlias")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.CREATE)
                 )
             )
-            .handler(this::addAlias)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
-        rtrb.operation("deleteAlias")
-            .handler(
+            .addHandler(this::addAlias)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+        rtrb.getRoute("deleteAlias")
+            .addHandler(
                 new AuthzHandler(
                     this.policy, new ApiAliasPermission(ApiAliasPermission.AliasAction.DELETE)
                 )
             )
-            .handler(this::deleteAlias)
-            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
+            .addHandler(this::deleteAlias)
+            .addFailureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
     }
 
     /**
@@ -214,6 +214,6 @@ public final class StorageAliasesRest extends BaseRest {
      * @return Javax json object
      */
     private static JsonObject jsonFromRequest(final RoutingContext context) {
-        return Json.createReader(new StringReader(context.body().asString())).readObject();
+        return BaseRest.readJsonObject(context);
     }
 }

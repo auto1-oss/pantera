@@ -1,5 +1,13 @@
 repo:
   type: go-group
+  # Members are listed in priority order - first match wins
   members:
-    - go_proxy
-    - go
+    - go             # local repository (highest priority)
+    - go_proxy       # proxy to proxy.golang.org
+  # Optional: override global group cache settings
+  settings:
+    group:
+      index:
+        remote_exists_ttl: 15m
+      metadata:
+        ttl: 5m

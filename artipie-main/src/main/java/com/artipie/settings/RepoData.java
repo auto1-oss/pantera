@@ -100,13 +100,12 @@ public final class RepoData {
                                 return asto.deleteAll(artifactKey)
                                     .thenApply(nothing -> {
                                         EcsLogger.info("com.artipie.settings")
-                                            .message("Deleted artifact directory from repository")
+                                            .message(String.format("Deleted artifact directory from repository (%d files)", keys.size()))
                                             .eventCategory("repository")
                                             .eventAction("artifact_delete")
                                             .eventOutcome("success")
                                             .field("repository.name", repo)
-                                            .field("artifact.path", artifactPath)
-                                            .field("files.count", keys.size())
+                                            .field("package.path", artifactPath)
                                             .log();
                                         return true;
                                     });
@@ -121,7 +120,7 @@ public final class RepoData {
                                 .eventAction("artifact_delete")
                                 .eventOutcome("success")
                                 .field("repository.name", repo)
-                                .field("artifact.path", artifactPath)
+                                .field("package.path", artifactPath)
                                 .log();
                             return true;
                         });

@@ -14,7 +14,7 @@ meta:
   
   credentials:
     # - type: env
-    # - type: artipie
+    - type: artipie
     - type: keycloak
       url: "http://keycloak:8080"
       realm: artipie
@@ -52,7 +52,30 @@ meta:
     repo_types:
       npm-proxy:
         enabled: true
-  
+#      docker-proxy:
+#        enabled: true
+
+  # Global group repository settings (can be overridden per-repo in settings.group)
+  group:
+    # Package location index TTLs
+    index:
+      remote_exists_ttl: 1d      # Cache that remote repo has package
+      remote_not_exists_ttl: 7d   # Negative cache for 404s
+      local_event_driven: true    # Immediate updates for local repos
+    # Merged metadata cache
+    metadata:
+      ttl: 12h                    # Merged metadata cache TTL
+      stale_serve: 1h             # Serve stale if upstream down
+      background_refresh_at: 0.9  # Trigger refresh at 80% of TTL
+    # Resolution behavior
+    resolution:
+      upstream_timeout: 5s        # Max wait per upstream request
+      max_parallel: 16            # Max concurrent upstream requests
+    # Cache sizing (L1=in-memory, L2=Valkey)
+    cache_sizing:
+      l1_max_entries: 10000
+      l2_max_entries: 1000000
+
   artifacts_database:
     postgres_host: "artipie-db"
     postgres_port: 5432
@@ -62,14 +85,42 @@ meta:
     pool_max_size: 50
     pool_min_idle: 10
   
+
   http_client:
-    proxy_timeout: 120
-    max_connections_per_destination: 512
-    max_requests_queued_per_destination: 2048
-    idle_timeout: 30000
-    connection_timeout: 15000
+    # Connection settings
+    connection_timeout: 15000           # ms, default 15s
+    idle_timeout: 30000                 # ms, default 30s
+    read_idle_timeout: 60000            # ms, for slow downloads, default 60s
+    # Pool settings
+    max_connections_per_destination: 16
+    max_total_connections: 1024
+    max_requests_queued_per_destination: 32
+    # Protocol
+    http2_enabled: true                 # HTTP/2 with HTTP/1.1 fallback
+    trust_all: false
     follow_redirects: true
-    connection_acquire_timeout: 120000  # ms to wait for pooled connection before failing
+    # Retry (exponential backoff + jitter)
+    retry:
+      max_attempts: 3
+      initial_delay: 100                # ms
+      max_delay: 1000                   # ms cap
+      multiplier: 2.0
+      jitter: 0.2                       # ±20%
+      retryable_status_codes: [ 502, 503, 504 ]
+    # Circuit breaker (per destination)
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 5
+      success_threshold: 3
+      timeout: 30000                    # ms before half-open
+      failure_rate_threshold: 80        # percentage to open
+      sliding_window_size: 10
+    # Cache strategy
+    cache:
+      artifact_ttl: -1                  # forever (immutable)
+
+    # Proxy timeout
+    proxy_timeout: 120                  # seconds
 
   http_server:
     # ISO-8601 duration (or milliseconds) before failing long running requests. Use 0 to disable.

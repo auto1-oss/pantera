@@ -6,11 +6,11 @@
   <parent>
     <groupId>com.artipie</groupId>
     <artifactId>artipie</artifactId>
-    <version>1.20.12</version>
+    <version>1.21.0</version>
   </parent>
 
   <artifactId>artipie-core</artifactId>
-  <version>1.20.12</version>
+  <version>1.21.0</version>
   <packaging>jar</packaging>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
@@ -19,7 +19,7 @@
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.12</version>
+      <version>1.21.0</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -113,6 +113,13 @@
       <scope>provided</scope>
     </dependency>
 
+    <!-- Vert.x core for stream-through caching -->
+    <dependency>
+      <groupId>io.vertx</groupId>
+      <artifactId>vertx-core</artifactId>
+      <version>${vertx.version}</version>
+    </dependency>
+
     <!-- Test only dependencies -->
     <dependency>
       <groupId>org.reactivestreams</groupId>
@@ -154,6 +161,13 @@
       <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-servlet</artifactId>
       <version>11.0.19</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Testcontainers for Redis/Valkey integration testing -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <version>${testcontainers.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

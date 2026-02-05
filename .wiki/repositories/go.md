@@ -32,3 +32,32 @@ In the examples above `{host}` and `{port}` are Artipie service host and port, `
 is the name of the repository (and repository name is the name of the repo config yaml file).
 
 There is no way to deploy packages to Artipie Go repository for now.
+
+## Go Group Repository
+
+A Go group aggregates multiple Go module proxies into a single virtual proxy.
+Artipie merges `@v/list` version lists, sorting by semantic version.
+
+```yaml
+repo:
+  type: go-group
+  settings:
+    repositories:
+      - go-local          # local repository
+      - goproxy-io        # proxy to proxy.golang.org
+    group:
+      index:
+        remote_exists_ttl: 15m
+        remote_not_exists_ttl: 5m
+      metadata:
+        ttl: 5m
+```
+
+Members are listed in priority order. Configure Go client:
+
+```bash
+export GOPROXY="http://{host}:{port}/go-group"
+go get example.com/mymodule
+```
+
+See [Group Cache Configuration](../Configuration-Group-Cache) for detailed cache settings.

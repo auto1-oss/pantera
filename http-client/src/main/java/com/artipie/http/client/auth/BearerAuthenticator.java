@@ -92,7 +92,21 @@ public final class BearerAuthenticator implements Authenticator {
 
         return new AuthClientSlice(new UriClientSlice(this.client, realm), this.auth)
             .response(new RequestLine(RqMethod.GET, "?" + query), Headers.EMPTY, Content.EMPTY)
-            .thenCompose(response -> response.body().asBytesFuture())
+            .thenCompose(response -> {
+                // Check for error status first
+                final int statusCode = response.status().code();
+                if (statusCode >= 400) {
+                    return response.body().asBytesFuture()
+                        .thenApply(bytes -> {
+                            final String body = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                            throw new IllegalStateException(String.format(
+                                "Token request failed: status=%d, realm=%s, body=%s",
+                                statusCode, realm, body.length() > 500 ? body.substring(0, 500) : body
+                            ));
+                        });
+                }
+                return response.body().asBytesFuture();
+            })
             .thenApply(bytes -> {
                 String token = this.format.token(bytes);
                 return new Authorization.Bearer(token);

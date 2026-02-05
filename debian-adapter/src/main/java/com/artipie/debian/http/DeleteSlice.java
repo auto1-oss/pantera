@@ -61,7 +61,10 @@ public final class DeleteSlice implements Slice {
                             }
                         );
                 }
-                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+                // Consume request body to prevent Vert.x connection leak
+                return body.asBytesFuture().thenApply(ignored ->
+                    ResponseBuilder.notFound().build()
+                );
             }
         );
     }

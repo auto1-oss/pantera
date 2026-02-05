@@ -1,0 +1,1281 @@
+ECS_Version,Indexed,Field_Set,Field,Type,Level,Normalization,Example,Description
+1.2.10,true,base,@timestamp,date,core,,2016-05-23T08:05:34.853Z,Date/time when the event originated.
+1.2.10,true,base,labels,object,core,,"{""application"": ""foo-bar"", ""env"": ""production""}",Custom key/value pairs.
+1.2.10,true,base,message,match_only_text,core,,Hello World,Log message optimized for viewing in a log viewer.
+1.2.10,true,base,tags,keyword,core,array,"[""production"", ""env2""]",List of keywords used to tag each event.
+1.2.10,true,agent,agent.build.original,keyword,core,,"metricbeat version 7.6.0 (amd64), libbeat 7.6.0 [6a23e8f8f30f5001ba344e4e54d8d9cb82cb107c built 2020-02-05 23:10:10 +0000 UTC]",Extended build information for the agent.
+1.2.10,true,agent,agent.ephemeral_id,keyword,extended,,8a4f500f,Ephemeral identifier of this agent.
+1.2.10,true,agent,agent.id,keyword,core,,8a4f500d,Unique identifier of this agent.
+1.2.10,true,agent,agent.name,keyword,core,,foo,Custom name of the agent.
+1.2.10,true,agent,agent.type,keyword,core,,filebeat,Type of the agent.
+1.2.10,true,agent,agent.version,keyword,core,,6.0.0-rc2,Version of the agent.
+1.2.10,true,auto1,auto1.activity.id,keyword,custom,,Activity_06o4fj9,The activity related to the log entry.
+1.2.10,true,auto1,auto1.api.route.controller,keyword,custom,,RetailDeliveryOptionsController::getOptions,The name of the api controller / handler that was called.
+1.2.10,true,auto1,auto1.api.route.handler,keyword,custom,,/v1/eta-calculation/estimations/{stockNumber}/current,The identifier of called api.
+1.2.10,true,auto1,auto1.api.route.name,keyword,custom,,delivery_options_for_retail,The name of called api.
+1.2.10,true,auto1,auto1.api.route.parameters,flattened,custom,,{'stockNumber': 'ABC123'},A map of route related parameters used to further debug the api call.
+1.2.10,true,auto1,auto1.auction.id,keyword,custom,,123456,The id of auto1 auction.
+1.2.10,true,auto1,auto1.aurs.alert.type,keyword,custom,,AURS_MESSAGING_LISTENER_ERROR,AURS Module Alert Type.
+1.2.10,true,auto1,auto1.aurs.messaging.listener.module,keyword,custom,,INBOUND_PAYMENTS,AURS listener module name.
+1.2.10,true,auto1,auto1.aurs.messaging.message.id,keyword,custom,,43e33019-91cf-462f-af0a-efd20d02245f,AURS Message Id.
+1.2.10,true,auto1,auto1.build.number,keyword,custom,,"36 , v1.2.0",The service/application build number.
+1.2.10,true,auto1,auto1.business.process,keyword,custom,,publish-ad,The name of business process that the log entry is related to.
+1.2.10,true,auto1,auto1.car.id,keyword,custom,,123456,The id of auto1 car.
+1.2.10,true,auto1,auto1.car.vin,keyword,custom,,YV1XZEYR0S2460362,Field to contain generic vin parameter.
+1.2.10,true,auto1,auto1.classifieds.ad.id,keyword,custom,,123456,The id of auto1 classifieds ad.
+1.2.10,true,auto1,auto1.config.transitional.silentJSONParsing,boolean,custom,,True,Flag that shows whether an silentJSONParsing occurred or not.
+1.2.10,true,auto1,auto1.conversation.number,keyword,custom,,WK00007842,Call center conversation number in logs. See https://wkdauto.atlassian.net/browse/CC-2127
+1.2.10,true,auto1,auto1.documents.delivered,boolean,custom,,True,Flag that shows whether the sent documents are delivered or not.
+1.2.10,true,auto1,auto1.email.account.id,keyword,custom,,123456,email account id.
+1.2.10,true,auto1,auto1.email.batch.size,long,custom,,54,Email batch size.
+1.2.10,true,auto1,auto1.email.locale,keyword,custom,,DE,Email template locale.
+1.2.10,true,auto1,auto1.email.processing.kind,keyword,custom,,"single, batch",Email processing kind.
+1.2.10,true,auto1,auto1.email.processing.status,keyword,custom,,SUCCESS,Email processing status.
+1.2.10,true,auto1,auto1.email.retry.count,long,custom,,3,The number of retries for sending an email.
+1.2.10,true,auto1,auto1.email.retry.error,keyword,custom,,"javax.mail.MessagingException: Could not connect to SMTP host: smtp.gmail.com, port: 465, response: -1",The error message of the last email retry.
+1.2.10,true,auto1,auto1.email.retry.error.text,match_only_text,custom,,"javax.mail.MessagingException: Could not connect to SMTP host: smtp.gmail.com, port: 465, response: -1",The error message of the last email retry.
+1.2.10,true,auto1,auto1.email.retry.schedule.next,date,custom,,1703409022000,The schedule of the next email retry in UNIX MS.
+1.2.10,true,auto1,auto1.email.template.id,keyword,custom,,134563,Email template id.
+1.2.10,true,auto1,auto1.email.triggered,boolean,custom,,True,Flag that shows whether an email has been sent or not.
+1.2.10,true,auto1,auto1.email.type,keyword,custom,,survey,The type of email of concern.
+1.2.10,true,auto1,auto1.environment,keyword,custom,,production,The name of environment hosting the target application/service.
+1.2.10,true,auto1,auto1.equipment_group.failed_mapping.count,long,custom,,2,The number of failed mappings in equipment_group.
+1.2.10,true,auto1,auto1.equipment_group.failed_mapping.name,keyword,custom,array,"[ 'ABC', 'EFG' ]",The name of failed mapping in equipment_group.
+1.2.10,true,auto1,auto1.equipment_group.successful.count,long,custom,,2,The number of successful mappings in equipment_group.
+1.2.10,true,auto1,auto1.equipment_group.successful.name,keyword,custom,array,"[ 'ABC', 'EFG' ]",The name of successful mapping in equipment_group.
+1.2.10,true,auto1,auto1.exception.full,keyword,custom,,java.lang.NullPointerException at com.auto1.aurs.messaging.listener.InboundPaymentsListener.onMessage(InboundPaymentsListener.java:47) at org.springframework.jms.listener.AbstractMessageListenerContainer.doInvokeListener(AbstractMessageListenerContainer.java:736) at org.springframework.jms.listener.AbstractMessageListenerContainer.invokeListener(AbstractMessageListenerContainer.java:696) at org.springframework.jms.listener.AbstractMessageListenerContainer.doExecuteListener(AbstractMessageListenerContainer.java:674) at org.springframework.jms.listener.AbstractPollingMessageListenerContainer.doReceiveAndExecute(AbstractPollingMessageListenerContainer.java:318) at org.springframework.jms.listener.AbstractPollingMessageListenerContainer.receiveAndExecute(AbstractPollingMessageListenerContainer.java:257) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.invokeListener(DefaultMessageListenerContainer.java:1166) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.executeOngoingLoop(DefaultMessageListenerContainer.java:1158) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.run(DefaultMessageListenerContainer.java:1055) at java.lang.Thread.run(Thread.java:748),The full exception reported.
+1.2.10,true,auto1,auto1.exception.full.text,match_only_text,custom,,java.lang.NullPointerException at com.auto1.aurs.messaging.listener.InboundPaymentsListener.onMessage(InboundPaymentsListener.java:47) at org.springframework.jms.listener.AbstractMessageListenerContainer.doInvokeListener(AbstractMessageListenerContainer.java:736) at org.springframework.jms.listener.AbstractMessageListenerContainer.invokeListener(AbstractMessageListenerContainer.java:696) at org.springframework.jms.listener.AbstractMessageListenerContainer.doExecuteListener(AbstractMessageListenerContainer.java:674) at org.springframework.jms.listener.AbstractPollingMessageListenerContainer.doReceiveAndExecute(AbstractPollingMessageListenerContainer.java:318) at org.springframework.jms.listener.AbstractPollingMessageListenerContainer.receiveAndExecute(AbstractPollingMessageListenerContainer.java:257) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.invokeListener(DefaultMessageListenerContainer.java:1166) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.executeOngoingLoop(DefaultMessageListenerContainer.java:1158) at org.springframework.jms.listener.DefaultMessageListenerContainer$AsyncMessageListenerInvoker.run(DefaultMessageListenerContainer.java:1055) at java.lang.Thread.run(Thread.java:748),The full exception reported.
+1.2.10,true,auto1,auto1.flat,flattened,custom,,"{'key1': 'value1', 'key2': 'value2'}",Flat field to hold informational/ additional data that is not searchable.
+1.2.10,true,auto1,auto1.flow.id,keyword,custom,,cd50517a-8edba370-16-2110cdc8-65c35b3d,Tracing flow id. See https://wkdauto.atlassian.net/browse/SRE-3680
+1.2.10,true,auto1,auto1.merchant.id,keyword,custom,,123456,The id identifying the merchant of the concerned log.
+1.2.10,true,auto1,auto1.merchant.user.uuid,keyword,custom,,43e33019-91cf-462f-af0a-efd20d022453,The user uuid identifying the merchant of the concerned log.
+1.2.10,true,auto1,auto1.message.latency.ms,long,custom,,10000,The amount of time needed to process the message by the service.
+1.2.10,true,auto1,auto1.messaging.direction,keyword,custom,,outbound,"Direction of the message, ""inbound"" or ""outbound""."
+1.2.10,true,auto1,auto1.messaging.name,keyword,custom,,arn:aws:sns:eu-west-1:312293476656:AppCockpit_Reading-production,Name of the resource.
+1.2.10,true,auto1,auto1.messaging.type,keyword,custom,,sns,Type of the resource. sns/sqs/events/kafka/kinesis/etc
+1.2.10,true,auto1,auto1.money.wired,boolean,custom,,True,Flag that shows whether money has been wired or not.
+1.2.10,true,auto1,auto1.processed,boolean,custom,,True,Flag that shows whether an event has been fully processed or not.
+1.2.10,true,auto1,auto1.retail.ad.id,keyword,custom,,43e33019-91cf-462f-af0a-efd20d022453,The id identifying the merchant of the concerned log.
+1.2.10,true,auto1,auto1.shard.id,keyword,custom,,shardId-000000000096,Unique identifier of the shard used by the service.
+1.2.10,true,auto1,auto1.silex.applog.account.id,keyword,custom,,123456,aid
+1.2.10,true,auto1,auto1.silex.applog.api.connect.time.ms,long,custom,,1000,java_api_connect_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.dns.time.ms,long,custom,,1000,java_api_namelookup_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.download.size,long,custom,,1024,java_api_size_download
+1.2.10,true,auto1,auto1.silex.applog.api.download.speed,long,custom,,50,java_api_speed_download
+1.2.10,true,auto1,auto1.silex.applog.api.endpoint.name,keyword,custom,,car_property.getProperties,java_api_endpoint
+1.2.10,true,auto1,auto1.silex.applog.api.pretransfer.time.ms,long,custom,,1000,java_api_pretransfer_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.redirect.time.ms,long,custom,,1000,java_api_redirect_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.request.host,keyword,custom,,api.domain.com,java_api_request_host
+1.2.10,true,auto1,auto1.silex.applog.api.request.method,keyword,custom,,GET,java_api_request_method
+1.2.10,true,auto1,auto1.silex.applog.api.response.status_code,long,custom,,200,java_api_response_status_code
+1.2.10,true,auto1,auto1.silex.applog.api.starttransfer.time.ms,long,custom,,1000,java_api_starttransfer_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.total.time.ms,long,custom,,1000,java_api_total_time_millis
+1.2.10,true,auto1,auto1.silex.applog.api.upload.size,long,custom,,1024,java_api_size_upload
+1.2.10,true,auto1,auto1.silex.applog.api.upload.speed,long,custom,,50,java_api_speed_upload
+1.2.10,true,auto1,auto1.silex.applog.api.url,wildcard,custom,,https://sample.com/ap1/v2/functioncall,java_api_effective_url
+1.2.10,true,auto1,auto1.silex.applog.api.url.text,match_only_text,custom,,https://sample.com/ap1/v2/functioncall,java_api_effective_url
+1.2.10,true,auto1,auto1.silex.applog.api.url.token,text,custom,,https://sample.com/ap1/v2/functioncall,java_api_effective_url
+1.2.10,true,auto1,auto1.silex.applog.api.url.length,token_count,custom,,https://sample.com/ap1/v2/functioncall,java_api_effective_url
+1.2.10,true,auto1,auto1.silex.applog.app.name,keyword,custom,,sms_log,app
+1.2.10,true,auto1,auto1.silex.applog.branch.country,keyword,custom,,DE,branch_country
+1.2.10,true,auto1,auto1.silex.applog.branch.id,keyword,custom,,1,branch_id
+1.2.10,true,auto1,auto1.silex.applog.branch.type,keyword,custom,,2,branch_type
+1.2.10,true,auto1,auto1.silex.applog.build.number,keyword,custom,,1624,build_number
+1.2.10,true,auto1,auto1.silex.applog.bundle.name,text,custom,,WKDA\SnsMessagingBundle,bundle
+1.2.10,true,auto1,auto1.silex.applog.call.id,long,custom,,123456,call_id
+1.2.10,true,auto1,auto1.silex.applog.car.id,long,custom,,123456,"carid, car_id"
+1.2.10,true,auto1,auto1.silex.applog.car.url,wildcard,custom,,http://auto1.com/en/app/merchant/car/AB123456,LINK TO CAR ON AUTO1
+1.2.10,true,auto1,auto1.silex.applog.car.url.text,match_only_text,custom,,http://auto1.com/en/app/merchant/car/AB123456,LINK TO CAR ON AUTO1
+1.2.10,true,auto1,auto1.silex.applog.car.vin,keyword,custom,,2G11Y5SL9E9227159,vin
+1.2.10,true,auto1,auto1.silex.applog.changelog.action.type,keyword,custom,,update,changelog.action_type
+1.2.10,true,auto1,auto1.silex.applog.changelog.new.value,keyword,custom,,123456,changelog.new_value
+1.2.10,true,auto1,auto1.silex.applog.changelog.object.id,long,custom,,123456,change_log_object_id
+1.2.10,true,auto1,auto1.silex.applog.changelog.old.value,keyword,custom,,123456,changelog.old_value
+1.2.10,true,auto1,auto1.silex.applog.channel,keyword,custom,,admin,channel
+1.2.10,true,auto1,auto1.silex.applog.class,keyword,custom,,Auto1\Car\CarSeller,class
+1.2.10,true,auto1,auto1.silex.applog.command.input,keyword,custom,,command1 -m 100 -vvv,commandinput
+1.2.10,true,auto1,auto1.silex.applog.command.name,keyword,custom,,command1,command
+1.2.10,true,auto1,auto1.silex.applog.company.name,keyword,custom,,Auto1,company_name
+1.2.10,true,auto1,auto1.silex.applog.currency,keyword,custom,,EUR,currency
+1.2.10,true,auto1,auto1.silex.applog.customer.name,keyword,custom,,John Doe,name
+1.2.10,true,auto1,auto1.silex.applog.customer.number,keyword,custom,,49123456789,number
+1.2.10,true,auto1,auto1.silex.applog.data.length,long,custom,,1024,dataLength
+1.2.10,true,auto1,auto1.silex.applog.dealer.country,keyword,custom,,DE,dealer_country
+1.2.10,true,auto1,auto1.silex.applog.delivery.address,keyword,custom,,123 Main Street,delivery_address
+1.2.10,true,auto1,auto1.silex.applog.document.currency.name,keyword,custom,,EUR,document_currency
+1.2.10,true,auto1,auto1.silex.applog.document.currency.rate.date,keyword,custom,,12.12.2023,document_currency_rate_date
+1.2.10,true,auto1,auto1.silex.applog.due.date,keyword,custom,,19.12.2023,due_date
+1.2.10,true,auto1,auto1.silex.applog.exception.class,keyword,custom,,LogicException,exceptionclass
+1.2.10,true,auto1,auto1.silex.applog.exception.message,text,custom,,Missing expected array Message.payload.changelogIds type=Entity.Car.OnSitePrice,exceptionmessage
+1.2.10,true,auto1,auto1.silex.applog.execution.time.ms,long,custom,,1000,passed_millis
+1.2.10,true,auto1,auto1.silex.applog.fallback.number,keyword,custom,,49123456789,fallback_number
+1.2.10,true,auto1,auto1.silex.applog.invoice.filename,keyword,custom,,invoice.pdf,invoiceFilename
+1.2.10,true,auto1,auto1.silex.applog.invoice.number,keyword,custom,,1002003004000,"invoiceNumber, invoice_number"
+1.2.10,true,auto1,auto1.silex.applog.lead.country,keyword,custom,,DE,lead_country
+1.2.10,true,auto1,auto1.silex.applog.lead.id,keyword,custom,,AB123456,"lead_id, Field_lead_id"
+1.2.10,true,auto1,auto1.silex.applog.location.address,text,custom,,123 Main Street,loc_address_text & loc_address_html
+1.2.10,true,auto1,auto1.silex.applog.location.hotline,keyword,custom,,49123456789,loc_hotline
+1.2.10,true,auto1,auto1.silex.applog.location.id,long,custom,,123456,location_id
+1.2.10,true,auto1,auto1.silex.applog.location.name,keyword,custom,,Logistikzentrum Berlin,location
+1.2.10,true,auto1,auto1.silex.applog.merchant.contact.id,long,custom,,123456,merchantcontactid
+1.2.10,true,auto1,auto1.silex.applog.merchant.country,keyword,custom,,DE,merchantcountry
+1.2.10,true,auto1,auto1.silex.applog.merchant.id,long,custom,,123456,merchantid
+1.2.10,true,auto1,auto1.silex.applog.merchant.uuid,keyword,custom,,256d1c3c-8b1a-4b5f-8b1a-4b5f8b1a4b5f,merchantUuid
+1.2.10,true,auto1,auto1.silex.applog.merchant.valid,boolean,custom,,True,"merchantIsValidForBooking , merchantIsValidForBooking_bool"
+1.2.10,true,auto1,auto1.silex.applog.merchant.vat.country,keyword,custom,,DE,merchantVatCountry
+1.2.10,true,auto1,auto1.silex.applog.message.content,flattened,custom,,"{'key1': 'value1', 'key2': 'value2'}",messagecontent
+1.2.10,true,auto1,auto1.silex.applog.message.processor,keyword,custom,,MsgProcessor,messageprocessor
+1.2.10,true,auto1,auto1.silex.applog.message.type,keyword,custom,,email,messagetype
+1.2.10,true,auto1,auto1.silex.applog.message.uuid,keyword,custom,,241d1c3c-8b1a-4b5f-8b1a-4b5f8b1a4b5f,messageuuid
+1.2.10,true,auto1,auto1.silex.applog.object.field,keyword,custom,,status,objectField
+1.2.10,true,auto1,auto1.silex.applog.object.id,long,custom,,123456,objectid
+1.2.10,true,auto1,auto1.silex.applog.object.type,keyword,custom,,Car,objecttype
+1.2.10,true,auto1,auto1.silex.applog.package.confirmed.date,date,custom,,2023-03-20 17:45:09,packageConfirmedOn
+1.2.10,true,auto1,auto1.silex.applog.package.created.date,date,custom,,2023-03-20 17:45:09,packageConfirmedOn
+1.2.10,true,auto1,auto1.silex.applog.package.id,long,custom,,123456,packageId
+1.2.10,true,auto1,auto1.silex.applog.parent.id,long,custom,,123456,parentid
+1.2.10,true,auto1,auto1.silex.applog.phone,keyword,custom,,49123456789,"phone, phoneNumber"
+1.2.10,true,auto1,auto1.silex.applog.price,keyword,custom,,"EUR 100,52",sell_price
+1.2.10,true,auto1,auto1.silex.applog.processor,keyword,custom,,ProcessorWKDA\LeadRotationBundle\Processor\CarSaleProcessor,processor
+1.2.10,true,auto1,auto1.silex.applog.proforma.filename,keyword,custom,,proforma.pdf,proformaFilename
+1.2.10,true,auto1,auto1.silex.applog.proforma.number,keyword,custom,,DEABCD123456,t_proforma_no
+1.2.10,true,auto1,auto1.silex.applog.proforma.total,keyword,custom,,"EUR 100,52",total_proforma_price
+1.2.10,true,auto1,auto1.silex.applog.purchaser.country,keyword,custom,,DE,purchasercountry
+1.2.10,true,auto1,auto1.silex.applog.queue.message.span.id,keyword,custom,,177ac1549390b295,queueMessageTraceSpanId
+1.2.10,true,auto1,auto1.silex.applog.queue.message.span.name,keyword,custom,,package-service#message-context-span,queueMessageTraceSpanName
+1.2.10,true,auto1,auto1.silex.applog.queue.message.trace.id,keyword,custom,,e2eac1549390b295,queueMessageTraceId
+1.2.10,true,auto1,auto1.silex.applog.queue.message.trace.span.id,keyword,custom,,177ac1549390b295,queueMessageTraceSpanId
+1.2.10,true,auto1,auto1.silex.applog.queue.message.uuid,keyword,custom,,241d1c3c-8b1a-4b5f-8b1a-4b5f8b1a4b5f,queueMessageUuid
+1.2.10,true,auto1,auto1.silex.applog.queue.name,keyword,custom,,book_package,queue
+1.2.10,true,auto1,auto1.silex.applog.recipient.country,keyword,custom,,DE,recipientcountry
+1.2.10,true,auto1,auto1.silex.applog.stock.number,keyword,custom,,AB123456,"stock_number, stockNumber"
+1.2.10,true,auto1,auto1.silex.applog.task.id,long,custom,,123456,"task_id,taskId"
+1.2.10,true,auto1,auto1.smartbox.alert.type,keyword,custom,,CLB-FAIL-ALT,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.callback.external.id,keyword,custom,,123456,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.callback.status,keyword,custom,,SUCCESS,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.callback.type,keyword,custom,,1,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.execution.type,keyword,custom,,callback,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.internal.id,keyword,custom,,43e33019-91cf-462f-af0a-efd20d022453,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.listener.exception,keyword,custom,,HystrixRuntimeException,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.listener.exception.text,match_only_text,custom,,HystrixRuntimeException,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.message.id,keyword,custom,,43e33019-91cf-462f-af0a-efd20d022453,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.message.type,keyword,custom,,Entity.Car.update,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.messaging.error.full,keyword,custom,,CarPropertiesApi#getCarProperties(Long) timed-out and no fallback available.,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.messaging.error.full.text,match_only_text,custom,,CarPropertiesApi#getCarProperties(Long) timed-out and no fallback available.,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.messaging.error.type,keyword,custom,,CarStatusChangeMonitoringListener,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.module.type,keyword,custom,,AP_INVOICE,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.oic.request.execution.time,long,custom,,100,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.process.status,keyword,custom,,INITIATED,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.request.id,keyword,custom,,123456,smartbox schema.
+1.2.10,true,auto1,auto1.smartbox.source.type,keyword,custom,,RETAIL_RECEIPT,smartbox schema.
+1.2.10,false,auto1,auto1.smartbox.unprocessed.requests,keyword,custom,,['html code'],smartbox schema.
+1.2.10,true,auto1,auto1.span.exportable,boolean,custom,,True,Flag that shows whether an span can be exported or not.
+1.2.10,true,auto1,auto1.stock.number,keyword,custom,,AA123456,The Number identifying the stock of of concern.
+1.2.10,true,auto1,auto1.supervisor.status,keyword,custom,,success,The status of the supervisor.
+1.2.10,true,auto1,auto1.supervisor.timestamp,date,custom,,"2024-01-25 17:14:28,356",The timestamp of the supervisor.
+1.2.10,true,auto1,auto1.transitional.clarifyTimeoutError,boolean,custom,,True,Flag that shows whether an clarifyTimeoutError occurred or not.
+1.2.10,true,auto1,auto1.transitional.forcedJSONParsing,boolean,custom,,True,Flag that shows whether an forcedJSONParsing occurred or not.
+1.2.10,true,auto1,auto1.uuid,keyword,custom,,43e33019-91cf-462f-af0a-efd20d022453,The uuid related to the log entry.
+1.2.10,true,client,client.address,keyword,extended,,,Client network address.
+1.2.10,true,client,client.as.number,long,extended,,15169,Unique number allocated to the autonomous system.
+1.2.10,true,client,client.as.organization.name,keyword,extended,,Google LLC,Organization name.
+1.2.10,true,client,client.as.organization.name.text,match_only_text,extended,,Google LLC,Organization name.
+1.2.10,true,client,client.bytes,long,core,,184,Bytes sent from the client to the server.
+1.2.10,true,client,client.domain,keyword,core,,foo.example.com,The domain name of the client.
+1.2.10,true,client,client.geo.city_name,keyword,core,,Montreal,City name.
+1.2.10,true,client,client.geo.continent_code,keyword,core,,NA,Continent code.
+1.2.10,true,client,client.geo.continent_name,keyword,core,,North America,Name of the continent.
+1.2.10,true,client,client.geo.country_iso_code,keyword,core,,CA,Country ISO code.
+1.2.10,true,client,client.geo.country_name,keyword,core,,Canada,Country name.
+1.2.10,true,client,client.geo.location,geo_point,core,,"{ ""lon"": -73.614830, ""lat"": 45.505918 }",Longitude and latitude.
+1.2.10,true,client,client.geo.name,keyword,extended,,boston-dc,User-defined description of a location.
+1.2.10,true,client,client.geo.postal_code,keyword,core,,94040,Postal code.
+1.2.10,true,client,client.geo.region_iso_code,keyword,core,,CA-QC,Region ISO code.
+1.2.10,true,client,client.geo.region_name,keyword,core,,Quebec,Region name.
+1.2.10,true,client,client.geo.timezone,keyword,core,,America/Argentina/Buenos_Aires,Time zone.
+1.2.10,true,client,client.ip,ip,core,,,IP address of the client.
+1.2.10,true,client,client.mac,keyword,core,,00-00-5E-00-53-23,MAC address of the client.
+1.2.10,true,client,client.nat.ip,ip,extended,,,Client NAT ip address
+1.2.10,true,client,client.nat.port,long,extended,,,Client NAT port
+1.2.10,true,client,client.packets,long,core,,12,Packets sent from the client to the server.
+1.2.10,true,client,client.port,long,core,,,Port of the client.
+1.2.10,true,client,client.registered_domain,keyword,extended,,example.com,"The highest registered client domain, stripped of the subdomain."
+1.2.10,true,client,client.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,client,client.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,client,client.user.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,client,client.user.email,keyword,extended,,,User email address.
+1.2.10,true,client,client.user.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,client,client.user.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,client,client.user.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,client,client.user.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,client,client.user.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,client,client.user.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,client,client.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,client,client.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,client,client.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,client,client.user.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,client,client.user.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,client,client.user.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,client,client.user.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,client,client.user.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,client,client.user.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,client,client.user.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,cloud,cloud.account.id,keyword,extended,,666777888999,The cloud account or organization id.
+1.2.10,true,cloud,cloud.account.name,keyword,extended,,elastic-dev,The cloud account name.
+1.2.10,true,cloud,cloud.availability_zone,keyword,extended,,us-east-1c,"Availability zone in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.image.id,keyword,custom,,ami-1234567890abcdef0,VM Image ID used by the cloud provider.
+1.2.10,true,cloud,cloud.instance.id,keyword,extended,,i-1234567890abcdef0,Instance ID of the host machine.
+1.2.10,true,cloud,cloud.instance.name,keyword,extended,,,Instance name of the host machine.
+1.2.10,true,cloud,cloud.machine.type,keyword,extended,,t2.medium,Machine type of the host machine.
+1.2.10,true,cloud,cloud.origin.account.id,keyword,extended,,666777888999,The cloud account or organization id.
+1.2.10,true,cloud,cloud.origin.account.name,keyword,extended,,elastic-dev,The cloud account name.
+1.2.10,true,cloud,cloud.origin.availability_zone,keyword,extended,,us-east-1c,"Availability zone in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.origin.image.id,keyword,custom,,ami-1234567890abcdef0,VM Image ID used by the cloud provider.
+1.2.10,true,cloud,cloud.origin.instance.id,keyword,extended,,i-1234567890abcdef0,Instance ID of the host machine.
+1.2.10,true,cloud,cloud.origin.instance.name,keyword,extended,,,Instance name of the host machine.
+1.2.10,true,cloud,cloud.origin.machine.type,keyword,extended,,t2.medium,Machine type of the host machine.
+1.2.10,true,cloud,cloud.origin.project.id,keyword,extended,,my-project,The cloud project id.
+1.2.10,true,cloud,cloud.origin.project.name,keyword,extended,,my project,The cloud project name.
+1.2.10,true,cloud,cloud.origin.provider,keyword,extended,,aws,Name of the cloud provider.
+1.2.10,true,cloud,cloud.origin.region,keyword,extended,,us-east-1,"Region in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.origin.service.name,keyword,extended,,lambda,The cloud service name.
+1.2.10,true,cloud,cloud.project.id,keyword,extended,,my-project,The cloud project id.
+1.2.10,true,cloud,cloud.project.name,keyword,extended,,my project,The cloud project name.
+1.2.10,true,cloud,cloud.provider,keyword,extended,,aws,Name of the cloud provider.
+1.2.10,true,cloud,cloud.region,keyword,extended,,us-east-1,"Region in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.service.name,keyword,extended,,lambda,The cloud service name.
+1.2.10,true,cloud,cloud.target.account.id,keyword,extended,,666777888999,The cloud account or organization id.
+1.2.10,true,cloud,cloud.target.account.name,keyword,extended,,elastic-dev,The cloud account name.
+1.2.10,true,cloud,cloud.target.availability_zone,keyword,extended,,us-east-1c,"Availability zone in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.target.image.id,keyword,custom,,ami-1234567890abcdef0,VM Image ID used by the cloud provider.
+1.2.10,true,cloud,cloud.target.instance.id,keyword,extended,,i-1234567890abcdef0,Instance ID of the host machine.
+1.2.10,true,cloud,cloud.target.instance.name,keyword,extended,,,Instance name of the host machine.
+1.2.10,true,cloud,cloud.target.machine.type,keyword,extended,,t2.medium,Machine type of the host machine.
+1.2.10,true,cloud,cloud.target.project.id,keyword,extended,,my-project,The cloud project id.
+1.2.10,true,cloud,cloud.target.project.name,keyword,extended,,my project,The cloud project name.
+1.2.10,true,cloud,cloud.target.provider,keyword,extended,,aws,Name of the cloud provider.
+1.2.10,true,cloud,cloud.target.region,keyword,extended,,us-east-1,"Region in which this host, resource, or service is located."
+1.2.10,true,cloud,cloud.target.service.name,keyword,extended,,lambda,The cloud service name.
+1.2.10,true,container,container.cpu.usage,scaled_float,extended,,,"Percent CPU used, between 0 and 1."
+1.2.10,true,container,container.disk.read.bytes,long,extended,,,The number of bytes read by all disks.
+1.2.10,true,container,container.disk.write.bytes,long,extended,,,The number of bytes written on all disks.
+1.2.10,true,container,container.id,keyword,core,,,Unique container id.
+1.2.10,true,container,container.image.hash.all,keyword,extended,array,[sha256:f8fefc80e3273dc756f288a63945820d6476ad64883892c771b5e2ece6bf1b26],An array of digests of the image the container was built on.
+1.2.10,true,container,container.image.name,keyword,extended,,,Name of the image the container was built on.
+1.2.10,true,container,container.image.tag,keyword,extended,array,,Container image tags.
+1.2.10,true,container,container.labels,object,extended,,,Image labels.
+1.2.10,true,container,container.memory.usage,scaled_float,extended,,,"Percent memory used, between 0 and 1."
+1.2.10,true,container,container.name,keyword,extended,,,Container name.
+1.2.10,true,container,container.network.egress.bytes,long,extended,,,The number of bytes sent on all network interfaces.
+1.2.10,true,container,container.network.ingress.bytes,long,extended,,,The number of bytes received on all network interfaces.
+1.2.10,true,container,container.runtime,keyword,extended,,docker,Runtime managing this container.
+1.2.10,true,container,container.security_context.privileged,boolean,extended,,,Indicates whether the container is running in privileged mode.
+1.2.10,true,data_stream,data_stream.dataset,constant_keyword,extended,,nginx.access,The field can contain anything that makes sense to signify the source of the data.
+1.2.10,true,data_stream,data_stream.namespace,constant_keyword,extended,,production,A user defined namespace. Namespaces are useful to allow grouping of data.
+1.2.10,true,data_stream,data_stream.type,constant_keyword,extended,,logs,An overarching type for the data stream.
+1.2.10,true,destination,destination.address,keyword,extended,,,Destination network address.
+1.2.10,true,destination,destination.as.number,long,extended,,15169,Unique number allocated to the autonomous system.
+1.2.10,true,destination,destination.as.organization.name,keyword,extended,,Google LLC,Organization name.
+1.2.10,true,destination,destination.as.organization.name.text,match_only_text,extended,,Google LLC,Organization name.
+1.2.10,true,destination,destination.bytes,long,core,,184,Bytes sent from the destination to the source.
+1.2.10,true,destination,destination.domain,keyword,core,,foo.example.com,The domain name of the destination.
+1.2.10,true,destination,destination.geo.city_name,keyword,core,,Montreal,City name.
+1.2.10,true,destination,destination.geo.continent_code,keyword,core,,NA,Continent code.
+1.2.10,true,destination,destination.geo.continent_name,keyword,core,,North America,Name of the continent.
+1.2.10,true,destination,destination.geo.country_iso_code,keyword,core,,CA,Country ISO code.
+1.2.10,true,destination,destination.geo.country_name,keyword,core,,Canada,Country name.
+1.2.10,true,destination,destination.geo.location,geo_point,core,,"{ ""lon"": -73.614830, ""lat"": 45.505918 }",Longitude and latitude.
+1.2.10,true,destination,destination.geo.name,keyword,extended,,boston-dc,User-defined description of a location.
+1.2.10,true,destination,destination.geo.postal_code,keyword,core,,94040,Postal code.
+1.2.10,true,destination,destination.geo.region_iso_code,keyword,core,,CA-QC,Region ISO code.
+1.2.10,true,destination,destination.geo.region_name,keyword,core,,Quebec,Region name.
+1.2.10,true,destination,destination.geo.timezone,keyword,core,,America/Argentina/Buenos_Aires,Time zone.
+1.2.10,true,destination,destination.ip,ip,core,,,IP address of the destination.
+1.2.10,true,destination,destination.mac,keyword,core,,00-00-5E-00-53-23,MAC address of the destination.
+1.2.10,true,destination,destination.nat.ip,ip,extended,,,Destination NAT ip
+1.2.10,true,destination,destination.nat.port,long,extended,,,Destination NAT Port
+1.2.10,true,destination,destination.packets,long,core,,12,Packets sent from the destination to the source.
+1.2.10,true,destination,destination.port,long,core,,,Port of the destination.
+1.2.10,true,destination,destination.registered_domain,keyword,extended,,example.com,"The highest registered destination domain, stripped of the subdomain."
+1.2.10,true,destination,destination.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,destination,destination.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,destination,destination.user.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,destination,destination.user.email,keyword,extended,,,User email address.
+1.2.10,true,destination,destination.user.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,destination,destination.user.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,destination,destination.user.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,destination,destination.user.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,destination,destination.user.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,destination,destination.user.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,destination,destination.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,destination,destination.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,destination,destination.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,destination,destination.user.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,destination,destination.user.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,destination,destination.user.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,destination,destination.user.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,destination,destination.user.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,destination,destination.user.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,destination,destination.user.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,ecs,ecs.error,text,extended,,Unsupported AECS type: potato,AECS mapping errors
+1.2.10,true,ecs,ecs.version,keyword,core,,1.0.0,ECS version this event conforms to.
+1.2.10,true,email,email.attachments,nested,extended,array,,List of objects describing the attachments.
+1.2.10,true,email,email.attachments.file.extension,keyword,extended,,txt,Attachment file extension.
+1.2.10,true,email,email.attachments.file.hash.cdhash,keyword,extended,,3783b4052fd474dbe30676b45c329e7a6d44acd9,The Code Directory (CD) hash of an executable.
+1.2.10,true,email,email.attachments.file.hash.md5,keyword,extended,,,MD5 hash.
+1.2.10,true,email,email.attachments.file.hash.sha1,keyword,extended,,,SHA1 hash.
+1.2.10,true,email,email.attachments.file.hash.sha256,keyword,extended,,,SHA256 hash.
+1.2.10,true,email,email.attachments.file.hash.sha384,keyword,extended,,,SHA384 hash.
+1.2.10,true,email,email.attachments.file.hash.sha512,keyword,extended,,,SHA512 hash.
+1.2.10,true,email,email.attachments.file.hash.ssdeep,keyword,extended,,,SSDEEP hash.
+1.2.10,true,email,email.attachments.file.hash.tlsh,keyword,extended,,,TLSH hash.
+1.2.10,true,email,email.attachments.file.mime_type,keyword,extended,,text/plain,MIME type of the attachment file.
+1.2.10,true,email,email.attachments.file.name,keyword,extended,,attachment.txt,Name of the attachment file.
+1.2.10,true,email,email.attachments.file.size,long,extended,,64329,Attachment file size.
+1.2.10,true,email,email.bcc.address,keyword,extended,array,bcc.user1@example.com,Email address of BCC recipient
+1.2.10,true,email,email.cc.address,keyword,extended,array,cc.user1@example.com,Email address of CC recipient
+1.2.10,true,email,email.content_type,keyword,extended,,text/plain,MIME type of the email message.
+1.2.10,true,email,email.delivery_timestamp,date,extended,,2020-11-10T22:12:34.8196921Z,Date and time when message was delivered.
+1.2.10,true,email,email.direction,keyword,extended,,inbound,Direction of the message.
+1.2.10,true,email,email.from.address,keyword,extended,array,sender@example.com,The sender's email address.
+1.2.10,true,email,email.local_id,keyword,extended,,c26dbea0-80d5-463b-b93c-4e8b708219ce,Unique identifier given by the source.
+1.2.10,true,email,email.message_id,wildcard,extended,,81ce15$8r2j59@mail01.example.com,Value from the Message-ID header.
+1.2.10,true,email,email.origination_timestamp,date,extended,,2020-11-10T22:12:34.8196921Z,Date and time the email was composed.
+1.2.10,true,email,email.reply_to.address,keyword,extended,array,reply.here@example.com,Address replies should be delivered to.
+1.2.10,true,email,email.sender.address,keyword,extended,,,Address of the message sender.
+1.2.10,true,email,email.subject,keyword,extended,,Please see this important message.,The subject of the email message.
+1.2.10,true,email,email.subject.text,match_only_text,extended,,Please see this important message.,The subject of the email message.
+1.2.10,true,email,email.to.address,keyword,extended,array,user1@example.com,Email address of recipient
+1.2.10,true,email,email.x_mailer,keyword,extended,,Spambot v2.5,Application that drafted email.
+1.2.10,true,error,error.code,keyword,core,,,Error code describing the error.
+1.2.10,true,error,error.id,keyword,core,,,Unique identifier for the error.
+1.2.10,true,error,error.message,match_only_text,core,,,Error message.
+1.2.10,true,error,error.stack_trace,wildcard,extended,,,The stack trace of this error in plain text.
+1.2.10,true,error,error.stack_trace.text,match_only_text,extended,,,The stack trace of this error in plain text.
+1.2.10,true,error,error.type,keyword,extended,,java.lang.NullPointerException,"The type of the error, for example the class name of the exception."
+1.2.10,true,event,event.action,keyword,core,,user-password-change,The action captured by the event.
+1.2.10,true,event,event.agent_id_status,keyword,extended,,verified,Validation status of the event's agent.id field.
+1.2.10,true,event,event.category,keyword,core,array,authentication,Event category. The second categorization field in the hierarchy.
+1.2.10,true,event,event.code,keyword,extended,,4648,Identification code for this event.
+1.2.10,true,event,event.created,date,core,,2016-05-23T08:05:34.857Z,Time when the event was first read by an agent or by your pipeline.
+1.2.10,true,event,event.dataset,keyword,core,,apache.access,Name of the dataset.
+1.2.10,true,event,event.duration,long,core,,,Duration of the event in nanoseconds.
+1.2.10,true,event,event.end,date,extended,,,`event.end` contains the date when the event ended or when the activity was last observed.
+1.2.10,true,event,event.hash,keyword,extended,,123456789012345678901234567890ABCD,Hash (perhaps logstash fingerprint) of raw field to be able to demonstrate log integrity.
+1.2.10,true,event,event.id,keyword,core,,8a4f500d,Unique ID to describe the event.
+1.2.10,true,event,event.ingested,date,core,,2016-05-23T08:05:35.101Z,Timestamp when an event arrived in the central data store.
+1.2.10,true,event,event.kind,keyword,core,,alert,The kind of the event. The highest categorization field in the hierarchy.
+1.2.10,true,event,event.module,keyword,core,,apache,Name of the module this data is coming from.
+1.2.10,false,event,event.original,keyword,core,,Sep 19 08:26:10 host CEF:0&#124;Security&#124; threatmanager&#124;1.0&#124;100&#124; worm successfully stopped&#124;10&#124;src=10.0.0.1 dst=2.1.2.2spt=1232,Raw text message of entire event.
+1.2.10,true,event,event.outcome,keyword,core,,success,The outcome of the event. The lowest level categorization field in the hierarchy.
+1.2.10,true,event,event.provider,keyword,extended,,kernel,Source of the event.
+1.2.10,true,event,event.reason,keyword,extended,,Terminated an unexpected process,"Reason why this event happened, according to the source"
+1.2.10,true,event,event.reference,keyword,extended,,https://system.example.com/event/#0001234,Event reference URL
+1.2.10,true,event,event.risk_score,float,core,,,Risk score or priority of the event (e.g. security solutions). Use your system's original value here.
+1.2.10,true,event,event.risk_score_norm,float,extended,,,Normalized risk score or priority of the event (0-100).
+1.2.10,true,event,event.sequence,long,extended,,,Sequence number of the event.
+1.2.10,true,event,event.severity,long,core,,7,Numeric severity of the event.
+1.2.10,true,event,event.start,date,extended,,,`event.start` contains the date when the event started or when the activity was first observed.
+1.2.10,true,event,event.timezone,keyword,extended,,,Event time zone.
+1.2.10,true,event,event.type,keyword,core,array,,Event type. The third categorization field in the hierarchy.
+1.2.10,true,event,event.url,keyword,extended,,https://mysystem.example.com/alert/5271dedb-f5b0-4218-87f0-4ac4870a38fe,Event investigation URL
+1.2.10,true,file,file.accessed,date,extended,,,Last time the file was accessed.
+1.2.10,true,file,file.attributes,keyword,extended,array,"[""readonly"", ""system""]",Array of file attributes.
+1.2.10,true,file,file.created,date,extended,,,File creation time.
+1.2.10,true,file,file.ctime,date,extended,,,Last time the file attributes or metadata changed.
+1.2.10,true,file,file.device,keyword,extended,,sda,Device that is the source of the file.
+1.2.10,true,file,file.directory,keyword,extended,,/home/alice,Directory where the file is located.
+1.2.10,true,file,file.drive_letter,keyword,extended,,C,Drive letter where the file is located.
+1.2.10,true,file,file.extension,keyword,extended,,png,"File extension, excluding the leading dot."
+1.2.10,true,file,file.fork_name,keyword,extended,,Zone.Identifer,A fork is additional data associated with a filesystem object.
+1.2.10,true,file,file.gid,keyword,extended,,1001,Primary group ID (GID) of the file.
+1.2.10,true,file,file.group,keyword,extended,,alice,Primary group name of the file.
+1.2.10,true,file,file.inode,keyword,extended,,256383,Inode representing the file in the filesystem.
+1.2.10,true,file,file.mime_type,keyword,extended,,,"Media type of file, document, or arrangement of bytes."
+1.2.10,true,file,file.mode,keyword,extended,,0640,Mode of the file in octal representation.
+1.2.10,true,file,file.mtime,date,extended,,,Last time the file content was modified.
+1.2.10,true,file,file.name,keyword,extended,,example.png,"Name of the file including the extension, without the directory."
+1.2.10,true,file,file.owner,keyword,extended,,alice,File owner's username.
+1.2.10,true,file,file.path,keyword,extended,,/home/alice/example.png,"Full path to the file, including the file name."
+1.2.10,true,file,file.path.text,match_only_text,extended,,/home/alice/example.png,"Full path to the file, including the file name."
+1.2.10,true,file,file.size,long,extended,,16384,File size in bytes.
+1.2.10,true,file,file.target_path,keyword,extended,,,Target path for symlinks.
+1.2.10,true,file,file.target_path.text,match_only_text,extended,,,Target path for symlinks.
+1.2.10,true,file,file.type,keyword,extended,,file,"File type (file, dir, or symlink)."
+1.2.10,true,file,file.uid,keyword,extended,,1001,The user ID (UID) or security identifier (SID) of the file owner.
+1.2.10,true,group,group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,group,group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,group,group.name,keyword,extended,,,Name of the group.
+1.2.10,true,haproxy,haproxy.backend_name,keyword,custom,,backend-1,Name of the backend (or listener) which was selected to manage the connection to the server.
+1.2.10,true,haproxy,haproxy.backend_queue,long,custom,,1000,Total number of requests which were processed before this one in the backend's global queue.
+1.2.10,true,haproxy,haproxy.bind_name,keyword,custom,,bind-1,Name of the listening address which received the connection.
+1.2.10,true,haproxy,haproxy.bytes_read,long,custom,,1000,Total number of bytes transmitted to the client when the log is emitted.
+1.2.10,true,haproxy,haproxy.connection_wait_time_ms,long,custom,,1000,Total time in milliseconds spent waiting for the connection to establish to the final server
+1.2.10,true,haproxy,haproxy.connections.active,long,custom,,1000,Total number of concurrent connections on the process when the session was logged.
+1.2.10,true,haproxy,haproxy.connections.backend,long,custom,,1000,Total number of concurrent connections handled by the backend when the session was logged.
+1.2.10,true,haproxy,haproxy.connections.fc_err,long,custom,,,Returns the ID of the error that might have occurred on the current connection. Any strictly positive value of this fetch indicates that the connection did not succeed and would result in an error log being output example: 12345
+1.2.10,true,haproxy,haproxy.connections.frontend,long,custom,,1000,Total number of concurrent connections on the frontend when the session was logged.
+1.2.10,true,haproxy,haproxy.connections.retries,long,custom,,1000,Number of connection retries experienced by this session when trying to connect to the server.
+1.2.10,true,haproxy,haproxy.connections.server,long,custom,,1000,Total number of concurrent connections still active on the server when the session was logged.
+1.2.10,true,haproxy,haproxy.connections.ssl_c_ca_err,long,custom,,12345,"When the incoming connection was made over an SSL/TLS transport layer, returns the ID of the first error detected during verification of the client certificate at depth > 0, or 0 if no error was encountered during this verification process."
+1.2.10,true,haproxy,haproxy.connections.ssl_c_err,long,custom,,12345,"When the incoming connection was made over an SSL/TLS transport layer, returns the ID of the first error detected during verification at depth 0, or 0 if no error was encountered during this verification process."
+1.2.10,true,haproxy,haproxy.connections.ssl_fc_err,long,custom,,12345,"When the incoming connection was made over an SSL/TLS transport layer, returns the ID of the last error of the first error stack raised on the frontend side, or 0 if no error was encountered. It can be used to identify handshake related errors other than verify ones (such as cipher mismatch), as well as other read or write errors occurring during the connection's lifetime"
+1.2.10,true,haproxy,haproxy.error_message,text,custom,,Connection refused,Error message logged by HAProxy in case of error.
+1.2.10,true,haproxy,haproxy.frontend_name,keyword,custom,,frontend-1,Name of the frontend (or listener) which received and processed the connection.
+1.2.10,true,haproxy,haproxy.http.request.captured_cookie,text,custom,,cookie,'name=value' entry indicating that the server has returned a cookie with its request.
+1.2.10,true,haproxy,haproxy.http.request.captured_headers,keyword,custom,array,[example.com],"List of headers captured in the request due to the presence of the ""capture request header"" statement in the frontend."
+1.2.10,true,haproxy,haproxy.http.request.raw_request_line,keyword,custom,,GET /component---src-pages-index-js-4b15624544f97cf0bb8f.js HTTP/1.1,"Complete HTTP request line, including the method, request and HTTP version string."
+1.2.10,true,haproxy,haproxy.http.request.time_wait_ms,long,custom,,1000,Total time in milliseconds spent waiting for a full HTTP request from the client (not counting body) after the first byte was received.
+1.2.10,true,haproxy,haproxy.http.request.time_wait_without_data_ms,long,custom,,1000,"Total time in milliseconds spent waiting for the server to send a full HTTP response, not counting data."
+1.2.10,true,haproxy,haproxy.http.response.captured_cookie,text,custom,,cookie,'name=value' entry indicating that the server has returned a cookie with its response.
+1.2.10,true,haproxy,haproxy.http.response.captured_headers,keyword,custom,array,[example.com],"List of headers captured in the response due to the presence of the ""capture response header"" statement in the frontend."
+1.2.10,true,haproxy,haproxy.mode,keyword,custom,,http,mode that the frontend is operating (TCP or HTTP)
+1.2.10,true,haproxy,haproxy.server_name,keyword,custom,,server-1,Name of the last server to which the connection was sent.
+1.2.10,true,haproxy,haproxy.server_queue,long,custom,,1000,Total number of requests which were processed before this one in the server queue.
+1.2.10,true,haproxy,haproxy.source,keyword,custom,,haproxy,The HAProxy source of the log
+1.2.10,true,haproxy,haproxy.tcp.connection_waiting_time_ms,long,custom,,1000,Total time in milliseconds elapsed between the accept and the last close.
+1.2.10,true,haproxy,haproxy.termination_state,keyword,custom,,----,Condition the session was in when the session ended.
+1.2.10,true,haproxy,haproxy.time_backend_connect,long,custom,,1000,"Total time in milliseconds spent waiting for the connection to establish to the final server, including retries."
+1.2.10,true,haproxy,haproxy.time_queue,long,custom,,1000,Total time in milliseconds spent waiting in the various queues.
+1.2.10,true,haproxy,haproxy.total_waiting_time_ms,long,custom,,1000,Total time in milliseconds spent waiting in the various queues
+1.2.10,true,host,host.architecture,keyword,core,,x86_64,Operating system architecture.
+1.2.10,true,host,host.boot.id,keyword,extended,,88a1f0ed-5ae5-41ee-af6b-41921c311872,Linux boot uuid taken from /proc/sys/kernel/random/boot_id
+1.2.10,true,host,host.cpu.usage,scaled_float,extended,,,"Percent CPU used, between 0 and 1."
+1.2.10,true,host,host.disk.read.bytes,long,extended,,,The number of bytes read by all disks.
+1.2.10,true,host,host.disk.write.bytes,long,extended,,,The number of bytes written on all disks.
+1.2.10,true,host,host.domain,keyword,extended,,CONTOSO,Name of the directory the group is a member of.
+1.2.10,true,host,host.geo.city_name,keyword,core,,Montreal,City name.
+1.2.10,true,host,host.geo.continent_code,keyword,core,,NA,Continent code.
+1.2.10,true,host,host.geo.continent_name,keyword,core,,North America,Name of the continent.
+1.2.10,true,host,host.geo.country_iso_code,keyword,core,,CA,Country ISO code.
+1.2.10,true,host,host.geo.country_name,keyword,core,,Canada,Country name.
+1.2.10,true,host,host.geo.location,geo_point,core,,"{ ""lon"": -73.614830, ""lat"": 45.505918 }",Longitude and latitude.
+1.2.10,true,host,host.geo.name,keyword,extended,,boston-dc,User-defined description of a location.
+1.2.10,true,host,host.geo.postal_code,keyword,core,,94040,Postal code.
+1.2.10,true,host,host.geo.region_iso_code,keyword,core,,CA-QC,Region ISO code.
+1.2.10,true,host,host.geo.region_name,keyword,core,,Quebec,Region name.
+1.2.10,true,host,host.geo.timezone,keyword,core,,America/Argentina/Buenos_Aires,Time zone.
+1.2.10,true,host,host.hostname,keyword,core,,,Hostname of the host.
+1.2.10,true,host,host.id,keyword,core,,,Unique host id.
+1.2.10,true,host,host.ip,ip,core,array,,Host ip addresses.
+1.2.10,true,host,host.mac,keyword,core,array,"[""00-00-5E-00-53-23"", ""00-00-5E-00-53-24""]",Host MAC addresses.
+1.2.10,true,host,host.name,keyword,core,,,Name of the host.
+1.2.10,true,host,host.network.egress.bytes,long,extended,,,The number of bytes sent on all network interfaces.
+1.2.10,true,host,host.network.egress.packets,long,extended,,,The number of packets sent on all network interfaces.
+1.2.10,true,host,host.network.ingress.bytes,long,extended,,,The number of bytes received on all network interfaces.
+1.2.10,true,host,host.network.ingress.packets,long,extended,,,The number of packets received on all network interfaces.
+1.2.10,true,host,host.os.family,keyword,extended,,debian,"OS family (such as redhat, debian, freebsd, windows)."
+1.2.10,true,host,host.os.full,keyword,extended,,Mac OS Mojave,"Operating system name, including the version or code name."
+1.2.10,true,host,host.os.full.text,match_only_text,extended,,Mac OS Mojave,"Operating system name, including the version or code name."
+1.2.10,true,host,host.os.kernel,keyword,extended,,4.4.0-112-generic,Operating system kernel version as a raw string.
+1.2.10,true,host,host.os.name,keyword,extended,,Mac OS X,"Operating system name, without the version."
+1.2.10,true,host,host.os.name.text,match_only_text,extended,,Mac OS X,"Operating system name, without the version."
+1.2.10,true,host,host.os.platform,keyword,extended,,darwin,"Operating system platform (such centos, ubuntu, windows)."
+1.2.10,true,host,host.os.type,keyword,extended,,macos,"Which commercial OS family (one of: linux, macos, unix, windows, ios or android)."
+1.2.10,true,host,host.os.version,keyword,extended,,10.14.1,Operating system version as a raw string.
+1.2.10,true,host,host.pid_ns_ino,keyword,extended,,256383,Pid namespace inode
+1.2.10,true,host,host.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,host,host.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,host,host.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,host,host.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,host,host.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,host,host.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,host,host.type,keyword,core,,,Type of host.
+1.2.10,true,host,host.uptime,long,extended,,1325,Seconds the host has been up.
+1.2.10,true,http,http.request.body.bytes,long,extended,,887,Size in bytes of the request body.
+1.2.10,true,http,http.request.body.content,wildcard,extended,,Hello world,The full HTTP request body.
+1.2.10,true,http,http.request.body.content.text,match_only_text,extended,,Hello world,The full HTTP request body.
+1.2.10,true,http,http.request.bytes,long,extended,,1437,Total size in bytes of the request (body and headers).
+1.2.10,true,http,http.request.headers,object,custom,,{'Accept': 'text/html'},The HTTP request headers
+1.2.10,true,http,http.request.id,keyword,extended,,123e4567-e89b-12d3-a456-426614174000,HTTP request ID.
+1.2.10,true,http,http.request.method,keyword,extended,,POST,HTTP request method.
+1.2.10,true,http,http.request.mime_type,keyword,extended,,image/gif,Mime type of the body of the request.
+1.2.10,true,http,http.request.referrer,keyword,extended,,https://blog.example.com/,Referrer for this HTTP request.
+1.2.10,true,http,http.request.timeout,long,custom,,10,The request timeout in seconds.
+1.2.10,true,http,http.response.body.bytes,long,extended,,887,Size in bytes of the response body.
+1.2.10,true,http,http.response.body.content,wildcard,extended,,Hello world,The full HTTP response body.
+1.2.10,true,http,http.response.body.content.text,match_only_text,extended,,Hello world,The full HTTP response body.
+1.2.10,true,http,http.response.bytes,long,extended,,1437,Total size in bytes of the response (body and headers).
+1.2.10,true,http,http.response.headers,object,custom,,{'Content-Type': 'text/html'},The HTTP response headers
+1.2.10,true,http,http.response.mime_type,keyword,extended,,image/gif,Mime type of the body of the response.
+1.2.10,true,http,http.response.status_code,long,extended,,404,HTTP response status code.
+1.2.10,true,http,http.response.time,long,custom,,1000,The amount of time needed for a request to complete.
+1.2.10,true,http,http.version,keyword,extended,,1.1,HTTP version.
+1.2.10,true,log,log.file.path,keyword,extended,,/var/log/fun-times.log,Full path to the log file this event came from.
+1.2.10,true,log,log.level,keyword,core,,error,Log level of the log event.
+1.2.10,true,log,log.logger,keyword,core,,org.elasticsearch.bootstrap.Bootstrap,Name of the logger.
+1.2.10,true,log,log.origin.file.line,long,extended,,42,The line number of the file which originated the log event.
+1.2.10,true,log,log.origin.file.name,keyword,extended,,Bootstrap.java,The code file which originated the log event.
+1.2.10,true,log,log.origin.function,keyword,extended,,init,The function which originated the log event.
+1.2.10,true,log,log.source,keyword,custom,,php-fpm.access,"The source that generated the log document, e.g. `php-fpm.app` or `apache.access`."
+1.2.10,true,log,log.syslog,object,extended,,,Syslog metadata
+1.2.10,true,log,log.syslog.appname,keyword,extended,,sshd,The device or application that originated the Syslog message.
+1.2.10,true,log,log.syslog.facility.code,long,extended,,23,Syslog numeric facility of the event.
+1.2.10,true,log,log.syslog.facility.name,keyword,extended,,local7,Syslog text-based facility of the event.
+1.2.10,true,log,log.syslog.hostname,keyword,extended,,example-host,The host that originated the Syslog message.
+1.2.10,true,log,log.syslog.msgid,keyword,extended,,ID47,An identifier for the type of Syslog message.
+1.2.10,true,log,log.syslog.priority,long,extended,,135,Syslog priority of the event.
+1.2.10,true,log,log.syslog.procid,keyword,extended,,12345,The process name or ID that originated the Syslog message.
+1.2.10,true,log,log.syslog.severity.code,long,extended,,3,Syslog numeric severity of the event.
+1.2.10,true,log,log.syslog.severity.name,keyword,extended,,Error,Syslog text-based severity of the event.
+1.2.10,true,log,log.syslog.structured_data,flattened,extended,,,Structured data expressed in RFC 5424 messages.
+1.2.10,true,log,log.syslog.version,keyword,extended,,1,Syslog protocol version.
+1.2.10,true,member,member.name,keyword,custom,,member 1,The name of member repo inside repo group.
+1.2.10,true,nginx,nginx.error.connection_id,long,custom,,7239727,Connection identifier.
+1.2.10,true,organization,organization.id,keyword,extended,,,Unique identifier for the organization.
+1.2.10,true,organization,organization.name,keyword,extended,,,Organization name.
+1.2.10,true,organization,organization.name.text,match_only_text,extended,,,Organization name.
+1.2.10,true,organization,organization.team,keyword,custom,,REM,The team that is responsible on the subject service.
+1.2.10,true,package,package.age,long,custom,,5,The age of the package in seconds.
+1.2.10,true,package,package.architecture,keyword,extended,,x86_64,Package architecture.
+1.2.10,true,package,package.build_version,keyword,extended,,36f4f7e89dd61b0988b12ee000b98966867710cd,Build version information
+1.2.10,true,package,package.checksum,keyword,extended,,68b329da9893e34099c7d8ad5cb9c940,Checksum of the installed package for verification.
+1.2.10,true,package,package.description,keyword,extended,,Open source programming language to build simple/reliable/efficient software.,Description of the package.
+1.2.10,true,package,package.group,keyword,custom,,com.example,The group id for maven/gradle package
+1.2.10,true,package,package.install_scope,keyword,extended,,global,"Indicating how the package was installed, e.g. user-local, global."
+1.2.10,true,package,package.installed,date,extended,,,Time when package was installed.
+1.2.10,true,package,package.license,keyword,extended,,Apache License 2.0,Package license
+1.2.10,true,package,package.name,keyword,extended,,go,Package name
+1.2.10,true,package,package.path,keyword,extended,,/usr/local/Cellar/go/1.12.9/,Path where the package is installed.
+1.2.10,true,package,package.reference,keyword,extended,,https://golang.org,Package home page or reference URL
+1.2.10,true,package,package.release_date,date,custom,,2019-10-12 21:31:12+02:00,The package release date.
+1.2.10,true,package,package.size,long,extended,,62231,Package size in bytes.
+1.2.10,true,package,package.type,keyword,extended,,rpm,Package type
+1.2.10,true,package,package.version,keyword,extended,,1.12.9,Package version
+1.2.10,true,php,php.cpu.total,float,custom,,60.5,"CPU Percentage used by the request, total = user + system."
+1.2.10,true,php,php.memory.peak,float,custom,,128.5,"Peak of memory allocated by PHP, in megabytes."
+1.2.10,true,php,php.symfony.environment,keyword,custom,,prod,"The symfony environment, usually prod, dev or test"
+1.2.10,true,php,php.version,keyword,custom,,7.4.3,The php version that is used by the application.
+1.2.10,true,process,process.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.code_signature.digest_algorithm,keyword,extended,,sha256,Hashing algorithm used to sign the process.
+1.2.10,true,process,process.code_signature.exists,boolean,core,,true,Boolean to capture if a signature is present.
+1.2.10,true,process,process.code_signature.flags,keyword,extended,,570522385,Code signing flags of the process
+1.2.10,true,process,process.code_signature.signing_id,keyword,extended,,com.apple.xpc.proxy,The identifier used to sign the process.
+1.2.10,true,process,process.code_signature.status,keyword,extended,,ERROR_UNTRUSTED_ROOT,Additional information about the certificate status.
+1.2.10,true,process,process.code_signature.subject_name,keyword,core,,Microsoft Corporation,Subject name of the code signer
+1.2.10,true,process,process.code_signature.team_id,keyword,extended,,EQHXZ8M8AV,The team identifier used to sign the process.
+1.2.10,true,process,process.code_signature.thumbprint_sha256,keyword,extended,,c0f23a8eb1cba0ccaa88483b5a234c96e4bdfec719bf458024e68c2a8183476b,SHA256 hash of the certificate.
+1.2.10,true,process,process.code_signature.timestamp,date,extended,,2021-01-01T12:10:30Z,When the signature was generated and signed.
+1.2.10,true,process,process.code_signature.trusted,boolean,extended,,true,Stores the trust status of the certificate chain.
+1.2.10,true,process,process.code_signature.valid,boolean,extended,,true,Boolean to capture if the digital signature is verified against the binary content.
+1.2.10,true,process,process.command_line,wildcard,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.command_line.text,match_only_text,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.elf.architecture,keyword,extended,,x86-64,Machine architecture of the ELF file.
+1.2.10,true,process,process.elf.byte_order,keyword,extended,,Little Endian,Byte sequence of ELF file.
+1.2.10,true,process,process.elf.cpu_type,keyword,extended,,Intel,CPU type of the ELF file.
+1.2.10,true,process,process.elf.creation_date,date,extended,,,Build or compile date.
+1.2.10,true,process,process.elf.exports,flattened,extended,array,,List of exported element names and types.
+1.2.10,true,process,process.elf.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in an ELF file.
+1.2.10,true,process,process.elf.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.elf.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.elf.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.elf.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.elf.header.abi_version,keyword,extended,,,Version of the ELF Application Binary Interface (ABI).
+1.2.10,true,process,process.elf.header.class,keyword,extended,,,Header class of the ELF file.
+1.2.10,true,process,process.elf.header.data,keyword,extended,,,Data table of the ELF header.
+1.2.10,true,process,process.elf.header.entrypoint,long,extended,,,Header entrypoint of the ELF file.
+1.2.10,true,process,process.elf.header.object_version,keyword,extended,,,"""0x1"" for original ELF files."
+1.2.10,true,process,process.elf.header.os_abi,keyword,extended,,,Application Binary Interface (ABI) of the Linux OS.
+1.2.10,true,process,process.elf.header.type,keyword,extended,,,Header type of the ELF file.
+1.2.10,true,process,process.elf.header.version,keyword,extended,,,Version of the ELF header.
+1.2.10,true,process,process.elf.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in an ELF file.
+1.2.10,true,process,process.elf.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.elf.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.elf.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.elf.sections,nested,extended,array,,Section information of the ELF file.
+1.2.10,true,process,process.elf.sections.chi2,long,extended,,,Chi-square probability distribution of the section.
+1.2.10,true,process,process.elf.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.elf.sections.flags,keyword,extended,,,ELF Section List flags.
+1.2.10,true,process,process.elf.sections.name,keyword,extended,,,ELF Section List name.
+1.2.10,true,process,process.elf.sections.physical_offset,keyword,extended,,,ELF Section List offset.
+1.2.10,true,process,process.elf.sections.physical_size,long,extended,,,ELF Section List physical size.
+1.2.10,true,process,process.elf.sections.type,keyword,extended,,,ELF Section List type.
+1.2.10,true,process,process.elf.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.elf.sections.virtual_address,long,extended,,,ELF Section List virtual address.
+1.2.10,true,process,process.elf.sections.virtual_size,long,extended,,,ELF Section List virtual size.
+1.2.10,true,process,process.elf.segments,nested,extended,array,,ELF object segment list.
+1.2.10,true,process,process.elf.segments.sections,keyword,extended,,,ELF object segment sections.
+1.2.10,true,process,process.elf.segments.type,keyword,extended,,,ELF object segment type.
+1.2.10,true,process,process.elf.shared_libraries,keyword,extended,array,,List of shared libraries used by this ELF object.
+1.2.10,true,process,process.elf.telfhash,keyword,extended,,,telfhash hash for ELF file.
+1.2.10,true,process,process.end,date,extended,,2016-05-23T08:05:34.853Z,The time the process ended.
+1.2.10,true,process,process.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.entry_leader.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.entry_leader.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.entry_leader.attested_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.entry_leader.attested_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.entry_leader.attested_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.attested_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.command_line,wildcard,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.entry_leader.command_line.text,match_only_text,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.entry_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.entry_leader.entry_meta.source.ip,ip,core,,,IP address of the source.
+1.2.10,true,process,process.entry_leader.entry_meta.type,keyword,extended,,,The entry type for the entry session leader.
+1.2.10,true,process,process.entry_leader.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.entry_leader.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.entry_leader.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.entry_leader.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.entry_leader.interactive,boolean,extended,,True,Whether the process is connected to an interactive shell.
+1.2.10,true,process,process.entry_leader.name,keyword,extended,,ssh,Process name.
+1.2.10,true,process,process.entry_leader.name.text,match_only_text,extended,,ssh,Process name.
+1.2.10,true,process,process.entry_leader.parent.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.entry_leader.parent.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.entry_leader.parent.session_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.entry_leader.parent.session_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.entry_leader.parent.session_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.entry_leader.parent.session_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.entry_leader.parent.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.entry_leader.parent.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.entry_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.entry_leader.real_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.entry_leader.real_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.entry_leader.real_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.entry_leader.real_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.real_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.same_as_process,boolean,extended,,True,This boolean is used to identify if a leader process is the same as the top level process.
+1.2.10,true,process,process.entry_leader.saved_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.entry_leader.saved_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.entry_leader.saved_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.entry_leader.saved_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.saved_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.entry_leader.supplemental_groups.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.entry_leader.supplemental_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.entry_leader.tty,object,extended,,,Information about the controlling TTY device.
+1.2.10,true,process,process.entry_leader.tty.char_device.major,long,extended,,4,The TTY character device's major number.
+1.2.10,true,process,process.entry_leader.tty.char_device.minor,long,extended,,1,The TTY character device's minor number.
+1.2.10,true,process,process.entry_leader.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.entry_leader.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.entry_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.entry_leader.working_directory,keyword,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.entry_leader.working_directory.text,match_only_text,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.env_vars,keyword,extended,array,"[""PATH=/usr/local/bin:/usr/bin"", ""USER=ubuntu""]",Array of environment variable bindings.
+1.2.10,true,process,process.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.exit_code,long,extended,,137,The exit code of the process.
+1.2.10,true,process,process.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.group_leader.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.group_leader.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.group_leader.command_line,wildcard,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.group_leader.command_line.text,match_only_text,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.group_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.group_leader.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.group_leader.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.group_leader.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.group_leader.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.group_leader.interactive,boolean,extended,,True,Whether the process is connected to an interactive shell.
+1.2.10,true,process,process.group_leader.name,keyword,extended,,ssh,Process name.
+1.2.10,true,process,process.group_leader.name.text,match_only_text,extended,,ssh,Process name.
+1.2.10,true,process,process.group_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.group_leader.real_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.group_leader.real_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.group_leader.real_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.group_leader.real_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.real_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.same_as_process,boolean,extended,,True,This boolean is used to identify if a leader process is the same as the top level process.
+1.2.10,true,process,process.group_leader.saved_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.group_leader.saved_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.group_leader.saved_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.group_leader.saved_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.saved_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.group_leader.supplemental_groups.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.group_leader.supplemental_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.group_leader.tty,object,extended,,,Information about the controlling TTY device.
+1.2.10,true,process,process.group_leader.tty.char_device.major,long,extended,,4,The TTY character device's major number.
+1.2.10,true,process,process.group_leader.tty.char_device.minor,long,extended,,1,The TTY character device's minor number.
+1.2.10,true,process,process.group_leader.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.group_leader.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.group_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.group_leader.working_directory,keyword,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.group_leader.working_directory.text,match_only_text,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.hash.cdhash,keyword,extended,,3783b4052fd474dbe30676b45c329e7a6d44acd9,The Code Directory (CD) hash of an executable.
+1.2.10,true,process,process.hash.md5,keyword,extended,,,MD5 hash.
+1.2.10,true,process,process.hash.sha1,keyword,extended,,,SHA1 hash.
+1.2.10,true,process,process.hash.sha256,keyword,extended,,,SHA256 hash.
+1.2.10,true,process,process.hash.sha384,keyword,extended,,,SHA384 hash.
+1.2.10,true,process,process.hash.sha512,keyword,extended,,,SHA512 hash.
+1.2.10,true,process,process.hash.ssdeep,keyword,extended,,,SSDEEP hash.
+1.2.10,true,process,process.hash.tlsh,keyword,extended,,,TLSH hash.
+1.2.10,true,process,process.interactive,boolean,extended,,True,Whether the process is connected to an interactive shell.
+1.2.10,true,process,process.io,object,extended,,,A chunk of input or output (IO) from a single process.
+1.2.10,true,process,process.io.bytes_skipped,object,extended,array,,An array of byte offsets and lengths denoting where IO data has been skipped.
+1.2.10,true,process,process.io.bytes_skipped.length,long,extended,,,The length of bytes skipped.
+1.2.10,true,process,process.io.bytes_skipped.offset,long,extended,,,The byte offset into this event's io.text (or io.bytes in the future) where length bytes were skipped.
+1.2.10,true,process,process.io.max_bytes_per_process_exceeded,boolean,extended,,,"If true, the process producing the output has exceeded the max_kilobytes_per_process configuration setting."
+1.2.10,true,process,process.io.text,wildcard,extended,,,A chunk of output or input sanitized to UTF-8.
+1.2.10,true,process,process.io.total_bytes_captured,long,extended,,,The total number of bytes captured in this event.
+1.2.10,true,process,process.io.total_bytes_skipped,long,extended,,,The total number of bytes that were not captured due to implementation restrictions such as buffer size limits.
+1.2.10,true,process,process.io.type,keyword,extended,,,The type of object on which the IO action (read or write) was taken.
+1.2.10,true,process,process.macho.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in a Mach-O file.
+1.2.10,true,process,process.macho.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.macho.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.macho.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.macho.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.macho.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in a Mach-O file.
+1.2.10,true,process,process.macho.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.macho.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.macho.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.macho.sections,nested,extended,array,,Section information of the Mach-O file.
+1.2.10,true,process,process.macho.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.macho.sections.name,keyword,extended,,,Mach-O Section List name.
+1.2.10,true,process,process.macho.sections.physical_size,long,extended,,,Mach-O Section List physical size.
+1.2.10,true,process,process.macho.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.macho.sections.virtual_size,long,extended,,,Mach-O Section List virtual size. This is always the same as `physical_size`.
+1.2.10,true,process,process.macho.symhash,keyword,extended,,d3ccf195b62a9279c3c19af1080497ec,A hash of the imports in a Mach-O file.
+1.2.10,true,process,process.name,keyword,extended,,ssh,Process name.
+1.2.10,true,process,process.name.text,match_only_text,extended,,ssh,Process name.
+1.2.10,true,process,process.parent.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.parent.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.parent.code_signature.digest_algorithm,keyword,extended,,sha256,Hashing algorithm used to sign the process.
+1.2.10,true,process,process.parent.code_signature.exists,boolean,core,,true,Boolean to capture if a signature is present.
+1.2.10,true,process,process.parent.code_signature.flags,keyword,extended,,570522385,Code signing flags of the process
+1.2.10,true,process,process.parent.code_signature.signing_id,keyword,extended,,com.apple.xpc.proxy,The identifier used to sign the process.
+1.2.10,true,process,process.parent.code_signature.status,keyword,extended,,ERROR_UNTRUSTED_ROOT,Additional information about the certificate status.
+1.2.10,true,process,process.parent.code_signature.subject_name,keyword,core,,Microsoft Corporation,Subject name of the code signer
+1.2.10,true,process,process.parent.code_signature.team_id,keyword,extended,,EQHXZ8M8AV,The team identifier used to sign the process.
+1.2.10,true,process,process.parent.code_signature.thumbprint_sha256,keyword,extended,,c0f23a8eb1cba0ccaa88483b5a234c96e4bdfec719bf458024e68c2a8183476b,SHA256 hash of the certificate.
+1.2.10,true,process,process.parent.code_signature.timestamp,date,extended,,2021-01-01T12:10:30Z,When the signature was generated and signed.
+1.2.10,true,process,process.parent.code_signature.trusted,boolean,extended,,true,Stores the trust status of the certificate chain.
+1.2.10,true,process,process.parent.code_signature.valid,boolean,extended,,true,Boolean to capture if the digital signature is verified against the binary content.
+1.2.10,true,process,process.parent.command_line,wildcard,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.parent.command_line.text,match_only_text,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.parent.elf.architecture,keyword,extended,,x86-64,Machine architecture of the ELF file.
+1.2.10,true,process,process.parent.elf.byte_order,keyword,extended,,Little Endian,Byte sequence of ELF file.
+1.2.10,true,process,process.parent.elf.cpu_type,keyword,extended,,Intel,CPU type of the ELF file.
+1.2.10,true,process,process.parent.elf.creation_date,date,extended,,,Build or compile date.
+1.2.10,true,process,process.parent.elf.exports,flattened,extended,array,,List of exported element names and types.
+1.2.10,true,process,process.parent.elf.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in an ELF file.
+1.2.10,true,process,process.parent.elf.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.parent.elf.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.elf.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.elf.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.parent.elf.header.abi_version,keyword,extended,,,Version of the ELF Application Binary Interface (ABI).
+1.2.10,true,process,process.parent.elf.header.class,keyword,extended,,,Header class of the ELF file.
+1.2.10,true,process,process.parent.elf.header.data,keyword,extended,,,Data table of the ELF header.
+1.2.10,true,process,process.parent.elf.header.entrypoint,long,extended,,,Header entrypoint of the ELF file.
+1.2.10,true,process,process.parent.elf.header.object_version,keyword,extended,,,"""0x1"" for original ELF files."
+1.2.10,true,process,process.parent.elf.header.os_abi,keyword,extended,,,Application Binary Interface (ABI) of the Linux OS.
+1.2.10,true,process,process.parent.elf.header.type,keyword,extended,,,Header type of the ELF file.
+1.2.10,true,process,process.parent.elf.header.version,keyword,extended,,,Version of the ELF header.
+1.2.10,true,process,process.parent.elf.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in an ELF file.
+1.2.10,true,process,process.parent.elf.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.parent.elf.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.elf.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.elf.sections,nested,extended,array,,Section information of the ELF file.
+1.2.10,true,process,process.parent.elf.sections.chi2,long,extended,,,Chi-square probability distribution of the section.
+1.2.10,true,process,process.parent.elf.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.elf.sections.flags,keyword,extended,,,ELF Section List flags.
+1.2.10,true,process,process.parent.elf.sections.name,keyword,extended,,,ELF Section List name.
+1.2.10,true,process,process.parent.elf.sections.physical_offset,keyword,extended,,,ELF Section List offset.
+1.2.10,true,process,process.parent.elf.sections.physical_size,long,extended,,,ELF Section List physical size.
+1.2.10,true,process,process.parent.elf.sections.type,keyword,extended,,,ELF Section List type.
+1.2.10,true,process,process.parent.elf.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.elf.sections.virtual_address,long,extended,,,ELF Section List virtual address.
+1.2.10,true,process,process.parent.elf.sections.virtual_size,long,extended,,,ELF Section List virtual size.
+1.2.10,true,process,process.parent.elf.segments,nested,extended,array,,ELF object segment list.
+1.2.10,true,process,process.parent.elf.segments.sections,keyword,extended,,,ELF object segment sections.
+1.2.10,true,process,process.parent.elf.segments.type,keyword,extended,,,ELF object segment type.
+1.2.10,true,process,process.parent.elf.shared_libraries,keyword,extended,array,,List of shared libraries used by this ELF object.
+1.2.10,true,process,process.parent.elf.telfhash,keyword,extended,,,telfhash hash for ELF file.
+1.2.10,true,process,process.parent.end,date,extended,,2016-05-23T08:05:34.853Z,The time the process ended.
+1.2.10,true,process,process.parent.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.parent.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.parent.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.parent.exit_code,long,extended,,137,The exit code of the process.
+1.2.10,true,process,process.parent.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.parent.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.parent.group_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.parent.group_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.parent.group_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.parent.group_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.parent.hash.cdhash,keyword,extended,,3783b4052fd474dbe30676b45c329e7a6d44acd9,The Code Directory (CD) hash of an executable.
+1.2.10,true,process,process.parent.hash.md5,keyword,extended,,,MD5 hash.
+1.2.10,true,process,process.parent.hash.sha1,keyword,extended,,,SHA1 hash.
+1.2.10,true,process,process.parent.hash.sha256,keyword,extended,,,SHA256 hash.
+1.2.10,true,process,process.parent.hash.sha384,keyword,extended,,,SHA384 hash.
+1.2.10,true,process,process.parent.hash.sha512,keyword,extended,,,SHA512 hash.
+1.2.10,true,process,process.parent.hash.ssdeep,keyword,extended,,,SSDEEP hash.
+1.2.10,true,process,process.parent.hash.tlsh,keyword,extended,,,TLSH hash.
+1.2.10,true,process,process.parent.interactive,boolean,extended,,True,Whether the process is connected to an interactive shell.
+1.2.10,true,process,process.parent.macho.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in a Mach-O file.
+1.2.10,true,process,process.parent.macho.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.parent.macho.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.macho.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.macho.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.parent.macho.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in a Mach-O file.
+1.2.10,true,process,process.parent.macho.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.parent.macho.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.macho.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.macho.sections,nested,extended,array,,Section information of the Mach-O file.
+1.2.10,true,process,process.parent.macho.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.macho.sections.name,keyword,extended,,,Mach-O Section List name.
+1.2.10,true,process,process.parent.macho.sections.physical_size,long,extended,,,Mach-O Section List physical size.
+1.2.10,true,process,process.parent.macho.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.macho.sections.virtual_size,long,extended,,,Mach-O Section List virtual size. This is always the same as `physical_size`.
+1.2.10,true,process,process.parent.macho.symhash,keyword,extended,,d3ccf195b62a9279c3c19af1080497ec,A hash of the imports in a Mach-O file.
+1.2.10,true,process,process.parent.name,keyword,extended,,ssh,Process name.
+1.2.10,true,process,process.parent.name.text,match_only_text,extended,,ssh,Process name.
+1.2.10,true,process,process.parent.pe.architecture,keyword,extended,,x64,CPU architecture target for the file.
+1.2.10,true,process,process.parent.pe.company,keyword,extended,,Microsoft Corporation,"Internal company name of the file, provided at compile-time."
+1.2.10,true,process,process.parent.pe.description,keyword,extended,,Paint,"Internal description of the file, provided at compile-time."
+1.2.10,true,process,process.parent.pe.file_version,keyword,extended,,6.3.9600.17415,Process name.
+1.2.10,true,process,process.parent.pe.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in a PE file.
+1.2.10,true,process,process.parent.pe.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.parent.pe.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.pe.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.parent.pe.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.parent.pe.imphash,keyword,extended,,0c6803c4e922103c4dca5963aad36ddf,A hash of the imports in a PE file.
+1.2.10,true,process,process.parent.pe.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in a PE file.
+1.2.10,true,process,process.parent.pe.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.parent.pe.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.pe.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.parent.pe.original_file_name,keyword,extended,,MSPAINT.EXE,"Internal name of the file, provided at compile-time."
+1.2.10,true,process,process.parent.pe.pehash,keyword,extended,,73ff189b63cd6be375a7ff25179a38d347651975,A hash of the PE header and data from one or more PE sections.
+1.2.10,true,process,process.parent.pe.product,keyword,extended,,Microsoft® Windows® Operating System,"Internal product name of the file, provided at compile-time."
+1.2.10,true,process,process.parent.pe.sections,nested,extended,array,,Section information of the PE file.
+1.2.10,true,process,process.parent.pe.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.pe.sections.name,keyword,extended,,,PE Section List name.
+1.2.10,true,process,process.parent.pe.sections.physical_size,long,extended,,,PE Section List physical size.
+1.2.10,true,process,process.parent.pe.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.parent.pe.sections.virtual_size,long,extended,,,PE Section List virtual size. This is always the same as `physical_size`.
+1.2.10,true,process,process.parent.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.parent.real_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.parent.real_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.parent.real_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.parent.real_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.real_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.saved_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.parent.saved_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.parent.saved_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.parent.saved_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.saved_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.parent.supplemental_groups.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.parent.supplemental_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.parent.thread.capabilities.effective,keyword,extended,array,"[""CAP_BPF"", ""CAP_SYS_ADMIN""]",Array of capabilities used for permission checks.
+1.2.10,true,process,process.parent.thread.capabilities.permitted,keyword,extended,array,"[""CAP_BPF"", ""CAP_SYS_ADMIN""]",Array of capabilities a thread could assume.
+1.2.10,true,process,process.parent.thread.id,long,extended,,4242,Thread ID.
+1.2.10,true,process,process.parent.thread.name,keyword,extended,,thread-0,Thread name.
+1.2.10,true,process,process.parent.title,keyword,extended,,,Process title.
+1.2.10,true,process,process.parent.title.text,match_only_text,extended,,,Process title.
+1.2.10,true,process,process.parent.tty,object,extended,,,Information about the controlling TTY device.
+1.2.10,true,process,process.parent.tty.char_device.major,long,extended,,4,The TTY character device's major number.
+1.2.10,true,process,process.parent.tty.char_device.minor,long,extended,,1,The TTY character device's minor number.
+1.2.10,true,process,process.parent.uptime,long,extended,,1325,Seconds the process has been up.
+1.2.10,true,process,process.parent.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.parent.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.parent.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.parent.working_directory,keyword,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.parent.working_directory.text,match_only_text,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.pe.architecture,keyword,extended,,x64,CPU architecture target for the file.
+1.2.10,true,process,process.pe.company,keyword,extended,,Microsoft Corporation,"Internal company name of the file, provided at compile-time."
+1.2.10,true,process,process.pe.description,keyword,extended,,Paint,"Internal description of the file, provided at compile-time."
+1.2.10,true,process,process.pe.file_version,keyword,extended,,6.3.9600.17415,Process name.
+1.2.10,true,process,process.pe.go_import_hash,keyword,extended,,10bddcb4cee42080f76c88d9ff964491,A hash of the Go language imports in a PE file.
+1.2.10,true,process,process.pe.go_imports,flattened,extended,,,List of imported Go language element names and types.
+1.2.10,true,process,process.pe.go_imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.pe.go_imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of Go imports.
+1.2.10,true,process,process.pe.go_stripped,boolean,extended,,,Whether the file is a stripped or obfuscated Go executable.
+1.2.10,true,process,process.pe.imphash,keyword,extended,,0c6803c4e922103c4dca5963aad36ddf,A hash of the imports in a PE file.
+1.2.10,true,process,process.pe.import_hash,keyword,extended,,d41d8cd98f00b204e9800998ecf8427e,A hash of the imports in a PE file.
+1.2.10,true,process,process.pe.imports,flattened,extended,array,,List of imported element names and types.
+1.2.10,true,process,process.pe.imports_names_entropy,long,extended,,,Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.pe.imports_names_var_entropy,long,extended,,,Variance for Shannon entropy calculation from the list of imported element names and types.
+1.2.10,true,process,process.pe.original_file_name,keyword,extended,,MSPAINT.EXE,"Internal name of the file, provided at compile-time."
+1.2.10,true,process,process.pe.pehash,keyword,extended,,73ff189b63cd6be375a7ff25179a38d347651975,A hash of the PE header and data from one or more PE sections.
+1.2.10,true,process,process.pe.product,keyword,extended,,Microsoft® Windows® Operating System,"Internal product name of the file, provided at compile-time."
+1.2.10,true,process,process.pe.sections,nested,extended,array,,Section information of the PE file.
+1.2.10,true,process,process.pe.sections.entropy,long,extended,,,Shannon entropy calculation from the section.
+1.2.10,true,process,process.pe.sections.name,keyword,extended,,,PE Section List name.
+1.2.10,true,process,process.pe.sections.physical_size,long,extended,,,PE Section List physical size.
+1.2.10,true,process,process.pe.sections.var_entropy,long,extended,,,Variance for Shannon entropy calculation from the section.
+1.2.10,true,process,process.pe.sections.virtual_size,long,extended,,,PE Section List virtual size. This is always the same as `physical_size`.
+1.2.10,true,process,process.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.previous.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.previous.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.previous.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.previous.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.real_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.real_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.real_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.real_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.real_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.saved_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.saved_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.saved_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.saved_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.saved_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.args,keyword,extended,array,"[""/usr/bin/ssh"", ""-l"", ""user"", ""10.0.0.16""]",Array of process arguments.
+1.2.10,true,process,process.session_leader.args_count,long,extended,,4,Length of the process.args array.
+1.2.10,true,process,process.session_leader.command_line,wildcard,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.session_leader.command_line.text,match_only_text,extended,,/usr/bin/ssh -l user 10.0.0.16,Full command line that started the process.
+1.2.10,true,process,process.session_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.session_leader.executable,keyword,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.session_leader.executable.text,match_only_text,extended,,/usr/bin/ssh,Absolute path to the process executable.
+1.2.10,true,process,process.session_leader.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.session_leader.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.session_leader.interactive,boolean,extended,,True,Whether the process is connected to an interactive shell.
+1.2.10,true,process,process.session_leader.name,keyword,extended,,ssh,Process name.
+1.2.10,true,process,process.session_leader.name.text,match_only_text,extended,,ssh,Process name.
+1.2.10,true,process,process.session_leader.parent.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.session_leader.parent.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.session_leader.parent.session_leader.entity_id,keyword,extended,,c2c455d9f99375d,Unique identifier for the process.
+1.2.10,true,process,process.session_leader.parent.session_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.session_leader.parent.session_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.session_leader.parent.session_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.session_leader.parent.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.session_leader.parent.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.session_leader.pid,long,core,,4242,Process id.
+1.2.10,true,process,process.session_leader.real_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.session_leader.real_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.session_leader.real_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.session_leader.real_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.real_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.same_as_process,boolean,extended,,True,This boolean is used to identify if a leader process is the same as the top level process.
+1.2.10,true,process,process.session_leader.saved_group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.session_leader.saved_group.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.session_leader.saved_user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.session_leader.saved_user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.saved_user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.session_leader.supplemental_groups.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.session_leader.supplemental_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.session_leader.tty,object,extended,,,Information about the controlling TTY device.
+1.2.10,true,process,process.session_leader.tty.char_device.major,long,extended,,4,The TTY character device's major number.
+1.2.10,true,process,process.session_leader.tty.char_device.minor,long,extended,,1,The TTY character device's minor number.
+1.2.10,true,process,process.session_leader.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.session_leader.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.session_leader.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.session_leader.working_directory,keyword,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.session_leader.working_directory.text,match_only_text,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.start,date,extended,,2016-05-23T08:05:34.853Z,The time the process started.
+1.2.10,true,process,process.supplemental_groups.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,process,process.supplemental_groups.name,keyword,extended,,,Name of the group.
+1.2.10,true,process,process.thread.capabilities.effective,keyword,extended,array,"[""CAP_BPF"", ""CAP_SYS_ADMIN""]",Array of capabilities used for permission checks.
+1.2.10,true,process,process.thread.capabilities.permitted,keyword,extended,array,"[""CAP_BPF"", ""CAP_SYS_ADMIN""]",Array of capabilities a thread could assume.
+1.2.10,true,process,process.thread.id,long,extended,,4242,Thread ID.
+1.2.10,true,process,process.thread.name,keyword,extended,,thread-0,Thread name.
+1.2.10,true,process,process.title,keyword,extended,,,Process title.
+1.2.10,true,process,process.title.text,match_only_text,extended,,,Process title.
+1.2.10,true,process,process.tty,object,extended,,,Information about the controlling TTY device.
+1.2.10,true,process,process.tty.char_device.major,long,extended,,4,The TTY character device's major number.
+1.2.10,true,process,process.tty.char_device.minor,long,extended,,1,The TTY character device's minor number.
+1.2.10,true,process,process.tty.columns,long,extended,,80,The number of character columns per line. e.g terminal width
+1.2.10,true,process,process.tty.rows,long,extended,,24,The number of character rows in the terminal. e.g terminal height
+1.2.10,true,process,process.uptime,long,extended,,1325,Seconds the process has been up.
+1.2.10,true,process,process.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,process,process.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,process,process.vpid,long,core,,4242,Virtual process id.
+1.2.10,true,process,process.working_directory,keyword,extended,,/home/alice,The working directory of the process.
+1.2.10,true,process,process.working_directory.text,match_only_text,extended,,/home/alice,The working directory of the process.
+1.2.10,true,related,related.hash,keyword,extended,array,,All the hashes seen on your event.
+1.2.10,true,related,related.hosts,keyword,extended,array,,All the host identifiers seen on your event.
+1.2.10,true,related,related.ip,ip,extended,array,,All of the IPs seen on your event.
+1.2.10,true,related,related.user,keyword,extended,array,,All the user names or other user identifiers seen on the event.
+1.2.10,true,repository,repository.name,keyword,custom,,local-release,The name of repository.
+1.2.10,true,repository,repository.type,keyword,custom,,php-proxy,The type of repository.
+1.2.10,true,service,service.address,keyword,extended,,172.26.0.2:5432,Address of this service.
+1.2.10,true,service,service.environment,keyword,extended,,production,Environment of the service.
+1.2.10,true,service,service.ephemeral_id,keyword,extended,,8a4f500f,Ephemeral identifier of this service.
+1.2.10,true,service,service.http.request.body.bytes,long,extended,,887,Size in bytes of the request body.
+1.2.10,true,service,service.http.request.body.content,wildcard,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.http.request.body.content.text,match_only_text,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.http.request.bytes,long,extended,,1437,Total size in bytes of the request (body and headers).
+1.2.10,true,service,service.http.request.headers,object,custom,,{'Accept': 'text/html'},The HTTP request headers
+1.2.10,true,service,service.http.request.id,keyword,extended,,123e4567-e89b-12d3-a456-426614174000,HTTP request ID.
+1.2.10,true,service,service.http.request.method,keyword,extended,,POST,HTTP request method.
+1.2.10,true,service,service.http.request.mime_type,keyword,extended,,image/gif,Mime type of the body of the request.
+1.2.10,true,service,service.http.request.referrer,keyword,extended,,https://blog.example.com/,Referrer for this HTTP request.
+1.2.10,true,service,service.http.request.timeout,long,custom,,10,The request timeout in seconds.
+1.2.10,true,service,service.http.response.body.bytes,long,extended,,887,Size in bytes of the response body.
+1.2.10,true,service,service.http.response.body.content,wildcard,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.http.response.body.content.text,match_only_text,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.http.response.bytes,long,extended,,1437,Total size in bytes of the response (body and headers).
+1.2.10,true,service,service.http.response.headers,object,custom,,{'Content-Type': 'text/html'},The HTTP response headers
+1.2.10,true,service,service.http.response.mime_type,keyword,extended,,image/gif,Mime type of the body of the response.
+1.2.10,true,service,service.http.response.status_code,long,extended,,404,HTTP response status code.
+1.2.10,true,service,service.http.response.time,long,custom,,1000,The amount of time needed for a request to complete.
+1.2.10,true,service,service.http.version,keyword,extended,,1.1,HTTP version.
+1.2.10,true,service,service.id,keyword,core,,d37e5ebfe0ae6c4972dbe9f0174a1637bb8247f6,Unique identifier of the running service.
+1.2.10,true,service,service.name,keyword,core,,elasticsearch-metrics,Name of the service.
+1.2.10,true,service,service.node.name,keyword,extended,,instance-0000000016,Name of the service node.
+1.2.10,true,service,service.node.role,keyword,extended,,background_tasks,Deprecated role (singular) of the service node.
+1.2.10,true,service,service.node.roles,keyword,extended,array,"[""ui"", ""background_tasks""]",Roles of the service node.
+1.2.10,true,service,service.origin.address,keyword,extended,,172.26.0.2:5432,Address of this service.
+1.2.10,true,service,service.origin.environment,keyword,extended,,production,Environment of the service.
+1.2.10,true,service,service.origin.ephemeral_id,keyword,extended,,8a4f500f,Ephemeral identifier of this service.
+1.2.10,true,service,service.origin.http.request.body.bytes,long,extended,,887,Size in bytes of the request body.
+1.2.10,true,service,service.origin.http.request.body.content,wildcard,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.origin.http.request.body.content.text,match_only_text,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.origin.http.request.bytes,long,extended,,1437,Total size in bytes of the request (body and headers).
+1.2.10,true,service,service.origin.http.request.headers,object,custom,,{'Accept': 'text/html'},The HTTP request headers
+1.2.10,true,service,service.origin.http.request.id,keyword,extended,,123e4567-e89b-12d3-a456-426614174000,HTTP request ID.
+1.2.10,true,service,service.origin.http.request.method,keyword,extended,,POST,HTTP request method.
+1.2.10,true,service,service.origin.http.request.mime_type,keyword,extended,,image/gif,Mime type of the body of the request.
+1.2.10,true,service,service.origin.http.request.referrer,keyword,extended,,https://blog.example.com/,Referrer for this HTTP request.
+1.2.10,true,service,service.origin.http.request.timeout,long,custom,,10,The request timeout in seconds.
+1.2.10,true,service,service.origin.http.response.body.bytes,long,extended,,887,Size in bytes of the response body.
+1.2.10,true,service,service.origin.http.response.body.content,wildcard,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.origin.http.response.body.content.text,match_only_text,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.origin.http.response.bytes,long,extended,,1437,Total size in bytes of the response (body and headers).
+1.2.10,true,service,service.origin.http.response.headers,object,custom,,{'Content-Type': 'text/html'},The HTTP response headers
+1.2.10,true,service,service.origin.http.response.mime_type,keyword,extended,,image/gif,Mime type of the body of the response.
+1.2.10,true,service,service.origin.http.response.status_code,long,extended,,404,HTTP response status code.
+1.2.10,true,service,service.origin.http.response.time,long,custom,,1000,The amount of time needed for a request to complete.
+1.2.10,true,service,service.origin.http.version,keyword,extended,,1.1,HTTP version.
+1.2.10,true,service,service.origin.id,keyword,core,,d37e5ebfe0ae6c4972dbe9f0174a1637bb8247f6,Unique identifier of the running service.
+1.2.10,true,service,service.origin.name,keyword,core,,elasticsearch-metrics,Name of the service.
+1.2.10,true,service,service.origin.node.name,keyword,extended,,instance-0000000016,Name of the service node.
+1.2.10,true,service,service.origin.node.role,keyword,extended,,background_tasks,Deprecated role (singular) of the service node.
+1.2.10,true,service,service.origin.node.roles,keyword,extended,array,"[""ui"", ""background_tasks""]",Roles of the service node.
+1.2.10,true,service,service.origin.state,keyword,core,,,Current state of the service.
+1.2.10,true,service,service.origin.type,keyword,core,,elasticsearch,The type of the service.
+1.2.10,true,service,service.origin.url.domain,keyword,extended,,www.elastic.co,Domain of the url.
+1.2.10,true,service,service.origin.url.extension,keyword,extended,,png,"File extension from the request url, excluding the leading dot."
+1.2.10,true,service,service.origin.url.fragment,keyword,extended,,,Portion of the url after the `#`.
+1.2.10,true,service,service.origin.url.full,wildcard,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.origin.url.full.text,match_only_text,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.origin.url.original,wildcard,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.origin.url.original.length,token_count,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.origin.url.original.text,match_only_text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.origin.url.original.token,text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.origin.url.password,keyword,extended,,,Password of the request.
+1.2.10,true,service,service.origin.url.path,wildcard,extended,,,"Path of the request, such as ""/search""."
+1.2.10,true,service,service.origin.url.port,long,extended,,443,"Port of the request, such as 443."
+1.2.10,true,service,service.origin.url.query,keyword,extended,,,Query string of the request.
+1.2.10,true,service,service.origin.url.registered_domain,keyword,extended,,example.com,"The highest registered url domain, stripped of the subdomain."
+1.2.10,true,service,service.origin.url.scheme,keyword,extended,,https,Scheme of the url.
+1.2.10,true,service,service.origin.url.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,service,service.origin.url.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,service,service.origin.url.username,keyword,extended,,,Username of the request.
+1.2.10,true,service,service.origin.version,keyword,core,,3.2.4,Version of the service.
+1.2.10,true,service,service.state,keyword,core,,,Current state of the service.
+1.2.10,true,service,service.target.address,keyword,extended,,172.26.0.2:5432,Address of this service.
+1.2.10,true,service,service.target.environment,keyword,extended,,production,Environment of the service.
+1.2.10,true,service,service.target.ephemeral_id,keyword,extended,,8a4f500f,Ephemeral identifier of this service.
+1.2.10,true,service,service.target.http.request.body.bytes,long,extended,,887,Size in bytes of the request body.
+1.2.10,true,service,service.target.http.request.body.content,wildcard,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.target.http.request.body.content.text,match_only_text,extended,,Hello world,The full HTTP request body.
+1.2.10,true,service,service.target.http.request.bytes,long,extended,,1437,Total size in bytes of the request (body and headers).
+1.2.10,true,service,service.target.http.request.headers,object,custom,,{'Accept': 'text/html'},The HTTP request headers
+1.2.10,true,service,service.target.http.request.id,keyword,extended,,123e4567-e89b-12d3-a456-426614174000,HTTP request ID.
+1.2.10,true,service,service.target.http.request.method,keyword,extended,,POST,HTTP request method.
+1.2.10,true,service,service.target.http.request.mime_type,keyword,extended,,image/gif,Mime type of the body of the request.
+1.2.10,true,service,service.target.http.request.referrer,keyword,extended,,https://blog.example.com/,Referrer for this HTTP request.
+1.2.10,true,service,service.target.http.request.timeout,long,custom,,10,The request timeout in seconds.
+1.2.10,true,service,service.target.http.response.body.bytes,long,extended,,887,Size in bytes of the response body.
+1.2.10,true,service,service.target.http.response.body.content,wildcard,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.target.http.response.body.content.text,match_only_text,extended,,Hello world,The full HTTP response body.
+1.2.10,true,service,service.target.http.response.bytes,long,extended,,1437,Total size in bytes of the response (body and headers).
+1.2.10,true,service,service.target.http.response.headers,object,custom,,{'Content-Type': 'text/html'},The HTTP response headers
+1.2.10,true,service,service.target.http.response.mime_type,keyword,extended,,image/gif,Mime type of the body of the response.
+1.2.10,true,service,service.target.http.response.status_code,long,extended,,404,HTTP response status code.
+1.2.10,true,service,service.target.http.response.time,long,custom,,1000,The amount of time needed for a request to complete.
+1.2.10,true,service,service.target.http.version,keyword,extended,,1.1,HTTP version.
+1.2.10,true,service,service.target.id,keyword,core,,d37e5ebfe0ae6c4972dbe9f0174a1637bb8247f6,Unique identifier of the running service.
+1.2.10,true,service,service.target.name,keyword,core,,elasticsearch-metrics,Name of the service.
+1.2.10,true,service,service.target.node.name,keyword,extended,,instance-0000000016,Name of the service node.
+1.2.10,true,service,service.target.node.role,keyword,extended,,background_tasks,Deprecated role (singular) of the service node.
+1.2.10,true,service,service.target.node.roles,keyword,extended,array,"[""ui"", ""background_tasks""]",Roles of the service node.
+1.2.10,true,service,service.target.state,keyword,core,,,Current state of the service.
+1.2.10,true,service,service.target.type,keyword,core,,elasticsearch,The type of the service.
+1.2.10,true,service,service.target.url.domain,keyword,extended,,www.elastic.co,Domain of the url.
+1.2.10,true,service,service.target.url.extension,keyword,extended,,png,"File extension from the request url, excluding the leading dot."
+1.2.10,true,service,service.target.url.fragment,keyword,extended,,,Portion of the url after the `#`.
+1.2.10,true,service,service.target.url.full,wildcard,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.target.url.full.text,match_only_text,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.target.url.original,wildcard,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.target.url.original.length,token_count,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.target.url.original.text,match_only_text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.target.url.original.token,text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.target.url.password,keyword,extended,,,Password of the request.
+1.2.10,true,service,service.target.url.path,wildcard,extended,,,"Path of the request, such as ""/search""."
+1.2.10,true,service,service.target.url.port,long,extended,,443,"Port of the request, such as 443."
+1.2.10,true,service,service.target.url.query,keyword,extended,,,Query string of the request.
+1.2.10,true,service,service.target.url.registered_domain,keyword,extended,,example.com,"The highest registered url domain, stripped of the subdomain."
+1.2.10,true,service,service.target.url.scheme,keyword,extended,,https,Scheme of the url.
+1.2.10,true,service,service.target.url.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,service,service.target.url.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,service,service.target.url.username,keyword,extended,,,Username of the request.
+1.2.10,true,service,service.target.version,keyword,core,,3.2.4,Version of the service.
+1.2.10,true,service,service.type,keyword,core,,elasticsearch,The type of the service.
+1.2.10,true,service,service.url.domain,keyword,extended,,www.elastic.co,Domain of the url.
+1.2.10,true,service,service.url.extension,keyword,extended,,png,"File extension from the request url, excluding the leading dot."
+1.2.10,true,service,service.url.fragment,keyword,extended,,,Portion of the url after the `#`.
+1.2.10,true,service,service.url.full,wildcard,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.url.full.text,match_only_text,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,service,service.url.original,wildcard,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.url.original.length,token_count,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.url.original.text,match_only_text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.url.original.token,text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,service,service.url.password,keyword,extended,,,Password of the request.
+1.2.10,true,service,service.url.path,wildcard,extended,,,"Path of the request, such as ""/search""."
+1.2.10,true,service,service.url.port,long,extended,,443,"Port of the request, such as 443."
+1.2.10,true,service,service.url.query,keyword,extended,,,Query string of the request.
+1.2.10,true,service,service.url.registered_domain,keyword,extended,,example.com,"The highest registered url domain, stripped of the subdomain."
+1.2.10,true,service,service.url.scheme,keyword,extended,,https,Scheme of the url.
+1.2.10,true,service,service.url.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,service,service.url.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,service,service.url.username,keyword,extended,,,Username of the request.
+1.2.10,true,service,service.version,keyword,core,,3.2.4,Version of the service.
+1.2.10,true,source,source.address,keyword,extended,,,Source network address.
+1.2.10,true,source,source.as.number,long,extended,,15169,Unique number allocated to the autonomous system.
+1.2.10,true,source,source.as.organization.name,keyword,extended,,Google LLC,Organization name.
+1.2.10,true,source,source.as.organization.name.text,match_only_text,extended,,Google LLC,Organization name.
+1.2.10,true,source,source.bytes,long,core,,184,Bytes sent from the source to the destination.
+1.2.10,true,source,source.domain,keyword,core,,foo.example.com,The domain name of the source.
+1.2.10,true,source,source.geo.city_name,keyword,core,,Montreal,City name.
+1.2.10,true,source,source.geo.continent_code,keyword,core,,NA,Continent code.
+1.2.10,true,source,source.geo.continent_name,keyword,core,,North America,Name of the continent.
+1.2.10,true,source,source.geo.country_iso_code,keyword,core,,CA,Country ISO code.
+1.2.10,true,source,source.geo.country_name,keyword,core,,Canada,Country name.
+1.2.10,true,source,source.geo.location,geo_point,core,,"{ ""lon"": -73.614830, ""lat"": 45.505918 }",Longitude and latitude.
+1.2.10,true,source,source.geo.name,keyword,extended,,boston-dc,User-defined description of a location.
+1.2.10,true,source,source.geo.postal_code,keyword,core,,94040,Postal code.
+1.2.10,true,source,source.geo.region_iso_code,keyword,core,,CA-QC,Region ISO code.
+1.2.10,true,source,source.geo.region_name,keyword,core,,Quebec,Region name.
+1.2.10,true,source,source.geo.timezone,keyword,core,,America/Argentina/Buenos_Aires,Time zone.
+1.2.10,true,source,source.ip,ip,core,,,IP address of the source.
+1.2.10,true,source,source.mac,keyword,core,,00-00-5E-00-53-23,MAC address of the source.
+1.2.10,true,source,source.nat.ip,ip,extended,,,Source NAT ip
+1.2.10,true,source,source.nat.port,long,extended,,,Source NAT port
+1.2.10,true,source,source.packets,long,core,,12,Packets sent from the source to the destination.
+1.2.10,true,source,source.port,long,core,,,Port of the source.
+1.2.10,true,source,source.registered_domain,keyword,extended,,example.com,"The highest registered source domain, stripped of the subdomain."
+1.2.10,true,source,source.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,source,source.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,source,source.user.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,source,source.user.email,keyword,extended,,,User email address.
+1.2.10,true,source,source.user.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,source,source.user.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,source,source.user.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,source,source.user.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,source,source.user.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,source,source.user.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,source,source.user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,source,source.user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,source,source.user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,source,source.user.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,source,source.user.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,source,source.user.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,source,source.user.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,source,source.user.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,source,source.user.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,source,source.user.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,span,span.child.id,keyword,extended,,a33c27ae31f3c9e9,Unique identifier of the parent trace within the scope of the trace.
+1.2.10,true,span,span.id,keyword,extended,,3ff9a8981b7ccd5a,Unique identifier of the span within the scope of its trace.
+1.2.10,true,span,span.parent.id,keyword,extended,,a33c27ae31f3c9e9,Unique identifier of the parent trace within the scope of the trace.
+1.2.10,true,trace,trace.id,keyword,extended,,4bf92f3577b34da6a3ce929d0e0e4736,Unique identifier of the trace.
+1.2.10,true,transaction,transaction.id,keyword,extended,,00f067aa0ba902b7,Unique identifier of the transaction within the scope of its trace.
+1.2.10,true,url,url.domain,keyword,extended,,www.elastic.co,Domain of the url.
+1.2.10,true,url,url.extension,keyword,extended,,png,"File extension from the request url, excluding the leading dot."
+1.2.10,true,url,url.fragment,keyword,extended,,,Portion of the url after the `#`.
+1.2.10,true,url,url.full,wildcard,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,url,url.full.text,match_only_text,extended,,https://www.elastic.co:443/search?q=elasticsearch#top,Full unparsed URL.
+1.2.10,true,url,url.original,wildcard,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,url,url.original.length,token_count,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,url,url.original.text,match_only_text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,url,url.original.token,text,custom,,https://www.elastic.co:443/search?q=elasticsearch#top or /search?q=elasticsearch,Unmodified original url as seen in the event source.
+1.2.10,true,url,url.password,keyword,extended,,,Password of the request.
+1.2.10,true,url,url.path,wildcard,extended,,,"Path of the request, such as ""/search""."
+1.2.10,true,url,url.port,long,extended,,443,"Port of the request, such as 443."
+1.2.10,true,url,url.query,keyword,extended,,,Query string of the request.
+1.2.10,true,url,url.registered_domain,keyword,extended,,example.com,"The highest registered url domain, stripped of the subdomain."
+1.2.10,true,url,url.scheme,keyword,extended,,https,Scheme of the url.
+1.2.10,true,url,url.subdomain,keyword,extended,,east,The subdomain of the domain.
+1.2.10,true,url,url.top_level_domain,keyword,extended,,co.uk,"The effective top level domain (com, org, net, co.uk)."
+1.2.10,true,url,url.username,keyword,extended,,,Username of the request.
+1.2.10,true,user,user.changes.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,user,user.changes.email,keyword,extended,,,User email address.
+1.2.10,true,user,user.changes.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.changes.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.changes.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,user,user.changes.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,user,user.changes.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,user,user.changes.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,user,user.changes.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,user,user.changes.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.changes.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.changes.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.changes.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.changes.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,user,user.changes.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.changes.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.changes.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,user,user.changes.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,user,user.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,user,user.effective.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,user,user.effective.email,keyword,extended,,,User email address.
+1.2.10,true,user,user.effective.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.effective.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.effective.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,user,user.effective.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,user,user.effective.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,user,user.effective.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,user,user.effective.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,user,user.effective.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.effective.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.effective.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.effective.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.effective.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,user,user.effective.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.effective.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.effective.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,user,user.effective.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,user,user.email,keyword,extended,,,User email address.
+1.2.10,true,user,user.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,user,user.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,user,user.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,user,user.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,user,user.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,user,user.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,user,user.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,user,user.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,user,user.target.domain,keyword,extended,,,Name of the directory the user is a member of.
+1.2.10,true,user,user.target.email,keyword,extended,,,User email address.
+1.2.10,true,user,user.target.full_name,keyword,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.target.full_name.text,match_only_text,extended,,Albert Einstein,"User's full name, if available."
+1.2.10,true,user,user.target.group.domain,keyword,extended,,,Name of the directory the group is a member of.
+1.2.10,true,user,user.target.group.id,keyword,extended,,,Unique identifier for the group on the system/platform.
+1.2.10,true,user,user.target.group.name,keyword,extended,,,Name of the group.
+1.2.10,true,user,user.target.hash,keyword,extended,,,Unique user hash to correlate information for a user in anonymized form.
+1.2.10,true,user,user.target.id,keyword,core,,S-1-5-21-202424912787-2692429404-2351956786-1000,Unique identifier of the user.
+1.2.10,true,user,user.target.name,keyword,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.target.name.text,match_only_text,core,,a.einstein,Short name or login of the user.
+1.2.10,true,user,user.target.risk.calculated_level,keyword,extended,,High,A risk classification level calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.target.risk.calculated_score,float,extended,,880.73,A risk classification score calculated by an internal system as part of entity analytics and entity risk scoring.
+1.2.10,true,user,user.target.risk.calculated_score_norm,float,extended,,88.73,A normalized risk score calculated by an internal system.
+1.2.10,true,user,user.target.risk.static_level,keyword,extended,,High,"A risk classification level obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.target.risk.static_score,float,extended,,830.0,"A risk classification score obtained from outside the system, such as from some external Threat Intelligence Platform."
+1.2.10,true,user,user.target.risk.static_score_norm,float,extended,,83.0,A normalized risk score calculated by an external system.
+1.2.10,true,user,user.target.roles,keyword,extended,array,"[""kibana_admin"", ""reporting_user""]",Array of user roles at the time of the event.
+1.2.10,true,user_agent,user_agent.device.name,keyword,extended,,iPhone,Name of the device.
+1.2.10,true,user_agent,user_agent.name,keyword,extended,,Safari,Name of the user agent.
+1.2.10,true,user_agent,user_agent.original,keyword,extended,,"Mozilla/5.0 (iPhone; CPU iPhone OS 12_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Mobile/15E148 Safari/604.1",Unparsed user_agent string.
+1.2.10,true,user_agent,user_agent.original.text,match_only_text,extended,,"Mozilla/5.0 (iPhone; CPU iPhone OS 12_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Mobile/15E148 Safari/604.1",Unparsed user_agent string.
+1.2.10,true,user_agent,user_agent.os.family,keyword,extended,,debian,"OS family (such as redhat, debian, freebsd, windows)."
+1.2.10,true,user_agent,user_agent.os.full,keyword,extended,,Mac OS Mojave,"Operating system name, including the version or code name."
+1.2.10,true,user_agent,user_agent.os.full.text,match_only_text,extended,,Mac OS Mojave,"Operating system name, including the version or code name."
+1.2.10,true,user_agent,user_agent.os.kernel,keyword,extended,,4.4.0-112-generic,Operating system kernel version as a raw string.
+1.2.10,true,user_agent,user_agent.os.name,keyword,extended,,Mac OS X,"Operating system name, without the version."
+1.2.10,true,user_agent,user_agent.os.name.text,match_only_text,extended,,Mac OS X,"Operating system name, without the version."
+1.2.10,true,user_agent,user_agent.os.platform,keyword,extended,,darwin,"Operating system platform (such centos, ubuntu, windows)."
+1.2.10,true,user_agent,user_agent.os.type,keyword,extended,,macos,"Which commercial OS family (one of: linux, macos, unix, windows, ios or android)."
+1.2.10,true,user_agent,user_agent.os.version,keyword,extended,,10.14.1,Operating system version as a raw string.
+1.2.10,true,user_agent,user_agent.version,keyword,extended,,12.0,Version of the user agent.

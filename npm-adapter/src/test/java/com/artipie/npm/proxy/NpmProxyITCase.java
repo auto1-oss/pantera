@@ -7,7 +7,7 @@ package com.artipie.npm.proxy;
 import com.artipie.asto.Storage;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.artipie.http.client.vertx.VertxClientSlices;
 import com.artipie.npm.RandomFreePort;
 import com.artipie.npm.events.NpmProxyPackageProcessor;
 import com.artipie.npm.proxy.http.NpmProxySlice;
@@ -69,7 +69,7 @@ public final class NpmProxyITCase {
     /**
      * Jetty client.
      */
-    private final JettyClientSlices client = new JettyClientSlices(
+    private final VertxClientSlices client = new VertxClientSlices(
         new HttpClientSettings().setFollowRedirects(true)
     );
 

@@ -5,7 +5,7 @@
 package com.artipie.db;
 
 import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.group.GroupNegativeCache;
+import com.artipie.group.GroupCacheRegistry;
 import com.artipie.http.log.EcsLogger;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
@@ -102,7 +102,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             .field("package.version", record.artifactVersion())
             .field("package.size", record.size())
             .userName(record.owner());
-        record.releaseDate().ifPresent(release -> logger.field("artifact.release", release));
+        record.releaseDate().ifPresent(release -> logger.field("package.release_date", release));
         logger.log();
     }
 
@@ -111,9 +111,9 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * This ensures newly published packages are immediately visible via group repos.
      * @param packageName Package name (e.g., "@retail/backoffice-interaction-notes")
      */
-    private static void invalidateGroupNegativeCache(final String packageName) {
+    private static void invalidateGroupCacheRegistry(final String packageName) {
         try {
-            GroupNegativeCache.invalidatePackageGlobally(packageName)
+            GroupCacheRegistry.invalidatePackageGlobally(packageName)
                 .whenComplete((v, err) -> {
                     if (err != null) {
                         EcsLogger.warn("com.artipie.db")
@@ -214,7 +214,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             // Invalidate group negative cache for npm packages
                             // This ensures newly published packages are immediately visible via group repos
                             if ("npm".equals(record.repoType())) {
-                                invalidateGroupNegativeCache(record.artifactName());
+                                invalidateGroupCacheRegistry(record.artifactName());
                             }
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));

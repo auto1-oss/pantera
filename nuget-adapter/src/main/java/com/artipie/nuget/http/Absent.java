@@ -23,6 +23,9 @@ public final class Absent implements Resource {
 
     @Override
     public CompletableFuture<Response> put(Headers headers, Content body) {
-        return ResponseBuilder.notFound().completedFuture();
+        // Consume request body to prevent Vert.x connection leak
+        return body.asBytesFuture().thenApply(ignored ->
+            ResponseBuilder.notFound().build()
+        );
     }
 }
