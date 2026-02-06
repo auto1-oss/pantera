@@ -27,6 +27,18 @@ public interface Manifests {
     CompletableFuture<Manifest> put(ManifestReference ref, Content content);
 
     /**
+     * Put manifest without validating that referenced blobs exist.
+     * Used by cache implementations where blobs may be lazily cached.
+     *
+     * @param ref     Manifest reference.
+     * @param content Manifest content.
+     * @return Added manifest.
+     */
+    default CompletableFuture<Manifest> putUnchecked(ManifestReference ref, Content content) {
+        return put(ref, content);
+    }
+
+    /**
      * Get manifest by reference.
      *
      * @param ref Manifest reference

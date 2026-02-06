@@ -17,9 +17,11 @@ import io.reactivex.Maybe;
 import io.reactivex.Single;
 import io.vertx.core.json.JsonObject;
 
+import com.artipie.npm.misc.MetadataETag;
 import javax.json.Json;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
 
 /**
  * Base NPM Proxy storage implementation. It encapsulates storage format details
@@ -54,11 +56,23 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         // This allows serving abbreviated requests without loading full metadata
         final byte[] fullContent = pkg.content().getBytes(StandardCharsets.UTF_8);
         final byte[] abbreviatedContent = this.generateAbbreviated(pkg.name(), pkg.content());
+        // PERF: Pre-compute content hashes at write time (Fix 2.1)
+        // At read time, derive ETag from stored hash + tarball prefix (~100 bytes)
+        // instead of SHA-256 of 3-5MB transformed content
+        final String fullHash = new MetadataETag(fullContent).calculate();
+        final String abbrevHash = abbreviatedContent.length > 0
+            ? new MetadataETag(abbreviatedContent).calculate() : null;
+        final NpmPackage.Metadata enrichedMeta = new NpmPackage.Metadata(
+            pkg.meta().lastModified(),
+            pkg.meta().lastRefreshed(),
+            fullHash,
+            abbrevHash
+        );
         return Completable.concatArray(
             this.storage.save(
                 metaKey,
                 new Content.From(
-                    pkg.meta().json().encode().getBytes(StandardCharsets.UTF_8)
+                    enrichedMeta.json().encode().getBytes(StandardCharsets.UTF_8)
                 )
             ),
             this.storage.save(
@@ -90,23 +104,20 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             // (added for pnpm compatibility). No separate cache needed - cooldown filtering
             // parses dates directly from abbreviated metadata.
             EcsLogger.debug("com.artipie.npm")
-                .message("Generated abbreviated metadata")
+                .message(String.format("Generated abbreviated metadata: abbreviated=%d bytes, full=%d bytes", result.length, fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("success")
                 .field("package.name", packageName)
-                .field("abbreviated.size", result.length)
-                .field("full.size", fullContent.length())
                 .log();
             return result;
         } catch (final Exception e) {
             EcsLogger.error("com.artipie.npm")
-                .message("Failed to generate abbreviated metadata")
+                .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("failure")
                 .field("package.name", packageName)
-                .field("full.size", fullContent.length())
                 .error(e)
                 .log();
             return new byte[0];
@@ -192,6 +203,15 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 // This is the memory-efficient path for npm install requests
                 return this.storage.value(abbreviatedKey).toMaybe();
             });
+    }
+
+    @Override
+    public Completable saveMetadataOnly(final String name, final NpmPackage.Metadata metadata) {
+        final Key metaKey = new Key.From(name, "meta.meta");
+        return this.storage.save(
+            metaKey,
+            new Content.From(metadata.json().encode().getBytes(StandardCharsets.UTF_8))
+        );
     }
 
     @Override

@@ -15,6 +15,7 @@ import com.artipie.npm.RandomFreePort;
 import com.artipie.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.io.DataOutputStream;
+import java.util.LinkedList;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -64,7 +65,7 @@ final class CurlPutIT {
         this.url = String.format("http://localhost:%s", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage)),
+            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage, new LinkedList<>())),
             port
         );
         this.server.start();

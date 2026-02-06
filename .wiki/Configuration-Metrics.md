@@ -46,6 +46,45 @@ Artipie gather the following metrics:
 
 All the metrics for storage operations report `error` events in the case of any errors, the events have `_error` postfix.
 
+### Thread pool metrics
+
+These gauges report the current utilisation of the internal thread pools that handle
+storage operations:
+
+| Name                       | Type  | Description                    |
+|----------------------------|-------|--------------------------------|
+| artipie.pool.read.active   | gauge | Active threads in READ pool    |
+| artipie.pool.read.queue    | gauge | Queue size of READ pool        |
+| artipie.pool.write.active  | gauge | Active threads in WRITE pool   |
+| artipie.pool.write.queue   | gauge | Queue size of WRITE pool       |
+| artipie.pool.list.active   | gauge | Active threads in LIST pool    |
+| artipie.pool.list.queue    | gauge | Queue size of LIST pool        |
+
+### Event queue metrics
+
+| Name                       | Type  | Description                                        | Tags |
+|----------------------------|-------|----------------------------------------------------|------|
+| artipie.events.queue.size  | gauge | Total pending events in the metadata queue          | -    |
+| artipie.proxy.queue.size   | gauge | Per-repository proxy event queue size               | repo |
+
+### Request deduplication metrics
+
+The `RequestDeduplicator` tracks the number of in-flight deduplicated requests.
+The current count is available programmatically via `RequestDeduplicator.inFlightCount()`.
+When metrics are enabled, this value is also exported as a gauge so it can be scraped by
+Prometheus alongside the other Artipie metrics.
+
+### Metrics environment variables
+
+| Variable                                | Default | Description                                          |
+|-----------------------------------------|---------|------------------------------------------------------|
+| `ARTIPIE_METRICS_MAX_REPOS`             | 50      | Maximum number of per-repo metric tag values tracked |
+| `ARTIPIE_METRICS_PERCENTILES_HISTOGRAM` | false   | Publish percentile histogram buckets for summaries   |
+
+Setting `ARTIPIE_METRICS_MAX_REPOS` limits the cardinality of the `repo` tag to avoid
+unbounded memory growth in deployments with many repositories. When the limit is reached,
+additional repositories are aggregated under a single `_other` tag value.
+
 Tags description:
 
 | Name   | Description                                                                                                                                              |

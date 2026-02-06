@@ -15,6 +15,7 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 import com.artipie.http.RsStatus;
 import io.reactivex.Flowable;
+import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
 import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.HttpClient;
@@ -24,8 +25,7 @@ import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.util.Callback;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -87,7 +87,9 @@ final class JettyClientSlice implements Slice {
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
-        final List<ByteBuffer> buffers = new ArrayList<>();  // Better cache locality than LinkedList
+        // Streaming: emit chunks as they arrive instead of buffering everything.
+        // UnicastProcessor supports backpressure and single-subscriber semantics.
+        final UnicastProcessor<ByteBuffer> processor = UnicastProcessor.create();
         if (line.method() != RqMethod.HEAD) {
             final AsyncRequestContent async = new AsyncRequestContent();
             Flowable.fromPublisher(body)
@@ -110,9 +112,27 @@ final class JettyClientSlice implements Slice {
         }
         request.onResponseContentSource(
                 (response, source) -> {
-                    // The function (as a Runnable) that reads the response content.
-                    final Runnable demander = new Demander(source, response, buffers);
-                    // Initiate the reads.
+                    // Complete the response future NOW with headers + streaming body.
+                    // Client receives the Response as soon as headers arrive,
+                    // body bytes stream through the processor as Demander reads them.
+                    final RsStatus status = RsStatus.byCode(response.getStatus());
+                    final Headers respHeaders = toHeaders(response.getHeaders());
+                    final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
+                    EcsLogger.debug("com.artipie.http.client")
+                        .message("Received HTTP response headers (streaming body)")
+                        .eventCategory("http")
+                        .eventAction("http_response_receive")
+                        .field("http.response.status_code", response.getStatus())
+                        .field("http.response.headers", sanitizedRespHeaders.toString())
+                        .log();
+                    res.complete(
+                        ResponseBuilder.from(status)
+                            .headers(respHeaders)
+                            .body(processor)
+                            .build()
+                    );
+                    // Start streaming body chunks through the processor.
+                    final Runnable demander = new StreamingDemander(source, response, processor);
                     demander.run();
                 }
         );
@@ -131,26 +151,28 @@ final class JettyClientSlice implements Slice {
         request.send(
                 result -> {
                     if (result.getFailure() == null) {
-                        RsStatus status = RsStatus.byCode(result.getResponse().getStatus());
-                        Flowable<ByteBuffer> content = Flowable.fromIterable(buffers)
-                            .map(ByteBuffer::asReadOnlyBuffer);
-                        final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(
-                            toHeaders(result.getResponse().getHeaders())
-                        );
-                        EcsLogger.debug("com.artipie.http.client")
-                            .message("Received HTTP response")
-                            .eventCategory("http")
-                            .eventAction("http_response_receive")
-                            .field("http.response.status_code", result.getResponse().getStatus())
-                            .field("http.response.body.content", result.getResponse().getReason())
-                            .field("http.response.headers", sanitizedRespHeaders.toString())
-                            .log();
-                        res.complete(
-                            ResponseBuilder.from(status)
-                                .headers(toHeaders(result.getResponse().getHeaders()))
-                                .body(content)
-                                .build()
-                        );
+                        // For responses where onResponseContentSource never fired
+                        // (empty body, HEAD, etc.), complete here with empty body.
+                        // If already completed by onResponseContentSource, this is a no-op.
+                        if (res.complete(
+                            ResponseBuilder.from(
+                                RsStatus.byCode(result.getResponse().getStatus())
+                            )
+                            .headers(toHeaders(result.getResponse().getHeaders()))
+                            .body(Flowable.empty())
+                            .build()
+                        )) {
+                            EcsLogger.debug("com.artipie.http.client")
+                                .message("Received HTTP response (no body)")
+                                .eventCategory("http")
+                                .eventAction("http_response_receive")
+                                .field("http.response.status_code",
+                                    result.getResponse().getStatus())
+                                .log();
+                        }
+                        // Complete the processor in case it was created but never used
+                        // (edge case: content source callback fired but no chunks)
+                        processor.onComplete();
                     } else {
                         EcsLogger.error("com.artipie.http.client")
                             .message("HTTP request failed")
@@ -159,6 +181,8 @@ final class JettyClientSlice implements Slice {
                             .eventOutcome("failure")
                             .error(result.getFailure())
                             .log();
+                        // Complete processor with error so subscribers don't hang
+                        processor.onError(result.getFailure());
                         res.completeExceptionally(result.getFailure());
                     }
                 }
@@ -166,12 +190,48 @@ final class JettyClientSlice implements Slice {
         return res;
     }
 
-    private Headers toHeaders(HttpFields fields) {
+    /**
+     * Convert Jetty HttpFields to Artipie Headers.
+     *
+     * <p>When Jetty auto-decodes a gzip/deflate/br response body via its registered
+     * {@code ContentDecoder.Factory} (default behaviour), the decoded (plain) bytes are
+     * streamed through the processor while the original {@code Content-Encoding} header
+     * is still present in {@code response.getHeaders()}. This creates a header/body
+     * mismatch: the body is plain bytes but the header claims it is compressed.
+     * Clients that trust the header will attempt to inflate the plain bytes and fail
+     * with {@code Z_DATA_ERROR: zlib: incorrect header check}.
+     *
+     * <p>Fix: detect the presence of a decoded transfer encoding and strip both
+     * {@code Content-Encoding} and {@code Content-Length} (which refers to the
+     * compressed size, no longer valid for the decoded body) from the returned headers.
+     */
+    private static Headers toHeaders(final HttpFields fields) {
+        final boolean decoded = fields.stream()
+            .anyMatch(f -> f.is("Content-Encoding")
+                && isDecodedEncoding(f.getValue()));
+        if (!decoded) {
+            return new Headers(
+                fields.stream()
+                    .map(f -> new Header(f.getName(), f.getValue()))
+                    .toList()
+            );
+        }
         return new Headers(
             fields.stream()
-                .map(field -> new Header(field.getName(), field.getValue()))
+                .filter(f -> !f.is("Content-Encoding") && !f.is("Content-Length"))
+                .map(f -> new Header(f.getName(), f.getValue()))
                 .toList()
         );
+    }
+
+    /**
+     * Returns true if the encoding value is one that Jetty auto-decodes by default.
+     * @param value Content-Encoding header value
+     * @return True for gzip, deflate, br, x-gzip
+     */
+    private static boolean isDecodedEncoding(final String value) {
+        final String lower = value.toLowerCase(Locale.ROOT).trim();
+        return lower.contains("gzip") || lower.contains("deflate") || lower.contains("br");
     }
 
     /**
@@ -202,13 +262,17 @@ final class JettyClientSlice implements Slice {
     }
 
     /**
-     * Demander.This class reads response content from request asynchronously piece by piece.
-     * See <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-content-response">jetty docs</a>
-     * for more details.
+     * Streaming demander that emits response content chunks through a UnicastProcessor
+     * as they arrive, instead of buffering everything in memory. This allows callers to
+     * start processing bytes immediately without waiting for the full response.
+     *
+     * <p>See <a href="https://eclipse.dev/jetty/documentation/jetty-12/programming-guide/index.html#pg-client-http-content-response">jetty docs</a>
+     * for more details on the Content.Source demand model.</p>
+     *
      * @since 0.3
      */
     @SuppressWarnings({"PMD.OnlyOneReturn", "PMD.CognitiveComplexity"})
-    private static final class Demander implements Runnable {
+    private static final class StreamingDemander implements Runnable {
 
         /**
          * Content source.
@@ -221,47 +285,49 @@ final class JettyClientSlice implements Slice {
         private final org.eclipse.jetty.client.Response response;
 
         /**
-         * Content chunks.
+         * Processor that streams chunks to subscribers.
          */
-        private final List<ByteBuffer> chunks;
+        private final UnicastProcessor<ByteBuffer> processor;
 
         /**
          * Ctor.
          * @param source Content source
          * @param response Response
-         * @param chunks Content chunks for further process
+         * @param processor Processor to emit chunks through
          */
-        private Demander(
+        private StreamingDemander(
             final Content.Source source,
             final org.eclipse.jetty.client.Response response,
-            final List<ByteBuffer> chunks
+            final UnicastProcessor<ByteBuffer> processor
         ) {
             this.source = source;
             this.response = response;
-            this.chunks = chunks;
+            this.processor = processor;
         }
 
         @Override
         public void run() {
-            final long startTime = System.nanoTime();
-            final long timeoutNanos = TimeUnit.SECONDS.toNanos(30);  // 30 second timeout
+            long lastDataTime = System.nanoTime();
+            final long idleTimeoutNanos = TimeUnit.SECONDS.toNanos(120);
             int iterations = 0;
-            final int maxIterations = 10000;  // Safety limit
-            
+            final int maxIterations = 1_000_000;
+
             while (iterations++ < maxIterations) {
-                // Check timeout
-                if (System.nanoTime() - startTime > timeoutNanos) {
+                if (System.nanoTime() - lastDataTime > idleTimeoutNanos) {
                     EcsLogger.error("com.artipie.http.client")
-                        .message("Response reading timeout (30 seconds)")
+                        .message(String.format("Response reading idle timeout (120s without data) after %d iterations", iterations))
                         .eventCategory("http")
                         .eventAction("http_response_read")
                         .eventOutcome("timeout")
                         .field("url.full", this.response.getRequest().getURI().toString())
                         .log();
-                    this.response.abort(new TimeoutException("Response reading timeout"));
+                    final TimeoutException timeout =
+                        new TimeoutException("Response reading idle timeout (120s without data)");
+                    this.processor.onError(timeout);
+                    this.response.abort(timeout);
                     return;
                 }
-                
+
                 final Content.Chunk chunk = this.source.read();
                 if (chunk == null) {
                     this.source.demand(this);
@@ -270,6 +336,7 @@ final class JettyClientSlice implements Slice {
                 if (Content.Chunk.isFailure(chunk)) {
                     final Throwable failure = chunk.getFailure();
                     if (chunk.isLast()) {
+                        this.processor.onError(failure);
                         this.response.abort(failure);
                         EcsLogger.error("com.artipie.http.client")
                             .message("HTTP response read failed")
@@ -291,6 +358,7 @@ final class JettyClientSlice implements Slice {
                             continue;
                         } else {
                             // The transient failure is treated as a terminal failure.
+                            this.processor.onError(failure);
                             this.response.abort(failure);
                             EcsLogger.error("com.artipie.http.client")
                                 .message("Transient failure treated as terminal")
@@ -310,8 +378,11 @@ final class JettyClientSlice implements Slice {
                 } finally {
                     chunk.release();
                 }
-                this.chunks.add(stored);
+                // Stream chunk to subscriber immediately instead of buffering
+                this.processor.onNext(stored);
+                lastDataTime = System.nanoTime();
                 if (chunk.isLast()) {
+                    this.processor.onComplete();
                     return;
                 }
             }
@@ -324,7 +395,10 @@ final class JettyClientSlice implements Slice {
                 .eventOutcome("failure")
                 .field("url.full", this.response.getRequest().getURI().toString())
                 .log();
-            this.response.abort(new IllegalStateException("Too many chunks - possible infinite loop"));
+            final IllegalStateException error =
+                new IllegalStateException("Too many chunks - possible infinite loop");
+            this.processor.onError(error);
+            this.response.abort(error);
         }
     }
 

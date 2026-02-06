@@ -113,12 +113,11 @@ final class JdbcCooldownService implements CooldownService {
                 metrics.setAllBlockedPackages(allBlocked);
 
                 EcsLogger.info("com.artipie.cooldown")
-                    .message("Initialized cooldown metrics from database")
+                    .message(String.format(
+                        "Initialized cooldown metrics from database: %d repositories, %d total blocks, %d all-blocked packages",
+                        counts.size(), total, allBlocked))
                     .eventCategory("cooldown")
                     .eventAction("metrics_init")
-                    .field("repositories.count", counts.size())
-                    .field("blocks.total", total)
-                    .field("all_blocked.packages", allBlocked)
                     .log();
             } catch (Exception e) {
                 EcsLogger.error("com.artipie.cooldown")
@@ -374,15 +373,13 @@ final class JdbcCooldownService implements CooldownService {
             if (record.isPresent()) {
                 final DbBlockRecord rec = record.get();
                 EcsLogger.info("com.artipie.cooldown")
-                    .message("Block record found in database")
+                    .message(String.format(
+                        "Block record found in database: status=%s, reason=%s, blockedAt=%s, blockedUntil=%s",
+                        rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))
                     .eventCategory("cooldown")
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
-                    .field("block.status", rec.status().name())
-                    .field("block.reason", rec.reason().name())
-                    .field("block.blockedAt", rec.blockedAt().toString())
-                    .field("block.blockedUntil", rec.blockedUntil().toString())
                     .log();
                 
                 if (rec.status() == BlockStatus.ACTIVE) {
@@ -390,12 +387,13 @@ final class JdbcCooldownService implements CooldownService {
                     final Instant now = Instant.now();
                     if (rec.blockedUntil().isBefore(now)) {
                         EcsLogger.info("com.artipie.cooldown")
-                            .message("Block has EXPIRED - allowing artifact")
+                            .message(String.format(
+                                "Block has EXPIRED - allowing artifact (blockedUntil=%s)",
+                                rec.blockedUntil()))
                             .eventCategory("cooldown")
                             .eventAction("block_expired")
                             .field("package.name", request.artifact())
                             .field("package.version", request.version())
-                            .field("block.blockedUntil", rec.blockedUntil().toString())
                             .log();
                         // Expire the block
                         this.expire(rec, now);
@@ -528,16 +526,14 @@ final class JdbcCooldownService implements CooldownService {
         
         // Debug logging to diagnose blocking decisions
         EcsLogger.info("com.artipie.cooldown")
-            .message("Evaluating freshness")
+            .message(String.format(
+                "Evaluating freshness: cooldown=%s, release+cooldown=%s, requestTime=%s, isFresh=%s",
+                fresh, date.plus(fresh), now, date.plus(fresh).isAfter(now)))
             .eventCategory("cooldown")
             .eventAction("freshness_check")
             .field("package.name", request.artifact())
             .field("package.version", request.version())
-            .field("release.date", date.toString())
-            .field("cooldown.period", fresh.toString())
-            .field("release.plus.cooldown", date.plus(fresh).toString())
-            .field("request.time", now.toString())
-            .field("is.fresh", date.plus(fresh).isAfter(now))
+            .field("package.release_date", date.toString())
             .log();
 
         if (date.plus(fresh).isAfter(now)
@@ -757,12 +753,12 @@ final class JdbcCooldownService implements CooldownService {
                 final long newTotal = this.repository.countAllBlockedPackages();
                 CooldownMetrics.getInstance().setAllBlockedPackages(newTotal);
                 EcsLogger.debug("com.artipie.cooldown")
-                    .message("Unmarked all-blocked packages for repo")
+                    .message(String.format(
+                        "Unmarked all-blocked packages for repo: %d packages unmarked", count))
                     .eventCategory("cooldown")
                     .eventAction("all_blocked_unmark_all")
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
-                    .field("packages.unmarked", count)
                     .log();
             }
         } catch (Exception e) {

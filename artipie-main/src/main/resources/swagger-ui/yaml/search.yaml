@@ -1,0 +1,305 @@
+openapi: "3.0.0"
+info:
+  version: 1.0.0
+  title: Artipie - OpenAPI 3.0
+  description: Artipie artifact search API
+  license:
+    name: MIT
+externalDocs:
+  description: Find out more about Artipie
+  url: https://github.com/artipie
+tags:
+  - name: search
+    description: Artifact search operations
+paths:
+  /api/v1/search:
+    get:
+      summary: Full-text search across all indexed artifacts
+      description: |
+        Searches the artifact index using full-text queries. Returns matching artifacts
+        with metadata including repository name, type, path, version, and size.
+        Results are paginated using size and from parameters.
+      operationId: searchArtifacts
+      tags:
+        - search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query string
+          schema:
+            type: string
+          example: "spring-boot"
+        - name: size
+          in: query
+          required: false
+          description: Maximum number of results (default 20, max 100)
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: from
+          in: query
+          required: false
+          description: Starting offset for pagination (default 0)
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+              example:
+                items:
+                  - repo_type: "maven"
+                    repo_name: "maven-central"
+                    artifact_path: "org/springframework/spring-boot/3.2.0/spring-boot-3.2.0.jar"
+                    artifact_name: "spring-boot"
+                    version: "3.2.0"
+                    size: 1548234
+                    owner: "admin"
+                total_hits: 42
+                offset: 0
+        '400':
+          description: Missing or invalid query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/search/locate:
+    get:
+      summary: Locate repositories containing an artifact
+      description: |
+        Finds which repositories contain an artifact at the specified path.
+        Useful for group repository resolution and dependency analysis.
+      operationId: locateArtifact
+      tags:
+        - search
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Artifact path to locate
+          schema:
+            type: string
+          example: "org/springframework/spring-boot/3.2.0/spring-boot-3.2.0.jar"
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: List of repository names containing the artifact
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocateResponse'
+              example:
+                repositories: ["maven-central", "maven-local"]
+                count: 2
+        '400':
+          description: Missing path parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/search/reindex:
+    post:
+      summary: Trigger full reindex of all artifacts
+      description: |
+        Triggers a full rebuild of the search index from the artifact database.
+        This is an admin-only operation that runs asynchronously.
+        Use this after data migration or to recover from index corruption.
+      operationId: reindexArtifacts
+      tags:
+        - search
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '202':
+          description: Reindex started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReindexResponse'
+              example:
+                status: "started"
+                message: "Full reindex initiated"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Insufficient permissions (requires write permission)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/search/stats:
+    get:
+      summary: Get artifact index statistics
+      description: |
+        Returns statistics about the artifact search index including
+        document count, warmup status, and directory type.
+      operationId: getIndexStats
+      tags:
+        - search
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Index statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndexStats'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+    SearchResponse:
+      type: object
+      required:
+        - items
+        - total_hits
+        - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArtifactResult'
+        total_hits:
+          type: integer
+          format: int64
+          description: Total number of matching artifacts
+        offset:
+          type: integer
+          description: Current pagination offset
+    LocateResponse:
+      type: object
+      required:
+        - repositories
+        - count
+      properties:
+        repositories:
+          type: array
+          items:
+            type: string
+          description: Repository names containing the artifact
+        count:
+          type: integer
+          description: Number of repositories found
+    ArtifactResult:
+      type: object
+      required:
+        - repo_type
+        - repo_name
+        - artifact_path
+      properties:
+        repo_type:
+          type: string
+          description: Repository type (maven, npm, pypi, etc.)
+        repo_name:
+          type: string
+          description: Repository name
+        artifact_path:
+          type: string
+          description: Full artifact path within the repository
+        artifact_name:
+          type: string
+          description: Artifact name (tokenized for search)
+        version:
+          type: string
+          description: Artifact version
+        size:
+          type: integer
+          format: int64
+          description: Artifact size in bytes
+        created_at:
+          type: string
+          format: date-time
+          description: When the artifact was indexed
+        owner:
+          type: string
+          description: User who published the artifact
+    ReindexResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Operation status
+          enum: ["started"]
+        message:
+          type: string
+          description: Human-readable status message
+    IndexStats:
+      type: object
+      properties:
+        documents:
+          type: integer
+          format: int64
+          description: Total number of indexed documents
+        warmedUp:
+          type: boolean
+          description: Whether the index warmup has completed
+        directoryType:
+          type: string
+          description: Lucene directory implementation type
+  responses:
+    UnauthorizedError:
+      description: "Access token is missing or invalid"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+security:
+  - bearerAuth: []

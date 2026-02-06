@@ -105,7 +105,7 @@ public final class RepoData {
                                             .eventAction("artifact_delete")
                                             .eventOutcome("success")
                                             .field("repository.name", repo)
-                                            .field("artifact.path", artifactPath)
+                                            .field("file.path", artifactPath)
                                             .field("files.count", keys.size())
                                             .log();
                                         return true;
@@ -121,7 +121,7 @@ public final class RepoData {
                                 .eventAction("artifact_delete")
                                 .eventOutcome("success")
                                 .field("repository.name", repo)
-                                .field("artifact.path", artifactPath)
+                                .field("file.path", artifactPath)
                                 .log();
                             return true;
                         });

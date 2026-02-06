@@ -85,6 +85,7 @@ final class EstimatedContentCompliment {
                 S3Storage.class.getSimpleName(),
                 ".upload.tmp"
             );
+            temp.toFile().deleteOnExit();
         } catch (final IOException ex) {
             throw new ArtipieIOException(ex);
         }

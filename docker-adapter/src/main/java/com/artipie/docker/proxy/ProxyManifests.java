@@ -19,6 +19,7 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
+import com.artipie.http.log.EcsLogger;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 
@@ -75,21 +76,47 @@ public final class ProxyManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
+        EcsLogger.info("com.artipie.docker.proxy")
+            .message("ProxyManifests upstream request")
+            .eventCategory("repository")
+            .eventAction("proxy_manifest_get")
+            .field("container.image.name", this.name)
+            .field("container.image.tag", ref.digest())
+            .field("url.path", uri)
+            .log();
+        final long start = System.currentTimeMillis();
         return new ResponseSink<>(
             this.remote.response(
-                new RequestLine(RqMethod.GET, String.format("/v2/%s/manifests/%s", name, ref.digest())),
+                new RequestLine(RqMethod.GET, uri),
                 MANIFEST_ACCEPT_HEADERS,
                 Content.EMPTY
             ),
             response -> {
+                final long duration = System.currentTimeMillis() - start;
+                EcsLogger.info("com.artipie.docker.proxy")
+                    .message("ProxyManifests upstream response")
+                    .eventCategory("repository")
+                    .eventAction("proxy_manifest_get")
+                    .eventOutcome(response.status().success() ? "success" : "failure")
+                    .field("container.image.name", this.name)
+                    .field("container.image.tag", ref.digest())
+                    .field("http.response.status_code", response.status().code())
+                    .duration(duration)
+                    .log();
                 final CompletableFuture<Optional<Manifest>> result;
                 if (response.status() == RsStatus.OK) {
                     final Digest digest = new DigestHeader(response.headers()).value();
                     result = response.body().asBytesFuture().thenApply(
                         bytes -> Optional.of(new Manifest(digest, bytes))
                     );
-                } else if (response.status() == RsStatus.NOT_FOUND) {
-                    // CRITICAL: Consume body even on 404 to prevent request leak
+                } else if (response.status() == RsStatus.NOT_FOUND
+                    || response.status() == RsStatus.UNAUTHORIZED
+                    || response.status() == RsStatus.FORBIDDEN
+                    || response.status() == RsStatus.PRECONDITION_FAILED) {
+                    // Treat 401/403/412 same as 404 for proxy use: image not accessible here.
+                    // 412 can occur when upstream registry rejects conditional requests.
+                    // Consume body to prevent request leak.
                     result = response.body().asBytesFuture().thenApply(ignored -> Optional.empty());
                 } else {
                     // CRITICAL: Consume body even on error to prevent request leak

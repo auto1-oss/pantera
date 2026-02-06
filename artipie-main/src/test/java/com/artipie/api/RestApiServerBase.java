@@ -217,7 +217,8 @@ public class RestApiServerBase {
                 ),
                 Optional.empty(),
                 NoopCooldownService.INSTANCE,
-                this.settings()
+                this.settings(),
+                com.artipie.index.ArtifactIndex.NOP
             ),
             context.succeedingThenComplete()
         );

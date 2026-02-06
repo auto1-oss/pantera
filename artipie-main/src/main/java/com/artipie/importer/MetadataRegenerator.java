@@ -14,6 +14,7 @@ import com.artipie.gem.Gem;
 import com.artipie.helm.TgzArchive;
 import com.artipie.helm.metadata.IndexYaml;
 import com.artipie.importer.api.DigestType;
+import com.artipie.maven.metadata.MavenTimestamp;
 import com.artipie.maven.metadata.Version;
 import com.artipie.npm.MetaUpdate;
 import com.artipie.http.log.EcsLogger;
@@ -27,9 +28,7 @@ import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
+
 import java.util.Base64;
 import java.util.Collection;
 import java.util.EnumSet;
@@ -53,12 +52,6 @@ import java.util.stream.Collectors;
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")
 public final class MetadataRegenerator {
-
-    /**
-     * Date format for Maven metadata lastUpdated field.
-     */
-    private static final DateTimeFormatter MAVEN_TS =
-        DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC);
 
     /**
      * Pattern to extract Composer dev suffix identifiers.
@@ -310,13 +303,14 @@ public final class MetadataRegenerator {
             try {
                 new Version(firstSegment);
                 versions.add(firstSegment);
-            } catch (final Exception ignored) {
+            } catch (final Exception ex) {
                 // Not a valid version, skip it
                 EcsLogger.debug("com.artipie.importer")
                     .message("Skipping non-version directory")
                     .eventCategory("repository")
                     .eventAction("maven_metadata_regenerate")
                     .field("file.directory", firstSegment)
+                    .error(ex)
                     .log();
             }
         }
@@ -360,7 +354,7 @@ public final class MetadataRegenerator {
         dirs.add("versions");
         versions.forEach(version -> dirs.add("version").set(version).up());
         dirs.up() // versions
-            .add("lastUpdated").set(MAVEN_TS.format(Instant.now())).up()
+            .add("lastUpdated").set(MavenTimestamp.now()).up()
             .up() // versioning
         .up(); // metadata
         final String metadata;

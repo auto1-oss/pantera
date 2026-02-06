@@ -30,6 +30,7 @@ import org.testcontainers.containers.GenericContainer;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedList;
 
 /**
  * IT for npm dist-tags command.
@@ -73,7 +74,7 @@ public final class NpmDistTagsIT {
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage)),
+            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage, new LinkedList<>())),
             port
         );
         this.server.start();

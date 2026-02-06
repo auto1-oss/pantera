@@ -1,1 +1,14 @@
+pluginManagement {
+    repositories {
+        maven {
+            url = 'http://localhost:8081/test_prefix/api/gradle_group'
+            allowInsecureProtocol = true
+            credentials {
+                username = 'ayd'
+                password = 'ayd'
+            }
+        }
+    }
+}
+
 rootProject.name = 'hello'

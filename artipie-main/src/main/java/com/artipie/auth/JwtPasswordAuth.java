@@ -123,12 +123,11 @@ public final class JwtPasswordAuth implements Authentication {
             // Security: Verify username matches token subject if required
             if (this.requireUsernameMatch && !username.equals(tokenSubject)) {
                 EcsLogger.warn("com.artipie.auth")
-                    .message("JWT token subject does not match provided username")
+                    .message(String.format("JWT token subject does not match provided username (subject=%s)", tokenSubject))
                     .eventCategory("authentication")
                     .eventAction("jwt_password_auth")
                     .eventOutcome("failure")
                     .field("user.name", username)
-                    .field("token.subject", tokenSubject)
                     .log();
                 return Optional.empty();
             }

@@ -9,6 +9,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.RsStatus;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.metrics.MicrometerMetrics;
 import io.reactivex.Flowable;
@@ -114,8 +115,11 @@ public final class RepoMetricsSlice implements Slice {
                                         respBytes
                                     );
                                 }
-                            } catch (NumberFormatException ignored) {
-                                // Skip if Content-Length is invalid
+                            } catch (final NumberFormatException ex) {
+                                EcsLogger.debug("com.artipie.metrics")
+                                    .message("Invalid Content-Length header value")
+                                    .error(ex)
+                                    .log();
                             }
                         });
                 }

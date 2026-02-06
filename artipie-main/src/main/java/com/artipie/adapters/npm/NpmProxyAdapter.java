@@ -24,7 +24,6 @@ import com.artipie.scheduling.ProxyArtifactEvent;
 import com.artipie.settings.repo.RepoConfig;
 
 import java.net.URL;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -100,11 +99,9 @@ public final class NpmProxyAdapter implements Slice {
                     return new CachedNpmProxySlice(
                         npmProxySlice,
                         asto,
-                        Duration.ofHours(24),   // 404 cache TTL
-                        true,                   // negative caching enabled
-                        cfg.name(),             // repo name for cache isolation
-                        remote.uri().toString(),// upstream URL for metrics
-                        cfg.type()              // repository type
+                        cfg.name(),
+                        remote.uri().toString(),
+                        cfg.type()
                     );
                 }
             ).collect(Collectors.toList())

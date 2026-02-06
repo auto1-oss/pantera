@@ -32,6 +32,8 @@ import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.security.policy.Policy;
 import com.artipie.settings.repo.RepoConfig;
 
+import com.artipie.http.log.EcsLogger;
+
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -73,7 +75,39 @@ public final class DockerProxy implements Slice {
         final Headers headers,
         final Content body
     ) {
-        return this.delegate.response(line, headers, body);
+        final long start = System.currentTimeMillis();
+        EcsLogger.info("com.artipie.docker.proxy")
+            .message("DockerProxy request")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("http.request.method", line.method().value())
+            .field("url.path", line.uri().getPath())
+            .log();
+        return this.delegate.response(line, headers, body)
+            .whenComplete((resp, err) -> {
+                final long duration = System.currentTimeMillis() - start;
+                if (err != null) {
+                    EcsLogger.error("com.artipie.docker.proxy")
+                        .message("DockerProxy error")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .eventOutcome("failure")
+                        .field("url.path", line.uri().getPath())
+                        .duration(duration)
+                        .error(err)
+                        .log();
+                } else {
+                    EcsLogger.info("com.artipie.docker.proxy")
+                        .message("DockerProxy response")
+                        .eventCategory("repository")
+                        .eventAction("proxy_request")
+                        .eventOutcome(resp.status().success() ? "success" : "failure")
+                        .field("url.path", line.uri().getPath())
+                        .field("http.response.status_code", resp.status().code())
+                        .duration(duration)
+                        .log();
+                }
+            });
     }
 
     /**

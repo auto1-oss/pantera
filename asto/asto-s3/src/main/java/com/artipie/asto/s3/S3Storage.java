@@ -16,7 +16,9 @@ import com.artipie.asto.UnderLockOperation;
 import com.artipie.asto.ValueNotFoundException;
 import com.artipie.asto.lock.storage.StorageLock;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -36,7 +38,6 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.CommonPrefix;
-import software.amazon.awssdk.services.s3.model.ListObjectsRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -58,12 +59,7 @@ import software.amazon.awssdk.services.s3.model.StorageClass;
  * }</pre>
  *
  * @since 0.1
- * @todo #87:60min Do not await abort to complete if save() failed.
- *  In case uploading content fails inside {@link S3Storage#save(Key, Content)} method
- *  we are doing abort() for multipart upload.
- *  Also whole operation does not complete until abort() is complete.
- *  It would be better to finish save() operation right away and do abort() in background,
- *  but it makes testing the method difficult.
+ * On multipart upload failure, abort() is fired in background without blocking save() completion.
  */
 @SuppressWarnings("PMD.TooManyMethods")
 public final class S3Storage implements ManagedStorage {
@@ -288,47 +284,103 @@ public final class S3Storage implements ManagedStorage {
 
     @Override
     public CompletableFuture<Collection<Key>> list(final Key prefix) {
-        return this.client.listObjects(
-            ListObjectsRequest.builder()
-                .bucket(this.bucket)
-                .prefix(prefix.string())
-                .build()
-        ).thenApply(
-            response -> response.contents()
-                .stream()
-                .map(S3Object::key)
-                .map(Key.From::new)
-                .collect(Collectors.toList())
-        );
+        return this.listAllKeys(prefix.string(), null, new ArrayList<>(64));
     }
 
     @Override
     public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
-        return this.client.listObjectsV2(
-            ListObjectsV2Request.builder()
-                .bucket(this.bucket)
-                .prefix(prefix.string())
-                .delimiter(delimiter)
-                .build()
-        ).thenApply(
-            response -> {
-                // Files at this level (objects without further delimiters)
-                final Collection<Key> files = response.contents()
-                    .stream()
+        final String pfx = prefix.string();
+        final String normalized;
+        if (pfx.isEmpty() || pfx.endsWith(delimiter)) {
+            normalized = pfx;
+        } else {
+            normalized = pfx + delimiter;
+        }
+        return this.listAllKeysWithDelimiter(
+            normalized, delimiter, null,
+            new ArrayList<>(64), new ArrayList<>(64)
+        );
+    }
+
+    /**
+     * Recursively list all keys with pagination using continuation tokens.
+     * @param prefix S3 key prefix
+     * @param token Continuation token (null for first page)
+     * @param accumulator Accumulated keys across pages
+     * @return All keys matching the prefix
+     */
+    private CompletableFuture<Collection<Key>> listAllKeys(
+        final String prefix,
+        final String token,
+        final List<Key> accumulator
+    ) {
+        final ListObjectsV2Request.Builder builder = ListObjectsV2Request.builder()
+            .bucket(this.bucket)
+            .prefix(prefix);
+        if (token != null) {
+            builder.continuationToken(token);
+        }
+        return this.client.listObjectsV2(builder.build())
+            .thenCompose(response -> {
+                response.contents().stream()
                     .map(S3Object::key)
                     .map(Key.From::new)
-                    .collect(Collectors.toList());
-                
-                // Directories at this level (common prefixes)
-                final Collection<Key> directories = response.commonPrefixes()
-                    .stream()
+                    .forEach(accumulator::add);
+                if (Boolean.TRUE.equals(response.isTruncated())) {
+                    return this.listAllKeys(
+                        prefix, response.nextContinuationToken(), accumulator
+                    );
+                }
+                return CompletableFuture.completedFuture(
+                    (Collection<Key>) accumulator
+                );
+            });
+    }
+
+    /**
+     * Recursively list all keys and common prefixes with pagination.
+     * @param prefix S3 key prefix
+     * @param delimiter Delimiter for common prefixes
+     * @param token Continuation token (null for first page)
+     * @param files Accumulated file keys
+     * @param dirs Accumulated directory prefixes
+     * @return ListResult with all files and directories
+     */
+    private CompletableFuture<ListResult> listAllKeysWithDelimiter(
+        final String prefix,
+        final String delimiter,
+        final String token,
+        final List<Key> files,
+        final List<Key> dirs
+    ) {
+        final ListObjectsV2Request.Builder builder = ListObjectsV2Request.builder()
+            .bucket(this.bucket)
+            .prefix(prefix)
+            .delimiter(delimiter);
+        if (token != null) {
+            builder.continuationToken(token);
+        }
+        return this.client.listObjectsV2(builder.build())
+            .thenCompose(response -> {
+                response.contents().stream()
+                    .map(S3Object::key)
+                    .map(Key.From::new)
+                    .forEach(files::add);
+                response.commonPrefixes().stream()
                     .map(CommonPrefix::prefix)
                     .map(Key.From::new)
-                    .collect(Collectors.toList());
-                
-                return new ListResult.Simple(files, directories);
-            }
-        );
+                    .forEach(dirs::add);
+                if (Boolean.TRUE.equals(response.isTruncated())) {
+                    return this.listAllKeysWithDelimiter(
+                        prefix, delimiter,
+                        response.nextContinuationToken(),
+                        files, dirs
+                    );
+                }
+                return CompletableFuture.completedFuture(
+                    (ListResult) new ListResult.Simple(files, dirs)
+                );
+            });
     }
 
     @Override
@@ -560,13 +612,22 @@ public final class S3Storage implements ManagedStorage {
                     if (throwable == null) {
                         finished = upload.complete();
                     } else {
-                        final CompletableFuture<Void> promise =
-                            new CompletableFuture<>();
-                        finished = promise;
                         upload.abort().whenComplete(
-                            (ignore, ex) -> promise.completeExceptionally(
-                                new ArtipieIOException(throwable)
-                            )
+                            (ignore, ex) -> {
+                                if (ex != null) {
+                                    java.util.logging.Logger.getLogger(
+                                        S3Storage.class.getName()
+                                    ).warning(
+                                        String.format(
+                                            "Background multipart abort failed for %s: %s",
+                                            upload, ex.getMessage()
+                                        )
+                                    );
+                                }
+                            }
+                        );
+                        finished = CompletableFuture.failedFuture(
+                            new ArtipieIOException(throwable)
                         );
                     }
                     return finished;

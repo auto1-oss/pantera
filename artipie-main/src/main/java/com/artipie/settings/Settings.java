@@ -8,8 +8,10 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.artipie.api.ssl.KeyStore;
 import com.artipie.asto.Storage;
+import com.artipie.cache.ValkeyConnection;
 import com.artipie.cooldown.CooldownSettings;
 import com.artipie.http.client.HttpClientSettings;
+import com.artipie.index.ArtifactIndex;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.settings.cache.ArtipieCaches;
 import java.util.Optional;
@@ -143,5 +145,21 @@ public interface Settings extends AutoCloseable {
      */
     default JwtSettings jwtSettings() {
         return new JwtSettings();
+    }
+
+    /**
+     * Artifact search index.
+     * @return Artifact index (NOP if indexing is disabled)
+     */
+    default ArtifactIndex artifactIndex() {
+        return ArtifactIndex.NOP;
+    }
+
+    /**
+     * Optional Valkey connection for cache operations.
+     * @return Valkey connection if configured
+     */
+    default Optional<ValkeyConnection> valkeyConnection() {
+        return Optional.empty();
     }
 }

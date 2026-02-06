@@ -6,6 +6,7 @@ package com.artipie.docker.cache;
 
 import com.artipie.cooldown.CooldownDependency;
 import com.artipie.cooldown.CooldownInspector;
+import com.artipie.http.misc.ConfigDefaults;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -40,14 +41,17 @@ public final class DockerProxyCooldownInspector implements CooldownInspector,
     private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> seen;
 
     public DockerProxyCooldownInspector() {
+        final long expiryHours = ConfigDefaults.getLong(
+            "ARTIPIE_DOCKER_CACHE_EXPIRY_HOURS", 24L
+        );
         this.releases = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
             .maximumSize(10_000)
-            .expireAfterWrite(Duration.ofHours(24))
+            .expireAfterWrite(Duration.ofHours(expiryHours))
             .recordStats()
             .build();
         this.digestOwners = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
             .maximumSize(50_000)  // More digests than images
-            .expireAfterWrite(Duration.ofHours(24))
+            .expireAfterWrite(Duration.ofHours(expiryHours))
             .recordStats()
             .build();
         this.seen = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()

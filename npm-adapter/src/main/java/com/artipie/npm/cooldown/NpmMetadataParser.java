@@ -7,6 +7,7 @@ package com.artipie.npm.cooldown;
 import com.artipie.cooldown.metadata.MetadataParseException;
 import com.artipie.cooldown.metadata.MetadataParser;
 import com.artipie.cooldown.metadata.ReleaseDateProvider;
+import com.artipie.http.log.EcsLogger;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -118,8 +119,11 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
                 try {
                     final Instant instant = Instant.parse(value.asText());
                     result.put(key, instant);
-                } catch (final DateTimeParseException ignored) {
-                    // Skip invalid timestamps
+                } catch (final DateTimeParseException ex) {
+                    EcsLogger.debug("com.artipie.npm")
+                        .message("Failed to parse NPM version timestamp")
+                        .error(ex)
+                        .log();
                 }
             }
         }

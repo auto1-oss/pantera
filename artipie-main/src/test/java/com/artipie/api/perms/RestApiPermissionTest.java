@@ -177,6 +177,55 @@ class RestApiPermissionTest {
             ),
             new IsEqual<>(true)
         );
+        final ApiSearchPermission search = new ApiSearchPermission(Set.of("read"));
+        MatcherAssert.assertThat(
+            "Search implies read",
+            search.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Search not implies write",
+            search.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.WRITE)),
+            new IsEqual<>(false)
+        );
+        final ApiSearchPermission searchAll = new ApiSearchPermission(Set.of("*"));
+        MatcherAssert.assertThat(
+            "Search wildcard implies write",
+            searchAll.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.WRITE)),
+            new IsEqual<>(true)
+        );
+    }
+
+    @ParameterizedTest
+    @EnumSource(ApiSearchPermission.SearchAction.class)
+    void searchPermissionWorksCorrect(final ApiSearchPermission.SearchAction action) {
+        MatcherAssert.assertThat(
+            "All implies any other action",
+            new ApiSearchPermission(ApiSearchPermission.SearchAction.ALL).implies(
+                new ApiSearchPermission(action)
+            ),
+            new IsEqual<>(true)
+        );
+        if (action != ApiSearchPermission.SearchAction.ALL) {
+            MatcherAssert.assertThat(
+                "Any other action does not imply all",
+                new ApiSearchPermission(action).implies(
+                    new ApiSearchPermission(ApiSearchPermission.SearchAction.ALL)
+                ),
+                new IsEqual<>(false)
+            );
+            for (final ApiSearchPermission.SearchAction item
+                : ApiSearchPermission.SearchAction.values()) {
+                if (item != action) {
+                    MatcherAssert.assertThat(
+                        "Action not implies other action",
+                        new ApiSearchPermission(action)
+                            .implies(new ApiSearchPermission(item)),
+                        new IsEqual<>(false)
+                    );
+                }
+            }
+        }
     }
 
     @Test
@@ -194,6 +243,11 @@ class RestApiPermissionTest {
         MatcherAssert.assertThat(
             new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.ALL)
                 .implies(new ApiUserPermission(ApiUserPermission.UserAction.ALL)),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            new ApiSearchPermission(ApiSearchPermission.SearchAction.ALL)
+                .implies(new ApiRolePermission(ApiRolePermission.RoleAction.ALL)),
             new IsEqual<>(false)
         );
     }

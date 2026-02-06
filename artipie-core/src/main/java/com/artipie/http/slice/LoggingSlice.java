@@ -58,10 +58,9 @@ public final class LoggingSlice implements Slice {
         // Log request at DEBUG level (diagnostic only)
         if (this.level.intValue() <= Level.FINE.intValue()) {
             EcsLogger.debug("com.artipie.http")
-                .message("HTTP request")
+                .message("HTTP request: " + msg.toString())
                 .eventCategory("http")
                 .eventAction("request")
-                .field("http.request.body.content", msg.toString())
                 .log();
         }
 
@@ -74,10 +73,9 @@ public final class LoggingSlice implements Slice {
                 // Log response at DEBUG level (diagnostic only)
                 if (LoggingSlice.this.level.intValue() <= Level.FINE.intValue()) {
                     EcsLogger.debug("com.artipie.http")
-                        .message("HTTP response")
+                        .message("HTTP response: " + sb.toString())
                         .eventCategory("http")
                         .eventAction("response")
-                        .field("http.response.body.content", sb.toString())
                         .log();
                 }
 

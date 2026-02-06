@@ -3,7 +3,7 @@ info:
   version: 1.0.0
   title: Artipie - OpenAPI 3.0
   description:
-    This is Atripie Server based on the OpenAPI 3.0 specification.
+    This is Artipie Server based on the OpenAPI 3.0 specification.
   license:
     name: MIT
 externalDocs:
@@ -13,6 +13,46 @@ tags:
   - name: users
     description: Operations about users
 paths:
+  /api/v1/users/me:
+    get:
+      summary: Get current authenticated user info and effective permissions
+      description: |
+        Returns information about the currently authenticated user, including
+        their username, authentication context, profile details, and a summary
+        of their effective permissions across all API categories. This endpoint
+        is essential for UI integration to determine what features to display.
+      operationId: getCurrentUser
+      tags:
+        - users
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Current user info with effective permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+              example:
+                name: "john.doe"
+                context: "artipie"
+                email: "john.doe@example.com"
+                groups: ["developers", "readers"]
+                permissions:
+                  api_repository_permissions: true
+                  api_user_permissions: false
+                  api_role_permissions: false
+                  api_alias_permissions: true
+                  api_cache_permissions: true
+                  api_search_permissions: true
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/users:
     get:
       summary: List all users.
@@ -62,6 +102,10 @@ paths:
                 $ref: "#/components/schemas/User"
         '404':
           description: User does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -95,6 +139,12 @@ paths:
           description: User successfully added
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -120,6 +170,10 @@ paths:
           description: User removed successfully
         '404':
           description: User does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -154,6 +208,10 @@ paths:
           description: Password changed successfully
         '404':
           description: User does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -182,6 +240,10 @@ paths:
           description: User disabled successfully
         '404':
           description: User does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -210,6 +272,10 @@ paths:
           description: User enabled successfully
         '404':
           description: User does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -329,8 +395,62 @@ components:
           description: Password encoding type for the new password
           enum: ["plain", "sha256"]
           example: "sha256"
+    CurrentUser:
+      type: object
+      description: Current authenticated user info with effective permissions
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Authenticated username
+          example: "john.doe"
+        context:
+          type: string
+          description: Authentication context (e.g., artipie, okta)
+          example: "artipie"
+        email:
+          type: string
+          format: email
+          description: User email address (if available)
+          example: "john.doe@example.com"
+        groups:
+          type: array
+          items:
+            type: string
+          description: User's role/group memberships
+          example: ["developers", "readers"]
+        permissions:
+          type: object
+          description: |
+            Effective permission summary. Each key indicates whether the user
+            has READ access to that API category. UI can use this to show/hide
+            menu items and features.
+          properties:
+            api_repository_permissions:
+              type: boolean
+              description: Can manage repositories
+            api_user_permissions:
+              type: boolean
+              description: Can manage users
+            api_role_permissions:
+              type: boolean
+              description: Can manage roles
+            api_alias_permissions:
+              type: boolean
+              description: Can manage storage aliases
+            api_cache_permissions:
+              type: boolean
+              description: Can manage caches
+            api_search_permissions:
+              type: boolean
+              description: Can use search
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 security:
   - bearerAuth: []

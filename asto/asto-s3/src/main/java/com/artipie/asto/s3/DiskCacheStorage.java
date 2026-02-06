@@ -9,6 +9,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
+import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import java.io.IOException;
@@ -175,12 +176,18 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                 Files.deleteIfExists(p);
                             }
                         }
-                    } catch (final IOException ignore) {
-                        // Ignore cleanup errors
+                    } catch (final IOException ex) {
+                        EcsLogger.debug("com.artipie.asto.cache")
+                            .message("Failed to clean up orphaned file")
+                            .error(ex)
+                            .log();
                     }
                 });
-        } catch (final IOException ignore) {
-            // Ignore if directory doesn't exist yet
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.asto.cache")
+                .message("Failed to walk directory for orphan cleanup")
+                .error(ex)
+                .log();
         }
     }
 
@@ -191,40 +198,60 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (Files.exists(file) && Files.exists(meta)) {
-                    final CacheMeta cm = CacheMeta.read(meta);
-                    if (!this.validateOnRead || this.matchRemote(key, cm)) {
-                        // Serve from cache and update metadata
-                        final Content cnt = new Content.From(
-                            cm.size > 0 ? Optional.of(cm.size) : Optional.empty(),
-                            filePublisher(file)
-                        );
-                        // Update metadata asynchronously to avoid blocking and race conditions
-                        CompletableFuture.runAsync(() -> {
-                            try {
-                                synchronized (getLock(meta)) {
-                                    final CacheMeta updated = CacheMeta.read(meta);
-                                    updated.hits += 1;
-                                    updated.lastAccess = Instant.now().toEpochMilli();
-                                    CacheMeta.write(meta, updated);
-                                }
-                            } catch (final IOException ignored) {
-                                // Best effort - cache hit still served
-                            }
-                        });
-                        return cnt;
-                    }
+                    return CacheMeta.read(meta);
                 }
             } catch (final IOException ex) {
                 // Fall through to fetch on any cache read error
             }
             return null;
-        }).thenCompose(hit -> {
-            if (hit != null) {
-                return CompletableFuture.completedFuture(hit);
+        }).thenCompose(cm -> {
+            if (cm == null) {
+                return this.fetchAndPersist(key, file, meta);
             }
-            // Miss or stale: fetch from delegate, stream to caller, persist to disk
-            return this.fetchAndPersist(key, file, meta);
+            if (!this.validateOnRead) {
+                return CompletableFuture.completedFuture(
+                    this.serveCached(file, meta, cm)
+                );
+            }
+            return this.matchRemoteAsync(key, cm).thenCompose(valid -> {
+                if (valid) {
+                    return CompletableFuture.completedFuture(
+                        this.serveCached(file, meta, cm)
+                    );
+                }
+                return this.fetchAndPersist(key, file, meta);
+            });
         });
+    }
+
+    /**
+     * Serve content from local cache and update access metadata in background.
+     * @param file Path to cached file
+     * @param meta Path to metadata file
+     * @param cm Cache metadata
+     * @return Cached content
+     */
+    private Content serveCached(final Path file, final Path meta, final CacheMeta cm) {
+        final Content cnt = new Content.From(
+            cm.size > 0 ? Optional.of(cm.size) : Optional.empty(),
+            filePublisher(file)
+        );
+        CompletableFuture.runAsync(() -> {
+            try {
+                synchronized (getLock(meta)) {
+                    final CacheMeta updated = CacheMeta.read(meta);
+                    updated.hits += 1;
+                    updated.lastAccess = Instant.now().toEpochMilli();
+                    CacheMeta.write(meta, updated);
+                }
+            } catch (final IOException ex) {
+                EcsLogger.debug("com.artipie.asto.cache")
+                    .message("Failed to update cache metadata after hit")
+                    .error(ex)
+                    .log();
+            }
+        });
+        return cnt;
     }
 
     @Override
@@ -251,8 +278,11 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         try {
             Files.deleteIfExists(filePath(key));
             Files.deleteIfExists(metaPath(key));
-        } catch (final IOException ignored) {
-            // best-effort
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.asto.cache")
+                .message("Failed to invalidate cache entry")
+                .error(ex)
+                .log();
         }
     }
 
@@ -309,8 +339,11 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                     cm.lastAccess = Instant.now().toEpochMilli();
                                     cm.hits = 1;
                                     CacheMeta.write(meta, cm);
-                                } catch (final IOException ignored) {
-                                    // Best effort - file is already cached
+                                } catch (final IOException ex) {
+                                    EcsLogger.debug("com.artipie.asto.cache")
+                                        .message("Failed to write cache metadata after fetch")
+                                        .error(ex)
+                                        .log();
                                 }
                                 return null;
                             });
@@ -319,8 +352,18 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         }
                     })
                     .doOnError(th -> {
-                        try { ch.close(); } catch (final IOException ignore) { }
-                        try { Files.deleteIfExists(tmp); } catch (final IOException ignore) { }
+                        try { ch.close(); } catch (final IOException ex) {
+                            EcsLogger.debug("com.artipie.asto.cache")
+                                .message("Failed to close channel on error")
+                                .error(ex)
+                                .log();
+                        }
+                        try { Files.deleteIfExists(tmp); } catch (final IOException ex) {
+                            EcsLogger.debug("com.artipie.asto.cache")
+                                .message("Failed to delete temp file on error")
+                                .error(ex)
+                                .log();
+                        }
                     });
                 result.complete(new Content.From(cnt.size(), stream));
             } catch (final IOException ioe) {
@@ -330,25 +373,26 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         return result;
     }
 
-    private boolean matchRemote(final Key key, final CacheMeta local) {
-        try {
-            // FIXME: This blocks! Should be made async or validation disabled for high-load scenarios
-            // For now, add timeout to prevent indefinite blocking
-            final Meta meta = super.metadata(key)
-                .toCompletableFuture()
-                .orTimeout(5, TimeUnit.SECONDS)
-                .join();
-            final boolean md5ok = meta.read(Meta.OP_MD5)
-                .map(val -> Objects.equals(val, local.etag))
-                .orElse(false);
-            final boolean sizeok = meta.read(Meta.OP_SIZE)
-                .map(val -> Objects.equals(val, local.size))
-                .orElse(false);
-            return md5ok && sizeok;
-        } catch (final Exception err) {
-            // If cannot validate or timeout, assume stale
-            return false;
-        }
+    /**
+     * Asynchronously validates local cache entry against remote metadata.
+     * @param key Storage key
+     * @param local Local cache metadata
+     * @return Future resolving to true if cache entry matches remote, false otherwise
+     */
+    private CompletableFuture<Boolean> matchRemoteAsync(final Key key, final CacheMeta local) {
+        return super.metadata(key)
+            .toCompletableFuture()
+            .orTimeout(5, TimeUnit.SECONDS)
+            .thenApply(meta -> {
+                final boolean md5ok = meta.read(Meta.OP_MD5)
+                    .map(val -> Objects.equals(val, local.etag))
+                    .orElse(false);
+                final boolean sizeok = meta.read(Meta.OP_SIZE)
+                    .map(val -> Objects.equals(val, local.size))
+                    .orElse(false);
+                return md5ok && sizeok;
+            })
+            .exceptionally(err -> false);
     }
 
     private Path nsRoot() { return this.root.resolve(this.namespace); }
@@ -369,7 +413,12 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 emitter.onNext(buf);
             }
             return ch;
-        }, ch -> { try { ch.close(); } catch (final IOException ignored) { } });
+        }, ch -> { try { ch.close(); } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.asto.cache")
+                .message("Failed to close file channel in publisher")
+                .error(ex)
+                .log();
+        } });
     }
 
     @Override
@@ -386,9 +435,11 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             if (delegate instanceof AutoCloseable) {
                 try {
                     ((AutoCloseable) delegate).close();
-                } catch (final Exception e) {
-                    // Log but continue - best effort cleanup
-                    System.err.println("Failed to close delegate storage: " + e.getMessage());
+                } catch (final Exception ex) {
+                    EcsLogger.warn("com.artipie.asto.cache")
+                        .message("Failed to close delegate storage")
+                        .error(ex)
+                        .log();
                 }
             }
         }
@@ -396,10 +447,13 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
 
     private void safeCleanup() {
         if (!this.closed.get()) {
-            try { 
-                cleanup(); 
-            } catch (final Throwable ignored) { 
-                // Ignore errors during cleanup
+            try {
+                cleanup();
+            } catch (final Throwable ex) {
+                EcsLogger.warn("com.artipie.asto.cache")
+                    .message("Cache cleanup failed")
+                    .error(ex)
+                    .log();
             }
         }
     }
@@ -443,7 +497,12 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
             final Path meta = Path.of(f.toString() + ".meta");
             CacheMeta cm = null;
             if (Files.exists(meta)) {
-                try { cm = CacheMeta.read(meta); } catch (final Exception ignore) { }
+                try { cm = CacheMeta.read(meta); } catch (final Exception ex) {
+                    EcsLogger.debug("com.artipie.asto.cache")
+                        .message("Failed to read cache metadata during cleanup")
+                        .error(ex)
+                        .log();
+                }
             }
             if (cm == null) {
                 cm = new CacheMeta();
@@ -475,7 +534,12 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                 Files.deleteIfExists(c.file);
                 Files.deleteIfExists(c.metaFile);
                 freed += c.meta.size;
-            } catch (final IOException ignore) { }
+            } catch (final IOException ex) {
+                EcsLogger.debug("com.artipie.asto.cache")
+                    .message("Failed to delete cache file during eviction")
+                    .error(ex)
+                    .log();
+            }
             if (freed >= target) {
                 break;
             }

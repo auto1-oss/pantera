@@ -7,43 +7,26 @@ package com.artipie.group;
 import com.artipie.http.Slice;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.timeout.AutoBlockRegistry;
+import com.artipie.http.timeout.AutoBlockSettings;
 
 import java.net.URI;
-import java.time.Duration;
-import java.time.Instant;
+import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Member repository slice with circuit breaker for failure isolation.
- * 
- * <p>Circuit breaker states:
+ * Member repository slice with circuit breaker delegating to {@link AutoBlockRegistry}.
+ *
+ * <p>Circuit breaker states (managed by the registry):
  * <ul>
- *   <li>CLOSED: Normal operation, requests pass through</li>
- *   <li>OPEN: Fast-fail mode, requests rejected immediately (after N failures)</li>
- *   <li>HALF_OPEN: Testing recovery, allow one request through</li>
+ *   <li>ONLINE: Normal operation, requests pass through</li>
+ *   <li>BLOCKED: Fast-fail mode, requests rejected immediately (after N failures)</li>
+ *   <li>PROBING: Testing recovery, allow requests through</li>
  * </ul>
- * 
- * <p>Circuit breaker thresholds:
- * <ul>
- *   <li>Open after 5 consecutive failures</li>
- *   <li>Stay open for 30 seconds</li>
- *   <li>Reset counter on first success</li>
- * </ul>
- * 
+ *
  * @since 1.18.23
  */
 public final class MemberSlice {
-
-    /**
-     * Number of consecutive failures before opening circuit.
-     */
-    private static final int FAILURE_THRESHOLD = 5;
-
-    /**
-     * How long to keep circuit open before attempting recovery.
-     */
-    private static final Duration RESET_TIMEOUT = Duration.ofSeconds(30);
 
     /**
      * Member repository name.
@@ -56,29 +39,70 @@ public final class MemberSlice {
     private final Slice delegate;
 
     /**
-     * Consecutive failure count.
+     * Auto-block registry for circuit breaker state.
      */
-    private final AtomicInteger failureCount = new AtomicInteger(0);
+    private final AutoBlockRegistry registry;
 
     /**
-     * When circuit was opened (null if closed).
+     * Whether this member is a proxy repository (fetches from upstream).
+     * Proxy members must always be queried on index miss because their
+     * content is not pre-indexed — it only gets indexed after being cached.
      */
-    private volatile Instant openedAt = null;
+    private final boolean proxy;
 
     /**
-     * Constructor.
-     * 
+     * Backward-compatible constructor (non-proxy).
+     * Creates a local {@link AutoBlockRegistry} with default settings.
+     *
      * @param name Member repository name
      * @param delegate Underlying slice
      */
     public MemberSlice(final String name, final Slice delegate) {
+        this(name, delegate, new AutoBlockRegistry(AutoBlockSettings.defaults()), false);
+    }
+
+    /**
+     * Constructor with proxy flag.
+     *
+     * @param name Member repository name
+     * @param delegate Underlying slice
+     * @param proxy Whether this member is a proxy repository
+     */
+    public MemberSlice(final String name, final Slice delegate, final boolean proxy) {
+        this(name, delegate, new AutoBlockRegistry(AutoBlockSettings.defaults()), proxy);
+    }
+
+    /**
+     * Constructor with shared registry (non-proxy).
+     *
+     * @param name Member repository name
+     * @param delegate Underlying slice
+     * @param registry Shared auto-block registry
+     */
+    public MemberSlice(final String name, final Slice delegate,
+        final AutoBlockRegistry registry) {
+        this(name, delegate, registry, false);
+    }
+
+    /**
+     * Full constructor.
+     *
+     * @param name Member repository name
+     * @param delegate Underlying slice
+     * @param registry Shared auto-block registry
+     * @param proxy Whether this member is a proxy repository
+     */
+    public MemberSlice(final String name, final Slice delegate,
+        final AutoBlockRegistry registry, final boolean proxy) {
         this.name = Objects.requireNonNull(name, "name");
-        this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.delegate = delegate;
+        this.registry = Objects.requireNonNull(registry, "registry");
+        this.proxy = proxy;
     }
 
     /**
      * Get member repository name.
-     * 
+     *
      * @return Member name
      */
     public String name() {
@@ -87,7 +111,7 @@ public final class MemberSlice {
 
     /**
      * Get underlying slice.
-     * 
+     *
      * @return Delegate slice
      */
     public Slice slice() {
@@ -95,78 +119,46 @@ public final class MemberSlice {
     }
 
     /**
-     * Check if circuit breaker is in OPEN state.
-     * 
+     * Whether this member is a proxy repository.
+     * Proxy members fetch content from upstream registries on-demand.
+     * Their content is only indexed after being cached, so they must
+     * always be queried on an index miss.
+     *
+     * @return True if this member is a proxy
+     */
+    public boolean isProxy() {
+        return this.proxy;
+    }
+
+    /**
+     * Check if circuit breaker is in BLOCKED state.
+     *
      * @return True if circuit is open (fast-failing)
      */
     public boolean isCircuitOpen() {
-        if (this.openedAt == null) {
-            return false;
-        }
-        
-        // Check if timeout has expired (transition to HALF_OPEN)
-        final Duration elapsed = Duration.between(this.openedAt, Instant.now());
-        if (elapsed.compareTo(RESET_TIMEOUT) >= 0) {
-            EcsLogger.info("com.artipie.group")
-                .message("Circuit breaker entering HALF_OPEN state for member: " + this.name)
-                .eventCategory("repository")
-                .eventAction("circuit_breaker_half_open")
-                .eventOutcome("success")
-                .duration(elapsed.toMillis())
-                .log();
-            this.openedAt = null;
-            return false;
-        }
-
-        return true;
+        return this.registry.isBlocked(this.name);
     }
 
     /**
      * Record successful response from this member.
-     * Resets circuit breaker state.
+     * Resets circuit breaker state via registry.
      */
     public void recordSuccess() {
-        final int previousFailures = this.failureCount.getAndSet(0);
-        if (previousFailures > 0) {
-            EcsLogger.info("com.artipie.group")
-                .message("Member '" + this.name + "' recovered - circuit breaker CLOSED (previous failures: " + previousFailures + ")")
-                .eventCategory("repository")
-                .eventAction("circuit_breaker_close")
-                .eventOutcome("success")
-                .log();
-        }
-        this.openedAt = null;
+        this.registry.recordSuccess(this.name);
     }
 
     /**
      * Record failed response from this member.
-     * May open circuit breaker if threshold exceeded.
+     * May block the remote via registry if threshold exceeded.
      */
     public void recordFailure() {
-        final int failures = this.failureCount.incrementAndGet();
-
-        if (failures >= FAILURE_THRESHOLD && this.openedAt == null) {
-            this.openedAt = Instant.now();
-            EcsLogger.warn("com.artipie.group")
-                .message("Circuit breaker OPENED for member '" + this.name + "' after " + failures + " consecutive failures")
-                .eventCategory("repository")
-                .eventAction("circuit_breaker_open")
-                .eventOutcome("failure")
-                .log();
-        } else if (failures < FAILURE_THRESHOLD) {
-            EcsLogger.debug("com.artipie.group")
-                .message("Member '" + this.name + "' failure count incremented (" + failures + "/" + FAILURE_THRESHOLD + ")")
-                .eventCategory("repository")
-                .eventAction("circuit_breaker_failure")
-                .eventOutcome("failure")
-                .log();
-        }
+        this.registry.recordFailure(this.name);
     }
 
     /**
      * Rewrite request path to include member repository name.
      *
-     * <p>Transforms: /path → /member/path
+     * <p>Transforms: /path -> /member/path
      *
      * @param original Original request line
      * @return Rewritten request line with member prefix
@@ -195,48 +187,30 @@ public final class MemberSlice {
         );
 
         EcsLogger.info("com.artipie.group")
-            .message("MemberSlice rewritePath")
+            .message(String.format("MemberSlice rewritePath: %s to %s", raw, result.uri().getPath()))
             .eventCategory("repository")
             .eventAction("path_rewrite")
             .field("member.name", this.name)
-            .field("original.path", raw)
-            .field("rewritten.path", result.uri().getPath())
             .log();
 
         return result;
     }
 
     /**
-     * Get current failure count for monitoring.
-     * 
-     * @return Number of consecutive failures
-     */
-    public int failureCount() {
-        return this.failureCount.get();
-    }
-
-    /**
      * Get circuit breaker state for monitoring.
-     * 
-     * @return "OPEN", "HALF_OPEN", or "CLOSED"
+     *
+     * @return "ONLINE", "BLOCKED", or "PROBING"
      */
     public String circuitState() {
-        if (this.openedAt == null) {
-            return "CLOSED";
-        }
-        final Duration elapsed = Duration.between(this.openedAt, Instant.now());
-        if (elapsed.compareTo(RESET_TIMEOUT) >= 0) {
-            return "HALF_OPEN";
-        }
-        return "OPEN";
+        return this.registry.status(this.name).toUpperCase(Locale.ROOT);
     }
 
     @Override
     public String toString() {
         return String.format(
-            "MemberSlice{name=%s, failures=%d, circuit=%s}",
+            "MemberSlice{name=%s, proxy=%s, circuit=%s}",
             this.name,
-            this.failureCount.get(),
+            this.proxy,
             circuitState()
         );
     }

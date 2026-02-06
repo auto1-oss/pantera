@@ -32,6 +32,7 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedList;
 
 /**
  * IT case for `npm deprecate` command.
@@ -81,7 +82,7 @@ public final class NpmDeprecateIT {
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.repo)),
+            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.repo, new LinkedList<>())),
             port
         );
         this.server.start();

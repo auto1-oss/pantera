@@ -107,7 +107,9 @@ public interface Helm {
                             try {
                                 final String prfx = "index-";
                                 dir.set(Files.createTempDirectory(prfx));
+                                dir.get().toFile().deleteOnExit();
                                 final Path out = Files.createTempFile(dir.get(), prfx, "-out.yaml");
+                                out.toFile().deleteOnExit();
                                 final Key outidx = new Key.From(out.getFileName().toString());
                                 final Storage tmpstrg = new FileStorage(dir.get());
                                 return new AddWriter.Asto(this.storage)
@@ -170,7 +172,9 @@ public interface Helm {
                                             noth -> {
                                                 try {
                                                     dir.set(Files.createTempDirectory(prfx));
+                                                    dir.get().toFile().deleteOnExit();
                                                     out.set(Files.createTempFile(dir.get(), prfx, "-out.yaml"));
+                                                    out.get().toFile().deleteOnExit();
                                                 } catch (final IOException exc) {
                                                     throw new ArtipieIOException(exc);
                                                 }
@@ -238,7 +242,9 @@ public interface Helm {
                     final String prfx = "index-";
                     try {
                         dir.set(Files.createTempDirectory(prfx));
+                        dir.get().toFile().deleteOnExit();
                         out.set(Files.createTempFile(dir.get(), prfx, "-out.yaml"));
+                        out.get().toFile().deleteOnExit();
                     } catch (final IOException exc) {
                         throw new ArtipieIOException(exc);
                     }

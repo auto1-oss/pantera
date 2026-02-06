@@ -56,6 +56,18 @@
         <Logger name="com.artipie.scheduling" level="INFO" />
         
         <!-- Repository adapters - Uncomment specific adapters for debugging -->
+        <Logger name="com.artipie.gradle" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        <Logger name="com.artipie.asto.cache" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        <Logger name="com.artipie.http.group" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        <Logger name="com.artipie.http" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
         <!-- <Logger name="com.artipie.maven" level="DEBUG"/> -->
         <!-- <Logger name="com.artipie.npm" level="DEBUG"/> -->
         <!-- <Logger name="com.artipie.docker" level="DEBUG"/> -->

@@ -9,6 +9,7 @@ import com.artipie.cooldown.CooldownInspector;
 import com.artipie.http.Headers;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
 
@@ -58,7 +59,11 @@ final class FilesCooldownInspector implements CooldownInspector {
             .flatMap(value -> {
                 try {
                     return Optional.of(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value)));
-                } catch (final DateTimeParseException ignored) {
+                } catch (final DateTimeParseException ex) {
+                    EcsLogger.debug("com.artipie.files")
+                        .message("Failed to parse Last-Modified header")
+                        .error(ex)
+                        .log();
                     return Optional.empty();
                 }
             });

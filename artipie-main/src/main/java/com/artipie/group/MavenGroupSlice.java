@@ -290,7 +290,7 @@ public final class MavenGroupSlice implements Slice {
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
                         .field("url.path", path)
-                        .field("fetch.duration.ms", fetchDuration)
+                        .field("event.duration", fetchDuration * 1_000_000L)
                         .log();
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.notFound().build()
@@ -316,28 +316,26 @@ public final class MavenGroupSlice implements Slice {
                         // Log slow fetches (>500ms) - expected for proxy repos
                         if (fetchDuration > 500) {
                             EcsLogger.info("com.artipie.maven")
-                                .message("Slow member fetch (" + metadataList.size() + " members)")
+                                .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_fetch")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
+                                .field("event.duration", fetchDuration * 1_000_000L)
                                 .log();
                         }
 
                         // Log slow merges (>50ms) - indicates actual performance issue
                         if (mergeDuration > 50) {
                             EcsLogger.warn("com.artipie.maven")
-                                .message("Slow metadata merge (" + metadataList.size() + " members)")
+                                .message(String.format("Slow metadata merge (%d members), fetch took %dms", metadataList.size(), fetchDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_merge")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
+                                .field("event.duration", mergeDuration * 1_000_000L)
                                 .log();
                         }
 

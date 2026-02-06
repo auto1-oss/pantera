@@ -40,8 +40,8 @@ public final class EventsProcessor<T> implements Job {
         if (this.action == null || this.elements == null) {
             this.stopJob(context);
         } else {
-            while (!this.elements.queue().isEmpty()) {
-                final T item = this.elements.queue().poll();
+            while (!this.elements.isEmpty()) {
+                final T item = this.elements.poll();
                 if (item != null) {
                     this.action.accept(item);
                 }

@@ -7,6 +7,15 @@
 
 > **Auto1 Fork**: This is a production-hardened fork of the original [Artipie](https://github.com/artipie/artipie) project, significantly enhanced for enterprise-scale deployments. It includes performance optimizations, security features, and operational improvements developed for high-traffic production workloads.
 
+## What's New in v1.20.14
+
+- **HA Clustering** — PostgreSQL-backed node registry with heartbeat liveness, cross-instance events via Valkey pub/sub
+- **Full-Text Search** — tsvector/GIN powered artifact search with relevance ranking
+- **Health Checks** — 5-component health endpoint with degraded/unhealthy severity levels
+- **Worker Pool Separation** — Independent thread pools for read, write, and list operations
+- **Observability** — Pool utilization gauges, event queue depth metrics, structured ECS logging
+- **Hardening** — 44 silent catches fixed, zero-copy request path, temp file bulk cleanup
+
 ## What is Artipie?
 
 Artipie is a **binary artifact management platform** similar to [JFrog Artifactory](https://jfrog.com/artifactory/), [Sonatype Nexus](https://www.sonatype.com/product-nexus-repository), and [Apache Archiva](https://archiva.apache.org/). It provides a unified solution for hosting, proxying, and managing software packages across multiple ecosystems.
@@ -21,11 +30,21 @@ Artipie is a **binary artifact management platform** similar to [JFrog Artifacto
 | **Enterprise Auth** | OAuth/OIDC integration (Keycloak, Okta with MFA), JWT, RBAC |
 | **Cloud-Native Storage** | Optimized S3-compatible storage with memory-efficient streaming |
 | **Observability** | Prometheus metrics, ECS JSON structured logging, Elastic APM |
+| **HA Clustering** | PostgreSQL-backed node coordination with heartbeat liveness detection |
+| **Full-Text Search** | Artifact search powered by PostgreSQL tsvector/GIN indexes |
+| **Health Checks** | 5-component health probes: storage, database, Valkey, Quartz, HTTP client |
+| **Worker Pool Separation** | Named I/O thread pools for read, write, and list operations |
+| **Cache Invalidation** | Cross-instance cache invalidation via Valkey pub/sub |
 | **Dynamic Configuration** | Create, update, delete repositories at runtime via REST API |
 | **Production-Ready** | Docker Compose stack with PostgreSQL, Valkey (Redis), Nginx, monitoring |
 
 ### Fork-Specific Enhancements
 
+- **HA Clustering**: PostgreSQL-backed node registry with heartbeat liveness detection and cross-instance event bus
+- **Full-Text Artifact Search**: PostgreSQL tsvector/GIN index with relevance-ranked results
+- **5-Component Health Checks**: Storage, database, Valkey, Quartz scheduler, and HTTP client probes
+- **Named Worker Pools**: Separate thread pools for read (CPU x4), write (CPU x2), and list (CPU) operations
+- **Cross-Instance Cache Invalidation**: Valkey pub/sub for distributed cache coherence
 - **Cooldown System**: Configurable delay on new package versions (supply chain attack prevention)
 - **Okta OIDC Integration**: Full Okta authentication with MFA support (TOTP + push)
 - **S3 Performance**: Memory-optimized streaming, retry improvements, connection pooling
@@ -108,6 +127,8 @@ cp .env.example .env
 # Start all services
 docker-compose up -d
 ```
+
+> **Multi-Instance HA Deployment**: For high-availability setups with multiple Artipie nodes behind a load balancer, see [`docs/ha-deployment/docker-compose-ha.yml`](docs/ha-deployment/docker-compose-ha.yml). The HA configuration includes PostgreSQL-backed node registry, Valkey pub/sub for cross-instance events, and nginx load balancing.
 
 ### Included Services
 
@@ -276,6 +297,9 @@ See [Cooldown System Documentation](docs/cooldown-fallback/README.md) for comple
 |----------|-------------|
 | [User Guide](docs/USER_GUIDE.md) | Installation, configuration, and usage |
 | [Developer Guide](docs/DEVELOPER_GUIDE.md) | Architecture and contributing |
+| [Auto1 Fork Changelog](docs/CHANGELOG-AUTO1.md) | Release history for the Auto1 fork |
+| [Environment Variables](docs/ENVIRONMENT_VARIABLES.md) | Complete environment variable reference |
+| [HA Deployment](docs/ha-deployment/) | High-availability deployment configs (nginx, Docker Compose, Artipie) |
 | [API Routing](docs/API_ROUTING.md) | URL patterns and routing |
 | [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain attack prevention |
 | [S3 Storage](docs/s3-optimizations/README.md) | S3 configuration and tuning |
@@ -446,7 +470,7 @@ ECS JSON structured logging for Elasticsearch/Kibana:
 
 | Component | Version |
 |-----------|---------|
-| Artipie | 1.20.12 |
+| Artipie | 1.20.14 |
 | Java | 21+ |
 | Vert.x | 4.5.x |
 

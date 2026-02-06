@@ -10,6 +10,7 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.auth.JwtTokens;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownSupport;
+import com.artipie.index.ArtifactIndex;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.settings.ArtipieSecurity;
@@ -84,6 +85,11 @@ public final class RestApi extends AbstractVerticle {
     private final Settings settings;
 
     /**
+     * Artifact index for search operations.
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -92,6 +98,9 @@ public final class RestApi extends AbstractVerticle {
      * @param keystore KeyStore
      * @param jwt Jwt authentication provider
      * @param events Artifact metadata events queue
+     * @param cooldown Cooldown service
+     * @param settings Artipie settings
+     * @param artifactIndex Artifact index for search
      */
     public RestApi(
         final ArtipieCaches caches,
@@ -102,7 +111,8 @@ public final class RestApi extends AbstractVerticle {
         final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
-        final Settings settings
+        final Settings settings,
+        final ArtifactIndex artifactIndex
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -113,6 +123,7 @@ public final class RestApi extends AbstractVerticle {
         this.events = events;
         this.cooldown = cooldown;
         this.settings = settings;
+        this.artifactIndex = artifactIndex;
     }
 
     /**
@@ -126,7 +137,8 @@ public final class RestApi extends AbstractVerticle {
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata(),
             CooldownSupport.create(settings),
-            settings
+            settings,
+            settings.artifactIndex()
         );
     }
 
@@ -137,8 +149,8 @@ public final class RestApi extends AbstractVerticle {
                 userRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
                     tokenRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
                         settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
-                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/cache.yaml").onSuccess(
-                                cacheRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb)
+                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/search.yaml").onSuccess(
+                                searchRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, searchRb)
                             ).onFailure(Throwable::printStackTrace)
                         ).onFailure(Throwable::printStackTrace)
                     )
@@ -154,16 +166,17 @@ public final class RestApi extends AbstractVerticle {
      * @param tokenRb Token RouterBuilder
      * @param settingsRb Settings RouterBuilder
      * @param rolesRb Roles RouterBuilder
-     * @param cacheRb Cache RouterBuilder
+     * @param searchRb Search RouterBuilder
      */
     private void startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
         final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb,
-        final RouterBuilder cacheRb) {
-        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, cacheRb);
+        final RouterBuilder searchRb) {
+        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, searchRb);
         final BlockingStorage asto = new BlockingStorage(this.configsStorage);
+        final ManageRepoSettings crs = new ManageRepoSettings(asto);
         new RepositoryRest(
             this.caches.filtersCache(),
-            new ManageRepoSettings(asto),
+            crs,
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
             this.cooldown,
@@ -185,14 +198,14 @@ public final class RestApi extends AbstractVerticle {
                 ).init(rolesRb);
             }
         }
-        new SettingsRest(this.port, this.settings).init(settingsRb);
-        new CacheRest(this.security.policy()).init(cacheRb);
+        new SettingsRest(this.port, this.settings, crs).init(settingsRb);
+        new SearchRest(this.artifactIndex, this.security.policy()).init(searchRb);
         final Router router = repoRb.createRouter();
         router.route("/*").subRouter(rolesRb.createRouter());
         router.route("/*").subRouter(userRb.createRouter());
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
-        router.route("/*").subRouter(cacheRb.createRouter());
+        router.route("/*").subRouter(searchRb.createRouter());
         // CRITICAL: Add simple health endpoint BEFORE StaticHandler
         // This avoids StaticHandler's file-serving leak for health checks
         router.get("/api/health").handler(ctx -> {

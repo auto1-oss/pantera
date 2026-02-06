@@ -113,11 +113,10 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         );
         
         EcsLogger.info("com.artipie.settings.cache")
-            .message("Auth cache initialized - JWT-as-password bypasses cache")
+            .message(String.format("Auth cache initialized - JWT-as-password bypasses cache: basicAuthTtl=%ds, jwtExpiry=%ds",
+                this.ttl.toSeconds(), jwtSettings != null ? jwtSettings.expirySeconds() : -1))
             .eventCategory("cache")
             .eventAction("init")
-            .field("basic_auth_ttl_seconds", this.ttl.toSeconds())
-            .field("jwt_expiry_seconds", jwtSettings != null ? jwtSettings.expirySeconds() : -1)
             .log();
         
         // L1: Hot data cache for direct Basic Auth only

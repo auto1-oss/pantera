@@ -5,6 +5,7 @@
 package com.artipie.api;
 
 import com.artipie.api.verifier.Verifier;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import java.util.Arrays;
 import java.util.function.Supplier;
@@ -37,7 +38,11 @@ public interface Validator {
             if (!valid) {
                 context.response()
                     .setStatusCode(code)
-                    .end(message);
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("code", code)
+                        .put("message", message)
+                        .encode());
             }
             return valid;
         };
@@ -58,7 +63,11 @@ public interface Validator {
             if (!valid) {
                 context.response()
                     .setStatusCode(code)
-                    .end(message.get());
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("code", code)
+                        .put("message", message.get())
+                        .encode());
             }
             return valid;
         };
@@ -77,7 +86,11 @@ public interface Validator {
             if (!valid) {
                 context.response()
                     .setStatusCode(code)
-                    .end(verifier.message());
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("code", code)
+                        .put("message", verifier.message())
+                        .encode());
             }
             return valid;
         };

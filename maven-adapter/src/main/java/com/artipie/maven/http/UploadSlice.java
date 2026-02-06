@@ -440,14 +440,17 @@ public final class UploadSlice implements Slice {
      * Record metric safely (only if metrics are enabled).
      * @param metric Metric recording action
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.maven")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

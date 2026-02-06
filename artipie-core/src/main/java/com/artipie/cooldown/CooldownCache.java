@@ -9,6 +9,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
 import io.lettuce.core.RedisFuture;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -366,14 +368,7 @@ public final class CooldownCache {
         // L2: Pattern update (SCAN is expensive but unblockAll is rare)
         if (this.twoTier) {
             final String pattern = prefix + "*";
-            this.l2.keys(pattern).thenAccept(keys -> {
-                if (keys != null && !keys.isEmpty()) {
-                    for (final String key : keys) {
-                        // Set each key to false with configured TTL
-                        this.l2.setex(key, this.l2AllowedTtlSeconds, "false".getBytes());
-                    }
-                }
-            });
+            this.scanAndUpdate(pattern);
         }
     }
 
@@ -441,6 +436,32 @@ public final class CooldownCache {
     private void putL2Boolean(final String key, final boolean blocked, final long ttlSeconds) {
         final byte[] value = (blocked ? "true" : "false").getBytes();
         this.l2.setex(key, ttlSeconds, value);
+    }
+
+    /**
+     * Scan and update keys matching pattern using cursor-based SCAN.
+     * Sets each matched key to "false" (allowed) with configured TTL.
+     * Avoids blocking KEYS command that freezes Redis on large datasets.
+     * @param pattern Redis key pattern (glob-style)
+     */
+    private CompletableFuture<Void> scanAndUpdate(final String pattern) {
+        return this.scanAndUpdateStep(ScanCursor.INITIAL, pattern);
+    }
+
+    private CompletableFuture<Void> scanAndUpdateStep(
+        final ScanCursor cursor, final String pattern
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(100))
+            .toCompletableFuture()
+            .thenCompose(result -> {
+                for (final String key : result.getKeys()) {
+                    this.l2.setex(key, this.l2AllowedTtlSeconds, "false".getBytes());
+                }
+                if (result.isFinished()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.scanAndUpdateStep(result, pattern);
+            });
     }
 
 }

@@ -154,11 +154,10 @@ final class GoCooldownInspector implements CooldownInspector {
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
                 EcsLogger.warn("com.artipie.go")
-                    .message("Invalid Last-Modified header")
+                    .message(String.format("Invalid Last-Modified header: %s", raw))
                     .eventCategory("repository")
                     .eventAction("cooldown_inspector")
                     .eventOutcome("failure")
-                    .field("http.response.headers.Last-Modified", raw)
                     .log();
                 return Optional.empty();
             }

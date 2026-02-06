@@ -17,6 +17,7 @@ import org.eclipse.jetty.client.Origin;
 import org.eclipse.jetty.io.ArrayByteBufferPool;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.misc.ConfigDefaults;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -132,6 +133,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 );
             }
         }
+    }
+
+    /**
+     * Checks whether the HTTP client subsystem is operational.
+     * @return True if started and not stopped and Jetty client is running
+     */
+    public boolean isOperational() {
+        return this.started.get() && !this.stopped.get() && this.clnt.isRunning();
     }
 
     /**
@@ -266,9 +275,9 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // - Lower value (256): more direct allocations, more GC pressure
         // - Higher value (1024): better reuse, but larger O(n) scan if eviction needed
         // - 1024 is sweet spot for 1000 req/s workloads
-        final int maxBucketSize = 1024;  // Handles 1000 req/s with good buffer reuse
-        final long maxDirectMemory = 2L * 1024L * 1024L * 1024L;  // 2GB (50% of 4GB budget)
-        final long maxHeapMemory = 1L * 1024L * 1024L * 1024L;    // 1GB (6% of 16GB heap)
+        final int maxBucketSize = ConfigDefaults.getInt("ARTIPIE_JETTY_BUCKET_SIZE", settings.jettyBucketSize());
+        final long maxDirectMemory = ConfigDefaults.getLong("ARTIPIE_JETTY_DIRECT_MEMORY", settings.jettyDirectMemory());
+        final long maxHeapMemory = ConfigDefaults.getLong("ARTIPIE_JETTY_HEAP_MEMORY", settings.jettyHeapMemory());
         final ArrayByteBufferPool bufferPool = new ArrayByteBufferPool(
             -1,           // minCapacity: use default (0)
             -1,           // factor: use default (1024) - bucket size increment
@@ -280,12 +289,11 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         result.setByteBufferPool(bufferPool);
         
         EcsLogger.info("com.artipie.http.client")
-            .message("Configured Jetty ByteBufferPool with bounded buckets")
+            .message(String.format(
+                "Configured Jetty ByteBufferPool with bounded buckets: maxBucketSize=%d, maxHeapMB=%d, maxDirectMB=%d",
+                maxBucketSize, maxHeapMemory / (1024 * 1024), maxDirectMemory / (1024 * 1024)))
             .eventCategory("http")
             .eventAction("http_client_init")
-            .field("buffer_pool.max_bucket_size", maxBucketSize)
-            .field("buffer_pool.max_heap_memory_mb", maxHeapMemory / (1024 * 1024))
-            .field("buffer_pool.max_direct_memory_mb", maxDirectMemory / (1024 * 1024))
             .log();
         
         final SslContextFactory.Client factory = new SslContextFactory.Client();
@@ -311,6 +319,13 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             }
         );
         result.setFollowRedirects(settings.followRedirects());
+        // Remove Jetty's built-in AuthenticationProtocolHandler. Some upstream registries
+        // return 401 without a WWW-Authenticate header (non-compliant but common), which
+        // causes Jetty to throw "HTTP protocol violation". Artipie handles authentication
+        // itself via AuthClientSlice, so the built-in handler is unnecessary.
+        result.getProtocolHandlers().remove(
+            org.eclipse.jetty.client.WWWAuthenticationProtocolHandler.NAME
+        );
         
         // CRITICAL FIX: Jetty 12 has a NPE bug when connectTimeout is 0
         // When timeout is 0 (infinite), don't set it - let Jetty use its default behavior

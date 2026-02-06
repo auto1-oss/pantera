@@ -121,7 +121,7 @@ services:
       - artipie-net
 
   artipie-db:
-    image: postgres:15-alpine
+    image: postgres:17.8-alpine
     container_name: artipie-db
     restart: unless-stopped
     networks:

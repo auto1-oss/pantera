@@ -1,0 +1,999 @@
+/*
+ * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
+ * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ */
+package com.artipie.http.cache;
+
+import com.artipie.asto.Content;
+import com.artipie.asto.Key;
+import com.artipie.asto.Storage;
+import com.artipie.asto.cache.Cache;
+import com.artipie.asto.cache.CacheControl;
+import com.artipie.asto.cache.Remote;
+import com.artipie.cooldown.CooldownInspector;
+import com.artipie.cooldown.CooldownRequest;
+import com.artipie.cooldown.CooldownResponses;
+import com.artipie.cooldown.CooldownResult;
+import com.artipie.cooldown.CooldownService;
+import com.artipie.http.Headers;
+import com.artipie.http.Response;
+import com.artipie.http.ResponseBuilder;
+import com.artipie.http.RsStatus;
+import com.artipie.http.Slice;
+import com.artipie.http.headers.Header;
+import com.artipie.http.headers.Login;
+import com.artipie.http.log.EcsLogger;
+import com.artipie.http.rq.RequestLine;
+import com.artipie.http.slice.KeyFromPath;
+import com.artipie.scheduling.ProxyArtifactEvent;
+
+import io.reactivex.Flowable;
+import java.io.IOException;
+import java.net.ConnectException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
+
+/**
+ * Abstract base class for all proxy adapter cache slices.
+ *
+ * <p>Implements the shared proxy flow via template method pattern:
+ * <ol>
+ *   <li>Check negative cache - fast-fail on known 404s</li>
+ *   <li>Check local cache (offline-safe) - serve if fresh hit</li>
+ *   <li>Evaluate cooldown - block if in cooldown period</li>
+ *   <li>Deduplicate concurrent requests for same path</li>
+ *   <li>Fetch from upstream</li>
+ *   <li>On 200: cache content, compute digests, generate sidecars, enqueue event</li>
+ *   <li>On 404: update negative cache</li>
+ *   <li>Record metrics</li>
+ * </ol>
+ *
+ * <p>Adapters override only the hooks they need:
+ * {@link #isCacheable(String)}, {@link #buildCooldownRequest(String, Headers)},
+ * {@link #digestAlgorithms()}, {@link #buildArtifactEvent(Key, Headers, long, String)},
+ * {@link #postProcess(Response, RequestLine)}, {@link #generateSidecars(String, Map)}.
+ *
+ * @since 1.20.13
+ */
+@SuppressWarnings({"PMD.GodClass", "PMD.ExcessiveImports"})
+public abstract class BaseCachedProxySlice implements Slice {
+
+    /**
+     * Upstream remote slice.
+     */
+    private final Slice client;
+
+    /**
+     * Asto cache for artifact storage.
+     */
+    private final Cache cache;
+
+    /**
+     * Repository name.
+     */
+    private final String repoName;
+
+    /**
+     * Repository type (e.g., "maven", "npm", "pypi").
+     */
+    private final String repoType;
+
+    /**
+     * Upstream base URL for metrics.
+     */
+    private final String upstreamUrl;
+
+    /**
+     * Optional local storage for metadata and sidecars.
+     */
+    private final Optional<CachedArtifactMetadataStore> metadataStore;
+
+    /**
+     * Whether cache is backed by persistent storage.
+     */
+    private final boolean storageBacked;
+
+    /**
+     * Event queue for proxy artifact events.
+     */
+    private final Optional<Queue<ProxyArtifactEvent>> events;
+
+    /**
+     * Unified proxy configuration.
+     */
+    private final ProxyCacheConfig config;
+
+    /**
+     * Negative cache for 404 responses.
+     */
+    private final NegativeCache negativeCache;
+
+    /**
+     * Cooldown service (null if cooldown disabled).
+     */
+    private final CooldownService cooldownService;
+
+    /**
+     * Cooldown inspector (null if cooldown disabled).
+     */
+    private final CooldownInspector cooldownInspector;
+
+    /**
+     * Request deduplicator.
+     */
+    private final RequestDeduplicator deduplicator;
+
+    /**
+     * Raw storage for direct saves (bypasses FromStorageCache lazy tee-content).
+     */
+    private final Optional<Storage> storage;
+
+    /**
+     * Constructor.
+     *
+     * @param client Upstream remote slice
+     * @param cache Asto cache for artifact storage
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param upstreamUrl Upstream base URL
+     * @param storage Optional local storage
+     * @param events Event queue for proxy artifacts
+     * @param config Unified proxy configuration
+     * @param cooldownService Cooldown service (nullable, required if cooldown enabled)
+     * @param cooldownInspector Cooldown inspector (nullable, required if cooldown enabled)
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    protected BaseCachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final String repoName,
+        final String repoType,
+        final String upstreamUrl,
+        final Optional<Storage> storage,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final ProxyCacheConfig config,
+        final CooldownService cooldownService,
+        final CooldownInspector cooldownInspector
+    ) {
+        this.client = Objects.requireNonNull(client, "client");
+        this.cache = Objects.requireNonNull(cache, "cache");
+        this.repoName = Objects.requireNonNull(repoName, "repoName");
+        this.repoType = Objects.requireNonNull(repoType, "repoType");
+        this.upstreamUrl = Objects.requireNonNull(upstreamUrl, "upstreamUrl");
+        this.events = Objects.requireNonNull(events, "events");
+        this.config = Objects.requireNonNull(config, "config");
+        this.storage = storage;
+        this.metadataStore = storage.map(CachedArtifactMetadataStore::new);
+        this.storageBacked = this.metadataStore.isPresent()
+            && !Objects.equals(this.cache, Cache.NOP);
+        this.negativeCache = config.negativeCacheEnabled()
+            ? new NegativeCache(repoType, repoName) : null;
+        this.cooldownService = cooldownService;
+        this.cooldownInspector = cooldownInspector;
+        this.deduplicator = new RequestDeduplicator(config.dedupStrategy());
+    }
+
+    /**
+     * Convenience constructor without cooldown (for adapters that don't use it).
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    protected BaseCachedProxySlice(
+        final Slice client,
+        final Cache cache,
+        final String repoName,
+        final String repoType,
+        final String upstreamUrl,
+        final Optional<Storage> storage,
+        final Optional<Queue<ProxyArtifactEvent>> events,
+        final ProxyCacheConfig config
+    ) {
+        this(client, cache, repoName, repoType, upstreamUrl,
+            storage, events, config, null, null);
+    }
+
+    @Override
+    public final CompletableFuture<Response> response(
+        final RequestLine line, final Headers headers, final Content body
+    ) {
+        final String path = line.uri().getPath();
+        if ("/".equals(path) || path.isEmpty()) {
+            return this.handleRootPath(line);
+        }
+        final Key key = new KeyFromPath(path);
+        // Step 1: Negative cache fast-fail
+        if (this.negativeCache != null && this.negativeCache.isNotFound(key)) {
+            this.logDebug("Negative cache hit", path);
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+        // Step 2: Pre-process hook (adapter-specific short-circuit)
+        final Optional<CompletableFuture<Response>> pre =
+            this.preProcess(line, headers, key, path);
+        if (pre.isPresent()) {
+            return pre.get();
+        }
+        // Step 3: Check if path is cacheable at all
+        if (!this.isCacheable(path)) {
+            return this.fetchDirect(line, key, new Login(headers).getValue());
+        }
+        // Step 4: Cache-first (offline-safe) — check cache before any network calls
+        if (this.storageBacked) {
+            return this.cacheFirstFlow(line, headers, key, path);
+        }
+        // No persistent storage — go directly to upstream
+        return this.fetchDirect(line, key, new Login(headers).getValue());
+    }
+
+    // ===== Abstract hooks — adapters override these =====
+
+    /**
+     * Determine if a request path is cacheable.
+     * @param path Request path (e.g., "/com/example/foo/1.0/foo-1.0.jar")
+     * @return True if this path should be cached
+     */
+    protected abstract boolean isCacheable(String path);
+
+    // ===== Overridable hooks with defaults =====
+
+    /**
+     * Build a cooldown request from the path.
+     * Return empty to skip cooldown for this path.
+     * @param path Request path
+     * @param headers Request headers
+     * @return Cooldown request or empty
+     */
+    protected Optional<CooldownRequest> buildCooldownRequest(
+        final String path, final Headers headers
+    ) {
+        return Optional.empty();
+    }
+
+    /**
+     * Return the set of digest algorithms to compute during cache streaming.
+     * Return empty set to skip digest computation.
+     * Override in adapters to enable digest computation (e.g., SHA-256, MD5).
+     * @return Set of algorithm names (e.g., "SHA-256", "MD5")
+     */
+    protected java.util.Set<String> digestAlgorithms() {
+        return Collections.emptySet();
+    }
+
+    /**
+     * Build a proxy artifact event for the event queue.
+     * Return empty to skip event emission.
+     * @param key Artifact cache key
+     * @param responseHeaders Upstream response headers
+     * @param size Artifact size in bytes
+     * @param owner Authenticated user login
+     * @return Proxy artifact event or empty
+     */
+    protected Optional<ProxyArtifactEvent> buildArtifactEvent(
+        final Key key, final Headers responseHeaders, final long size,
+        final String owner
+    ) {
+        return Optional.empty();
+    }
+
+    /**
+     * Post-process response before returning to caller.
+     * Default: identity (no transformation).
+     * @param response The response to post-process
+     * @param line Original request line
+     * @return Post-processed response
+     */
+    protected Response postProcess(final Response response, final RequestLine line) {
+        return response;
+    }
+
+    /**
+     * Generate sidecar files from computed digests.
+     * Default: empty list (no sidecars).
+     * @param path Original artifact path
+     * @param digests Computed digests map (algorithm -> hex value)
+     * @return List of sidecar files to store alongside the artifact
+     */
+    protected List<SidecarFile> generateSidecars(
+        final String path, final Map<String, String> digests
+    ) {
+        return Collections.emptyList();
+    }
+
+    /**
+     * Check if path is a sidecar checksum file that should be served from cache.
+     * Default: false. Override in adapters that generate checksum sidecars.
+     * @param path Request path
+     * @return True if this is a checksum sidecar file
+     */
+    protected boolean isChecksumSidecar(final String path) {
+        return false;
+    }
+
+    /**
+     * Pre-process a request before the standard flow.
+     * If non-empty, the returned response short-circuits the standard flow.
+     * Use for adapter-specific handling (e.g., Maven metadata cache).
+     * Default: empty (use standard flow for all paths).
+     * @param line Request line
+     * @param headers Request headers
+     * @param key Cache key
+     * @param path Request path
+     * @return Optional future response to short-circuit, or empty for standard flow
+     */
+    protected Optional<CompletableFuture<Response>> preProcess(
+        final RequestLine line, final Headers headers, final Key key, final String path
+    ) {
+        return Optional.empty();
+    }
+
+    // ===== Protected accessors for subclass use =====
+
+    /**
+     * @return Repository name
+     */
+    protected final String repoName() {
+        return this.repoName;
+    }
+
+    /**
+     * @return Repository type
+     */
+    protected final String repoType() {
+        return this.repoType;
+    }
+
+    /**
+     * @return Upstream URL
+     */
+    protected final String upstreamUrl() {
+        return this.upstreamUrl;
+    }
+
+    /**
+     * @return The upstream client slice
+     */
+    protected final Slice client() {
+        return this.client;
+    }
+
+    /**
+     * @return The asto cache
+     */
+    protected final Cache cache() {
+        return this.cache;
+    }
+
+    /**
+     * @return Proxy cache config
+     */
+    protected final ProxyCacheConfig config() {
+        return this.config;
+    }
+
+    /**
+     * @return Metadata store if storage-backed
+     */
+    protected final Optional<CachedArtifactMetadataStore> metadataStore() {
+        return this.metadataStore;
+    }
+
+    // ===== Internal flow implementation =====
+
+    /**
+     * Cache-first flow: check cache, then evaluate cooldown, then fetch.
+     */
+    private CompletableFuture<Response> cacheFirstFlow(
+        final RequestLine line,
+        final Headers headers,
+        final Key key,
+        final String path
+    ) {
+        // Checksum sidecars: serve from storage if present, else try upstream
+        if (this.isChecksumSidecar(path)) {
+            return this.serveChecksumFromStorage(line, key, new Login(headers).getValue());
+        }
+        final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
+        return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    this.logDebug("Cache hit", path);
+                    // Fast path: serve from cache with async metadata
+                    return store.load(key).thenApply(meta -> {
+                        final ResponseBuilder builder = ResponseBuilder.ok()
+                            .body(cached.get());
+                        meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
+                        return this.postProcess(builder.build(), line);
+                    });
+                }
+                // Cache miss: evaluate cooldown then fetch
+                return this.evaluateCooldownAndFetch(line, headers, key, path, store);
+            }).toCompletableFuture();
+    }
+
+    /**
+     * Evaluate cooldown, then fetch from upstream if allowed.
+     */
+    private CompletableFuture<Response> evaluateCooldownAndFetch(
+        final RequestLine line,
+        final Headers headers,
+        final Key key,
+        final String path,
+        final CachedArtifactMetadataStore store
+    ) {
+        if (this.config.cooldownEnabled()
+            && this.cooldownService != null
+            && this.cooldownInspector != null) {
+            final Optional<CooldownRequest> request =
+                this.buildCooldownRequest(path, headers);
+            if (request.isPresent()) {
+                return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
+                    .thenCompose(result -> {
+                        if (result.blocked()) {
+                            return CompletableFuture.completedFuture(
+                                CooldownResponses.forbidden(result.block().orElseThrow())
+                            );
+                        }
+                        return this.fetchAndCache(line, key, headers, store);
+                    });
+            }
+        }
+        return this.fetchAndCache(line, key, headers, store);
+    }
+
+    /**
+     * Fetch from upstream and cache the result, with request deduplication.
+     * Uses NIO temp file streaming to avoid buffering full artifacts on heap.
+     */
+    private CompletableFuture<Response> fetchAndCache(
+        final RequestLine line,
+        final Key key,
+        final Headers headers,
+        final CachedArtifactMetadataStore store
+    ) {
+        final String owner = new Login(headers).getValue();
+        final long startTime = System.currentTimeMillis();
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                if (resp.status().code() == 404) {
+                    return this.handle404(resp, key, duration)
+                        .thenCompose(signal ->
+                            this.signalToResponse(signal, line, key, headers, store));
+                }
+                if (!resp.status().success()) {
+                    return this.handleNonSuccess(resp, key, duration)
+                        .thenCompose(signal ->
+                            this.signalToResponse(signal, line, key, headers, store));
+                }
+                this.recordProxyMetric("success", duration);
+                return this.deduplicator.deduplicate(key, () -> {
+                    return this.cacheResponse(resp, key, owner, store)
+                        .thenApply(r -> RequestDeduplicator.FetchSignal.SUCCESS);
+                }).thenCompose(signal ->
+                    this.signalToResponse(signal, line, key, headers, store));
+            })
+            .exceptionally(error -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                this.trackUpstreamFailure(error);
+                this.recordProxyMetric("exception", duration);
+                EcsLogger.warn("com.artipie." + this.repoType)
+                    .message("Upstream request failed with exception")
+                    .eventCategory("repository")
+                    .eventAction("proxy_upstream")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("event.duration", duration)
+                    .error(error)
+                    .log();
+                return ResponseBuilder.unavailable()
+                    .textBody("Upstream temporarily unavailable")
+                    .build();
+            });
+    }
+
+    /**
+     * Convert a dedup signal into an HTTP response.
+     */
+    private CompletableFuture<Response> signalToResponse(
+        final RequestDeduplicator.FetchSignal signal,
+        final RequestLine line,
+        final Key key,
+        final Headers headers,
+        final CachedArtifactMetadataStore store
+    ) {
+        switch (signal) {
+            case SUCCESS:
+                // Read from cache (populated by the winning fetch)
+                return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+                    .thenCompose(cached -> {
+                        if (cached.isPresent()) {
+                            return store.load(key).thenApply(meta -> {
+                                final ResponseBuilder builder = ResponseBuilder.ok()
+                                    .body(cached.get());
+                                meta.ifPresent(m -> builder.headers(stripContentEncoding(m.headers())));
+                                return this.postProcess(builder.build(), line);
+                            });
+                        }
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        );
+                    }).toCompletableFuture();
+            case NOT_FOUND:
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            case ERROR:
+            default:
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.unavailable()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+        }
+    }
+
+    /**
+     * Cache a successful upstream response using NIO temp file streaming.
+     * Streams body to a temp file while computing digests incrementally,
+     * then saves from temp file to cache. Never buffers the full artifact on heap.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<RequestDeduplicator.FetchSignal> cacheResponse(
+        final Response resp,
+        final Key key,
+        final String owner,
+        final CachedArtifactMetadataStore store
+    ) {
+        final Path tempFile;
+        final FileChannel channel;
+        try {
+            tempFile = Files.createTempFile("artipie-cache-", ".tmp");
+            tempFile.toFile().deleteOnExit();
+            channel = FileChannel.open(
+                tempFile,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING
+            );
+        } catch (final IOException ex) {
+            EcsLogger.warn("com.artipie." + this.repoType)
+                .message("Failed to create temp file for cache streaming")
+                .eventCategory("repository")
+                .eventAction("proxy_cache")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .field("file.path", key.string())
+                .error(ex)
+                .log();
+            return CompletableFuture.completedFuture(
+                RequestDeduplicator.FetchSignal.ERROR
+            );
+        }
+        final Map<String, MessageDigest> digests =
+            DigestComputer.createDigests(this.digestAlgorithms());
+        final AtomicLong totalSize = new AtomicLong(0);
+        final CompletableFuture<Void> streamDone = new CompletableFuture<>();
+        Flowable.fromPublisher(resp.body())
+            .doOnNext(buf -> {
+                final int nbytes = buf.remaining();
+                DigestComputer.updateDigests(digests, buf);
+                final ByteBuffer copy = buf.asReadOnlyBuffer();
+                while (copy.hasRemaining()) {
+                    channel.write(copy);
+                }
+                totalSize.addAndGet(nbytes);
+            })
+            .doOnComplete(() -> {
+                channel.force(true);
+                channel.close();
+            })
+            .doOnError(err -> {
+                closeChannelQuietly(channel);
+                deleteTempQuietly(tempFile);
+            })
+            .subscribe(
+                item -> { },
+                streamDone::completeExceptionally,
+                () -> streamDone.complete(null)
+            );
+        return streamDone.thenCompose(v -> {
+            final Map<String, String> digestResults =
+                DigestComputer.finalizeDigests(digests);
+            final long size = totalSize.get();
+            return this.saveFromTempFile(key, tempFile, size)
+                .thenCompose(loaded -> {
+                    final Map<String, String> digestsCopy =
+                        new java.util.HashMap<>(digestResults);
+                    final CachedArtifactMetadataStore.ComputedDigests computed =
+                        new CachedArtifactMetadataStore.ComputedDigests(
+                            size, digestsCopy
+                        );
+                    return store.save(key, stripContentEncoding(resp.headers()), computed);
+                }).thenCompose(savedHeaders -> {
+                    final List<SidecarFile> sidecars =
+                        this.generateSidecars(key.string(), digestResults);
+                    if (sidecars.isEmpty()) {
+                        return CompletableFuture.completedFuture(
+                            (Void) null
+                        );
+                    }
+                    final CompletableFuture<?>[] writes;
+                    if (this.storage.isPresent()) {
+                        // Save sidecars directly to storage (avoids lazy tee-content)
+                        writes = sidecars.stream()
+                            .map(sc -> this.storage.get().save(
+                                new Key.From(sc.path()),
+                                new Content.From(sc.content())
+                            ))
+                            .toArray(CompletableFuture[]::new);
+                    } else {
+                        writes = sidecars.stream()
+                            .map(sc -> this.cache.load(
+                                new Key.From(sc.path()),
+                                () -> CompletableFuture.completedFuture(
+                                    Optional.of(new Content.From(sc.content()))
+                                ),
+                                CacheControl.Standard.ALWAYS
+                            ))
+                            .toArray(CompletableFuture[]::new);
+                    }
+                    return CompletableFuture.allOf(writes);
+                }).thenApply(ignored -> {
+                    this.enqueueEvent(key, resp.headers(), size, owner);
+                    deleteTempQuietly(tempFile);
+                    return RequestDeduplicator.FetchSignal.SUCCESS;
+                });
+        }).exceptionally(err -> {
+            deleteTempQuietly(tempFile);
+            EcsLogger.warn("com.artipie." + this.repoType)
+                .message("Failed to cache upstream response")
+                .eventCategory("repository")
+                .eventAction("proxy_cache")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .field("file.path", key.string())
+                .error(err)
+                .log();
+            return RequestDeduplicator.FetchSignal.ERROR;
+        });
+    }
+
+    /**
+     * Save content to cache from a temp file using NIO streaming.
+     * Saves directly to storage to avoid FromStorageCache's lazy tee-content
+     * which requires the returned Content to be consumed for the save to happen.
+     * @param key Cache key
+     * @param tempFile Temp file with content
+     * @param size File size in bytes
+     * @return Save future
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<?> saveFromTempFile(
+        final Key key, final Path tempFile, final long size
+    ) {
+        if (this.storage.isPresent()) {
+            final Flowable<ByteBuffer> flow = Flowable.using(
+                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
+                chan -> Flowable.<ByteBuffer>generate(emitter -> {
+                    final ByteBuffer buf = ByteBuffer.allocate(65536);
+                    final int read = chan.read(buf);
+                    if (read < 0) {
+                        emitter.onComplete();
+                    } else {
+                        buf.flip();
+                        emitter.onNext(buf);
+                    }
+                }),
+                FileChannel::close
+            );
+            final Content content = new Content.From(Optional.of(size), flow);
+            return this.storage.get().save(key, content);
+        }
+        // Fallback: use cache.load (non-storage-backed mode)
+        final Flowable<ByteBuffer> flow = Flowable.using(
+            () -> FileChannel.open(tempFile, StandardOpenOption.READ),
+            chan -> Flowable.<ByteBuffer>generate(emitter -> {
+                final ByteBuffer buf = ByteBuffer.allocate(65536);
+                final int read = chan.read(buf);
+                if (read < 0) {
+                    emitter.onComplete();
+                } else {
+                    buf.flip();
+                    emitter.onNext(buf);
+                }
+            }),
+            FileChannel::close
+        );
+        final Content content = new Content.From(Optional.of(size), flow);
+        return this.cache.load(
+            key,
+            () -> CompletableFuture.completedFuture(Optional.of(content)),
+            CacheControl.Standard.ALWAYS
+        ).toCompletableFuture();
+    }
+
+    /**
+     * Close a FileChannel quietly.
+     * @param channel Channel to close
+     */
+    private static void closeChannelQuietly(final FileChannel channel) {
+        try {
+            if (channel.isOpen()) {
+                channel.close();
+            }
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.cache")
+                .message("Failed to close file channel")
+                .error(ex)
+                .log();
+        }
+    }
+
+    /**
+     * Delete a temp file quietly.
+     * @param path Temp file to delete
+     */
+    private static void deleteTempQuietly(final Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.cache")
+                .message("Failed to delete temp file")
+                .error(ex)
+                .log();
+        }
+    }
+
+    /**
+     * Fetch directly from upstream without caching (non-cacheable paths).
+     */
+    private CompletableFuture<Response> fetchDirect(
+        final RequestLine line, final Key key, final String owner
+    ) {
+        final long startTime = System.currentTimeMillis();
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                if (!resp.status().success()) {
+                    if (resp.status().code() == 404) {
+                        if (this.negativeCache != null
+                            && !this.isChecksumSidecar(key.string())) {
+                            resp.body().asBytesFuture().thenAccept(
+                                bytes -> this.negativeCache.cacheNotFound(key)
+                            );
+                        }
+                        this.recordProxyMetric("not_found", duration);
+                    } else if (resp.status().code() >= 500) {
+                        this.trackUpstreamFailure(
+                            new RuntimeException("HTTP " + resp.status().code())
+                        );
+                        this.recordProxyMetric("error", duration);
+                    } else {
+                        this.recordProxyMetric("client_error", duration);
+                    }
+                    return resp.body().asBytesFuture()
+                        .thenApply(bytes -> ResponseBuilder.notFound().build());
+                }
+                this.recordProxyMetric("success", duration);
+                this.enqueueEvent(key, resp.headers(), -1, owner);
+                return CompletableFuture.completedFuture(
+                    this.postProcess(
+                        ResponseBuilder.ok()
+                            .headers(stripContentEncoding(resp.headers()))
+                            .body(resp.body())
+                            .build(),
+                        line
+                    )
+                );
+            })
+            .exceptionally(error -> {
+                final long duration = System.currentTimeMillis() - startTime;
+                this.trackUpstreamFailure(error);
+                this.recordProxyMetric("exception", duration);
+                EcsLogger.warn("com.artipie." + this.repoType)
+                    .message("Direct upstream request failed with exception")
+                    .eventCategory("repository")
+                    .eventAction("proxy_upstream")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("event.duration", duration)
+                    .error(error)
+                    .log();
+                return ResponseBuilder.unavailable()
+                    .textBody("Upstream error")
+                    .build();
+            });
+    }
+
+    private CompletableFuture<RequestDeduplicator.FetchSignal> handle404(
+        final Response resp, final Key key, final long duration
+    ) {
+        this.recordProxyMetric("not_found", duration);
+        return resp.body().asBytesFuture().thenApply(bytes -> {
+            if (this.negativeCache != null && !this.isChecksumSidecar(key.string())) {
+                this.negativeCache.cacheNotFound(key);
+            }
+            return RequestDeduplicator.FetchSignal.NOT_FOUND;
+        });
+    }
+
+    private CompletableFuture<RequestDeduplicator.FetchSignal> handleNonSuccess(
+        final Response resp, final Key key, final long duration
+    ) {
+        if (resp.status().code() >= 500) {
+            this.trackUpstreamFailure(
+                new RuntimeException("HTTP " + resp.status().code())
+            );
+            this.recordProxyMetric("error", duration);
+        } else {
+            this.recordProxyMetric("client_error", duration);
+        }
+        return resp.body().asBytesFuture()
+            .thenApply(bytes -> RequestDeduplicator.FetchSignal.ERROR);
+    }
+
+    private CompletableFuture<Response> serveChecksumFromStorage(
+        final RequestLine line, final Key key, final String owner
+    ) {
+        return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
+            .thenCompose(cached -> {
+                if (cached.isPresent()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "text/plain")
+                            .body(cached.get())
+                            .build()
+                    );
+                }
+                return this.fetchDirect(line, key, owner);
+            }).toCompletableFuture();
+    }
+
+    private CompletableFuture<Response> handleRootPath(final RequestLine line) {
+        return this.client.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (resp.status().success()) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.ok()
+                            .headers(stripContentEncoding(resp.headers()))
+                            .body(resp.body())
+                            .build()
+                    );
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(ignored -> ResponseBuilder.notFound().build());
+            });
+    }
+
+    private void enqueueEvent(
+        final Key key, final Headers headers, final long size, final String owner
+    ) {
+        if (this.events.isEmpty()) {
+            return;
+        }
+        final Optional<ProxyArtifactEvent> event =
+            this.buildArtifactEvent(key, headers, size, owner);
+        event.ifPresent(e -> this.events.get().offer(e));
+    }
+
+    private void trackUpstreamFailure(final Throwable error) {
+        final String errorType;
+        if (error instanceof TimeoutException) {
+            errorType = "timeout";
+        } else if (error instanceof ConnectException) {
+            errorType = "connection_refused";
+        } else {
+            errorType = "unknown";
+        }
+        this.recordMetric(() ->
+            com.artipie.metrics.ArtipieMetrics.instance()
+                .upstreamFailure(this.repoName, this.upstreamUrl, errorType)
+        );
+    }
+
+    private void recordProxyMetric(final String result, final long duration) {
+        this.recordMetric(() -> {
+            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+                com.artipie.metrics.MicrometerMetrics.getInstance()
+                    .recordProxyRequest(this.repoName, this.upstreamUrl, result, duration);
+            }
+        });
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void recordMetric(final Runnable metric) {
+        try {
+            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+                metric.run();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.artipie.cache")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
+        }
+    }
+
+    private void logDebug(final String message, final String path) {
+        EcsLogger.debug("com.artipie." + this.repoType)
+            .message(message)
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("repository.name", this.repoName)
+            .field("url.path", path)
+            .log();
+    }
+
+    /**
+     * Strip {@code Content-Encoding} and {@code Content-Length} headers that indicate
+     * the HTTP client already decoded the response body.
+     *
+     * <p>Jetty's {@code GZIPContentDecoder} (registered by default) auto-decodes gzip,
+     * deflate and br response bodies but leaves the original {@code Content-Encoding}
+     * header intact. Passing those headers through to callers creates a header/body
+     * mismatch: the body is plain bytes while the header still claims it is compressed.
+     * Any client that trusts the header will fail to inflate the body
+     * ({@code Z_DATA_ERROR: zlib: incorrect header check}).
+     *
+     * <p>We strip {@code Content-Length} as well because it refers to the compressed
+     * size, which no longer matches the decoded body length.
+     *
+     * @param headers Upstream response headers
+     * @return Headers without Content-Encoding (gzip/deflate/br) and Content-Length
+     */
+    protected static Headers stripContentEncoding(final Headers headers) {
+        final boolean hasDecoded = StreamSupport.stream(headers.spliterator(), false)
+            .filter(h -> "content-encoding".equalsIgnoreCase(h.getKey()))
+            .map(Header::getValue)
+            .map(v -> v.toLowerCase(Locale.ROOT).trim())
+            .anyMatch(v -> v.contains("gzip") || v.contains("deflate") || v.contains("br"));
+        if (!hasDecoded) {
+            return headers;
+        }
+        final List<Header> filtered = StreamSupport.stream(headers.spliterator(), false)
+            .filter(h -> !"content-encoding".equalsIgnoreCase(h.getKey())
+                && !"content-length".equalsIgnoreCase(h.getKey()))
+            .collect(Collectors.toList());
+        return new Headers(filtered);
+    }
+
+    /**
+     * Extract Last-Modified timestamp from response headers.
+     * @param headers Response headers
+     * @return Optional epoch millis
+     */
+    protected static Optional<Long> extractLastModified(final Headers headers) {
+        try {
+            return StreamSupport.stream(headers.spliterator(), false)
+                .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
+                .findFirst()
+                .map(Header::getValue)
+                .map(val -> Instant.from(
+                    DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)
+                ).toEpochMilli());
+        } catch (final DateTimeParseException ex) {
+            EcsLogger.debug("com.artipie.cache")
+                .message("Failed to parse Last-Modified header")
+                .error(ex)
+                .log();
+            return Optional.empty();
+        }
+    }
+}

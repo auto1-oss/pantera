@@ -178,7 +178,7 @@ final class RpmSliceDownloadITCase {
     private void start(final Policy<?> perms, final Authentication auth) {
         this.server = new VertxSliceServer(
             RpmSliceDownloadITCase.VERTX,
-            new LoggingSlice(new RpmSlice(this.asto, perms, auth, RpmSliceDownloadITCase.CONFIG))
+            new LoggingSlice(new RpmSlice(this.asto, perms, auth, RpmSliceDownloadITCase.CONFIG, Optional.empty()))
         );
         this.port = this.server.start();
         Testcontainers.exposeHostPorts(this.port);

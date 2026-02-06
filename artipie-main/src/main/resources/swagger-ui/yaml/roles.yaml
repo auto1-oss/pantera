@@ -3,7 +3,7 @@ info:
   version: 1.0.0
   title: Artipie - OpenAPI 3.0
   description:
-    This is Atripie Server based on the OpenAPI 3.0 specification.
+    This is Artipie Server based on the OpenAPI 3.0 specification.
   license:
     name: MIT
 externalDocs:
@@ -16,6 +16,7 @@ paths:
   /api/v1/roles:
     get:
       summary: List all roles.
+      description: Returns all configured roles with their permissions and enabled status. Requires read permission on the role API.
       operationId: listAllRoles
       tags:
         - roles
@@ -41,6 +42,7 @@ paths:
   /api/v1/roles/{role}:
     get:
       summary: Get role info.
+      description: Returns the configuration for a specific role including its permissions and enabled status. Returns 404 if the role does not exist.
       operationId: getRole
       tags:
         - roles
@@ -62,6 +64,10 @@ paths:
                 $ref: "#/components/schemas/Role"
         '404':
           description: Role does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -72,6 +78,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     put:
       summary: Create or replace role.
+      description: Creates a new role or replaces an existing one. The request body must contain the role permissions. Requires create or update permission.
       operationId: putRole
       tags:
         - roles
@@ -95,6 +102,12 @@ paths:
           description: Role successfully added
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -103,6 +116,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     delete:
       summary: Delete role info.
+      description: Permanently removes a role. Users assigned to this role will lose its permissions. Returns 404 if the role does not exist.
       operationId: deleteRole
       tags:
         - roles
@@ -120,6 +134,10 @@ paths:
           description: Role removed successfully
         '404':
           description: Role does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -131,6 +149,7 @@ paths:
   /api/v1/roles/{role}/disable:
     post:
       summary: Disable role.
+      description: Disables a role without deleting it. Users assigned to this role will temporarily lose its permissions. Returns 404 if the role does not exist.
       operationId: disable
       tags:
         - roles
@@ -148,6 +167,10 @@ paths:
           description: Role disabled successfully
         '404':
           description: Role does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -159,6 +182,7 @@ paths:
   /api/v1/roles/{role}/enable:
     post:
       summary: Enable role.
+      description: Re-enables a previously disabled role. Users assigned to this role will regain its permissions. Returns 404 if the role does not exist.
       operationId: enable
       tags:
         - roles
@@ -176,6 +200,10 @@ paths:
           description: Role enabled successfully
         '404':
           description: Role does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -295,6 +323,16 @@ components:
                 enum: ["read", "write"]
           description: Permissions for cache REST API operations
           example: ["read", "write"]
+        api_search_permissions:
+          oneOf:
+            - type: string
+              enum: ["*"]
+            - type: array
+              items:
+                type: string
+                enum: ["read", "write"]
+          description: Permissions for search REST API operations
+          example: ["read"]
         adapter_basic_permissions:
           type: object
           description: Repository-specific artifact permissions
@@ -313,5 +351,9 @@ components:
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 security:
   - bearerAuth: []

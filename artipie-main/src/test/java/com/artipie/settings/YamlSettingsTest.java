@@ -339,6 +339,29 @@ class YamlSettingsTest {
         );
     }
 
+    @Test
+    void closeIsIdempotent() throws Exception {
+        final YamlSettings settings = new YamlSettings(
+            this.config("some/path"), this.temp, new QuartzService()
+        );
+        settings.close();
+        Assertions.assertDoesNotThrow(
+            settings::close,
+            "Calling close() a second time should not throw"
+        );
+    }
+
+    @Test
+    void closeWithNoDatabaseOrValkey() throws Exception {
+        final YamlSettings settings = new YamlSettings(
+            this.config("some/path"), this.temp, new QuartzService()
+        );
+        Assertions.assertDoesNotThrow(
+            settings::close,
+            "close() should complete without error when no database or Valkey is configured"
+        );
+    }
+
     @SuppressWarnings("PMD.UnusedPrivateMethod")
     private static Stream<String> badYamls() {
         return Stream.of(

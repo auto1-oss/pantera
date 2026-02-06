@@ -78,7 +78,7 @@ public final class LayoutFactory {
                 layout = new NpmLayout();
                 break;
             case GRADLE:
-                layout = new GradleLayout();
+                layout = new MavenLayout();
                 break;
             case COMPOSER:
                 layout = new ComposerLayout();

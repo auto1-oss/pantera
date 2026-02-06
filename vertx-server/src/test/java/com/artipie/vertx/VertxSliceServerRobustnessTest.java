@@ -491,6 +491,91 @@ final class VertxSliceServerRobustnessTest {
         assertThat("Should have 5 errors", errorCount, equalTo(5));
     }
 
+    @Test
+    @DisplayName("VertxSliceServer default constructor configures HTTP/2 flow control windows")
+    void http2ServerOptionsHaveLargeWindowSize() throws Exception {
+        final int expectedStreamWindow = 16 * 1024 * 1024;   // 16 MB
+        final int expectedConnWindow   = 128 * 1024 * 1024;  // 128 MB
+
+        // Instantiate using the constructor that builds HttpServerOptions internally
+        // so we validate the actual production configuration, not a hand-built copy.
+        this.server = new VertxSliceServer(
+            this.vertx,
+            (line, headers, body) -> CompletableFuture.completedFuture(
+                ResponseBuilder.ok().build()
+            ),
+            this.port,
+            Duration.ZERO
+        );
+
+        // Read the private options field via reflection (test is in same package but field is private)
+        final java.lang.reflect.Field optionsField =
+            VertxSliceServer.class.getDeclaredField("options");
+        optionsField.setAccessible(true);
+        final io.vertx.core.http.HttpServerOptions opts =
+            (io.vertx.core.http.HttpServerOptions) optionsField.get(this.server);
+
+        assertThat(
+            "Stream-level window must be 16 MB",
+            opts.getInitialSettings().getInitialWindowSize(),
+            equalTo(expectedStreamWindow)
+        );
+        assertThat(
+            "Connection-level window must be 128 MB",
+            opts.getHttp2ConnectionWindowSize(),
+            equalTo(expectedConnWindow)
+        );
+    }
+
+    @Test
+    @DisplayName("Large streaming upload is not killed by request timeout while data is flowing")
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    void streamingUploadNotKilledByRequestTimeout() throws Exception {
+        // Use an aggressively short request timeout (500 ms).
+        // The slice takes 2 seconds to respond after consuming the body.
+        // With withRequestTimeout wrapping serveWithStream this always produces 503.
+        // After the fix it must return 200 because the streaming path relies only
+        // on the connection idle timeout — the same model Tomcat/Jetty use.
+        final Duration shortTimeout = Duration.ofMillis(500);
+
+        this.server = new VertxSliceServer(
+            this.vertx,
+            (line, headers, body) -> {
+                // Consume body then delay — simulates slow storage write
+                final CompletableFuture<com.artipie.http.Response> fut = new CompletableFuture<>();
+                io.reactivex.Flowable.fromPublisher(body)
+                    .toList()
+                    .delay(2, TimeUnit.SECONDS)
+                    .subscribe(
+                        chunks -> fut.complete(ResponseBuilder.ok().textBody("stored").build()),
+                        fut::completeExceptionally
+                    );
+                return fut;
+            },
+            new io.vertx.core.http.HttpServerOptions().setPort(this.port),
+            shortTimeout
+        );
+        this.server.start();
+
+        // Body must be larger than DEFAULT_BODY_BUFFER_THRESHOLD (1 MB) to trigger serveWithStream
+        final int bodySize = 2 * 1024 * 1024; // 2 MB
+        final byte[] payload = new byte[bodySize];
+        new java.util.Random().nextBytes(payload);
+
+        final io.vertx.reactivex.ext.web.client.HttpResponse<io.vertx.reactivex.core.buffer.Buffer> response =
+            this.client
+                .put(this.port, HOST, "/upload")
+                .putHeader("Content-Length", String.valueOf(bodySize))
+                .rxSendBuffer(io.vertx.reactivex.core.buffer.Buffer.buffer(payload))
+                .blockingGet();
+
+        assertThat(
+            "Streaming upload must succeed (200), not be killed by request timeout (503)",
+            response.statusCode(),
+            equalTo(200)
+        );
+    }
+
     private static int findFreePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();

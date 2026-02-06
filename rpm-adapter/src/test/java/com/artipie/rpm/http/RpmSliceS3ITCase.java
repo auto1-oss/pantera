@@ -217,7 +217,7 @@ public final class RpmSliceS3ITCase {
         new Rpm(this.storage, config).batchUpdate(Key.ROOT).blockingAwait();
         this.server = new VertxSliceServer(
             RpmSliceS3ITCase.VERTX,
-            new LoggingSlice(new RpmSlice(this.storage, policy, auth, config))
+            new LoggingSlice(new RpmSlice(this.storage, policy, auth, config, Optional.empty()))
         );
         final int port = this.server.start();
         Testcontainers.exposeHostPorts(port);

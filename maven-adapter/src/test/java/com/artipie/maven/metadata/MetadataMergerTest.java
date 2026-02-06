@@ -134,11 +134,11 @@ class MetadataMergerTest {
             Matchers.containsString("<versioning>")
         );
 
-        // Verify lastUpdated is present
+        // Verify lastUpdated uses Maven-standard yyyyMMddHHmmss format (14 digits)
         MatcherAssert.assertThat(
-            "Merged metadata should have lastUpdated",
+            "Merged metadata should have lastUpdated in yyyyMMddHHmmss format",
             merged,
-            Matchers.containsString("<lastUpdated>")
+            Matchers.matchesRegex("(?s).*<lastUpdated>\\d{14}</lastUpdated>.*")
         );
     }
 

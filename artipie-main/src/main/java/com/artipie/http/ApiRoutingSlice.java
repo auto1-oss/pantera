@@ -6,12 +6,14 @@ package com.artipie.http;
 
 import com.artipie.asto.Content;
 import com.artipie.http.rq.RequestLine;
+import com.artipie.settings.repo.Repositories;
 import org.apache.http.client.utils.URIBuilder;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -19,19 +21,20 @@ import java.util.regex.Pattern;
  * Slice decorator which redirects API requests to repository format paths.
  * Supports multiple access patterns for different repository types.
  * <p>
- * Supported patterns for most repositories:
- * - /{repo_name}
- * - /{prefix}/{repo_name}
- * - /api/{repo_name}
- * - /{prefix}/api/{repo_name}
- * - /api/{repo_type}/{repo_name}
- * - /{prefix}/api/{repo_type}/{repo_name}
+ * Supported patterns for all repositories:
+ * <ul>
+ *   <li>/{repo_name}</li>
+ *   <li>/{prefix}/{repo_name}</li>
+ *   <li>/api/{repo_name}</li>
+ *   <li>/{prefix}/api/{repo_name}</li>
+ *   <li>/api/{repo_type}/{repo_name}</li>
+ *   <li>/{prefix}/api/{repo_type}/{repo_name}</li>
+ * </ul>
  * <p>
- * For gradle, rpm, and maven (limited support):
- * - /{repo_name}
- * - /{prefix}/{repo_name}
- * - /api/{repo_name}
- * - /{prefix}/api/{repo_name}
+ * When the first segment after /api/ matches a known repo type (e.g., "npm"),
+ * the second segment is checked against the repository registry. If it is a
+ * known repo name, the repo_type interpretation is used. Otherwise, the first
+ * segment is treated as the repo name (repo_name interpretation).
  */
 public final class ApiRoutingSlice implements Slice {
 
@@ -75,11 +78,39 @@ public final class ApiRoutingSlice implements Slice {
     private final Slice origin;
 
     /**
-     * Decorates slice with API routing.
+     * Predicate to check if a repository name exists.
+     */
+    private final Predicate<String> repoExists;
+
+    /**
+     * Constructor with repository registry for disambiguation.
+     * @param origin Origin slice
+     * @param repos Repository registry
+     */
+    public ApiRoutingSlice(final Slice origin, final Repositories repos) {
+        this.origin = origin;
+        this.repoExists = name -> repos.config(name).isPresent();
+    }
+
+    /**
+     * Constructor without repository registry (backward compatible).
+     * Falls back to assuming segments[1] is always a repo name
+     * when first segment matches a repo type.
      * @param origin Origin slice
      */
     public ApiRoutingSlice(final Slice origin) {
         this.origin = origin;
+        this.repoExists = name -> true;
+    }
+
+    /**
+     * Constructor with custom predicate (for testing).
+     * @param origin Origin slice
+     * @param repoExists Predicate to check if a repo name exists
+     */
+    ApiRoutingSlice(final Slice origin, final Predicate<String> repoExists) {
+        this.origin = origin;
+        this.repoExists = repoExists;
     }
 
     @Override
@@ -88,60 +119,61 @@ public final class ApiRoutingSlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         final Matcher matcher = PTN_API.matcher(path);
-        
+
         if (matcher.matches()) {
             final String prefix = matcher.group(1);    // e.g., "/test_prefix" or null
             final String apiPath = matcher.group(2);   // Everything after /api/
-            
+
             // Split the path into segments
             final String[] segments = apiPath.split("/", 3);
             if (segments.length < 1) {
                 return this.origin.response(line, headers, body);
             }
-            
-            // Check if first segment is a repo_type
+
+            // Check if first segment is a repo_type.
+            // Ambiguity: /api/npm/X — is "npm" the repo_type or repo_name?
+            // Resolved by checking if X is a known repository name. If yes,
+            // use repo_type interpretation. If not, treat first segment as
+            // the repo_name.
             final String firstSegment = segments[0];
-            if (REPO_TYPE_MAPPING.containsKey(firstSegment) && segments.length >= 2) {
+            if (REPO_TYPE_MAPPING.containsKey(firstSegment)
+                && segments.length >= 2
+                && this.repoExists.test(segments[1])) {
                 // Pattern: /api/{repo_type}/{repo_name}[/rest]
                 final String repoName = segments[1];
                 final String rest = segments.length > 2 ? "/" + segments[2] : "";
-                final String newPath = (prefix != null ? prefix : "") + "/" + repoName + rest;
-                
-                // Preserve original path in header for metadata-url generation
-                final Headers newHeaders = headers.copy();
-                newHeaders.add("X-Original-Path", path);
-                
-                return this.origin.response(
-                    new RequestLine(
-                        line.method().toString(),
-                        new URIBuilder(line.uri()).setPath(newPath).toString(),
-                        line.version()
-                    ),
-                    newHeaders,
-                    body
-                );
+                return this.rewrite(line, headers, body, path, prefix, repoName, rest);
             } else {
                 // Pattern: /api/{repo_name}[/rest]
                 final String repoName = firstSegment;
-                final String rest = segments.length > 1 ? "/" + apiPath.substring(repoName.length() + 1) : "";
-                final String newPath = (prefix != null ? prefix : "") + "/" + repoName + rest;
-                
-                // Preserve original path in header for metadata-url generation
-                final Headers newHeaders = headers.copy();
-                newHeaders.add("X-Original-Path", path);
-                
-                return this.origin.response(
-                    new RequestLine(
-                        line.method().toString(),
-                        new URIBuilder(line.uri()).setPath(newPath).toString(),
-                        line.version()
-                    ),
-                    newHeaders,
-                    body
-                );
+                final String rest = segments.length > 1
+                    ? "/" + apiPath.substring(repoName.length() + 1) : "";
+                return this.rewrite(line, headers, body, path, prefix, repoName, rest);
             }
         }
-        
+
         return this.origin.response(line, headers, body);
+    }
+
+    /**
+     * Rewrite the request path and forward to origin.
+     */
+    private CompletableFuture<Response> rewrite(
+        final RequestLine line, final Headers headers, final Content body,
+        final String originalPath, final String prefix,
+        final String repoName, final String rest
+    ) {
+        final String newPath = (prefix != null ? prefix : "") + "/" + repoName + rest;
+        final Headers newHeaders = headers.copy();
+        newHeaders.add("X-Original-Path", originalPath);
+        return this.origin.response(
+            new RequestLine(
+                line.method().toString(),
+                new URIBuilder(line.uri()).setPath(newPath).toString(),
+                line.version()
+            ),
+            newHeaders,
+            body
+        );
     }
 }

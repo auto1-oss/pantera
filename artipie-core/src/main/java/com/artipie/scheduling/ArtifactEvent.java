@@ -63,13 +63,19 @@ public final class ArtifactEvent {
     private final Optional<Long> release;
 
     /**
+     * Path prefix for index-based group lookups (e.g., "com/google/guava/guava/32.1.3-jre").
+     * Nullable — only set by proxy package processors.
+     */
+    private final String pathPrefix;
+
+    /**
      * Ctor for the event to remove all artifact versions.
      * @param repoType Repository type
      * @param repoName Repository name
      * @param artifactName Artifact name
      */
     public ArtifactEvent(String repoType, String repoName, String artifactName) {
-        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, "", 0L, 0L, Optional.empty(), Type.DELETE_ALL);
+        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, "", 0L, 0L, Optional.empty(), null, Type.DELETE_ALL);
     }
 
     /**
@@ -81,7 +87,7 @@ public final class ArtifactEvent {
      */
     public ArtifactEvent(String repoType, String repoName,
                          String artifactName, String version) {
-        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, version, 0L, 0L, Optional.empty(), Type.DELETE_VERSION);
+        this(repoType, repoName, ArtifactEvent.DEF_OWNER, artifactName, version, 0L, 0L, Optional.empty(), null, Type.DELETE_VERSION);
     }
 
     /**
@@ -92,11 +98,14 @@ public final class ArtifactEvent {
      * @param version Artifact version
      * @param size Artifact size
      * @param created Artifact created date
+     * @param release Remote release date
+     * @param pathPrefix Path prefix for index lookups (nullable)
      * @param etype Event type
      */
     private ArtifactEvent(String repoType, String repoName, String owner,
                           String artifactName, String version, long size,
-                          long created, Optional<Long> release, Type etype) {
+                          long created, Optional<Long> release, String pathPrefix,
+                          Type etype) {
         this.repoType = repoType;
         this.repoName = repoName;
         this.owner = owner;
@@ -105,6 +114,7 @@ public final class ArtifactEvent {
         this.size = size;
         this.created = created;
         this.release = release == null ? Optional.empty() : release;
+        this.pathPrefix = pathPrefix;
         this.eventType = etype;
     }
 
@@ -121,7 +131,7 @@ public final class ArtifactEvent {
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size,
                          final long created) {
-        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), Type.INSERT);
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), null, Type.INSERT);
     }
 
     /**
@@ -130,7 +140,7 @@ public final class ArtifactEvent {
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size,
                          final long created, final Type etype) {
-        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), etype);
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.empty(), null, etype);
     }
 
     /**
@@ -147,7 +157,25 @@ public final class ArtifactEvent {
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size,
                          final long created, final Long release) {
-        this(repoType, repoName, owner, artifactName, version, size, created, Optional.ofNullable(release), Type.INSERT);
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.ofNullable(release), null, Type.INSERT);
+    }
+
+    /**
+     * Ctor to insert artifact data with explicit created and release timestamps and path prefix.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @param owner Owner username
+     * @param artifactName Artifact name
+     * @param version Artifact version
+     * @param size Artifact size
+     * @param created Artifact created (uploaded) date
+     * @param release Remote release date (nullable)
+     * @param pathPrefix Path prefix for index lookups (nullable)
+     */
+    public ArtifactEvent(final String repoType, final String repoName, final String owner,
+                         final String artifactName, final String version, final long size,
+                         final long created, final Long release, final String pathPrefix) {
+        this(repoType, repoName, owner, artifactName, version, size, created, Optional.ofNullable(release), pathPrefix, Type.INSERT);
     }
 
     /**
@@ -162,7 +190,7 @@ public final class ArtifactEvent {
     public ArtifactEvent(final String repoType, final String repoName, final String owner,
                          final String artifactName, final String version, final long size) {
         this(repoType, repoName, owner, artifactName, version, size,
-            System.currentTimeMillis(), Optional.empty(), Type.INSERT);
+            System.currentTimeMillis(), Optional.empty(), null, Type.INSERT);
     }
 
     /**
@@ -227,6 +255,14 @@ public final class ArtifactEvent {
      */
     public String owner() {
         return this.owner;
+    }
+
+    /**
+     * Path prefix for index-based group lookups.
+     * @return Path prefix or null if not set
+     */
+    public String pathPrefix() {
+        return this.pathPrefix;
     }
 
     /**

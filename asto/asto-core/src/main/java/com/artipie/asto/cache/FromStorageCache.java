@@ -11,9 +11,13 @@ import com.artipie.asto.rx.RxFuture;
 import com.artipie.asto.rx.RxStorageWrapper;
 import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
+import io.reactivex.Flowable;
 import io.reactivex.Single;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Cache implementation that tries to obtain items from storage cache,
@@ -73,12 +77,12 @@ public final class FromStorageCache implements Cache {
                     content -> {
                         final Single<Optional<? extends Content>> res;
                         if (content.isPresent()) {
-                            // CRITICAL: Don't call content.get() twice - it's a OneTimePublisher!
-                            // Save content as-is (size will be computed during save if needed)
-                            final Content remoteContent = content.get();
-                            res = rxsto.save(key, remoteContent)
-                            // Read back saved content (optimization happens during cache hits above)
-                            .andThen(rxsto.value(key)).map(Optional::of);
+                            // Stream-through: deliver bytes to caller immediately while
+                            // saving a copy to storage in the background.
+                            // This avoids the save-then-read-back two-pass I/O penalty.
+                            res = Single.just(
+                                Optional.of(teeContent(key, content.get(), this.storage))
+                            );
                         } else {
                             res = Single.fromCallable(Optional::empty);
                         }
@@ -86,5 +90,54 @@ public final class FromStorageCache implements Cache {
                     }
                 )
             ).to(SingleInterop.get());
+    }
+
+    /**
+     * Create a tee-Content that forwards bytes to the caller while accumulating
+     * them for background storage save.
+     *
+     * @param key Storage key for caching
+     * @param remote Remote content to tee
+     * @param sto Storage to save to
+     * @return Content that streams to caller and saves to storage
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static Content teeContent(final Key key, final Content remote, final Storage sto) {
+        final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        final AtomicBoolean saveFired = new AtomicBoolean(false);
+        final Flowable<ByteBuffer> teed = Flowable.fromPublisher(remote)
+            .doOnNext(buf -> {
+                final ByteBuffer copy = buf.asReadOnlyBuffer();
+                final byte[] bytes = new byte[copy.remaining()];
+                copy.get(bytes);
+                buffer.write(bytes);
+            })
+            .doOnComplete(() -> {
+                if (saveFired.compareAndSet(false, true)) {
+                    try {
+                        sto.save(key, new Content.From(buffer.toByteArray()))
+                            .whenComplete((ignored, err) -> {
+                                if (err != null) {
+                                    EcsLogger.warn("com.artipie.asto.cache")
+                                        .message(String.format("Stream-through: failed to save to cache for key '%s'", key.string()))
+                                        .eventCategory("cache")
+                                        .eventAction("stream_through_save")
+                                        .eventOutcome("failure")
+                                        .error(err)
+                                        .log();
+                                }
+                            });
+                    } catch (final Exception ex) {
+                        EcsLogger.warn("com.artipie.asto.cache")
+                            .message(String.format("Stream-through: exception initiating save for key '%s'", key.string()))
+                            .eventCategory("cache")
+                            .eventAction("stream_through_save")
+                            .eventOutcome("failure")
+                            .error(ex)
+                            .log();
+                    }
+                }
+            });
+        return new Content.From(remote.size(), teed);
     }
 }

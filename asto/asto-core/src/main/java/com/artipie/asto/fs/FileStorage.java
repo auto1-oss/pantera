@@ -249,13 +249,21 @@ public final class FileStorage implements Storage {
                 // Create temp file in .tmp directory at storage root to avoid filename length issues
                 // Using parent directory could still exceed 255-byte limit if parent path is long
                 final Path tmpDir = this.dir.resolve(".tmp");
-                tmpDir.toFile().mkdirs();
+                try {
+                    Files.createDirectories(tmpDir);
+                } catch (final IOException iex) {
+                    throw new ArtipieIOException(iex);
+                }
                 final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
 
                 // Ensure target directory exists
                 final Path parent = path.getParent();
                 if (parent != null) {
-                    parent.toFile().mkdirs();
+                    try {
+                        Files.createDirectories(parent);
+                    } catch (final IOException iex) {
+                        throw new ArtipieIOException(iex);
+                    }
                 }
 
                 return ImmutablePair.of(path, tmp);
@@ -494,13 +502,26 @@ public final class FileStorage implements Storage {
     private static CompletableFuture<Void> move(final Path source, final Path dest) {
         return CompletableFuture.supplyAsync(
             () -> {
-                dest.getParent().toFile().mkdirs();
+                try {
+                    Files.createDirectories(dest.getParent());
+                } catch (final IOException iex) {
+                    throw new ArtipieIOException(iex);
+                }
                 return dest;
             }
         ).thenAcceptAsync(
             dst -> {
                 try {
                     Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+                } catch (final java.nio.file.NoSuchFileException nfe) {
+                    // Retry once: parent dir may have been removed by concurrent operation
+                    try {
+                        Files.createDirectories(dst.getParent());
+                        Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (final IOException retry) {
+                        retry.addSuppressed(nfe);
+                        throw new ArtipieIOException(retry);
+                    }
                 } catch (final IOException iex) {
                     throw new ArtipieIOException(iex);
                 }

@@ -18,7 +18,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
@@ -223,7 +223,7 @@ public final class MetadataMerger {
                     writer.write("    </versions>\n");
 
                     writer.write("    <lastUpdated>");
-                    writer.write(String.valueOf(Instant.now().toEpochMilli()));
+                    writer.write(MavenTimestamp.now());
                     writer.write("</lastUpdated>\n");
 
                     writer.write("  </versioning>\n");

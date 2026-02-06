@@ -103,12 +103,11 @@ public final class BlockedThreadDiagnostics {
             instance = new BlockedThreadDiagnostics();
             instance.start();
             EcsLogger.info("com.artipie.diagnostics")
-                .message("Blocked thread diagnostics initialized")
+                .message(String.format(
+                    "Blocked thread diagnostics initialized: GC check interval 1s, thread check interval 5s, GC pause threshold %dms",
+                    GC_PAUSE_THRESHOLD_MS))
                 .eventCategory("system")
                 .eventAction("diagnostics_init")
-                .field("gc.check.interval.sec", 1)
-                .field("thread.check.interval.sec", 5)
-                .field("gc.pause.threshold.ms", GC_PAUSE_THRESHOLD_MS)
                 .log();
         }
         return instance;
@@ -158,13 +157,11 @@ public final class BlockedThreadDiagnostics {
             if (gcTimeDelta > GC_PAUSE_THRESHOLD_MS && gcCountDelta > 0) {
                 final long avgPauseMs = gcTimeDelta / gcCountDelta;
                 EcsLogger.warn("com.artipie.diagnostics")
-                    .message("Long GC pause detected - may cause blocked thread warnings")
+                    .message(String.format(
+                        "Long GC pause detected - may cause blocked thread warnings: time delta %dms, %d collections, avg pause %dms, total GC time %dms",
+                        gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
                     .eventCategory("system")
                     .eventAction("gc_pause")
-                    .field("gc.time.delta.ms", gcTimeDelta)
-                    .field("gc.count.delta", gcCountDelta)
-                    .field("gc.avg.pause.ms", avgPauseMs)
-                    .field("gc.total.time.ms", totalGcTime)
                     .log();
 
                 // Also log thread states during long GC
@@ -207,12 +204,11 @@ public final class BlockedThreadDiagnostics {
             // Only log if there are blocked event loop threads
             if (blockedCount > 0) {
                 EcsLogger.warn("com.artipie.diagnostics")
-                    .message("Event loop threads in BLOCKED state")
+                    .message(String.format(
+                        "Event loop threads in BLOCKED state: %d blocked, %d waiting, %d runnable",
+                        blockedCount, waitingCount, runnableCount))
                     .eventCategory("system")
                     .eventAction("thread_state")
-                    .field("eventloop.blocked", blockedCount)
-                    .field("eventloop.waiting", waitingCount)
-                    .field("eventloop.runnable", runnableCount)
                     .log();
                 this.logAllBlockedThreads();
             }
@@ -242,13 +238,13 @@ public final class BlockedThreadDiagnostics {
                     }
 
                     EcsLogger.error("com.artipie.diagnostics")
-                        .message("Blocked event loop thread details")
+                        .message(String.format(
+                            "Blocked event loop thread details: lock=%s, lock owner=%s",
+                            info.getLockName(), info.getLockOwnerName()))
                         .eventCategory("system")
                         .eventAction("blocked_thread")
-                        .field("thread.name", info.getThreadName())
-                        .field("lock.name", info.getLockName())
-                        .field("lock.owner", info.getLockOwnerName())
-                        .field("stack.trace", sb.toString())
+                        .field("process.thread.name", info.getThreadName())
+                        .field("error.stack_trace", sb.toString())
                         .log();
                 }
             }
@@ -279,7 +275,7 @@ public final class BlockedThreadDiagnostics {
     }
 
     /**
-     * Shutdown diagnostics.
+     * Shutdown diagnostics instance.
      */
     public void shutdown() {
         this.scheduler.shutdown();
@@ -290,6 +286,17 @@ public final class BlockedThreadDiagnostics {
         } catch (final InterruptedException e) {
             this.scheduler.shutdownNow();
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Shutdown the singleton diagnostics instance (if initialized).
+     * Safe to call even if never initialized.
+     */
+    public static synchronized void shutdownInstance() {
+        if (instance != null) {
+            instance.shutdown();
+            instance = null;
         }
     }
 }

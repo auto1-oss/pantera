@@ -47,6 +47,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -164,6 +166,18 @@ final class ProxySlice implements Slice {
     private final CacheControl indexCacheControl;
 
     /**
+     * Index pages currently being refreshed in background (stale-while-revalidate).
+     * Prevents duplicate refresh operations for the same index.
+     */
+    private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+
+    /**
+     * Cached Last-Modified headers from upstream for conditional requests.
+     * Key: storage key string, Value: Last-Modified header value.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, String> lastModifiedCache;
+
+    /**
      * Ctor with default 12h metadata TTL.
      * @param clients HTTP clients
      * @param auth Authenticator
@@ -225,6 +239,11 @@ final class ProxySlice implements Slice {
         this.storage = new BlockingStorage(backend);
         this.asyncStorage = backend;
         this.indexCacheControl = new CacheTimeControl(backend, metadataTtl);
+        this.refreshing = ConcurrentHashMap.newKeySet();
+        this.lastModifiedCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofHours(24))
+            .build();
     }
 
     @Override
@@ -355,6 +374,7 @@ final class ProxySlice implements Slice {
         });
     }
     
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private CompletableFuture<Response> serveNonArtifact(
         final RequestLine line, final Headers rqheaders, final Content body, final String user
     ) {
@@ -362,97 +382,346 @@ final class ProxySlice implements Slice {
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
         final Key key = ProxySlice.keyFromPath(line);
         final RequestLine upstream = this.upstreamLine(line);
+        // Stale-while-revalidate: check if we have stale cached content
+        return this.asyncStorage.exists(key).thenCompose(exists -> {
+            if (exists) {
+                return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
+                    if (!fresh) {
+                        // Stale content - serve immediately + background refresh
+                        this.backgroundRefreshIndex(key, line, upstream, user);
+                        return this.asyncStorage.value(key).thenCompose(cached ->
+                            this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
+                        );
+                    }
+                    // Fresh cache hit - serve from storage
+                    return this.asyncStorage.value(key).thenCompose(cached ->
+                        this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
+                    );
+                });
+            }
+            // Cache miss - fetch from upstream with write-time rewriting
+            return this.fetchNonArtifact(
+                line, rqheaders, body, user, key, upstream, remote, remoteSuccess
+            );
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.artipie.pypi")
+                .message("Non-artifact request failed")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .eventOutcome("failure")
+                .field("url.path", line.uri().getPath())
+                .error(err)
+                .log();
+            return ResponseBuilder.notFound().build();
+        });
+    }
+
+    /**
+     * Fetch non-artifact content from upstream with write-time URL rewriting.
+     * URLs are rewritten once at write time and cached pre-rewritten.
+     */
+    private CompletableFuture<Response> fetchNonArtifact(
+        final RequestLine line, final Headers rqheaders, final Content body,
+        final String user, final Key key, final RequestLine upstream,
+        final AtomicReference<Headers> remote, final AtomicBoolean remoteSuccess
+    ) {
         return this.cache.load(
             key,
             new Remote.WithErrorHandling(
                 () -> {
-                    final CompletableFuture<Response> fetch;
-                    
-                    // Check mirror cache first for all paths
-                    final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
-                    if (mirror != null) {
-                        EcsLogger.debug("com.artipie.pypi")
-                            .message("Serving via cached mirror")
-                            .eventCategory("repository")
-                            .eventAction("proxy_request")
-                            .field("url.path", line.uri().getPath())
-                            .field("destination.address", mirror.toString())
-                            .log();
-                        fetch = this.fetchFromMirror(line, mirror);
-                    } else if (this.isPackageFilePath(line)) {
-                        // For /packages/ paths without mirror mapping:
-                        // PyPI serves package files from files.pythonhosted.org, not pypi.org/simple
-                        // Construct the CDN URL directly since pip may request files before index pages
-                        final URI filesUri = URI.create("https://files.pythonhosted.org" + line.uri().getPath());
-                        EcsLogger.debug("com.artipie.pypi")
-                            .message("Package file request (no mirror) -> fetching from files.pythonhosted.org")
-                            .eventCategory("repository")
-                            .eventAction("proxy_request")
-                            .field("url.path", line.uri().getPath())
-                            .field("destination.address", filesUri.toString())
-                            .log();
-                        fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
-                            EcsLogger.debug("com.artipie.pypi")
-                                .message("files.pythonhosted.org response")
-                                .eventCategory("repository")
-                                .eventAction("proxy_request")
-                                .field("url.path", line.uri().getPath())
-                                .field("http.response.status_code", resp.status().code())
-                                .log();
-                            return resp;
-                        });
-                    } else {
-                        // For other paths without mirrors, forward to upstream
-                        EcsLogger.debug("com.artipie.pypi")
-                            .message("Forwarding to primary upstream")
-                            .eventCategory("repository")
-                            .eventAction("proxy_request")
-                            .field("url.path", line.uri().getPath())
-                            .field("destination.address", upstream.uri().toString())
-                            .log();
-                        fetch = this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
-                    }
-                    return fetch.thenApply(response -> {
-                        remote.set(response.headers());
-                        if (response.status().success()) {
-                            remoteSuccess.set(true);
-                            // Enqueue artifact event immediately on successful remote fetch
-                            // ONLY for actual artifact downloads (archives/wheels). This ensures
-                            // metadata is recorded even if cooldown blocks this request, while
-                            // avoiding index requests polluting the queue.
-                            if (ProxySlice.this.extract(line).isPresent()) {
-                                ProxySlice.this.extract(line).ifPresent(info -> {
-                                    final Optional<Instant> releaseDate = ProxySlice.this.releaseInstant(response.headers());
-                                    ProxySlice.this.events.ifPresent(queue ->
-                                        queue.add(new ProxyArtifactEvent(
-                                            key,
-                                            ProxySlice.this.rname,
-                                            user,
-                                            releaseDate.map(Instant::toEpochMilli)
-                                        ))
-                                    );
-                                });
+                    final CompletableFuture<Response> fetch =
+                        this.fetchFromUpstream(line, upstream);
+                    return fetch.thenCompose(
+                        (Response response) -> {
+                            remote.set(response.headers());
+                            if (response.status().success()) {
+                                remoteSuccess.set(true);
+                                this.storeLastModified(key, response.headers());
+                                if (ProxySlice.this.extract(line).isPresent()) {
+                                    ProxySlice.this.extract(line).ifPresent(info -> {
+                                        final Optional<Instant> releaseDate =
+                                            ProxySlice.this.releaseInstant(
+                                                response.headers()
+                                            );
+                                        ProxySlice.this.events.ifPresent(queue ->
+                                            queue.add(new ProxyArtifactEvent(
+                                                key, ProxySlice.this.rname, user,
+                                                releaseDate.map(Instant::toEpochMilli)
+                                            ))
+                                        );
+                                    });
+                                }
+                                final String path = line.uri().getPath();
+                                if (path != null && path.endsWith(".metadata")) {
+                                    final CompletionStage<Optional<? extends Content>>
+                                        res = CompletableFuture.completedFuture(
+                                            Optional.of(response.body())
+                                        );
+                                    return res;
+                                }
+                                return ProxySlice.this.preRewriteContent(
+                                    response.body(), response.headers(), line
+                                ).thenApply(
+                                    opt -> (Optional<? extends Content>) opt
+                                );
                             }
-                            return Optional.of(response.body());
+                            return CompletableFuture.completedFuture(
+                                Optional.empty()
+                            );
                         }
-                        return Optional.empty();
-                    });
+                    );
                 }
             ),
             this.indexCacheControl
         ).handle(
             (content, throwable) -> {
                 if (throwable != null || content.isEmpty()) {
-                    // Consume request body to prevent Vert.x request leak
                     return body.asBytesFuture().thenApply(ignored ->
                         ResponseBuilder.notFound().build()
                     );
                 }
+                // Content is pre-rewritten at write time — serve directly
+                if (remoteSuccess.get()) {
+                    return this.servePreRewritten(line, content.get(), remote.get());
+                }
+                // Cache hit — may need rewriting for pre-optimization cached content
                 return this.afterHit(
-                    line, rqheaders, key, content.get(), remote.get(), remoteSuccess.get()
+                    line, rqheaders, key, content.get(), remote.get(), false
                 );
             }
         ).thenCompose(Function.identity()).toCompletableFuture();
+    }
+
+    /**
+     * Fetch response from upstream (mirror, files.pythonhosted.org, or origin).
+     */
+    private CompletableFuture<Response> fetchFromUpstream(
+        final RequestLine line, final RequestLine upstream
+    ) {
+        final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
+        if (mirror != null) {
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Serving via cached mirror")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", line.uri().getPath())
+                .field("destination.address", mirror.toString())
+                .log();
+            return this.fetchFromMirror(line, mirror);
+        }
+        if (this.isPackageFilePath(line)) {
+            final URI filesUri = URI.create(
+                "https://files.pythonhosted.org" + line.uri().getPath()
+            );
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Package file request -> files.pythonhosted.org")
+                .eventCategory("repository")
+                .eventAction("proxy_request")
+                .field("url.path", line.uri().getPath())
+                .log();
+            return this.fetchFromMirror(line, filesUri);
+        }
+        EcsLogger.debug("com.artipie.pypi")
+            .message("Forwarding to primary upstream")
+            .eventCategory("repository")
+            .eventAction("proxy_request")
+            .field("url.path", line.uri().getPath())
+            .log();
+        return this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
+    }
+
+    /**
+     * Pre-rewrite index content at write time.
+     * Rewrites URLs once before caching so reads serve pre-rewritten content.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<Optional<Content>> preRewriteContent(
+        final Content body, final Headers headers, final RequestLine line
+    ) {
+        return body.asBytesFuture().thenApply(bytes -> {
+            try {
+                if (bytes.length == 0) {
+                    if (this.packageIndexWithoutLinks(line, "")) {
+                        return Optional.<Content>empty();
+                    }
+                    return Optional.<Content>of(new Content.From(bytes));
+                }
+                if (bytes.length > MAX_INDEX_SIZE) {
+                    return Optional.<Content>of(new Content.From(bytes));
+                }
+                final String original = new String(bytes, StandardCharsets.UTF_8);
+                final Header ctype = ProxySlice.contentType(headers, line);
+                final String rewritten = this.rewriteIndexBody(original, ctype, line);
+                // Check for package index pages with no download links
+                if (this.packageIndexWithoutLinks(line, rewritten)) {
+                    return Optional.<Content>empty();
+                }
+                if (rewritten.equals(original)) {
+                    return Optional.<Content>of(new Content.From(bytes));
+                }
+                return Optional.<Content>of(
+                    new Content.From(rewritten.getBytes(StandardCharsets.UTF_8))
+                );
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.artipie.pypi")
+                    .message("Write-time rewriting failed, caching original")
+                    .eventCategory("cache")
+                    .eventAction("pre_rewrite")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
+                return Optional.<Content>of(new Content.From(bytes));
+            }
+        });
+    }
+
+    /**
+     * Serve pre-rewritten content directly (no rewrite needed on read).
+     */
+    private CompletableFuture<Response> servePreRewritten(
+        final RequestLine line, final Content content, final Headers remote
+    ) {
+        final Header ctype = ProxySlice.contentType(remote, line);
+        return CompletableFuture.completedFuture(
+            ResponseBuilder.ok()
+                .headers(Headers.from(ctype))
+                .body(content)
+                .build()
+        );
+    }
+
+    /**
+     * Store Last-Modified header from upstream for conditional requests.
+     */
+    private void storeLastModified(final Key key, final Headers headers) {
+        if (headers != null) {
+            StreamSupport.stream(headers.spliterator(), false)
+                .filter(h -> "last-modified".equalsIgnoreCase(h.getKey()))
+                .findFirst()
+                .ifPresent(h -> this.lastModifiedCache.put(key.string(), h.getValue()));
+        }
+    }
+
+    /**
+     * Background refresh of index page (stale-while-revalidate pattern).
+     * Serves stale content immediately while refreshing in background.
+     * Uses conditional request (If-Modified-Since) when possible.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void backgroundRefreshIndex(
+        final Key key, final RequestLine line,
+        final RequestLine upstream, final String user
+    ) {
+        final String keyStr = key.string();
+        if (!this.refreshing.add(keyStr)) {
+            return;
+        }
+        CompletableFuture.runAsync(() -> {
+            try {
+                // Build request with conditional header if available
+                final String lm = this.lastModifiedCache.getIfPresent(keyStr);
+                final Headers extra = lm != null
+                    ? Headers.from(new Header("If-Modified-Since", lm))
+                    : Headers.EMPTY;
+                // Fetch from upstream
+                this.fetchFromUpstreamWithHeaders(line, upstream, extra)
+                    .thenCompose(response -> {
+                        if (response.status().code() == 304) {
+                            // Not modified — keep cached version
+                            EcsLogger.debug("com.artipie.pypi")
+                                .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
+                                .eventCategory("cache")
+                                .eventAction("stale_while_revalidate")
+                                .eventOutcome("success")
+                                .log();
+                            return CompletableFuture.completedFuture((Void) null);
+                        }
+                        if (!response.status().success()) {
+                            return CompletableFuture.completedFuture((Void) null);
+                        }
+                        // Store new Last-Modified
+                        this.storeLastModified(key, response.headers());
+                        // Pre-rewrite and save
+                        final String path = line.uri().getPath();
+                        final CompletableFuture<Optional<Content>> rewritten;
+                        if (path != null && path.endsWith(".metadata")) {
+                            rewritten = CompletableFuture.completedFuture(
+                                Optional.of(response.body())
+                            );
+                        } else {
+                            rewritten = this.preRewriteContent(
+                                response.body(), response.headers(), line
+                            );
+                        }
+                        return rewritten.thenCompose(opt -> {
+                            if (opt.isPresent()) {
+                                return opt.get().asBytesFuture().thenCompose(bytes ->
+                                    this.asyncStorage.save(
+                                        key, new Content.From(bytes)
+                                    )
+                                );
+                            }
+                            return CompletableFuture.completedFuture(null);
+                        });
+                    }).whenComplete((v, err) -> {
+                        this.refreshing.remove(keyStr);
+                        if (err != null) {
+                            EcsLogger.warn("com.artipie.pypi")
+                                .message(String.format("Background refresh failed for key '%s'", keyStr))
+                                .eventCategory("cache")
+                                .eventAction("stale_while_revalidate")
+                                .eventOutcome("failure")
+                                .error(err)
+                                .log();
+                        } else {
+                            EcsLogger.debug("com.artipie.pypi")
+                                .message(String.format("Background refresh completed for key '%s'", keyStr))
+                                .eventCategory("cache")
+                                .eventAction("stale_while_revalidate")
+                                .eventOutcome("success")
+                                .log();
+                        }
+                    });
+            } catch (final Exception ex) {
+                this.refreshing.remove(keyStr);
+                EcsLogger.warn("com.artipie.pypi")
+                    .message(String.format("Background refresh exception for key '%s'", keyStr))
+                    .eventCategory("cache")
+                    .eventAction("stale_while_revalidate")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
+            }
+        });
+    }
+
+    /**
+     * Fetch from upstream with custom headers (for conditional requests).
+     */
+    private CompletableFuture<Response> fetchFromUpstreamWithHeaders(
+        final RequestLine line, final RequestLine upstream, final Headers extra
+    ) {
+        final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
+        if (mirror != null) {
+            final Slice slice = this.sliceForUri(mirror);
+            final String path = Optional.ofNullable(mirror.getRawPath()).orElse("/");
+            return slice.response(
+                new RequestLine(line.method().value(), path, line.version()),
+                extra, Content.EMPTY
+            );
+        }
+        if (this.isPackageFilePath(line)) {
+            final URI filesUri = URI.create(
+                "https://files.pythonhosted.org" + line.uri().getPath()
+            );
+            final Slice slice = this.sliceForUri(filesUri);
+            final String path = Optional.ofNullable(filesUri.getRawPath()).orElse("/");
+            return slice.response(
+                new RequestLine(line.method().value(), path, line.version()),
+                extra, Content.EMPTY
+            );
+        }
+        return this.origin.response(upstream, extra, Content.EMPTY);
     }
 
     private CompletableFuture<Response> serveArtifact(
@@ -559,21 +828,17 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Response> serveArtifactContent(
         final RequestLine line, final Key key, final Content content, final Headers remote
     ) {
-        return new com.artipie.asto.streams.ContentAsStream<Response>(content)
-            .process(stream -> {
-                try {
-                    final byte[] data = stream.readAllBytes();
-                    // Artifact served successfully (keep at debug to reduce log noise)
-                    return ResponseBuilder.ok()
-                        .headers(Headers.from(ProxySlice.contentType(remote, line)))
-                        .body(new Content.From(data))
-                        .header(new com.artipie.http.headers.ContentLength((long) data.length), true)
-                        .build();
-                } catch (final java.io.IOException ex) {
-                    throw new com.artipie.asto.ArtipieIOException(ex);
-                }
-            })
-            .toCompletableFuture();
+        // Stream content directly without buffering into byte[].
+        // StreamThroughCache or FromStorageCache provides Content with size info.
+        final ResponseBuilder builder = ResponseBuilder.ok()
+            .headers(Headers.from(ProxySlice.contentType(remote, line)))
+            .body(content);
+        content.size().ifPresent(size ->
+            builder.header(
+                new com.artipie.http.headers.ContentLength(size), true
+            )
+        );
+        return CompletableFuture.completedFuture(builder.build());
     }
 
     private CompletableFuture<Response> afterHit(
@@ -587,25 +852,21 @@ final class ProxySlice implements Slice {
         final Optional<ArtifactCoordinates> coords = this.extract(line);
         if (coords.isEmpty()) {
             final String path = line.uri().getPath();
-            // Serve .metadata files exactly as received (no rewriting, no charset conversions)
+            // Serve .metadata files directly (no rewriting needed)
             if (path != null && path.endsWith(".metadata")) {
-                return new com.artipie.asto.streams.ContentAsStream<Response>(content)
-                    .process(stream -> {
-                        try {
-                            final byte[] bytes = stream.readAllBytes();
-                            return ResponseBuilder.ok()
-                                // Keep minimal headers; integrity depends on body bytes, not headers
-                                .headers(Headers.EMPTY)
-                                .body(new Content.From(bytes))
-                                .header(new com.artipie.http.headers.ContentLength((long) bytes.length), true)
-                                .build();
-                        } catch (final java.io.IOException ex) {
-                            throw new com.artipie.asto.ArtipieIOException(ex);
-                        }
-                    })
-                    .toCompletableFuture();
+                final ResponseBuilder builder = ResponseBuilder.ok()
+                    .headers(Headers.EMPTY)
+                    .body(content);
+                content.size().ifPresent(size ->
+                    builder.header(
+                        new com.artipie.http.headers.ContentLength(size), true
+                    )
+                );
+                return CompletableFuture.completedFuture(builder.build());
             }
             final Header ctype = ProxySlice.contentType(remote, line);
+            // For cache hits: rewrite may be needed for pre-optimization cached content.
+            // For post-optimization cached content, rewrite patterns won't match (no-op).
             return this.rewriteIndex(content, ctype, line)
                 .thenApply(
                     updated -> updated
@@ -1069,7 +1330,11 @@ final class ProxySlice implements Slice {
             .flatMap(value -> {
                 try {
                     return Optional.of(Instant.from(RFC_1123.parse(value)));
-                } catch (final DateTimeParseException ignored) {
+                } catch (final DateTimeParseException ex) {
+                    EcsLogger.debug("com.artipie.pypi")
+                        .message("Failed to parse Last-Modified header")
+                        .error(ex)
+                        .log();
                     return Optional.empty();
                 }
             });

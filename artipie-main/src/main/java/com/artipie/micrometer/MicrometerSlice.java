@@ -9,6 +9,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -101,8 +102,11 @@ public final class MicrometerSlice implements Slice {
                     .ifPresent(contentLength -> {
                         try {
                             responseBody.record(Long.parseLong(contentLength));
-                        } catch (NumberFormatException ignored) {
-                            // Skip if Content-Length is invalid
+                        } catch (final NumberFormatException ex) {
+                            EcsLogger.debug("com.artipie.metrics")
+                                .message("Invalid Content-Length header value")
+                                .error(ex)
+                                .log();
                         }
                     });
                 // Pass response through unchanged - no body wrapping

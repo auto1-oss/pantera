@@ -44,6 +44,19 @@ public final class SettingsFromPath {
      * @throws IOException On IO error
      */
     public Settings find(final QuartzService quartz) throws IOException {
+        return this.find(quartz, java.util.Optional.empty());
+    }
+
+    /**
+     * Searches settings by the provided path, reusing a pre-created DataSource.
+     * @param quartz Quartz service
+     * @param dataSource Shared DataSource to avoid duplicate connection pools
+     * @return Artipie settings
+     * @throws IOException On IO error
+     * @since 1.20.13
+     */
+    public Settings find(final QuartzService quartz,
+        final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
         boolean initialize = Boolean.parseBoolean(System.getenv("ARTIPIE_INIT"));
         if (!Files.exists(this.path)) {
             new JavaResource("example/artipie.yaml").copy(this.path);
@@ -51,7 +64,7 @@ public final class SettingsFromPath {
         }
         final Settings settings = new YamlSettings(
             Yaml.createYamlInput(this.path.toFile()).readYamlMapping(),
-            this.path.getParent(), quartz
+            this.path.getParent(), quartz, dataSource
         );
         final BlockingStorage bsto = new BlockingStorage(settings.configStorage());
         final Key init = new Key.From(".artipie", "initialized");
@@ -104,6 +117,7 @@ public final class SettingsFromPath {
             final Path tmp = Files.createTempFile(
                 Path.of(res).getFileName().toString(), ".tmp"
             );
+            tmp.toFile().deleteOnExit();
             new JavaResource(String.format("example/%s/%s", dir, res)).copy(tmp);
             bsto.save(new Key.From(res), Files.readAllBytes(tmp));
             Files.delete(tmp);

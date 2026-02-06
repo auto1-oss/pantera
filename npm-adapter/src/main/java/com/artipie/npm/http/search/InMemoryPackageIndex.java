@@ -7,6 +7,7 @@ package com.artipie.npm.http.search;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.cache.CacheConfig;
 import com.artipie.cache.ValkeyConnection;
+import com.artipie.http.misc.ConfigDefaults;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -68,7 +69,9 @@ public final class InMemoryPackageIndex implements PackageIndex {
     public InMemoryPackageIndex(final ValkeyConnection valkey) {
         this.twoTier = (valkey != null);
         this.l2 = this.twoTier ? valkey.async() : null;
-        this.ttl = Duration.ofHours(24);
+        this.ttl = Duration.ofHours(
+            ConfigDefaults.getLong("ARTIPIE_NPM_INDEX_TTL_HOURS", 24L)
+        );
         
         // L1: Hot data cache
         final Duration l1Ttl = this.twoTier ? Duration.ofMinutes(5) : this.ttl;

@@ -12,8 +12,10 @@ import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.misc.JoinedTagsSource;
 import com.artipie.docker.misc.Pagination;
 import com.artipie.http.log.EcsLogger;
+import org.slf4j.MDC;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -50,32 +52,43 @@ public final class MultiReadManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        // Capture MDC context before crossing the async boundary.
+        // supplyAsync() runs on ForkJoinPool which does not inherit thread-local MDC.
+        // Without this, CacheManifests.get() captures requestOwner = null → UNKNOWN.
+        final Map<String, String> mdcContext = MDC.getCopyOfContextMap();
         return CompletableFuture.supplyAsync(() -> {
-            for (Manifests m : manifests) {
-                Optional<Manifest> res = m.get(ref).handle(
-                    (manifest, throwable) -> {
-                        final Optional<Manifest> result;
-                        if (throwable == null) {
-                            result = manifest;
-                        } else {
-                            EcsLogger.error("com.artipie.docker")
-                                .message("Failed to read manifest")
-                                .eventCategory("repository")
-                                .eventAction("manifest_get")
-                                .eventOutcome("failure")
-                                .field("container.image.hash.all", ref.digest())
-                                .error(throwable)
-                                .log();
-                            result = Optional.empty();
-                        }
-                        return result;
-                    }
-                ).toCompletableFuture().join();
-                if (res.isPresent()) {
-                    return res;
-                }
+            if (mdcContext != null) {
+                MDC.setContextMap(mdcContext);
             }
-            return Optional.empty();
+            try {
+                for (Manifests m : manifests) {
+                    Optional<Manifest> res = m.get(ref).handle(
+                        (manifest, throwable) -> {
+                            final Optional<Manifest> result;
+                            if (throwable == null) {
+                                result = manifest;
+                            } else {
+                                EcsLogger.error("com.artipie.docker")
+                                    .message("Failed to read manifest")
+                                    .eventCategory("repository")
+                                    .eventAction("manifest_get")
+                                    .eventOutcome("failure")
+                                    .field("container.image.hash.all", ref.digest())
+                                    .error(throwable)
+                                    .log();
+                                result = Optional.empty();
+                            }
+                            return result;
+                        }
+                    ).toCompletableFuture().join();
+                    if (res.isPresent()) {
+                        return res;
+                    }
+                }
+                return Optional.empty();
+            } finally {
+                MDC.clear();
+            }
         });
     }
 

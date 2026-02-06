@@ -24,7 +24,6 @@ import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -105,52 +104,6 @@ public final class Rpm {
     }
 
     /**
-     * Update the meta info for single artifact.
-     *
-     * @param key The name of the file just updated
-     * @return Completion or error signal.
-     * @deprecated use {@link #update(Key)} instead
-     */
-    @Deprecated
-    public Completable update(final String key) {
-        return this.update(new Key.From(key));
-    }
-
-    /**
-     * Update the meta info for single artifact.
-     *
-     * @param key The name of the file just updated
-     * @return Completion or error signal.
-     * @deprecated This method calls {@link #batchUpdate(Key)} with parent of the key
-     */
-    @Deprecated
-    public Completable update(final Key key) {
-        final String[] parts = key.string().split("/");
-        final Key folder;
-        if (parts.length == 1) {
-            folder = Key.ROOT;
-        } else {
-            folder = new Key.From(
-                Arrays.stream(parts)
-                    .limit(parts.length - 1)
-                    .toArray(String[]::new)
-            );
-        }
-        return this.batchUpdate(folder);
-    }
-
-    /**
-     * Batch update RPM files for repository.
-     * @param prefix Repository key prefix (String)
-     * @return Completable action
-     * @deprecated use {@link #batchUpdate(Key)} instead
-     */
-    @Deprecated
-    public Completable batchUpdate(final String prefix) {
-        return this.batchUpdate(new Key.From(prefix));
-    }
-
-    /**
      * Batch update RPM files for repository.
      * @param prefix Repository key prefix
      * @return Completable action
@@ -168,19 +121,6 @@ public final class Rpm {
                 }).toCompletableFuture()
             )
         );
-    }
-
-    /**
-     * Batch update RPM files for repository,
-     * works exactly as {@link Rpm#batchUpdate(Key)}.
-     * @param prefix Repo prefix
-     * @return Completable action
-     * @throws ArtipieIOException On IO-operation errors
-     * @deprecated Use {@link Rpm#batchUpdate(Key)}
-     */
-    @Deprecated
-    public Completable batchUpdateIncrementally(final Key prefix) {
-        return this.batchUpdate(prefix);
     }
 
     /**

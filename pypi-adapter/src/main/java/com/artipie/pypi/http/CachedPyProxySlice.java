@@ -315,14 +315,17 @@ public final class CachedPyProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.pypi")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

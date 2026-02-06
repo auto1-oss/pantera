@@ -7,7 +7,7 @@ package com.artipie;
 import com.artipie.adapters.docker.DockerProxy;
 import com.artipie.adapters.file.FileProxy;
 import com.artipie.adapters.go.GoProxy;
-import com.artipie.adapters.gradle.GradleProxy;
+
 import com.artipie.adapters.maven.MavenProxy;
 import com.artipie.adapters.php.ComposerGroupSlice;
 import com.artipie.adapters.php.ComposerProxy;
@@ -31,7 +31,7 @@ import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownSupport;
 import com.artipie.files.FilesSlice;
 import com.artipie.gem.http.GemSlice;
-import com.artipie.gradle.http.GradleSlice;
+
 import com.artipie.helm.http.HelmSlice;
 import com.artipie.hex.http.HexSlice;
 import com.artipie.http.ContentLengthRestriction;
@@ -42,6 +42,7 @@ import com.artipie.http.log.EcsLogger;
 import com.artipie.http.Slice;
 import com.artipie.http.TimeoutSlice;
 import com.artipie.group.GroupSlice;
+import com.artipie.index.ArtifactIndex;
 import com.artipie.http.auth.Authentication;
 import com.artipie.http.auth.BasicAuthScheme;
 import com.artipie.http.auth.CombinedAuthScheme;
@@ -90,8 +91,11 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -100,6 +104,27 @@ import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 public class RepositorySlices {
+
+    /**
+     * Thread counter for the resolve executor pool.
+     */
+    private static final AtomicInteger RESOLVE_COUNTER = new AtomicInteger(0);
+
+    /**
+     * Dedicated executor for blocking slice resolution operations (e.g. Jetty client start).
+     * Prevents blocking the Vert.x event loop when proxy repositories are initialized.
+     */
+    private static final ExecutorService RESOLVE_EXECUTOR =
+        Executors.newFixedThreadPool(
+            Math.max(4, Runtime.getRuntime().availableProcessors()),
+            r -> {
+                final Thread t = new Thread(
+                    r, "slice-resolve-" + RESOLVE_COUNTER.incrementAndGet()
+                );
+                t.setDaemon(true);
+                return t;
+            }
+        );
 
     /**
      * Pattern to trim path before passing it to adapters' slice.
@@ -155,6 +180,8 @@ public class RepositorySlices {
         this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
         this.sharedClients = new SharedJettyClients();
         this.slices = CacheBuilder.newBuilder()
+            .maximumSize(500)
+            .expireAfterAccess(30, java.util.concurrent.TimeUnit.MINUTES)
             .removalListener(
                 (RemovalListener<SliceKey, SliceValue>) notification -> notification.getValue()
                     .client()
@@ -212,8 +239,7 @@ public class RepositorySlices {
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
-                .field("port", port)
-                .field("source", "cache")
+                .field("url.port", port)
                 .log();
             return cached.slice();
         }
@@ -221,13 +247,12 @@ public class RepositorySlices {
         if (resolved.isPresent()) {
             this.slices.put(skey, resolved.get());
             EcsLogger.debug("com.artipie.settings")
-                .message("Repository slice resolved and cached")
+                .message("Repository slice resolved and cached from config")
                 .eventCategory("repository")
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
-                .field("port", port)
-                .field("source", "config")
+                .field("url.port", port)
                 .log();
             return resolved.get().slice();
         }
@@ -238,7 +263,7 @@ public class RepositorySlices {
             .eventAction("slice_resolve")
             .eventOutcome("failure")
             .field("repository.name", name.string())
-            .field("port", port)
+            .field("url.port", port)
             .log();
         return new SliceSimple(
             () -> ResponseBuilder.notFound()
@@ -441,38 +466,6 @@ public class RepositorySlices {
                 );
                 break;
             case "gradle":
-                // Use streaming browsing for fast directory listings
-                slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
-                        new GradleSlice(cfg.storage(), securityPolicy(),
-                            authentication(), cfg.name(), artifactEvents()),
-                        cfg.storage()
-                    )
-                );
-                break;
-            case "gradle-proxy":
-                clientLease = jettyClientSlices(cfg);
-                clientSlices = clientLease.client();
-                final Slice gradleProxySlice = new CombinedAuthzSliceWrap(
-                    new TimeoutSlice(
-                        new GradleProxy(
-                            clientSlices,
-                            cfg,
-                            settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
-                            this.cooldown
-                        ),
-                        settings.httpClientSettings().proxyTimeout()
-                    ),
-                    authentication(),
-                    tokens.auth(),
-                    new OperationControl(
-                        securityPolicy(),
-                        new AdapterBasicPermission(cfg.name(), Action.Standard.READ)
-                    )
-                );
-                // Browsing disabled for proxy repos - files are fetched on-demand from upstream
-                slice = trimPathSlice(gradleProxySlice);
-                break;
             case "maven":
                 // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
@@ -483,6 +476,7 @@ public class RepositorySlices {
                     )
                 );
                 break;
+            case "gradle-proxy":
             case "maven-proxy":
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
@@ -604,7 +598,10 @@ public class RepositorySlices {
             case "npm-group":
                 final Slice npmGroupSlice = new GroupSlice(
                     this::slice, cfg.name(), cfg.members(), port, depth,
-                    cfg.groupMemberTimeout().orElse(120L)
+                    cfg.groupMemberTimeout().orElse(120L),
+                    java.util.Collections.emptyList(),
+                    Optional.of(this.settings.artifactIndex()),
+                    proxyMembers(cfg.members())
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -661,9 +658,21 @@ public class RepositorySlices {
                 break;
             case "file-group":
             case "php-group":
+                final GroupSlice composerDelegate = new GroupSlice(
+                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    cfg.groupMemberTimeout().orElse(120L),
+                    java.util.Collections.emptyList(),
+                    Optional.of(this.settings.artifactIndex()),
+                    proxyMembers(cfg.members())
+                );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new ComposerGroupSlice(this::slice, cfg.name(), cfg.members(), port),
+                        new ComposerGroupSlice(
+                            composerDelegate,
+                            this::slice, cfg.name(), cfg.members(), port,
+                            this.settings.prefixes().prefixes().stream()
+                                .findFirst().orElse("")
+                        ),
                         authentication(),
                         tokens.auth(),
                         new OperationControl(
@@ -677,7 +686,10 @@ public class RepositorySlices {
                 // Maven groups need special metadata merging
                 final GroupSlice mavenDelegate = new GroupSlice(
                     this::slice, cfg.name(), cfg.members(), port, depth,
-                    cfg.groupMemberTimeout().orElse(120L)
+                    cfg.groupMemberTimeout().orElse(120L),
+                    java.util.Collections.emptyList(),
+                    Optional.of(this.settings.artifactIndex()),
+                    proxyMembers(cfg.members())
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -707,7 +719,10 @@ public class RepositorySlices {
                     new CombinedAuthzSliceWrap(
                         new GroupSlice(
                             this::slice, cfg.name(), cfg.members(), port, depth,
-                            cfg.groupMemberTimeout().orElse(120L)
+                            cfg.groupMemberTimeout().orElse(120L),
+                            java.util.Collections.emptyList(),
+                            Optional.of(this.settings.artifactIndex()),
+                            proxyMembers(cfg.members())
                         ),
                         authentication(),
                         tokens.auth(),
@@ -844,7 +859,17 @@ public class RepositorySlices {
             wrapIntoCommonSlices(slice, cfg),
             Optional.ofNullable(clientLease)
         );
-        } catch (RuntimeException | Error ex) {
+        } catch (final Exception ex) {
+            if (clientLease != null) {
+                clientLease.close();
+            }
+            if (ex instanceof RuntimeException) {
+                throw (RuntimeException) ex;
+            }
+            throw new IllegalStateException(
+                String.format("Failed to construct adapter slice for '%s'", cfg.name()), ex
+            );
+        } catch (final Error ex) {
             if (clientLease != null) {
                 clientLease.close();
             }
@@ -887,6 +912,41 @@ public class RepositorySlices {
 
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
+    }
+
+    /**
+     * Determine which group members are proxy repositories.
+     * A member is a proxy if its repo type ends with "-proxy".
+     *
+     * @param members Member repository names
+     * @return Set of member names that are proxy repositories
+     */
+    private Set<String> proxyMembers(final List<String> members) {
+        return members.stream()
+            .filter(this::isProxyOrContainsProxy)
+            .collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * Check if a member is a proxy repo or a group that contains proxy repos.
+     * Nested groups that contain proxies must be treated as proxy-like because
+     * their content is only indexed after being cached from upstream.
+     * @param name Member repository name
+     * @return True if proxy or group containing proxies
+     */
+    private boolean isProxyOrContainsProxy(final String name) {
+        return this.repos.config(name)
+            .map(c -> {
+                final String type = c.type();
+                if (type.endsWith("-proxy")) {
+                    return true;
+                }
+                if (type.endsWith("-group")) {
+                    return c.members().stream().anyMatch(this::isProxyOrContainsProxy);
+                }
+                return false;
+            })
+            .orElse(false);
     }
 
 
@@ -984,13 +1044,19 @@ public class RepositorySlices {
         private static final class SharedClient {
             private final HttpClientSettingsKey key;
             private final JettyClientSlices client;
+            private final CompletableFuture<Void> startFuture;
             private final AtomicInteger references = new AtomicInteger(0);
             private final AtomicBoolean metricsRegistered = new AtomicBoolean(false);
 
             SharedClient(final HttpClientSettingsKey key) {
                 this.key = key;
                 this.client = new JettyClientSlices(key.toSettings());
-                this.client.start();
+                // Start the Jetty client on the dedicated resolve executor to avoid
+                // blocking the Vert.x event loop. The start() call can take 100ms+
+                // due to SSL context initialization and socket setup.
+                this.startFuture = CompletableFuture.runAsync(
+                    this.client::start, RESOLVE_EXECUTOR
+                );
             }
 
             void retain() {
@@ -998,14 +1064,21 @@ public class RepositorySlices {
             }
 
             int release() {
-                final int remaining = this.references.decrementAndGet();
-                if (remaining < 0) {
-                    throw new IllegalStateException("Jetty client reference count became negative");
+                final int remaining = this.references.updateAndGet(current -> Math.max(0, current - 1));
+                if (remaining == 0 && this.references.get() == 0) {
+                    EcsLogger.debug("com.artipie")
+                        .message(String.format("Jetty client reference count reached zero for settings key '%s'", this.key.metricId()))
+                        .eventCategory("http_client")
+                        .eventAction("client_release")
+                        .log();
                 }
                 return remaining;
             }
 
             JettyClientSlices client() {
+                // Ensure the client has finished starting before returning it.
+                // The actual start() runs on RESOLVE_EXECUTOR, not the calling thread.
+                this.startFuture.join();
                 return this.client;
             }
 
@@ -1057,6 +1130,8 @@ public class RepositorySlices {
             }
 
             void stop() {
+                // Wait for start to complete before stopping to avoid race conditions.
+                this.startFuture.join();
                 this.client.stop();
             }
         }

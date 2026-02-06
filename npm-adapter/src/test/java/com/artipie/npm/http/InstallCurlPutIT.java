@@ -20,6 +20,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedList;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.text.StringContainsInOrder;
@@ -85,7 +86,7 @@ final class InstallCurlPutIT {
         this.url = String.format("http://host.testcontainers.internal:%s", this.port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage)),
+            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage, new LinkedList<>())),
             this.port
         );
         this.server.start();

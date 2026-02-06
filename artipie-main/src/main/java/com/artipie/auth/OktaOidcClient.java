@@ -101,13 +101,10 @@ public final class OktaOidcClient {
         final String mfaCode
     ) throws IOException, InterruptedException {
         EcsLogger.info("com.artipie.auth")
-            .message("Starting Okta authentication")
+            .message(String.format("Starting Okta authentication: issuer=%s, authnUrl=%s, authorizeUrl=%s", this.issuer, this.authnUrl, this.authorizeUrl))
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
-            .field("okta.issuer", this.issuer)
-            .field("okta.authn_url", this.authnUrl)
-            .field("okta.authorize_url", this.authorizeUrl)
             .log();
         final JsonObject authnReq = Json.createObjectBuilder()
             .add("username", username)
@@ -126,19 +123,19 @@ public final class OktaOidcClient {
                 final JsonObject errBody = json(response.body());
                 errorCode = errBody.getString("errorCode", "");
                 errorSummary = errBody.getString("errorSummary", "");
-            } catch (final Exception ignored) {
-                // Response may not be JSON
+            } catch (final Exception ex) {
+                EcsLogger.debug("com.artipie.auth")
+                    .message("Failed to parse Okta error response as JSON")
+                    .error(ex)
+                    .log();
             }
             EcsLogger.error("com.artipie.auth")
-                .message("Okta /authn failed")
+                .message(String.format("Okta /authn failed: url=%s, errorCode=%s, errorSummary=%s", this.authnUrl, errorCode, errorSummary))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", response.statusCode())
-                .field("okta.url", this.authnUrl)
-                .field("okta.error_code", errorCode)
-                .field("okta.error_summary", errorSummary)
+                .field("http.response.status_code", response.statusCode())
                 .log();
             return null;
         }
@@ -191,7 +188,6 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("tokens_null", tokens == null)
                 .log();
             return null;
         }
@@ -362,14 +358,12 @@ public final class OktaOidcClient {
         );
         if (resp.statusCode() / 100 != 3) {
             EcsLogger.error("com.artipie.auth")
-                .message("Okta authorize did not redirect")
+                .message(String.format("Okta authorize did not redirect: authorizeUrl=%s, issuer=%s", this.authorizeUrl, this.issuer))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
-                .field("okta.authorize_url", this.authorizeUrl)
-                .field("okta.issuer", this.issuer)
+                .field("http.response.status_code", resp.statusCode())
                 .log();
             return null;
         }
@@ -381,7 +375,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
+                .field("http.response.status_code", resp.statusCode())
                 .log();
             return null;
         }
@@ -391,7 +385,6 @@ public final class OktaOidcClient {
             .eventCategory("authentication")
             .eventAction("login")
             .field("user.name", username)
-            .field("okta.redirect_location", location)
             .log();
         final URI loc = URI.create(location);
         final String queryStr = loc.getQuery();
@@ -402,7 +395,6 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("okta.redirect_location", location)
                 .log();
             return null;
         }
@@ -430,25 +422,21 @@ public final class OktaOidcClient {
         }
         if (error != null) {
             EcsLogger.error("com.artipie.auth")
-                .message("Okta authorize returned error")
+                .message(String.format("Okta authorize returned error: %s - %s", error, errorDesc != null ? errorDesc : ""))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("okta.error", error)
-                .field("okta.error_description", errorDesc != null ? errorDesc : "")
                 .log();
             return null;
         }
         if (code == null || !state.equals(returnedState)) {
             EcsLogger.error("com.artipie.auth")
-                .message("Okta authorize missing code or state mismatch")
+                .message(String.format("Okta authorize missing code or state mismatch: codePresent=%s, stateMatch=%s", code != null, state.equals(returnedState)))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("code_present", code != null)
-                .field("state_match", state.equals(returnedState))
                 .log();
             return null;
         }
@@ -479,7 +467,7 @@ public final class OktaOidcClient {
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.status", resp.statusCode())
+                .field("http.response.status_code", resp.statusCode())
                 .log();
             return null;
         }
@@ -522,13 +510,11 @@ public final class OktaOidcClient {
             final String iss = json.getString("iss", "");
             if (!this.issuer.equals(iss)) {
                 EcsLogger.error("com.artipie.auth")
-                    .message("id_token issuer mismatch")
+                    .message(String.format("id_token issuer mismatch: expected=%s, actual=%s", this.issuer, iss))
                     .eventCategory("authentication")
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
-                    .field("okta.expected_issuer", this.issuer)
-                    .field("okta.actual_issuer", iss)
                     .log();
                 return null;
             }
@@ -541,13 +527,11 @@ public final class OktaOidcClient {
             }
             if (!this.clientId.equals(aud)) {
                 EcsLogger.error("com.artipie.auth")
-                    .message("id_token audience mismatch")
+                    .message(String.format("id_token audience mismatch: expected=%s, actual=%s", this.clientId, aud))
                     .eventCategory("authentication")
                     .eventAction("login")
                     .eventOutcome("failure")
                     .field("user.name", username)
-                    .field("okta.expected_aud", this.clientId)
-                    .field("okta.actual_aud", aud)
                     .log();
                 return null;
             }
@@ -574,14 +558,12 @@ public final class OktaOidcClient {
                 }
             }
             EcsLogger.info("com.artipie.auth")
-                .message("Okta authentication successful")
+                .message(String.format("Okta authentication successful: groups=[%s], groupsClaim=%s", String.join(",", groups), this.groupsClaim))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("success")
                 .field("user.name", uname)
                 .field("user.email", email != null ? email : "")
-                .field("okta.groups", String.join(",", groups))
-                .field("okta.groups_claim", this.groupsClaim)
                 .log();
             return new OktaAuthResult(uname, email, groups);
         } catch (final IllegalArgumentException err) {
@@ -623,24 +605,22 @@ public final class OktaOidcClient {
             );
             if (resp.statusCode() / 100 != 2) {
                 EcsLogger.warn("com.artipie.auth")
-                    .message("Okta userinfo endpoint failed")
+                    .message(String.format("Okta userinfo endpoint failed: url=%s", this.userinfoUrl))
                     .eventCategory("authentication")
                     .eventAction("userinfo")
                     .eventOutcome("failure")
                     .field("user.name", username)
-                    .field("http.status", resp.statusCode())
-                    .field("okta.userinfo_url", this.userinfoUrl)
+                    .field("http.response.status_code", resp.statusCode())
                     .log();
                 return null;
             }
             final JsonObject userinfo = json(resp.body());
             EcsLogger.info("com.artipie.auth")
-                .message("Okta userinfo response")
+                .message(String.format("Okta userinfo response: keys=[%s]", String.join(",", userinfo.keySet())))
                 .eventCategory("authentication")
                 .eventAction("userinfo")
                 .eventOutcome("success")
                 .field("user.name", username)
-                .field("okta.userinfo_keys", String.join(",", userinfo.keySet()))
                 .log();
             return userinfo;
         } catch (final IOException | InterruptedException err) {

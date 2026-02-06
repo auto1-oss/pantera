@@ -341,7 +341,7 @@ class ProxySliceTest {
     }
 
     @Test
-    void fetchesPackageViaMirrorMapping() {
+    void fetchesPackageViaMirrorMapping() throws Exception {
         final byte[] pkg = "package".getBytes(StandardCharsets.UTF_8);
         final String upstream =
             "https://files.pythonhosted.org/packages/aa/bb/pkg-1.0.0-py3-none-any.whl#sha256=abc";
@@ -361,7 +361,7 @@ class ProxySliceTest {
             this.authorization,
             Content.EMPTY
         ).toCompletableFuture().join();
-        slice.response(
+        final Response pkgResp = slice.response(
             new RequestLine(RqMethod.GET, "/my-pypi-proxy/packages/aa/bb/pkg-1.0.0-py3-none-any.whl"),
             this.authorization,
             Content.EMPTY
@@ -372,6 +372,10 @@ class ProxySliceTest {
             clients.lastLine().uri().getPath(),
             Matchers.equalTo("/packages/aa/bb/pkg-1.0.0-py3-none-any.whl")
         );
+        // Consume body to trigger StreamThroughCache background save
+        pkgResp.body().asBytesFuture().join();
+        // Wait for async storage save to complete
+        Thread.sleep(200);
         final byte[] cached = new BlockingStorage(this.storage)
             .value(new Key.From("my-pypi-proxy/packages/aa/bb/pkg-1.0.0-py3-none-any.whl"));
         MatcherAssert.assertThat(cached, Matchers.equalTo(pkg));

@@ -7,6 +7,7 @@ package com.artipie.asto.fs;
 import com.artipie.asto.ArtipieIOException;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.UnderLockOperation;
@@ -24,14 +25,17 @@ import io.vertx.core.file.CopyOptions;
 import io.vertx.reactivex.RxHelper;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -142,6 +146,79 @@ public final class VertxFileStorage implements Storage {
                 final long durationNs = System.nanoTime() - startNs;
                 StorageMetricsCollector.record(
                     "list",
+                    durationNs,
+                    throwable == null,
+                    this.id
+                );
+            });
+    }
+
+    @Override
+    public CompletableFuture<ListResult> list(final Key prefix, final String delimiter) {
+        final long startNs = System.nanoTime();
+        return Single.fromCallable(
+            () -> {
+                final Path path = this.path(prefix);
+                if (!Files.exists(path) || !Files.isDirectory(path)) {
+                    return ListResult.EMPTY;
+                }
+                final Collection<Key> files = new ArrayList<>();
+                final Collection<Key> directories = new LinkedHashSet<>();
+                final String separator = FileSystems.getDefault().getSeparator();
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
+                    for (final Path entry : stream) {
+                        final String fileName = entry.getFileName().toString();
+                        final Key entryKey;
+                        if (Key.ROOT.equals(prefix) || prefix.string().isEmpty()) {
+                            entryKey = new Key.From(
+                                fileName.split(separator.replace("\\", "\\\\"))
+                            );
+                        } else {
+                            final String[] prefixParts = prefix.string().split("/");
+                            final String[] nameParts =
+                                fileName.split(separator.replace("\\", "\\\\"));
+                            final String[] combined =
+                                new String[prefixParts.length + nameParts.length];
+                            System.arraycopy(
+                                prefixParts, 0, combined, 0, prefixParts.length
+                            );
+                            System.arraycopy(
+                                nameParts, 0, combined, prefixParts.length, nameParts.length
+                            );
+                            entryKey = new Key.From(combined);
+                        }
+                        if (Files.isDirectory(entry)) {
+                            final String dirKeyStr = entryKey.string().endsWith("/")
+                                ? entryKey.string()
+                                : entryKey.string() + "/";
+                            directories.add(new Key.From(dirKeyStr));
+                        } else if (Files.isRegularFile(entry)) {
+                            files.add(entryKey);
+                        }
+                    }
+                } catch (final IOException iex) {
+                    throw new ArtipieIOException(iex);
+                }
+                EcsLogger.debug("com.artipie.asto")
+                    .message(
+                        "Hierarchical list for prefix '"
+                            + prefix.string() + "' (" + files.size()
+                            + " files, " + directories.size() + " directories)"
+                    )
+                    .eventCategory("storage")
+                    .eventAction("list_hierarchical")
+                    .eventOutcome("success")
+                    .field("file.path", path.toString())
+                    .field("file.directory", this.dir.toString())
+                    .log();
+                return new ListResult.Simple(files, new ArrayList<>(directories));
+            })
+            .subscribeOn(RxHelper.blockingScheduler(this.vertx.getDelegate()))
+            .to(SingleInterop.get()).toCompletableFuture()
+            .whenComplete((result, throwable) -> {
+                final long durationNs = System.nanoTime() - startNs;
+                StorageMetricsCollector.record(
+                    "list_hierarchical",
                     durationNs,
                     throwable == null,
                     this.id

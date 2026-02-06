@@ -26,7 +26,7 @@ SOFTWARE.
   <parent>
     <artifactId>asto</artifactId>
     <groupId>com.artipie</groupId>
-    <version>1.20.12</version>
+    <version>1.20.13</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>asto-s3</artifactId>
@@ -37,36 +37,36 @@ SOFTWARE.
     <dependency>
       <groupId>com.artipie</groupId>
       <artifactId>asto-core</artifactId>
-      <version>1.20.12</version>
+      <version>1.20.13</version>
       <scope>compile</scope>
     </dependency>
     <!-- S3 client -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>s3</artifactId>
-      <version>2.23.21</version>
+      <version>2.41.29</version>
     </dependency>
     <!-- AWS SDK v2 SSO modules for profile-based SSO credentials -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sso</artifactId>
-      <version>2.23.21</version>
+      <version>2.41.29</version>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>ssooidc</artifactId>
-      <version>2.23.21</version>
+      <version>2.41.29</version>
     </dependency>
     <!-- Netty async HTTP client for AWS SDK v2 -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>netty-nio-client</artifactId>
-      <version>2.23.21</version>
+      <version>2.41.29</version>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sts</artifactId>
-      <version>2.23.21</version>
+      <version>2.41.29</version>
     </dependency>
     <!-- tests -->
     <!-- Testcontainers for S3Mock - avoids Jetty 12 classpath conflicts -->

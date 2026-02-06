@@ -203,8 +203,7 @@ public final class StorageAliasesRest extends BaseRest {
             this.caches.invalidateAll();
             context.response().setStatusCode(HttpStatus.OK_200).end();
         } catch (final IllegalStateException err) {
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404)
-                .end(err.getMessage());
+            sendError(context, HttpStatus.NOT_FOUND_404, err.getMessage());
         }
     }
 

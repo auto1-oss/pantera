@@ -1,0 +1,158 @@
+# Artipie HA Configuration
+#
+# This configuration is shared by all Artipie instances in an HA deployment.
+# All instances mount the same file and connect to the same shared infrastructure.
+#
+# Key HA requirements:
+#   1. Repository config storage MUST use S3 (not local filesystem), so all
+#      instances see the same repository definitions.
+#   2. All instances MUST connect to the same PostgreSQL database for artifact
+#      metadata, search index, and node registry.
+#   3. All instances MUST connect to the same Valkey instance for cache
+#      invalidation, negative cache, and cooldown state.
+#   4. JWT secret MUST be identical across all instances so tokens issued
+#      by one instance are valid on all others.
+#
+# Config propagation:
+#   When repository configs are stored in S3, all instances can read them.
+#   Config changes made via the REST API on any instance are written to S3
+#   and a Valkey pub/sub notification is published on artipie:config:changed.
+#   All other instances subscribe to this channel and reload their config.
+#   This means config changes are propagated within seconds across the cluster.
+
+meta:
+  # Repository configuration storage - MUST be S3 for HA deployments.
+  # Local filesystem storage will NOT propagate across instances.
+  storage:
+    type: s3
+    bucket: artipie-config
+    region: us-east-1
+    endpoint: http://s3:9000
+    credentials:
+      type: basic
+      accessKeyId: ${MINIO_ROOT_USER}
+      secretAccessKey: ${MINIO_ROOT_PASSWORD}
+
+  # JWT token settings - secret must be identical across all instances
+  jwt:
+    expires: true
+    expiry-seconds: 86400
+    secret: ${JWT_SECRET}
+
+  credentials:
+    - type: env
+    - type: artipie
+
+  policy:
+    type: artipie
+    eviction_millis: 180000
+    storage:
+      type: s3
+      bucket: artipie-config
+      region: us-east-1
+      endpoint: http://s3:9000
+      prefix: security/
+      credentials:
+        type: basic
+        accessKeyId: ${MINIO_ROOT_USER}
+        secretAccessKey: ${MINIO_ROOT_PASSWORD}
+
+  # Artifact metadata database - shared PostgreSQL
+  artifacts_database:
+    postgres_host: postgres
+    postgres_port: 5432
+    postgres_database: artipie
+    postgres_user: ${POSTGRES_USER}
+    postgres_password: ${POSTGRES_PASSWORD}
+    pool_max_size: 50
+    pool_min_idle: 10
+
+  http_client:
+    proxy_timeout: 120
+    max_connections_per_destination: 512
+    max_requests_queued_per_destination: 2048
+    idle_timeout: 30000
+    connection_timeout: 15000
+    follow_redirects: true
+    connection_acquire_timeout: 120000
+
+  http_server:
+    request_timeout: PT2M
+
+  metrics:
+    endpoint: /metrics/vertx
+    port: 8087
+    types:
+      - jvm
+      - storage
+      - http
+
+  # Cache configuration - Valkey provides cross-instance cache invalidation.
+  # When one instance invalidates a cache entry, all instances are notified
+  # via Valkey pub/sub (CacheInvalidationPubSub).
+  caches:
+    valkey:
+      enabled: true
+      host: valkey
+      port: 6379
+      timeout: 100ms
+
+    cooldown:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+
+    negative:
+      ttl: 24h
+      maxSize: 5000
+      valkey:
+        enabled: true
+        l1MaxSize: 5000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+
+    auth:
+      ttl: 5m
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 5m
+        l2MaxSize: 100000
+        l2Ttl: 5m
+
+    maven-metadata:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 0
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
+
+    npm-search:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
+
+  # Cooldown configuration for supply chain security
+  cooldown:
+    enabled: false
+    minimum_allowed_age: 7d
+    repo_types:
+      npm-proxy:
+        enabled: true
+
+  layout: org

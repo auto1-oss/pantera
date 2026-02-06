@@ -34,6 +34,8 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 import wtf.g4s8.hamcrest.json.StringIsJson;
 
+import org.slf4j.MDC;
+
 import javax.json.Json;
 import java.time.Instant;
 import java.util.Map;
@@ -133,6 +135,32 @@ final class CacheManifestsTest {
     }
 
     @Test
+    void doesNotCreateEventForDigestRef() throws Exception {
+        final ManifestReference ref = ManifestReference.from(
+            new Digest.Sha256("cb8a924afdf0229ef7515d9e5b3024e23b3eb03ddbba287f4a19c6ac90b8d221")
+        );
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final Repo cache = new AstoDocker("registry", new InMemoryStorage())
+            .repo("my-cache");
+        new CacheManifests("cache-alpine",
+            new AstoDocker("registry", new ExampleStorage()).repo("my-alpine"),
+            cache,
+            Optional.of(events),
+            "my-docker-proxy",
+            Optional.of(new DockerProxyCooldownInspector())
+        ).get(ref).toCompletableFuture().join();
+        Thread.sleep(500);
+        final boolean hasDigestEvent = events.stream().anyMatch(
+            e -> e.artifactVersion().startsWith("sha256:")
+        );
+        MatcherAssert.assertThat(
+            "Digest-based refs should NOT create artifact events",
+            hasDigestEvent,
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void recordsReleaseTimestampFromConfig() throws Exception {
         final Instant created = Instant.parse("2024-05-01T12:34:56Z");
         final Digest configDigest = new Digest.Sha256("config");
@@ -149,7 +177,7 @@ final class CacheManifestsTest {
             .build().toString().getBytes();
         final Digest manifestDigest = new Digest.Sha256("manifest");
         final Manifest manifest = new Manifest(manifestDigest, manifestBytes);
-        final ManifestReference ref = ManifestReference.from(manifest.digest());
+        final ManifestReference ref = ManifestReference.fromTag("latest");
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
         final Repo origin = new StubRepo(
@@ -181,6 +209,115 @@ final class CacheManifestsTest {
         Assertions.assertEquals(
             Optional.of(created),
             inspector.releaseDate("library/haproxy", ref.digest()).join()
+        );
+    }
+
+    /**
+     * Regression: when inspector has UNKNOWN (stored by DockerProxyCooldownSlice using
+     * pre-auth headers), CacheManifests must ignore it and use MDC user.name instead.
+     *
+     * Root cause: DockerProxyCooldownSlice resolves user from original request headers
+     * which do not contain artipie_login for Bearer token auth, so it stores UNKNOWN.
+     * Without the fix, UNKNOWN (non-null) was used directly as effectiveOwner.
+     *
+     * @since 1.20.13
+     */
+    @Test
+    void ownerResolvesFromMdcWhenInspectorHasUnknown() throws Exception {
+        final Digest configDigest = new Digest.Sha256("config");
+        final byte[] configBytes = Json.createObjectBuilder()
+            .add("created", "2024-01-01T00:00:00Z")
+            .build().toString().getBytes();
+        final byte[] manifestBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_SCHEMA2)
+            .add("config", Json.createObjectBuilder().add("digest", configDigest.string()))
+            .add("layers", Json.createArrayBuilder())
+            .build().toString().getBytes();
+        final Manifest manifest = new Manifest(new Digest.Sha256("manifest"), manifestBytes);
+        final ManifestReference ref = ManifestReference.fromTag("latest");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        // Pre-register UNKNOWN in inspector — simulates DockerProxyCooldownSlice behaviour
+        // for Bearer-token users where pre-auth headers have no artipie_login.
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        inspector.register(
+            "library/haproxy", "latest", Optional.empty(),
+            ArtifactEvent.DEF_OWNER, "docker-proxy", Optional.empty()
+        );
+        final Repo origin = new StubRepo(
+            new StaticLayers(Map.of(configDigest.string(), new TestBlob(configDigest, configBytes))),
+            new FixedManifests(manifest)
+        );
+        MDC.put("user.name", "alice");
+        try {
+            new CacheManifests(
+                "library/haproxy",
+                origin,
+                new StubRepo(new RecordingLayers(), new RecordingManifests()),
+                Optional.of(events),
+                "docker-proxy",
+                Optional.of(inspector)
+            ).get(ref).toCompletableFuture().join();
+        } finally {
+            MDC.remove("user.name");
+        }
+        ArtifactEvent event = null;
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(2);
+        while (event == null && System.currentTimeMillis() < deadline) {
+            event = events.poll();
+            if (event == null) {
+                Thread.sleep(10L);
+            }
+        }
+        Assertions.assertNotNull(event, "Expected artifact event to be queued");
+        Assertions.assertEquals(
+            "alice", event.owner(),
+            "Owner must be resolved from MDC user.name, not UNKNOWN from inspector"
+        );
+    }
+
+    /**
+     * Regression: UNKNOWN from inspector without any MDC should still yield UNKNOWN.
+     * This is correct behaviour for unauthenticated/anonymous pulls.
+     *
+     * @since 1.20.13
+     */
+    @Test
+    void ownerIsUnknownWhenInspectorHasUnknownAndNoMdc() throws Exception {
+        final Digest configDigest = new Digest.Sha256("cfg");
+        final byte[] manifestBytes = Json.createObjectBuilder()
+            .add("mediaType", Manifest.MANIFEST_SCHEMA2)
+            .add("config", Json.createObjectBuilder().add("digest", configDigest.string()))
+            .add("layers", Json.createArrayBuilder())
+            .build().toString().getBytes();
+        final Manifest manifest = new Manifest(new Digest.Sha256("mfst"), manifestBytes);
+        final ManifestReference ref = ManifestReference.fromTag("v1.0");
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
+        final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
+        inspector.register(
+            "library/nginx", "v1.0", Optional.empty(),
+            ArtifactEvent.DEF_OWNER, "docker-proxy", Optional.empty()
+        );
+        MDC.remove("user.name");
+        new CacheManifests(
+            "library/nginx",
+            new StubRepo(new StaticLayers(Map.of()), new FixedManifests(manifest)),
+            new StubRepo(new RecordingLayers(), new RecordingManifests()),
+            Optional.of(events),
+            "docker-proxy",
+            Optional.of(inspector)
+        ).get(ref).toCompletableFuture().join();
+        ArtifactEvent event = null;
+        final long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(2);
+        while (event == null && System.currentTimeMillis() < deadline) {
+            event = events.poll();
+            if (event == null) {
+                Thread.sleep(10L);
+            }
+        }
+        Assertions.assertNotNull(event, "Expected artifact event to be queued");
+        Assertions.assertEquals(
+            ArtifactEvent.DEF_OWNER, event.owner(),
+            "Owner must be UNKNOWN when no MDC user is set and inspector has UNKNOWN"
         );
     }
 

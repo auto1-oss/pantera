@@ -15,16 +15,22 @@ import com.artipie.http.rq.RequestLine;
 import com.artipie.http.log.EcsLogEvent;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.slice.KeyFromPath;
+import com.artipie.http.misc.ConfigDefaults;
+import com.artipie.index.ArtifactIndex;
 
-import java.time.Duration;
 import java.util.ArrayList;
+import java.util.concurrent.Semaphore;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import org.slf4j.MDC;
 
@@ -48,9 +54,24 @@ import org.slf4j.MDC;
 public final class GroupSlice implements Slice {
 
     /**
-     * Default timeout for member requests in seconds.
+     * Resolved drain permits from env/system property/default.
      */
-    private static final long DEFAULT_TIMEOUT_SECONDS = 120;
+    private static final int DRAIN_LIMIT =
+        ConfigDefaults.getInt("ARTIPIE_GROUP_DRAIN_PERMITS", 20);
+
+    /**
+     * Semaphore limiting concurrent response body drains to prevent memory pressure.
+     * At 30MB per npm metadata response, 20 concurrent drains = 600MB max.
+     */
+    private static final Semaphore DRAIN_PERMITS = new Semaphore(DRAIN_LIMIT);
+
+    static {
+        EcsLogger.info("com.artipie.group")
+            .message("GroupSlice drain permits configured: " + DRAIN_LIMIT)
+            .eventCategory("configuration")
+            .eventAction("group_init")
+            .log();
+    }
 
     /**
      * Group repository name.
@@ -63,14 +84,21 @@ public final class GroupSlice implements Slice {
     private final List<MemberSlice> members;
 
     /**
-     * Timeout for member requests.
+     * Routing rules for directing paths to specific members.
      */
-    private final Duration timeout;
+    private final List<RoutingRule> routingRules;
 
     /**
-     * Negative cache for member 404s.
+     * Optional artifact index for O(1) group lookups.
      */
-    private final GroupNegativeCache negativeCache;
+    private final Optional<ArtifactIndex> artifactIndex;
+
+    /**
+     * Names of members that are proxy repositories.
+     * Proxy members must always be queried on index miss because their
+     * content is only indexed after being cached.
+     */
+    private final Set<String> proxyMembers;
 
     /**
      * Request context for enhanced logging (client IP, username, trace ID, package).
@@ -131,7 +159,8 @@ public final class GroupSlice implements Slice {
         final List<String> members,
         final int port
     ) {
-        this(resolver, group, members, port, 0, DEFAULT_TIMEOUT_SECONDS);
+        this(resolver, group, members, port, 0, 0,
+            Collections.emptyList(), Optional.empty(), Collections.emptySet());
     }
 
     /**
@@ -150,7 +179,8 @@ public final class GroupSlice implements Slice {
         final int port,
         final int depth
     ) {
-        this(resolver, group, members, port, depth, DEFAULT_TIMEOUT_SECONDS);
+        this(resolver, group, members, port, depth, 0,
+            Collections.emptyList(), Optional.empty(), Collections.emptySet());
     }
 
     /**
@@ -171,23 +201,81 @@ public final class GroupSlice implements Slice {
         final int depth,
         final long timeoutSeconds
     ) {
+        this(resolver, group, members, port, depth, timeoutSeconds,
+            Collections.emptyList(), Optional.empty(), Collections.emptySet());
+    }
+
+    /**
+     * Constructor with depth, timeout, routing rules, and artifact index (backward compatible).
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex
+    ) {
+        this(resolver, group, members, port, depth, timeoutSeconds,
+            routingRules, artifactIndex, Collections.emptySet());
+    }
+
+    /**
+     * Full constructor with proxy member awareness.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     * @param proxyMembers Names of members that are proxy repositories
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers
+    ) {
         this.group = Objects.requireNonNull(group, "group");
-        this.timeout = Duration.ofSeconds(timeoutSeconds);
-        this.negativeCache = new GroupNegativeCache(group);
+        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
+        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
+        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
 
         // Deduplicate members (simple flattening for now)
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
 
-        // Create MemberSlice wrappers with circuit breakers
+        // Create MemberSlice wrappers with circuit breakers and proxy flags
         this.members = flatMembers.stream()
             .map(name -> new MemberSlice(
                 name,
-                resolver.slice(new Key.From(name), port, 0)
+                resolver.slice(new Key.From(name), port, 0),
+                this.proxyMembers.contains(name)
             ))
             .toList();
 
         EcsLogger.debug("com.artipie.group")
-            .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total)")
+            .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total, " + this.proxyMembers.size() + " proxies)")
             .eventCategory("repository")
             .eventAction("group_init")
             .field("repository.name", group)
@@ -225,6 +313,54 @@ public final class GroupSlice implements Slice {
 
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
+        // Index-first: try O(1) lookup before parallel fan-out
+        if (this.artifactIndex.isPresent()) {
+            final ArtifactIndex idx = this.artifactIndex.get();
+            // Strip leading slash for path-prefix matching in DB
+            final String locatePath = path.startsWith("/") ? path.substring(1) : path;
+            return idx.locate(locatePath)
+                .thenCompose(repos -> {
+                    if (!repos.isEmpty()) {
+                        // Filter to members of this group
+                        final Set<String> indexHits = Set.copyOf(repos);
+                        final List<MemberSlice> targeted = this.members.stream()
+                            .filter(m -> indexHits.contains(m.name()))
+                            .toList();
+                        if (!targeted.isEmpty()) {
+                            EcsLogger.debug("com.artipie.group")
+                                .message("Index hit: targeting " + targeted.size() + " member(s)")
+                                .eventCategory("repository")
+                                .eventAction("group_index_hit")
+                                .field("repository.name", this.group)
+                                .field("url.path", path)
+                                .log();
+                            return queryTargetedMembers(targeted, line, headers, body, ctx);
+                        }
+                    }
+                    // Index miss: the index may not match non-standard path
+                    // formats (PyPI /simple/, Composer /p2/, etc.), so query
+                    // all members instead of returning 404 prematurely.
+                    EcsLogger.debug("com.artipie.group")
+                        .message("Index miss: falling back to all members"
+                            + (idx.isWarmedUp() ? " (index warm)" : " (index cold)"))
+                        .eventCategory("repository")
+                        .eventAction("group_index_miss")
+                        .field("repository.name", this.group)
+                        .field("url.path", path)
+                        .log();
+                    return queryAllMembersInParallel(line, headers, body, ctx);
+                })
+                .whenComplete((resp, err) -> {
+                    final long duration = System.currentTimeMillis() - requestStartTime;
+                    if (err != null) {
+                        recordGroupRequest("error", duration);
+                    } else if (resp.status().success()) {
+                        recordGroupRequest("success", duration);
+                    } else {
+                        recordGroupRequest("not_found", duration);
+                    }
+                });
+        }
         return queryAllMembersInParallel(line, headers, body, ctx)
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - requestStartTime;
@@ -255,25 +391,132 @@ public final class GroupSlice implements Slice {
         final Key pathKey = new KeyFromPath(line.uri().getPath());
 
         return body.asBytesFuture().thenCompose(requestBytes -> {
+            // Apply routing rules to filter members for this path
+            final List<MemberSlice> eligibleMembers = this.filterByRoutingRules(
+                line.uri().getPath()
+            );
             final CompletableFuture<Response> result = new CompletableFuture<>();
             final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(this.members.size());
+            final AtomicInteger pending = new AtomicInteger(eligibleMembers.size());
+            final AtomicBoolean anyServerError = new AtomicBoolean(false);
+            // Track all member futures for best-effort cancellation on first success
+            final List<CompletableFuture<Response>> memberFutures =
+                new ArrayList<>(eligibleMembers.size());
 
-            // Start ALL members in parallel
-            for (MemberSlice member : this.members) {
-                queryMember(member, line, headers, requestBytes, ctx)
-                    .orTimeout(this.timeout.getSeconds(), java.util.concurrent.TimeUnit.SECONDS)
-                    .whenComplete((resp, err) -> {
-                        if (err != null) {
-                            handleMemberFailure(member, err, completed, pending, result, ctx);
-                        } else {
-                            handleMemberResponse(member, resp, completed, pending, result, startTime, pathKey, ctx);
-                        }
-                    });
+            if (eligibleMembers.isEmpty()) {
+                result.complete(ResponseBuilder.notFound().build());
+                return result;
             }
+
+            // Start eligible members in parallel
+            for (MemberSlice member : eligibleMembers) {
+                final CompletableFuture<Response> memberFuture =
+                    queryMember(member, line, headers, requestBytes, ctx);
+                memberFutures.add(memberFuture);
+                memberFuture.whenComplete((resp, err) -> {
+                    if (err != null) {
+                        handleMemberFailure(member, err, completed, pending, anyServerError, result, ctx);
+                    } else {
+                        handleMemberResponse(member, resp, completed, pending, anyServerError, result, startTime, pathKey, ctx);
+                    }
+                });
+            }
+
+            // When first success completes the result, cancel remaining member requests
+            result.whenComplete((resp, err) -> {
+                for (CompletableFuture<Response> future : memberFutures) {
+                    if (!future.isDone()) {
+                        future.cancel(true);
+                    }
+                }
+            });
 
             return result;
         });
+    }
+
+    /**
+     * Query only targeted members (from index hits) in parallel.
+     */
+    private CompletableFuture<Response> queryTargetedMembers(
+        final List<MemberSlice> targeted,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final RequestContext ctx
+    ) {
+        final long startTime = System.currentTimeMillis();
+        final Key pathKey = new KeyFromPath(line.uri().getPath());
+
+        return body.asBytesFuture().thenCompose(requestBytes -> {
+            final CompletableFuture<Response> result = new CompletableFuture<>();
+            final AtomicBoolean completed = new AtomicBoolean(false);
+            final AtomicInteger pending = new AtomicInteger(targeted.size());
+            final AtomicBoolean anyServerError = new AtomicBoolean(false);
+            final List<CompletableFuture<Response>> memberFutures =
+                new ArrayList<>(targeted.size());
+
+            for (MemberSlice member : targeted) {
+                final CompletableFuture<Response> memberFuture =
+                    queryMemberDirect(member, line, headers, requestBytes, ctx);
+                memberFutures.add(memberFuture);
+                memberFuture.whenComplete((resp, err) -> {
+                    if (err != null) {
+                        handleMemberFailure(member, err, completed, pending, anyServerError, result, ctx);
+                    } else {
+                        handleMemberResponse(member, resp, completed, pending, anyServerError, result, startTime, pathKey, ctx);
+                    }
+                });
+            }
+
+            result.whenComplete((resp, err) -> {
+                for (CompletableFuture<Response> future : memberFutures) {
+                    if (!future.isDone()) {
+                        future.cancel(true);
+                    }
+                }
+            });
+
+            return result;
+        });
+    }
+
+    /**
+     * Query a single member directly (no negative cache check).
+     * Used for index-targeted queries where we already know the member has the artifact.
+     */
+    private CompletableFuture<Response> queryMemberDirect(
+        final MemberSlice member,
+        final RequestLine line,
+        final Headers headers,
+        final byte[] requestBytes,
+        final RequestContext ctx
+    ) {
+        if (member.isCircuitOpen()) {
+            ctx.addTo(EcsLogger.warn("com.artipie.group")
+                .message("Member circuit OPEN, skipping")
+                .eventCategory("repository")
+                .eventAction("group_query")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("member.name", member.name()))
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.unavailable().build()
+            );
+        }
+
+        final Content memberBody = requestBytes.length > 0
+            ? new Content.From(requestBytes)
+            : Content.EMPTY;
+
+        final RequestLine rewritten = member.rewritePath(line);
+
+        return member.slice().response(
+            rewritten,
+            dropFullPathHeader(headers),
+            memberBody
+        );
     }
 
     /**
@@ -293,65 +536,41 @@ public final class GroupSlice implements Slice {
         final byte[] requestBytes,
         final RequestContext ctx
     ) {
-        final Key pathKey = new KeyFromPath(line.uri().getPath());
+        if (member.isCircuitOpen()) {
+            ctx.addTo(EcsLogger.warn("com.artipie.group")
+                .message("Member circuit OPEN, skipping")
+                .eventCategory("repository")
+                .eventAction("group_query")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("member.name", member.name()))
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.unavailable().build()
+            );
+        }
 
-        // Check negative cache FIRST (L1 then L2 if miss)
-        return this.negativeCache.isNotFoundAsync(member.name(), pathKey)
-            .thenCompose(isNotFound -> {
-                if (isNotFound) {
-                    ctx.addTo(EcsLogger.debug("com.artipie.group")
-                        .message("Member negative cache HIT")
-                        .eventCategory("repository")
-                        .eventAction("group_query")
-                        .eventOutcome("cache_hit")
-                        .field("repository.name", this.group)
-                        .field("member.name", member.name())
-                        .field("url.path", pathKey.string()))
-                        .log();
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
-                    );
-                }
+        // Create new Content instance from buffered bytes for each member
+        final Content memberBody = requestBytes.length > 0
+            ? new Content.From(requestBytes)
+            : Content.EMPTY;
 
-                if (member.isCircuitOpen()) {
-                    ctx.addTo(EcsLogger.warn("com.artipie.group")
-                        .message("Member circuit OPEN, skipping")
-                        .eventCategory("repository")
-                        .eventAction("group_query")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.group)
-                        .field("member.name", member.name()))
-                        .log();
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.unavailable().build()
-                    );
-                }
+        final RequestLine rewritten = member.rewritePath(line);
 
-                // Create new Content instance from buffered bytes for each member
-                // This allows parallel requests with POST body (e.g., npm audit)
-                final Content memberBody = requestBytes.length > 0
-                    ? new Content.From(requestBytes)
-                    : Content.EMPTY;
+        // Log the path rewriting for troubleshooting
+        EcsLogger.info("com.artipie.group")
+            .message(String.format("Forwarding request to member: rewrote path %s to %s", line.uri().getPath(), rewritten.uri().getPath()))
+            .eventCategory("repository")
+            .eventAction("group_forward")
+            .field("repository.name", this.group)
+            .field("member.name", member.name())
+            .log();
 
-                final RequestLine rewritten = member.rewritePath(line);
-
-                // Log the path rewriting for troubleshooting
-                EcsLogger.info("com.artipie.group")
-                    .message("Forwarding request to member")
-                    .eventCategory("repository")
-                    .eventAction("group_forward")
-                    .field("repository.name", this.group)
-                    .field("member.name", member.name())
-                    .field("original.path", line.uri().getPath())
-                    .field("rewritten.path", rewritten.uri().getPath())
-                    .log();
-
-                return member.slice().response(
-                    rewritten,
-                    dropFullPathHeader(headers),
-                    memberBody
-                );
-            });
+        return member.slice().response(
+            rewritten,
+            dropFullPathHeader(headers),
+            memberBody
+        );
     }
 
     /**
@@ -362,6 +581,7 @@ public final class GroupSlice implements Slice {
         final Response resp,
         final AtomicBoolean completed,
         final AtomicInteger pending,
+        final AtomicBoolean anyServerError,
         final CompletableFuture<Response> result,
         final long startTime,
         final Key pathKey,
@@ -419,10 +639,9 @@ public final class GroupSlice implements Slice {
                 drainBody(member.name(), resp.body());
             }
         } else if (status == RsStatus.NOT_FOUND) {
-            // 404: Cache in negative cache and try next member
-            this.negativeCache.cacheNotFound(member.name(), pathKey);
+            // 404: try next member
             ctx.addTo(EcsLogger.info("com.artipie.group")
-                .message("Member returned 404, cached in negative cache")
+                .message("Member returned 404")
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("not_found")
@@ -432,19 +651,9 @@ public final class GroupSlice implements Slice {
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
             drainBody(member.name(), resp.body());
-            if (pending.decrementAndGet() == 0 && !completed.get()) {
-                ctx.addTo(EcsLogger.warn("com.artipie.group")
-                    .message("All members exhausted, returning 404")
-                    .eventCategory("repository")
-                    .eventAction("group_query")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.group))
-                    .log();
-                recordNotFound();
-                result.complete(ResponseBuilder.notFound().build());
-            }
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
         } else {
-            // Other errors (500, etc.): try next member (don't cache)
+            // Server errors (500, 503, etc.): record failure, try next member
             ctx.addTo(EcsLogger.warn("com.artipie.group")
                 .message("Member returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("repository")
@@ -454,19 +663,11 @@ public final class GroupSlice implements Slice {
                 .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .log();
+            member.recordFailure();
+            anyServerError.set(true);
             recordGroupMemberRequest(member.name(), "error");
             drainBody(member.name(), resp.body());
-            if (pending.decrementAndGet() == 0 && !completed.get()) {
-                ctx.addTo(EcsLogger.warn("com.artipie.group")
-                    .message("All members exhausted, returning 404")
-                    .eventCategory("repository")
-                    .eventAction("group_query")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.group))
-                    .log();
-                recordNotFound();
-                result.complete(ResponseBuilder.notFound().build());
-            }
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
         }
     }
 
@@ -478,6 +679,7 @@ public final class GroupSlice implements Slice {
         final Throwable err,
         final AtomicBoolean completed,
         final AtomicInteger pending,
+        final AtomicBoolean anyServerError,
         final CompletableFuture<Response> result,
         final RequestContext ctx
     ) {
@@ -491,10 +693,44 @@ public final class GroupSlice implements Slice {
             .field("error.message", err.getMessage()))
             .log();
         member.recordFailure();
+        anyServerError.set(true);
+        completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
+    }
 
+    /**
+     * Complete the result future if all members have been exhausted.
+     * Returns 502 Bad Gateway if any member had a server error,
+     * otherwise returns 404 Not Found.
+     */
+    private void completeIfAllExhausted(
+        final AtomicInteger pending,
+        final AtomicBoolean completed,
+        final AtomicBoolean anyServerError,
+        final CompletableFuture<Response> result,
+        final RequestContext ctx
+    ) {
         if (pending.decrementAndGet() == 0 && !completed.get()) {
-            recordNotFound();
-            result.complete(ResponseBuilder.notFound().build());
+            if (anyServerError.get()) {
+                ctx.addTo(EcsLogger.warn("com.artipie.group")
+                    .message("All members exhausted with upstream errors, returning 502")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group))
+                    .log();
+                result.complete(ResponseBuilder.badGateway()
+                    .textBody("All upstream members failed").build());
+            } else {
+                ctx.addTo(EcsLogger.warn("com.artipie.group")
+                    .message("All members exhausted, returning 404")
+                    .eventCategory("repository")
+                    .eventAction("group_query")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.group))
+                    .log();
+                recordNotFound();
+                result.complete(ResponseBuilder.notFound().build());
+            }
         }
     }
 
@@ -503,8 +739,19 @@ public final class GroupSlice implements Slice {
      * Uses streaming discard to avoid OOM on large responses (e.g., npm typescript ~30MB).
      */
     private void drainBody(final String memberName, final Content body) {
-        // Use streaming subscriber that discards bytes without accumulating
-        // This prevents OOM when draining large npm package metadata
+        if (!DRAIN_PERMITS.tryAcquire()) {
+            // Too many concurrent drains — skip to prevent memory pressure
+            // The response will eventually be GC'd and the connection cleaned up
+            EcsLogger.debug("com.artipie.group")
+                .message("Skipping body drain (too many concurrent drains)")
+                .eventCategory("repository")
+                .eventAction("body_drain")
+                .eventOutcome("skipped")
+                .field("repository.name", GroupSlice.this.group)
+                .field("member.name", memberName)
+                .log();
+            return;
+        }
         body.subscribe(new org.reactivestreams.Subscriber<>() {
             private org.reactivestreams.Subscription subscription;
 
@@ -521,6 +768,7 @@ public final class GroupSlice implements Slice {
 
             @Override
             public void onError(final Throwable err) {
+                DRAIN_PERMITS.release();
                 EcsLogger.warn("com.artipie.group")
                     .message("Failed to drain response body")
                     .eventCategory("repository")
@@ -534,7 +782,7 @@ public final class GroupSlice implements Slice {
 
             @Override
             public void onComplete() {
-                // Body fully drained
+                DRAIN_PERMITS.release();
             }
         });
     }
@@ -595,5 +843,34 @@ public final class GroupSlice implements Slice {
             com.artipie.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberLatency(this.group, memberName, result, latencyMs);
         }
+    }
+
+    /**
+     * Filter members by routing rules for the given path.
+     * If no routing rules are configured, all members are returned.
+     * Members with matching routing rules are included. Members with
+     * no routing rules also participate (default: include).
+     *
+     * @param path Request path
+     * @return Filtered list of members to query
+     */
+    private List<MemberSlice> filterByRoutingRules(final String path) {
+        if (this.routingRules.isEmpty()) {
+            return this.members;
+        }
+        // Collect members that have explicit routing rules
+        final Set<String> ruledMembers = this.routingRules.stream()
+            .map(RoutingRule::member)
+            .collect(Collectors.toSet());
+        // Collect members whose rules match this path
+        final Set<String> matchedMembers = this.routingRules.stream()
+            .filter(rule -> rule.matches(path))
+            .map(RoutingRule::member)
+            .collect(Collectors.toSet());
+        // Include: members with matching rules + members with no rules (default include)
+        return this.members.stream()
+            .filter(m -> matchedMembers.contains(m.name())
+                || !ruledMembers.contains(m.name()))
+            .toList();
     }
 }

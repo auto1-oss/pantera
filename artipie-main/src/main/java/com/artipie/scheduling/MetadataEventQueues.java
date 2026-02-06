@@ -6,13 +6,15 @@ package com.artipie.scheduling;
 
 import com.artipie.ArtipieException;
 import com.artipie.goproxy.GoProxyPackageProcessor;
-import com.artipie.gradle.GradleProxyPackageProcessor;
+
 import com.artipie.maven.MavenProxyPackageProcessor;
 import com.artipie.npm.events.NpmProxyPackageProcessor;
 import com.artipie.pypi.PyProxyPackageProcessor;
 import com.artipie.composer.http.proxy.ComposerProxyPackageProcessor;
 import com.artipie.settings.repo.RepoConfig;
 import com.artipie.http.log.EcsLogger;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -20,6 +22,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import org.quartz.JobDataMap;
 import org.quartz.JobKey;
 import org.quartz.SchedulerException;
@@ -67,6 +70,11 @@ public final class MetadataEventQueues {
     private final QuartzService quartz;
 
     /**
+     * Optional meter registry for metrics.
+     */
+    private final Optional<MeterRegistry> registry;
+
+    /**
      * Ctor.
      *
      * @param queue Artifact events queue
@@ -75,10 +83,31 @@ public final class MetadataEventQueues {
     public MetadataEventQueues(
         final Queue<ArtifactEvent> queue, final QuartzService quartz
     ) {
+        this(queue, quartz, Optional.empty());
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param queue Artifact events queue
+     * @param quartz Quartz service
+     * @param registry Optional meter registry for queue depth metrics
+     */
+    public MetadataEventQueues(
+        final Queue<ArtifactEvent> queue, final QuartzService quartz,
+        final Optional<MeterRegistry> registry
+    ) {
         this.queue = queue;
         this.queues = new ConcurrentHashMap<>();
         this.quartz = quartz;
         this.keys = new ConcurrentHashMap<>();
+        this.registry = registry;
+        this.registry.ifPresent(
+            reg -> Gauge.builder("artipie.events.queue.size", queue, Queue::size)
+                .tag("type", "events")
+                .description("Size of the artifact events queue")
+                .register(reg)
+        );
     }
 
     /**
@@ -91,6 +120,15 @@ public final class MetadataEventQueues {
 
     /**
      * Obtain queue for proxy adapter repository.
+     * <p>
+     * Thread-safety note: concurrent calls for the same config.name() are safe because
+     * {@link ConcurrentHashMap#computeIfAbsent} guarantees the mapping function executes
+     * exactly once per key. The initial {@code this.queues.get()} check is a fast-path
+     * optimization; if two threads both see null, both enter the if-block, but only one
+     * thread's lambda will execute inside computeIfAbsent. The other thread receives the
+     * already-created queue. The {@code this.keys.put()} call inside the lambda also
+     * executes exactly once per key, so no duplicate jobs are scheduled.
+     * </p>
      * @param config Repository config
      * @return Queue for proxy events
      */
@@ -103,14 +141,31 @@ public final class MetadataEventQueues {
                 final Queue<ProxyArtifactEvent> events = this.queues.computeIfAbsent(
                     config.name(),
                     key -> {
-                        final Queue<ProxyArtifactEvent> res = new ConcurrentLinkedQueue<>();
+                        final Queue<ProxyArtifactEvent> res =
+                            new LinkedBlockingQueue<>(10_000);
                         final JobDataMap data = new JobDataMap();
-                        data.put("packages", res);
-                        data.put("storage", config.storage());
-                        data.put("events", this.queue);
                         final ProxyRepoType type = ProxyRepoType.type(config.type());
-                        if (type == ProxyRepoType.NPM_PROXY) {
-                            data.put(MetadataEventQueues.HOST, artipieHost(config));
+                        if (this.quartz.isClustered()) {
+                            final String prefix = config.name() + "-proxy-";
+                            final String pkgKey = prefix + "packages";
+                            final String stoKey = prefix + "storage";
+                            final String evtKey = prefix + "events";
+                            JobDataRegistry.register(pkgKey, res);
+                            JobDataRegistry.register(stoKey, config.storage());
+                            JobDataRegistry.register(evtKey, this.queue);
+                            data.put("packages_key", pkgKey);
+                            data.put("storage_key", stoKey);
+                            data.put("events_key", evtKey);
+                            if (type == ProxyRepoType.NPM_PROXY) {
+                                data.put(MetadataEventQueues.HOST, artipieHost(config));
+                            }
+                        } else {
+                            data.put("packages", res);
+                            data.put("storage", config.storage());
+                            data.put("events", this.queue);
+                            if (type == ProxyRepoType.NPM_PROXY) {
+                                data.put(MetadataEventQueues.HOST, artipieHost(config));
+                            }
                         }
                         final int threads = Math.max(1, settingsIntValue(config, "threads_count"));
                         final int interval = Math.max(
@@ -131,6 +186,13 @@ public final class MetadataEventQueues {
                         } catch (final SchedulerException err) {
                             throw new ArtipieException(err);
                         }
+                        this.registry.ifPresent(
+                            reg -> Gauge.builder(
+                                "artipie.proxy.queue.size", res, Queue::size
+                            ).tag("repo", config.name())
+                                .description("Size of proxy artifact event queue")
+                                .register(reg)
+                        );
                         return res;
                     }
                 );
@@ -213,7 +275,7 @@ public final class MetadataEventQueues {
         GRADLE_PROXY {
             @Override
             Class<? extends QuartzJob> job() {
-                return GradleProxyPackageProcessor.class;
+                return MavenProxyPackageProcessor.class;
             }
         },
 

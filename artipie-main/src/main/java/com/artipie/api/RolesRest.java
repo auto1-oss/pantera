@@ -133,7 +133,7 @@ public final class RolesRest extends BaseRest {
                 .field("user.roles", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Role not found");
             return;
         }
         this.cache.invalidate(uname);
@@ -157,7 +157,7 @@ public final class RolesRest extends BaseRest {
                 .field("user.roles", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Role not found");
             return;
         }
         this.cache.invalidate(uname);
@@ -181,7 +181,7 @@ public final class RolesRest extends BaseRest {
                 .field("user.roles", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Role not found");
             return;
         }
         this.cache.invalidate(uname);
@@ -210,7 +210,7 @@ public final class RolesRest extends BaseRest {
             this.cache.invalidate(uname);
             context.response().setStatusCode(HttpStatus.CREATED_201).end();
         } else {
-            context.response().setStatusCode(HttpStatus.FORBIDDEN_403).end();
+            sendError(context, HttpStatus.FORBIDDEN_403, "Insufficient permissions");
         }
     }
 
@@ -225,7 +225,7 @@ public final class RolesRest extends BaseRest {
         if (usr.isPresent()) {
             context.response().setStatusCode(HttpStatus.OK_200).end(usr.get().toString());
         } else {
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Role not found");
         }
     }
 

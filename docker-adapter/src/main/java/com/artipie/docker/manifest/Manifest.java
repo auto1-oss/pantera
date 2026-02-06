@@ -85,9 +85,31 @@ public final class Manifest {
     public String mediaType() {
         String res = this.json.getString("mediaType", null);
         if (Strings.isNullOrEmpty(res)) {
-            throw new InvalidManifestException("Required field `mediaType` is absent");
+            res = this.inferMediaType();
+        }
+        if (Strings.isNullOrEmpty(res)) {
+            throw new InvalidManifestException(
+                "Cannot determine mediaType: field absent and unrecognizable structure"
+            );
         }
         return res;
+    }
+
+    /**
+     * Infer media type from manifest structure when the mediaType field is absent.
+     * Per the OCI Image Spec, the mediaType field is OPTIONAL. DHI and OCI-compliant
+     * registries often omit it.
+     *
+     * @return Inferred media type, or null if structure is unrecognizable.
+     */
+    private String inferMediaType() {
+        if (this.json.containsKey("manifests")) {
+            return MANIFEST_OCI_INDEX;
+        }
+        if (this.json.containsKey("config") && this.json.containsKey("layers")) {
+            return MANIFEST_OCI_V1;
+        }
+        return null;
     }
 
     /**

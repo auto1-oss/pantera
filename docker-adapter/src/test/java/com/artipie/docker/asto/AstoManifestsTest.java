@@ -82,12 +82,29 @@ final class AstoManifestsTest {
 
     @Test
     @Timeout(5)
-    void shouldFailPutManifestIfMediaTypeIsEmpty() {
+    void shouldInferMediaTypeWhenEmptyOnPut() {
         final Digest config = this.blobs.put(new TrustedBlobSource("config".getBytes())).join();
         final Digest layer = this.blobs.put(new TrustedBlobSource("layer".getBytes())).join();
         final byte[] data = this.getJsonBytes(config, layer, "");
-        final CompletionStage<Manifest> future = this.manifests.put(
+        final Manifest manifest = this.manifests.put(
             ManifestReference.fromTag("ddd"),
+            new Content.From(data)
+        ).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Manifest with config+layers should infer OCI v1 media type",
+            manifest.mediaType(),
+            new IsEqual<>(Manifest.MANIFEST_OCI_V1)
+        );
+    }
+
+    @Test
+    @Timeout(5)
+    void shouldFailPutManifestIfMediaTypeUnrecognizable() {
+        final byte[] data = Json.createObjectBuilder()
+            .add("schemaVersion", 2)
+            .build().toString().getBytes();
+        final CompletionStage<Manifest> future = this.manifests.put(
+            ManifestReference.fromTag("bad"),
             new Content.From(data)
         );
         final CompletionException exception = Assertions.assertThrows(
@@ -98,11 +115,6 @@ final class AstoManifestsTest {
             "Exception cause should be instance of InvalidManifestException",
             exception.getCause(),
             new IsInstanceOf(InvalidManifestException.class)
-        );
-        MatcherAssert.assertThat(
-            "Exception does not contain expected message",
-            exception.getMessage(),
-            new StringContains("Required field `mediaType` is absent")
         );
     }
 

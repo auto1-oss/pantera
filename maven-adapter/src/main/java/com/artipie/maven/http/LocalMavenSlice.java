@@ -13,6 +13,7 @@ import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
@@ -162,14 +163,17 @@ final class LocalMavenSlice implements Slice {
      * Record metric safely (only if metrics are enabled).
      * @param metric Metric recording action
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.maven")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

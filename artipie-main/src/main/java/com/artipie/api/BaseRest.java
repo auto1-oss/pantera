@@ -65,9 +65,12 @@ abstract class BaseRest {
             // Sanitize message - HTTP status messages can't contain control chars
             final String msg = sanitizeStatusMessage(context.failure().getMessage());
             context.response()
-                .setStatusMessage(msg)
                 .setStatusCode(status)
-                .end();
+                .putHeader("Content-Type", "application/json")
+                .end(new io.vertx.core.json.JsonObject()
+                    .put("code", status)
+                    .put("message", msg)
+                    .encode());
             EcsLogger.warn("com.artipie.api")
                 .message("REST API request failed")
                 .eventCategory("api")
@@ -102,6 +105,23 @@ abstract class BaseRest {
             sanitized = sanitized.substring(0, 100) + "...";
         }
         return sanitized;
+    }
+
+    /**
+     * Send a JSON error response with standard {code, message} format.
+     * @param context Routing context
+     * @param status HTTP status code
+     * @param message Error message
+     */
+    protected static void sendError(final RoutingContext context,
+        final int status, final String message) {
+        context.response()
+            .setStatusCode(status)
+            .putHeader("Content-Type", "application/json")
+            .end(new io.vertx.core.json.JsonObject()
+                .put("code", status)
+                .put("message", message)
+                .encode());
     }
 
     /**

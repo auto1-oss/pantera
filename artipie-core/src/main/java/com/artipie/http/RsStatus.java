@@ -121,6 +121,10 @@ public enum RsStatus {
      */
     NOT_IMPLEMENTED(HttpStatus.SC_NOT_IMPLEMENTED),
     /**
+     * Bad Gateway (502).
+     */
+    BAD_GATEWAY(HttpStatus.SC_BAD_GATEWAY),
+    /**
      * Service Unavailable.
      */
     SERVICE_UNAVAILABLE(HttpStatus.SC_SERVICE_UNAVAILABLE),

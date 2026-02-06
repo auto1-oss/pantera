@@ -84,7 +84,11 @@ public final class DockerProxyCooldownSlice implements Slice {
         final ManifestRequest request;
         try {
             request = ManifestRequest.from(line);
-        } catch (final IllegalArgumentException ignored) {
+        } catch (final IllegalArgumentException ex) {
+            EcsLogger.debug("com.artipie.docker")
+                .message("Failed to parse manifest request, falling through to origin")
+                .error(ex)
+                .log();
             return this.origin.response(line, headers, body);
         }
         return this.origin.response(line, headers, body)
@@ -362,7 +366,11 @@ public final class DockerProxyCooldownSlice implements Slice {
             .flatMap(value -> {
                 try {
                     return Optional.of(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value)));
-                } catch (final DateTimeParseException ignored) {
+                } catch (final DateTimeParseException ex) {
+                    EcsLogger.debug("com.artipie.docker")
+                        .message("Failed to parse date header for release time")
+                        .error(ex)
+                        .log();
                     return Optional.empty();
                 }
             });

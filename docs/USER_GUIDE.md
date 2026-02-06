@@ -1,7 +1,7 @@
 # Artipie User Guide
 
-**Version:** 1.20.11
-**Last Updated:** January 2026
+**Version:** 1.20.14
+**Last Updated:** February 2026
 
 ---
 
@@ -18,7 +18,12 @@
 9. [Metrics & Monitoring](#metrics--monitoring)
 10. [Logging](#logging)
 11. [Performance Tuning](#performance-tuning)
-12. [Troubleshooting](#troubleshooting)
+12. [Health Checks](#health-checks)
+13. [Full-Text Search](#full-text-search)
+14. [HA Deployment](#ha-deployment)
+15. [Cooldown System](#cooldown-system)
+16. [Named Worker Pools](#named-worker-pools)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -149,7 +154,7 @@ Services available:
 
 ```bash
 # Download from releases
-wget https://github.com/artipie/artipie/releases/download/v1.20.11/artipie.jar
+wget https://github.com/artipie/artipie/releases/download/v1.20.14/artipie.jar
 
 # Run
 java -jar artipie.jar \
@@ -204,7 +209,41 @@ meta:
     secret: ${JWT_SECRET}
     expires: true
     expiry-seconds: 86400  # 24 hours
+
+  # Artifact index (Lucene-based)
+  artifact_index:
+    enabled: true                     # Enable Lucene artifact index (default: false)
+    directory: /var/artipie/index     # Path for Lucene index files (required if enabled)
+    warmup_on_startup: true           # Scan repos on startup to populate index (default: true)
 ```
+
+### Artifact Index (Lucene)
+
+Artipie includes a Lucene-based artifact index that enables fast O(1) group repository lookups. When enabled, group repositories query the index to find which member contains an artifact, instead of querying all members in parallel.
+
+```yaml
+meta:
+  artifact_index:
+    enabled: true                     # Enable Lucene artifact index (default: false)
+    directory: /var/artipie/index     # Path for Lucene index files (required if enabled)
+    warmup_on_startup: true           # Scan repos on startup to populate index (default: true)
+```
+
+**How it works:**
+- On startup, the index scans all repository storage to build an initial index (warmup)
+- During warmup, group repositories fall back to querying all members (fan-out)
+- Once warmup completes, the index is trusted: group lookups return immediately from the index
+- Artifact uploads and deletes automatically update the index via the event pipeline
+- If the index says no member has an artifact, group repos return 404 immediately
+
+**When to enable:**
+- You have group repositories with many members
+- You want to reduce latency for group repository lookups
+- You want to eliminate fan-out queries for artifacts that don't exist
+
+**Requirements:**
+- Disk space for the Lucene index directory (typically 10-50MB depending on artifact count)
+- The index directory must be writable by the Artipie process
 
 ### Repository Configuration
 
@@ -244,6 +283,12 @@ repo:
     - my-maven       # Try local first
     - maven-proxy    # Then proxy
 ```
+
+> **Tip:** Enable the `artifact_index` in `artipie.yml` for fast O(1) group lookups instead of querying all members.
+
+### Artipie Tuning Variables
+
+All `ARTIPIE_*` environment variables can be used to tune Artipie's runtime behavior, including database pool sizing, I/O thread counts, cache TTLs, metrics configuration, and HTTP client settings. See [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for the full list of supported variables and their defaults.
 
 ### Environment Variable Substitution
 
@@ -539,6 +584,10 @@ storage:
     eviction-policy: LRU
 ```
 
+**Disk Cache:** The local disk cache (`cache` block) significantly reduces S3 latency for frequently accessed artifacts. When enabled, artifacts are stored on a local filesystem path and served from disk on subsequent requests. The LRU eviction policy automatically cleans up when disk usage exceeds the high-watermark threshold, reclaiming space down to the low-watermark level.
+
+**S3 Parallel Downloads:** S3 storage supports parallel multipart downloads for large artifacts. The `multipart-concurrency` setting controls how many parts are fetched concurrently, improving throughput for large files on high-bandwidth connections.
+
 ### MinIO/S3-Compatible Storage
 
 ```yaml
@@ -805,6 +854,14 @@ curl http://localhost:8087/metrics/vertx
 | `artipie_storage_operations_total` | Counter | Storage operations |
 | `artipie_storage_operation_duration_seconds` | Histogram | Storage latency |
 | `artipie_repository_requests_total` | Counter | Per-repository requests |
+| `artipie.pool.read.active` | Gauge | Active threads in the read I/O pool |
+| `artipie.pool.read.queue` | Gauge | Queued tasks in the read I/O pool |
+| `artipie.pool.write.active` | Gauge | Active threads in the write I/O pool |
+| `artipie.pool.write.queue` | Gauge | Queued tasks in the write I/O pool |
+| `artipie.pool.list.active` | Gauge | Active threads in the list I/O pool |
+| `artipie.pool.list.queue` | Gauge | Queued tasks in the list I/O pool |
+| `artipie.events.queue.size` | Gauge | Current depth of the event processing queue |
+| `artipie.proxy.queue.size` | Gauge | Per-repository proxy request queue depth |
 
 ### Grafana Dashboard
 
@@ -815,13 +872,14 @@ When using Docker Compose, Grafana is available at http://localhost:3000 with pr
 **Health Endpoint:**
 ```bash
 curl http://localhost:8080/.health
-# Returns: OK
 ```
+
+The health endpoint returns a structured JSON response with component-level status. See the [Health Checks](#health-checks) section for the full response format and severity logic.
 
 **Version Endpoint:**
 ```bash
 curl http://localhost:8080/.version
-# Returns: 1.20.11
+# Returns: 1.20.14
 ```
 
 ---
@@ -996,6 +1054,306 @@ Vert.x thread pools are automatically sized:
 
 ---
 
+## Health Checks
+
+The `/.health` endpoint provides a comprehensive, component-level health assessment of the running Artipie instance. It returns a JSON response that reports on five internal components:
+
+```json
+{
+  "status": "healthy|degraded|unhealthy",
+  "components": {
+    "storage": {"status": "up|down", "details": "..."},
+    "database": {"status": "up|down", "details": "..."},
+    "valkey": {"status": "up|down|not_configured", "details": "..."},
+    "quartz": {"status": "up|down", "details": "..."},
+    "http_client": {"status": "up|down", "details": "..."}
+  }
+}
+```
+
+### Component Descriptions
+
+| Component | What It Checks |
+|-----------|---------------|
+| **storage** | Primary artifact storage backend (filesystem, S3, etc.) is accessible |
+| **database** | PostgreSQL connection pool is active and can execute queries |
+| **valkey** | Valkey/Redis connection for caching and pub/sub (reports `not_configured` if not in use) |
+| **quartz** | Quartz scheduler is running (used for scheduled jobs like cleanup and reindex) |
+| **http_client** | Jetty HTTP client used for proxy and upstream requests is operational |
+
+### Severity Logic
+
+The top-level `status` is computed from individual component statuses:
+
+| Condition | Overall Status |
+|-----------|---------------|
+| Storage is down | `unhealthy` |
+| Two or more components are down | `unhealthy` |
+| Exactly one non-storage component is down | `degraded` |
+| All components are up | `healthy` |
+
+### HTTP Status Codes
+
+| Overall Status | HTTP Code | Meaning |
+|---------------|-----------|---------|
+| `healthy` | 200 | All systems operational |
+| `degraded` | 200 | Operational with reduced capability |
+| `unhealthy` | 503 | Service unavailable, should not receive traffic |
+
+### Usage with Load Balancers
+
+The `/.health` endpoint is designed for use with load balancer health checks. Configure your load balancer to probe `/.health` and remove instances that return HTTP 503:
+
+```bash
+# Quick check
+curl -s http://localhost:8080/.health | jq .status
+
+# Use in scripts
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/.health)
+if [ "$STATUS" -ne 200 ]; then
+  echo "Artipie is unhealthy"
+fi
+```
+
+---
+
+## Full-Text Search
+
+Artifact search uses PostgreSQL `tsvector` with a GIN index for relevance-ranked full-text search across all indexed repositories. This replaces simple substring matching with proper linguistic tokenization and ranking.
+
+### Search API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/search?query=...&cursor=...&limit=...` | GET | Search artifacts with cursor-based pagination |
+| `/api/v1/search/locate?repo=...&name=...` | GET | Locate a specific artifact by repository and name |
+| `/api/v1/search/reindex` | GET | Trigger a full reindex of all artifact metadata |
+| `/api/v1/search/stats` | GET | Retrieve search index statistics (document count, index size) |
+
+### Query Behavior
+
+The search endpoint automatically selects the matching strategy based on the query pattern:
+
+- **Full-text search (default):** Queries without wildcard characters are parsed into a `tsquery` and matched against the `tsvector` index. Results are ranked by PostgreSQL's `ts_rank` function, which considers term frequency and proximity.
+- **Wildcard matching:** Queries that contain `*` or `%` characters use SQL `LIKE` matching against artifact names and paths. This is useful for glob-style lookups such as `com.example.*`.
+
+### Cursor Pagination
+
+Search results are paginated using an opaque cursor token. The first request returns a `cursor` value in the response; pass it as the `cursor` query parameter on subsequent requests to retrieve the next page. The `limit` parameter controls page size.
+
+```bash
+# First page
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search?query=spring-boot&limit=20"
+
+# Next page (using cursor from previous response)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search?query=spring-boot&cursor=eyJvZmZzZXQiOjIwfQ&limit=20"
+```
+
+### Reindexing
+
+If the search index becomes stale (for example, after restoring from a backup), trigger a reindex:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8086/api/v1/search/reindex
+```
+
+Reindexing runs in the background and does not block normal operations.
+
+---
+
+## HA Deployment
+
+Artipie supports multi-instance high-availability deployment with coordinated scheduling, shared state, and cross-instance event propagation.
+
+### Architecture Overview
+
+A production HA deployment consists of:
+
+- **Two or more Artipie instances** behind a load balancer
+- **Shared PostgreSQL database** for metadata, artifact index, and job coordination
+- **Shared Valkey (Redis-compatible)** for cache invalidation and negative cache
+- **Shared S3 storage backend** for artifact data
+- **nginx load balancer** distributing traffic across instances
+
+### Shared Components
+
+#### PostgreSQL (Required)
+
+All Artipie instances connect to the same PostgreSQL database. The database stores:
+
+- Repository configurations and metadata
+- Artifact search index (tsvector/GIN)
+- Quartz JDBC job store for clustered scheduling
+- Node registry and heartbeat records
+
+Quartz JDBC clustering ensures that scheduled jobs (cleanup, reindex, health checks) run on exactly one instance at a time, with automatic failover if that instance goes down.
+
+#### Valkey / Redis (Recommended)
+
+Valkey provides two HA-critical functions:
+
+- **Pub/Sub for cache invalidation:** When one instance updates repository configuration or artifact metadata, it publishes an event via Valkey pub/sub. All other instances receive the event and invalidate their local caches.
+- **L2 negative cache:** Caches "artifact not found" results to prevent repeated storage lookups for missing artifacts. This is shared across instances so that a 404 resolved by one instance benefits all others.
+
+#### S3 Storage (Required for HA)
+
+All instances must use the same S3 (or S3-compatible) bucket for artifact storage. Filesystem storage is not suitable for multi-instance deployment because it is local to each node.
+
+### Node Registry
+
+`DbNodeRegistry` tracks active Artipie instances using heartbeat-based liveness detection:
+
+- Each instance registers itself in the database on startup
+- Periodic heartbeats update the instance's last-seen timestamp
+- Instances that miss heartbeats are considered dead and removed from the active set
+- The node registry is used by the Quartz scheduler and event bus to coordinate work
+
+### Cross-Instance Events
+
+`ClusterEventBus` provides cross-instance event notification via Valkey pub/sub. Events include:
+
+- Repository configuration changes (create, update, delete)
+- Artifact upload and deletion notifications
+- Cache invalidation signals
+- Reindex requests
+
+### Load Balancer Configuration
+
+Use nginx with `least_conn` balancing and passive health checks:
+
+```nginx
+upstream artipie {
+    least_conn;
+    server artipie-1:8080 max_fails=3 fail_timeout=30s;
+    server artipie-2:8080 max_fails=3 fail_timeout=30s;
+}
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://artipie;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /.health {
+        proxy_pass http://artipie;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+}
+```
+
+### Reference Deployment
+
+Reference deployment configurations (Docker Compose, nginx, and environment files) are available in the `docs/ha-deployment/` directory.
+
+---
+
+## Cooldown System
+
+The cooldown system is a supply chain security feature that prevents Artipie proxy repositories from blindly re-fetching artifacts from upstream registries shortly after they were first cached. This mitigates attacks where a malicious package is published to an upstream registry and then quickly replaced or weaponized.
+
+### How It Works
+
+1. When a proxy repository fetches an artifact from upstream for the first time, Artipie records the fetch timestamp.
+2. During the cooldown window, subsequent requests for the same artifact are served from the local cache without contacting upstream.
+3. After the cooldown period expires, Artipie resumes normal upstream checking behavior.
+
+### Configuration
+
+Cooldown settings are configured per-repository in the repository YAML:
+
+```yaml
+repo:
+  type: docker-proxy
+  storage:
+    type: s3
+    bucket: artipie-cache
+  remotes:
+    - url: https://registry-1.docker.io
+  cooldown:
+    enabled: true
+    duration: 6h    # Do not re-fetch from upstream within 6 hours of first cache
+```
+
+### Docker Proxy Cooldown
+
+The Docker proxy adapter includes a database-backed cooldown inspector that tracks manifest and blob fetch times. This is particularly important for Docker images because:
+
+- Docker image manifests can be mutated by tag (a tag can point to a different digest over time)
+- Supply chain attacks often involve pushing a malicious image to a previously trusted tag
+- The cooldown ensures that once a tag is resolved, it remains stable for the configured duration
+
+### Monitoring
+
+Active cooldown entries can be queried from the database:
+
+```bash
+docker exec artipie-db psql -U artipie -d artifacts -c \
+  "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = 'ACTIVE';"
+```
+
+Blocked fetch attempts are logged with structured fields:
+
+```bash
+docker logs artipie | grep "event.outcome=blocked"
+```
+
+---
+
+## Named Worker Pools
+
+Artipie uses three separate named thread pools for storage I/O operations. Separating reads, writes, and listings prevents slow directory scans from blocking artifact downloads, and prevents large uploads from starving metadata reads.
+
+### Pool Definitions
+
+| Pool | Purpose | Default Size | Environment Variable |
+|------|---------|-------------|---------------------|
+| **READ** | Metadata reads, artifact content fetches | CPU cores x 4 | `ARTIPIE_IO_READ_THREADS` |
+| **WRITE** | Artifact saves, deletes, moves | CPU cores x 2 | `ARTIPIE_IO_WRITE_THREADS` |
+| **LIST** | Directory and prefix listings | CPU cores | `ARTIPIE_IO_LIST_THREADS` |
+
+### Why Separate Pools
+
+Without separate pools, a burst of directory listing requests (which can be slow on S3 with many keys) could exhaust all I/O threads, causing artifact downloads to queue up. By isolating each operation type into its own pool:
+
+- **Downloads remain fast** even during heavy indexing or listing activity
+- **Uploads do not block reads**, so existing artifacts are always available
+- **Listings are bounded**, preventing runaway prefix scans from affecting other operations
+
+### Configuration
+
+Set pool sizes via environment variables:
+
+```bash
+# Example: 8-core machine with high read traffic
+export ARTIPIE_IO_READ_THREADS=64    # 8x default for read-heavy workload
+export ARTIPIE_IO_WRITE_THREADS=16   # Default for 8 cores
+export ARTIPIE_IO_LIST_THREADS=8     # Default for 8 cores
+```
+
+### Monitoring
+
+Pool utilization is exposed as Prometheus metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `artipie.pool.read.active` | Number of threads currently executing read operations |
+| `artipie.pool.read.queue` | Number of read tasks waiting for a thread |
+| `artipie.pool.write.active` | Number of threads currently executing write operations |
+| `artipie.pool.write.queue` | Number of write tasks waiting for a thread |
+| `artipie.pool.list.active` | Number of threads currently executing list operations |
+| `artipie.pool.list.queue` | Number of list tasks waiting for a thread |
+
+If `queue` metrics are consistently above zero, consider increasing the pool size for that operation type. See [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for all tuning options.
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -1112,6 +1470,8 @@ http://artipie:8080/<repo_name>/<path>
 
 ## Appendix B: Cooldown System
 
+> See also: [Cooldown System](#cooldown-system) section above for an overview of the feature.
+
 The cooldown system blocks package versions that are too recently released to prevent supply chain attacks.
 
 ### Configuration
@@ -1151,11 +1511,16 @@ docker logs artipie | grep "event.outcome=blocked"
 
 ## Appendix C: Environment Variables
 
+> For a comprehensive reference of all `ARTIPIE_*` tuning variables (database pool, I/O threads, cache, metrics, HTTP client, concurrency), see [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md).
+
+The table below lists the standard deployment variables used in configuration file substitution:
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JVM_ARGS` | - | JVM arguments |
 | `LOG4J_CONFIGURATION_FILE` | - | External log4j2.xml path |
 | `ARTIPIE_ENV` | production | Environment name |
+| `ARTIPIE_INIT` | false | Initialize with example configuration on first start |
 | `JWT_SECRET` | - | JWT signing secret |
 | `AWS_ACCESS_KEY_ID` | - | S3 credentials |
 | `AWS_SECRET_ACCESS_KEY` | - | S3 credentials |
@@ -1170,4 +1535,4 @@ docker logs artipie | grep "event.outcome=blocked"
 
 ---
 
-*This guide covers Artipie version 1.20.11. For the latest updates, see the [GitHub repository](https://github.com/artipie/artipie).*
+*This guide covers Artipie version 1.20.14. For the latest updates, see the [GitHub repository](https://github.com/artipie/artipie).*

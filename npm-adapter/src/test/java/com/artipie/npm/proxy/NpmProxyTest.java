@@ -253,7 +253,7 @@ public final class NpmProxyTest {
         }
 
         @Test
-        public void getsMetadataOnlyRefreshesWhenStale() throws IOException {
+        public void getsMetadataOnlyRefreshesWhenStale() throws Exception {
             final String name = "asdas";
             // Original metadata is 2 hours old (exceeds 1h TTL)
             final NpmPackage.Metadata stale = new NpmPackage.Metadata(
@@ -270,18 +270,22 @@ public final class NpmProxyTest {
             ).thenReturn(Completable.complete());
             final NpmPackage.Metadata result =
                 NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet();
+            // Stale-while-revalidate: returns stale immediately,
+            // background refresh happens asynchronously
             MatcherAssert.assertThat(
-                "Should return refreshed metadata",
-                result.lastRefreshed(),
-                new IsSame<>(refreshed.meta().lastRefreshed())
+                "Should return stale metadata immediately (stale-while-revalidate)",
+                result,
+                new IsSame<>(stale)
             );
-            Mockito.verify(NpmProxyTest.this.storage).getPackageMetadata(name);
+            Mockito.verify(NpmProxyTest.this.storage, Mockito.atLeastOnce()).getPackageMetadata(name);
+            // Wait for background refresh to complete
+            Thread.sleep(500);
             Mockito.verify(NpmProxyTest.this.remote).loadPackage(name);
             Mockito.verify(NpmProxyTest.this.storage).save(refreshed);
         }
 
         @Test
-        public void getsMetadataOnlyFallsBackToStaleOnRemoteFailure() throws IOException {
+        public void getsMetadataOnlyFallsBackToStaleOnRemoteFailure() throws Exception {
             final String name = "asdas";
             // Original metadata is 2 hours old (exceeds 1h TTL)
             final NpmPackage.Metadata stale = new NpmPackage.Metadata(
@@ -297,11 +301,13 @@ public final class NpmProxyTest {
             final NpmPackage.Metadata result =
                 NpmProxyTest.this.npm.getPackageMetadataOnly(name).blockingGet();
             MatcherAssert.assertThat(
-                "Should fall back to stale metadata when remote fails",
+                "Should return stale metadata immediately (stale-while-revalidate)",
                 result,
                 new IsSame<>(stale)
             );
-            Mockito.verify(NpmProxyTest.this.storage).getPackageMetadata(name);
+            Mockito.verify(NpmProxyTest.this.storage, Mockito.atLeastOnce()).getPackageMetadata(name);
+            // Wait for background refresh attempt
+            Thread.sleep(500);
             Mockito.verify(NpmProxyTest.this.remote).loadPackage(name);
         }
     }

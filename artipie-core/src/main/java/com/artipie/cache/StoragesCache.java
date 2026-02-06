@@ -18,6 +18,7 @@ import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.base.Strings;
 import org.apache.commons.lang3.NotImplementedException;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.misc.DispatchedStorage;
 
 import java.time.Duration;
 
@@ -117,8 +118,10 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                 // Direct storage without JfrStorage wrapper
                 // JFR profiling removed - adds 2-10% overhead and bypassed by optimized slices
                 // Request-level metrics still active via Vert.x HTTP
-                return StoragesLoader.STORAGES
-                    .newObject(type, new Config.YamlStorageConfig(key));
+                return new DispatchedStorage(
+                    StoragesLoader.STORAGES
+                        .newObject(type, new Config.YamlStorageConfig(key))
+                );
             }
         );
 

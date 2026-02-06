@@ -161,7 +161,11 @@ public final class Gem {
     private static CompletionStage<Path> newTempDir() {
         return CompletableFuture.supplyAsync(
             new UncheckedSupplier<>(
-                () -> Files.createTempDirectory(Gem.class.getSimpleName())
+                () -> {
+                    final Path tmp = Files.createTempDirectory(Gem.class.getSimpleName());
+                    tmp.toFile().deleteOnExit();
+                    return tmp;
+                }
             )
         );
     }

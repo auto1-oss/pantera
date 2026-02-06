@@ -45,3 +45,5 @@
     * [[Scripting support|Configuration-Scripting]]
     * [[Artifacts metadata|Configuration-Metadata]]
     * [[HTTP3 support|Configuration-http3]]
+    * [[HA Deployment|Configuration-HA]]
+    * [[Health Checks|Configuration-Health]]

@@ -310,7 +310,7 @@ final class JettyClientSliceChunkLifecycleTest {
     void concurrentRequestsDoNotLeakBuffers() throws Exception {
         final byte[] responseData = new byte[2048];
         java.util.Arrays.fill(responseData, (byte) 'C');
-        
+
         this.server.update(
             (line, headers, body) -> CompletableFuture.completedFuture(
                 ResponseBuilder.ok()
@@ -330,22 +330,23 @@ final class JettyClientSliceChunkLifecycleTest {
         final int concurrency = 50;
         final int iterations = 10;
         final CompletableFuture<?>[] futures = new CompletableFuture[concurrency];
-        
+
         for (int iter = 0; iter < iterations; iter++) {
             for (int i = 0; i < concurrency; i++) {
                 futures[i] = this.slice.response(
                     new RequestLine(RqMethod.GET, "/"),
                     Headers.EMPTY,
                     Content.EMPTY
-                ).thenAccept(resp -> {
-                    // Mix of consumed and unconsumed bodies
+                ).thenCompose(resp -> {
+                    // Mix of consumed and unconsumed bodies.
+                    // Use async asBytesFuture() to avoid blocking ForkJoinPool threads,
+                    // which is essential with streaming response bodies.
                     if (Math.random() > 0.5) {
-                        try {
-                            new Content.From(resp.body()).asBytes();
-                        } catch (Exception e) {
-                            // Ignore
-                        }
+                        return new Content.From(resp.body()).asBytesFuture()
+                            .thenAccept(bytes -> { })
+                            .exceptionally(ex -> null);
                     }
+                    return CompletableFuture.completedFuture(null);
                 });
             }
             CompletableFuture.allOf(futures).get(30, TimeUnit.SECONDS);

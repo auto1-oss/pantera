@@ -99,7 +99,8 @@ public final class MainSlice extends Slice.Wrap {
                     new DockerRoutingSlice(
                         settings,
                         new ApiRoutingSlice(
-                            new SliceByPath(slices, settings.prefixes())
+                            new SliceByPath(slices, settings.prefixes()),
+                            slices.repositories()
                         )
                     )
                 )

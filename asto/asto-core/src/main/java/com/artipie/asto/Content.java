@@ -4,6 +4,7 @@
  */
 package com.artipie.asto;
 
+import com.artipie.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -159,16 +160,22 @@ public interface Content extends Publisher<ByteBuffer> {
                 error -> {
                     try {
                         output.close();
-                    } catch (final java.io.IOException ignored) {
-                        // Ignore close errors
+                    } catch (final java.io.IOException ex) {
+                        EcsLogger.debug("com.artipie.asto")
+                            .message("Failed to close piped output stream on error")
+                            .error(ex)
+                            .log();
                     }
                 },
                 () -> {
                     try {
                         output.close();
                         completed.set(true);
-                    } catch (final java.io.IOException ignored) {
-                        // Ignore close errors
+                    } catch (final java.io.IOException ex) {
+                        EcsLogger.debug("com.artipie.asto")
+                            .message("Failed to close piped output stream on completion")
+                            .error(ex)
+                            .log();
                     }
                 }
             );

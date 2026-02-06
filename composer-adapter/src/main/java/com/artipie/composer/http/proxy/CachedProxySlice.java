@@ -31,11 +31,13 @@ import com.artipie.scheduling.ProxyArtifactEvent;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -92,6 +94,16 @@ final class CachedProxySlice implements Slice {
      * Upstream URL for metrics.
      */
     private final String upstreamUrl;
+
+    /**
+     * Packages currently being refreshed in background (stale-while-revalidate).
+     */
+    private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+
+    /**
+     * Store for upstream Last-Modified headers (conditional requests).
+     */
+    private final ConcurrentHashMap<String, String> lastModifiedStore;
 
     /**
      * @param remote Remote slice
@@ -170,6 +182,8 @@ final class CachedProxySlice implements Slice {
         this.inspector = inspector;
         this.baseUrl = baseUrl;
         this.upstreamUrl = upstreamUrl;
+        this.refreshing = ConcurrentHashMap.newKeySet();
+        this.lastModifiedStore = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -212,14 +226,12 @@ final class CachedProxySlice implements Slice {
         final Headers headers
     ) {
         // Check storage cache FIRST before any network calls
-        // Use FromStorageCache directly to avoid FromRemoteCache issues with Remote.EMPTY
         return new FromStorageCache(this.repo.storage()).load(
             new Key.From(name),
             Remote.EMPTY,
             CacheControl.Standard.ALWAYS
         ).thenCompose(cached -> {
             if (cached.isPresent()) {
-                // Cache HIT - serve immediately without any network calls
                 EcsLogger.info("com.artipie.composer")
                     .message("Cache hit, serving cached metadata (offline-safe)")
                     .eventCategory("repository")
@@ -227,36 +239,56 @@ final class CachedProxySlice implements Slice {
                     .eventOutcome("cache_hit")
                     .field("package.name", name)
                     .log();
-                // Read cached bytes and rewrite URLs
-                return cached.get().asBytesFuture().thenCompose(bytes ->
-                    this.evaluateMetadataCooldown(name, headers, bytes)
-                        .thenCompose(result -> {
-                            if (result.blocked()) {
-                                EcsLogger.info("com.artipie.composer")
-                                    .message("Cooldown blocked cached metadata request")
-                                    .eventCategory("repository")
-                                    .eventAction("cooldown_check")
-                                    .eventOutcome("blocked")
-                                    .field("package.name", name)
-                                    .log();
-                                return CompletableFuture.completedFuture(
-                                    CooldownResponses.forbidden(result.block().orElseThrow())
-                                );
-                            }
-                            // Rewrite URLs in cached metadata
-                            final Content rewritten = this.rewriteMetadata(bytes, headers);
-                            return rewritten.asBytesFuture().thenApply(rewrittenBytes ->
-                                ResponseBuilder.ok()
-                                    .header("Content-Type", "application/json")
-                                    .body(new Content.From(rewrittenBytes))
-                                    .build()
-                            );
-                        })
-                );
+                return cached.get().asBytesFuture().thenCompose(bytes -> {
+                    // Stale-while-revalidate: check freshness, trigger background refresh if stale
+                    return new CacheTimeControl(this.repo.storage()).validate(
+                        new Key.From(name), Remote.EMPTY
+                    ).thenCompose(fresh -> {
+                        if (!fresh) {
+                            this.backgroundRefresh(line, name, headers);
+                        }
+                        return this.serveCachedMetadata(name, headers, bytes);
+                    });
+                });
             }
             // Cache MISS - now we need network, evaluate cooldown first
             return this.evaluateCooldownAndFetch(line, name, headers);
         }).toCompletableFuture();
+    }
+
+    /**
+     * Serve cached metadata bytes: evaluate cooldown, rewrite URLs if needed, build response.
+     * Fixes triple buffering by using byte[] directly instead of wrapping/unwrapping Content.
+     *
+     * @param name Package name
+     * @param headers Request headers
+     * @param bytes Cached metadata bytes
+     * @return Response future
+     */
+    private CompletableFuture<Response> serveCachedMetadata(
+        final String name,
+        final Headers headers,
+        final byte[] bytes
+    ) {
+        return this.evaluateMetadataCooldown(name, headers, bytes)
+            .thenApply(result -> {
+                if (result.blocked()) {
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Cooldown blocked cached metadata request")
+                        .eventCategory("repository")
+                        .eventAction("cooldown_check")
+                        .eventOutcome("blocked")
+                        .field("package.name", name)
+                        .log();
+                    return CooldownResponses.forbidden(result.block().orElseThrow());
+                }
+                // Rewrite URLs (no-op for pre-rewritten content due to original_url check)
+                final byte[] rewritten = this.rewriteMetadata(bytes);
+                return ResponseBuilder.ok()
+                    .header("Content-Type", "application/json")
+                    .body(new Content.From(rewritten))
+                    .build();
+            });
     }
 
     /**
@@ -328,7 +360,48 @@ final class CachedProxySlice implements Slice {
             .log();
         return this.fetchThroughCache(line, name, headers);
     }
-    
+
+    /**
+     * Trigger background refresh of metadata (stale-while-revalidate pattern).
+     * Serves stale content immediately while refreshing in background.
+     *
+     * @param line Request line
+     * @param name Package name
+     * @param headers Request headers
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void backgroundRefresh(
+        final RequestLine line,
+        final String name,
+        final Headers headers
+    ) {
+        if (this.refreshing.add(name)) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    this.fetchThroughCache(line, name, headers).join();
+                    EcsLogger.debug("com.artipie.composer")
+                        .message("Background refresh completed")
+                        .eventCategory("cache")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("package.name", name)
+                        .log();
+                } catch (final Exception err) {
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("Background refresh failed")
+                        .eventCategory("cache")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("failure")
+                        .field("package.name", name)
+                        .error(err)
+                        .log();
+                } finally {
+                    this.refreshing.remove(name);
+                }
+            });
+        }
+    }
+
     /**
      * Fetch package through cache.
      *
@@ -354,16 +427,31 @@ final class CachedProxySlice implements Slice {
                         this.packageFromRemote(line, headers),
                         (lcl, rmt) -> new MergePackage.WithRemote(packageName, lcl).merge(rmt)
                     ).thenCompose(Function.identity())
-                    .thenApply(content -> {
-                        // Note: Do NOT emit events here - this is just metadata
-                        // Events should only be emitted when actual zip files are downloaded
+                    .thenCompose(contentOpt -> {
+                        // Write-time URL rewriting: rewrite before caching
+                        if (contentOpt.isPresent()) {
+                            return contentOpt.get().asBytesFuture().thenApply(bytes -> {
+                                final byte[] rewritten = this.rewriteMetadata(bytes);
+                                EcsLogger.debug("com.artipie.composer")
+                                    .message("Pre-rewrote metadata URLs at write time")
+                                    .eventCategory("repository")
+                                    .eventAction("metadata_rewrite")
+                                    .field("package.name", name)
+                                    .log();
+                                return Optional.of(
+                                    (Content) new Content.From(rewritten)
+                                );
+                            });
+                        }
                         EcsLogger.debug("com.artipie.composer")
-                            .message("Fetched package metadata from remote (content present: " + content.isPresent() + ")")
+                            .message("No content from remote for package")
                             .eventCategory("repository")
                             .eventAction("metadata_fetch")
                             .field("package.name", name)
                             .log();
-                        return content;
+                        return CompletableFuture.completedFuture(
+                            Optional.<Content>empty()
+                        );
                     })
             ),
             new CacheTimeControl(this.repo.storage())
@@ -371,7 +459,7 @@ final class CachedProxySlice implements Slice {
             if (pkgs.isEmpty()) {
                 return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
             }
-            // Read once and reuse for cooldown + rewrite to avoid OneTimePublisher double-consumption
+            // Content is already pre-rewritten at write time
             return pkgs.get().asBytesFuture().thenCompose(bytes ->
                 this.evaluateMetadataCooldown(name, headers, bytes)
                     .thenCompose(result -> {
@@ -387,27 +475,21 @@ final class CachedProxySlice implements Slice {
                                 CooldownResponses.forbidden(result.block().orElseThrow())
                             );
                         }
-                        // Rewrite URLs in metadata to proxy through Artipie
-                        final Content rewritten = this.rewriteMetadata(bytes, headers);
-                        
-                        // Save rewritten metadata to storage so ProxyDownloadSlice can find original URLs
+                        // Save rewritten metadata for ProxyDownloadSlice (original_url lookup)
                         final Key metadataKey = new Key.From(name + ".json");
-                        return rewritten.asBytesFuture().thenCompose(rewrittenBytes -> {
-                            final Content saved = new Content.From(rewrittenBytes);
-                            return this.repo.storage().save(metadataKey, saved)
-                                .thenApply(ignored -> {
-                                    EcsLogger.debug("com.artipie.composer")
-                                        .message("Saved metadata to storage")
-                                        .eventCategory("repository")
-                                        .eventAction("metadata_save")
-                                        .field("package.name", metadataKey.string())
-                                        .log();
-                                    return ResponseBuilder.ok()
-                                        .header("Content-Type", "application/json")
-                                        .body(new Content.From(rewrittenBytes))
-                                        .build();
-                                });
-                        });
+                        return this.repo.storage().save(metadataKey, new Content.From(bytes))
+                            .thenApply(ignored -> {
+                                EcsLogger.debug("com.artipie.composer")
+                                    .message("Saved metadata to storage")
+                                    .eventCategory("repository")
+                                    .eventAction("metadata_save")
+                                    .field("package.name", metadataKey.string())
+                                    .log();
+                                return ResponseBuilder.ok()
+                                    .header("Content-Type", "application/json")
+                                    .body(new Content.From(bytes))
+                                    .build();
+                            });
                     })
             );
         }).exceptionally(throwable -> {
@@ -498,8 +580,11 @@ final class CachedProxySlice implements Slice {
                             best = ins;
                             bestVer = ver;
                         }
-                    } catch (Exception ignored) {
-                        // ignore unparsable times
+                    } catch (final Exception ex) {
+                        EcsLogger.debug("com.artipie.composer")
+                            .message("Failed to parse Composer version time")
+                            .error(ex)
+                            .log();
                     }
                 }
             }
@@ -522,8 +607,11 @@ final class CachedProxySlice implements Slice {
                             best = ins;
                             bestVer = key;
                         }
-                    } catch (Exception ignored) {
-                        // ignore
+                    } catch (final Exception ex) {
+                        EcsLogger.debug("com.artipie.composer")
+                            .message("Failed to parse Composer version time")
+                            .error(ex)
+                            .log();
                     }
                 }
             }
@@ -533,23 +621,16 @@ final class CachedProxySlice implements Slice {
     
     /**
      * Rewrite metadata content to proxy downloads through Artipie.
+     * Returns byte[] directly to avoid unnecessary Content wrapping/unwrapping.
      *
-     * @param content Original metadata content
-     * @param headers Request headers (unused, kept for signature compatibility)
-     * @return Rewritten metadata content
+     * @param original Original metadata bytes
+     * @return Rewritten metadata bytes
      */
-    private Content rewriteMetadata(final byte[] original, final Headers headers) {
-        EcsLogger.debug("com.artipie.composer")
-            .message("Rewriting metadata URLs to proxy through Artipie")
-            .eventCategory("repository")
-            .eventAction("metadata_rewrite")
-            .field("url.path", this.baseUrl)
-            .log();
+    private byte[] rewriteMetadata(final byte[] original) {
         try {
-            final String json = new String(original, java.nio.charset.StandardCharsets.UTF_8);
+            final String json = new String(original, StandardCharsets.UTF_8);
             final MetadataUrlRewriter rewriter = new MetadataUrlRewriter(this.baseUrl);
-            final byte[] rewritten = rewriter.rewrite(json);
-            return new Content.From(rewritten);
+            return rewriter.rewrite(json);
         } catch (Exception ex) {
             EcsLogger.error("com.artipie.composer")
                 .message("Failed to rewrite metadata")
@@ -558,7 +639,7 @@ final class CachedProxySlice implements Slice {
                 .eventOutcome("failure")
                 .error(ex)
                 .log();
-            return new Content.From(original);
+            return original;
         }
     }
 
@@ -639,7 +720,11 @@ final class CachedProxySlice implements Slice {
                 .map(Header::getValue)
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)).toEpochMilli())
                 .orElse(null);
-        } catch (final DateTimeParseException ignored) {
+        } catch (final DateTimeParseException ex) {
+            EcsLogger.debug("com.artipie.composer")
+                .message("Failed to parse Last-Modified header for release date")
+                .error(ex)
+                .log();
             return null;
         }
     }
@@ -671,6 +756,13 @@ final class CachedProxySlice implements Slice {
                                 .log();
                             if (response.status().success()) {
                                 this.recordProxyMetric("success", duration);
+                                // Store Last-Modified for conditional requests
+                                response.headers().stream()
+                                    .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
+                                    .findFirst()
+                                    .ifPresent(h -> this.lastModifiedStore.put(
+                                        line.uri().getPath(), h.getValue()
+                                    ));
                                 return CompletableFuture.completedFuture(Optional.of(response.body()));
                             }
                             // CRITICAL: Consume body to prevent Vert.x request leak
@@ -735,14 +827,17 @@ final class CachedProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.composer")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

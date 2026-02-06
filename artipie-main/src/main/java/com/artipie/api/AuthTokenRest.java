@@ -90,7 +90,7 @@ public final class AuthTokenRest extends BaseRest {
                         new JsonObject().put("token", token).encode()
                     );
                 } else {
-                    routing.response().setStatusCode(HttpStatus.UNAUTHORIZED_401).send();
+                    sendError(routing, HttpStatus.UNAUTHORIZED_401, "Invalid credentials");
                 }
             } else {
                 routing.fail(ar.cause());

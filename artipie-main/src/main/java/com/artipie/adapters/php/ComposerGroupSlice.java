@@ -37,6 +37,13 @@ import java.util.concurrent.CompletableFuture;
 public final class ComposerGroupSlice implements Slice {
 
     /**
+     * Delegate group slice for non-packages.json requests.
+     * Uses the standard GroupSlice with artifact index, proxy awareness,
+     * circuit breaker, and error handling.
+     */
+    private final Slice delegate;
+
+    /**
      * Slice resolver for getting member slices.
      */
     private final SliceResolver resolver;
@@ -57,23 +64,40 @@ public final class ComposerGroupSlice implements Slice {
     private final int port;
 
     /**
-     * Constructor.
+     * Base path for metadata-url (e.g. "/test_prefix/php_group").
+     * Built from global prefix + group name so Composer can resolve
+     * p2 URLs as host-absolute paths.
+     */
+    private final String basePath;
+
+    /**
+     * Constructor with delegate slice for standard group behavior.
      *
+     * @param delegate Delegate group slice (GroupSlice with index/proxy support)
      * @param resolver Slice resolver
      * @param group Group repository name
      * @param members List of member repository names
      * @param port Server port
+     * @param globalPrefix Global URL prefix (e.g. "test_prefix"), empty string if none
      */
     public ComposerGroupSlice(
+        final Slice delegate,
         final SliceResolver resolver,
         final String group,
         final List<String> members,
-        final int port
+        final int port,
+        final String globalPrefix
     ) {
+        this.delegate = delegate;
         this.resolver = resolver;
         this.group = group;
         this.members = members;
         this.port = port;
+        if (globalPrefix != null && !globalPrefix.isEmpty()) {
+            this.basePath = "/" + globalPrefix + "/" + group;
+        } else {
+            this.basePath = "/" + group;
+        }
     }
 
     @Override
@@ -88,57 +112,60 @@ public final class ComposerGroupSlice implements Slice {
         }
 
         final String path = line.uri().getPath();
-        
+
         // For packages.json, merge responses from all members
         if (path.endsWith("/packages.json") || path.equals("/packages.json")) {
-            EcsLogger.debug("com.artipie.composer")
-                .message("Merging packages.json from " + this.members.size() + " members")
-                .eventCategory("repository")
-                .eventAction("packages_merge")
-                .field("repository.name", this.group)
-                .log();
-            // Get original path before any routing rewrites
-            // Priority: X-Original-Path (from ApiRoutingSlice) > X-FullPath (from TrimPathSlice) > current path
-            final String originalPath = headers.find("X-Original-Path").stream()
-                .findFirst()
-                .map(h -> h.getValue())
-                .or(() -> headers.find("X-FullPath").stream()
-                    .findFirst()
-                    .map(h -> h.getValue())
-                )
-                .orElse(path);
-            EcsLogger.debug("com.artipie.composer")
-                .message("Path resolution for packages.json")
-                .eventCategory("repository")
-                .eventAction("path_resolve")
-                .field("url.path", path)
-                .field("url.original", originalPath)
-                .field("http.request.headers.X-FullPath", headers.find("X-FullPath").stream().findFirst().map(h -> h.getValue()).orElse("none"))
-                .field("http.request.headers.X-Original-Path", headers.find("X-Original-Path").stream().findFirst().map(h -> h.getValue()).orElse("none"))
-                .log();
-            // Extract base path for metadata-url (everything before /packages.json)
-            final String basePath = extractBasePath(originalPath);
-            EcsLogger.debug("com.artipie.composer")
-                .message("Base path for metadata-url")
-                .eventCategory("repository")
-                .eventAction("path_resolve")
-                .field("url.path", basePath)
-                .log();
-            return mergePackagesJson(line, headers, body, basePath);
+            return mergePackagesJson(line, headers, body);
         }
 
-        // For other requests (individual packages), try members sequentially
-        EcsLogger.debug("com.artipie.composer")
-            .message("Trying members for request")
-            .eventCategory("repository")
-            .eventAction("member_query")
-            .field("repository.name", this.group)
-            .field("url.path", path)
-            .log();
-        // CRITICAL: Consume body once before sequential member queries
-        return body.asBytesFuture().thenCompose(requestBytes ->
-            tryMembersSequentially(0, line, headers)
-        );
+        // For p2 metadata requests, try each member directly.
+        // The artifact index cannot match p2 paths (it stores package names,
+        // not filesystem paths), so the delegate GroupSlice would skip local
+        // members and return 404.
+        if (path.contains("/p2/")) {
+            return tryMembersForP2(line, headers, body);
+        }
+
+        // For other requests (tarballs, artifacts), delegate to GroupSlice
+        // which has artifact index, proxy awareness, circuit breaker, and error handling
+        return this.delegate.response(line, headers, body);
+    }
+
+    /**
+     * Try each member sequentially for p2 metadata requests.
+     * Returns the first successful response, or 404 if all members fail.
+     */
+    private CompletableFuture<Response> tryMembersForP2(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        return body.asBytesFuture().thenCompose(requestBytes -> {
+            CompletableFuture<Response> chain = CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+            for (final String member : this.members) {
+                chain = chain.thenCompose(prev -> {
+                    if (prev.status() == RsStatus.OK) {
+                        return CompletableFuture.completedFuture(prev);
+                    }
+                    final Slice memberSlice = this.resolver.slice(
+                        new Key.From(member), this.port, 0
+                    );
+                    final RequestLine rewritten = rewritePath(line, member);
+                    final Headers sanitized = dropFullPathHeader(headers);
+                    return memberSlice.response(rewritten, sanitized, Content.EMPTY)
+                        .thenApply(resp -> {
+                            if (resp.status() == RsStatus.OK) {
+                                return resp;
+                            }
+                            return prev;
+                        })
+                        .exceptionally(ex -> prev);
+                });
+            }
+            return chain;
+        });
     }
 
     /**
@@ -147,14 +174,12 @@ public final class ComposerGroupSlice implements Slice {
      * @param line Request line
      * @param headers Headers
      * @param body Body
-     * @param basePath Base path for metadata-url (e.g., "/test_prefix/api/composer/php_group" or "/php_group")
      * @return Merged response
      */
     private CompletableFuture<Response> mergePackagesJson(
         final RequestLine line,
         final Headers headers,
-        final Content body,
-        final String basePath
+        final Content body
     ) {
         // CRITICAL: Consume original body to prevent OneTimePublisher errors
         // GET requests have empty bodies, but Content is still reference-counted
@@ -312,7 +337,7 @@ public final class ComposerGroupSlice implements Slice {
                 if (hasSatisFormat) {
                     // Use Satis format for group
                     merged.add("packages", Json.createObjectBuilder()); // Empty object
-                    merged.add("providers-url", basePath + "/p2/%package%.json");
+                    merged.add("providers-url", this.basePath + "/p2/%package%.json");
                     merged.add("providers", providersBuilder.build());
                     EcsLogger.debug("com.artipie.composer")
                         .message("Using Satis format for group (" + providersBuilder.build().size() + " providers)")
@@ -322,8 +347,9 @@ public final class ComposerGroupSlice implements Slice {
                         .field("repository.name", this.group)
                         .log();
                 } else {
-                    // Use traditional format
-                    merged.add("metadata-url", basePath + "/p2/%package%.json");
+                    // Use host-absolute metadata-url including global prefix.
+                    // Composer (especially v1) needs absolute paths, not relative.
+                    merged.add("metadata-url", this.basePath + "/p2/%package%.json");
                     merged.add("packages", packagesBuilder.build());
                     EcsLogger.debug("com.artipie.composer")
                         .message("Using traditional format for group (" + packagesBuilder.build().size() + " packages)")
@@ -347,66 +373,6 @@ public final class ComposerGroupSlice implements Slice {
         }); // Close thenCompose lambda for body consumption
     }
 
-    /**
-     * Try members sequentially until one returns a non-404 response.
-     * Body has already been consumed by caller.
-     *
-     * @param index Current member index
-     * @param line Request line
-     * @param headers Headers
-     * @return Response from first successful member or 404
-     */
-    private CompletableFuture<Response> tryMembersSequentially(
-        final int index,
-        final RequestLine line,
-        final Headers headers
-    ) {
-        if (index >= this.members.size()) {
-            EcsLogger.debug("com.artipie.composer")
-                .message("No member in group could serve request")
-                .eventCategory("repository")
-                .eventAction("member_query")
-                .eventOutcome("failure")
-                .field("repository.name", this.group)
-                .field("url.path", line.uri().getPath())
-                .log();
-            return ResponseBuilder.notFound().completedFuture();
-        }
-
-        final String member = this.members.get(index);
-        final Slice memberSlice = this.resolver.slice(new Key.From(member), this.port, 0);
-        final RequestLine rewritten = rewritePath(line, member);
-        final Headers sanitized = dropFullPathHeader(headers);
-
-        EcsLogger.debug("com.artipie.composer")
-            .message("Trying member for request")
-            .eventCategory("repository")
-            .eventAction("member_query")
-            .field("repository.name", this.group)
-            .field("member.name", member)
-            .field("url.path", line.uri().getPath())
-            .log();
-
-        return memberSlice.response(rewritten, sanitized, Content.EMPTY)
-            .thenCompose(resp -> {
-                EcsLogger.debug("com.artipie.composer")
-                    .message("Member responded")
-                    .eventCategory("repository")
-                    .eventAction("member_query")
-                    .field("member.name", member)
-                    .field("http.response.status_code", resp.status().code())
-                    .field("url.path", line.uri().getPath())
-                    .log();
-
-                if (resp.status() == RsStatus.NOT_FOUND) {
-                    // Try next member
-                    return tryMembersSequentially(index + 1, line, sanitized);
-                }
-
-                // Return this response (success or error)
-                return CompletableFuture.completedFuture(resp);
-            });
-    }
 
     /**
      * Rewrite request line to include member repository name in path.
@@ -447,24 +413,4 @@ public final class ComposerGroupSlice implements Slice {
         );
     }
 
-    /**
-     * Extract base path from packages.json request path.
-     * Examples:
-     * - "/packages.json" -> ""
-     * - "/php_group/packages.json" -> "/php_group"
-     * - "/test_prefix/api/composer/php_group/packages.json" -> "/test_prefix/api/composer/php_group"
-     *
-     * @param path Full request path
-     * @return Base path (without /packages.json suffix)
-     */
-    private static String extractBasePath(final String path) {
-        if (path.endsWith("/packages.json")) {
-            return path.substring(0, path.length() - "/packages.json".length());
-        }
-        if (path.equals("/packages.json")) {
-            return "";
-        }
-        // Fallback: return path as-is
-        return path;
-    }
 }

@@ -49,6 +49,38 @@ class ManifestTest {
     }
 
     @Test
+    void shouldInferOciManifestWhenMediaTypeAbsent() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder()
+                .add("schemaVersion", 2)
+                .add("config", Json.createObjectBuilder()
+                    .add("mediaType", "application/vnd.oci.image.config.v1+json")
+                    .add("digest", "sha256:abc"))
+                .add("layers", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("digest", "sha256:def")))
+                .build().toString().getBytes()
+        );
+        Assertions.assertEquals(Manifest.MANIFEST_OCI_V1, manifest.mediaType());
+    }
+
+    @Test
+    void shouldInferOciIndexWhenMediaTypeAbsent() {
+        final Manifest manifest = new Manifest(
+            new Digest.Sha256("123"),
+            Json.createObjectBuilder()
+                .add("schemaVersion", 2)
+                .add("manifests", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("digest", "sha256:abc")
+                        .add("mediaType", "application/vnd.oci.image.manifest.v1+json")))
+                .build().toString().getBytes()
+        );
+        Assertions.assertEquals(Manifest.MANIFEST_OCI_INDEX, manifest.mediaType());
+    }
+
+    @Test
     void shouldReadConfig() {
         final String digest = "sha256:def";
         final Manifest manifest = new Manifest(

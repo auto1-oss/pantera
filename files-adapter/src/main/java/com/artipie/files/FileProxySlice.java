@@ -8,7 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.FromRemoteCache;
+import com.artipie.asto.cache.StreamThroughCache;
 import com.artipie.asto.cache.FromStorageCache;
 import com.artipie.asto.cache.Remote;
 import com.artipie.cooldown.CooldownRequest;
@@ -18,14 +18,13 @@ import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Response;
 import com.artipie.http.Slice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
 import com.artipie.http.client.auth.Authenticator;
 import com.artipie.http.headers.Login;
-import com.artipie.http.headers.ContentLength;
 import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
 import com.artipie.http.slice.KeyFromPath;
 import com.artipie.scheduling.ArtifactEvent;
 import io.reactivex.Flowable;
@@ -87,6 +86,7 @@ public final class FileProxySlice implements Slice {
      */
     private final Optional<Storage> storage;
 
+
     /**
      * New files proxy slice.
      * @param clients HTTP clients
@@ -108,7 +108,7 @@ public final class FileProxySlice implements Slice {
         final Authenticator auth, final Storage asto) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
-            new FromRemoteCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
+            new StreamThroughCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
             com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
@@ -125,7 +125,7 @@ public final class FileProxySlice implements Slice {
         final Queue<ArtifactEvent> events, final String rname) {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
-            new FromRemoteCache(asto), Optional.of(events), rname,
+            new StreamThroughCache(asto), Optional.of(events), rname,
             com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
@@ -298,31 +298,34 @@ public final class FileProxySlice implements Slice {
 
                                     if (response.status().success()) {
                                         this.recordProxyMetric("success", duration);
+                                        final java.util.concurrent.atomic.AtomicLong totalSize =
+                                            new java.util.concurrent.atomic.AtomicLong(0);
                                         final Flowable<ByteBuffer> body = Flowable.fromPublisher(response.body())
+                                            .doOnNext(buf -> totalSize.addAndGet(buf.remaining()))
                                             .doOnError(term::completeExceptionally)
                                             .doOnTerminate(() -> term.complete(null));
 
                                         promise.complete(Optional.of(new Content.From(body)));
 
                                         if (this.events.isPresent()) {
-                                            final long size =
-                                                new RqHeaders(rshdr.get(), ContentLength.NAME)
-                                                    .stream().findFirst().map(Long::parseLong)
-                                                    .orElse(0L);
-                                            String aname = key.string();
-                                            // Exclude repo name prefix if present
-                                            if (this.rname != null && !this.rname.isEmpty()
-                                                && aname.startsWith(this.rname + "/")) {
-                                                aname = aname.substring(this.rname.length() + 1);
-                                            }
-                                            // Replace folder separators with dots
-                                            aname = aname.replace('/', '.');
-                                            this.events.get().add(
-                                                new ArtifactEvent(
-                                                    FileProxySlice.REPO_TYPE, this.rname, user,
-                                                    aname, "UNKNOWN", size
-                                                )
-                                            );
+                                            final String finalArtifact = key.string();
+                                            term.thenRun(() -> {
+                                                final long size = totalSize.get();
+                                                String aname = finalArtifact;
+                                                // Exclude repo name prefix if present
+                                                if (this.rname != null && !this.rname.isEmpty()
+                                                    && aname.startsWith(this.rname + "/")) {
+                                                    aname = aname.substring(this.rname.length() + 1);
+                                                }
+                                                // Replace folder separators with dots
+                                                aname = aname.replace('/', '.');
+                                                this.events.get().add(
+                                                    new ArtifactEvent(
+                                                        FileProxySlice.REPO_TYPE, this.rname, user,
+                                                        aname, "UNKNOWN", size
+                                                    )
+                                                );
+                                            });
                                         }
                                     } else {
                                         // CRITICAL: Consume body to prevent Vert.x request leak
@@ -397,14 +400,17 @@ public final class FileProxySlice implements Slice {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.files")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

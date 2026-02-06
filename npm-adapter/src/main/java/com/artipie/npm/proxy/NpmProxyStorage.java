@@ -72,4 +72,13 @@ public interface NpmProxyStorage {
      * @return True if abbreviated metadata is cached
      */
     Maybe<Boolean> hasAbbreviatedContent(String name);
+
+    /**
+     * Save only the metadata file (meta.meta) without overwriting content.
+     * Used for updating refresh timestamps on conditional 304 responses.
+     * @param name Package name
+     * @param metadata Metadata to save
+     * @return Completion or error signal
+     */
+    Completable saveMetadataOnly(String name, NpmPackage.Metadata metadata);
 }

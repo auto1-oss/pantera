@@ -100,6 +100,10 @@ public class ResponseBuilder {
         return new ResponseBuilder(RsStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
     }
 
+    public static ResponseBuilder badGateway() {
+        return new ResponseBuilder(RsStatus.BAD_GATEWAY);
+    }
+
     public static ResponseBuilder gatewayTimeout() {
         return new ResponseBuilder(RsStatus.GATEWAY_TIMEOUT);
     }
@@ -245,6 +249,7 @@ public class ResponseBuilder {
                 case TOO_MANY_REQUESTS -> RSP_TOO_MANY_REQUESTS;
                 case INTERNAL_ERROR -> RSP_INTERNAL_ERROR;
                 case NOT_IMPLEMENTED -> RSP_NOT_IMPLEMENTED;
+                case BAD_GATEWAY -> RSP_BAD_GATEWAY;
                 case SERVICE_UNAVAILABLE -> RSP_SERVICE_UNAVAILABLE;
                 case PARTIAL_CONTENT -> RSP_PARTIAL_CONTENT;
                 case GATEWAY_TIMEOUT -> RSP_GATEWAY_TIMEOUT;
@@ -284,6 +289,7 @@ public class ResponseBuilder {
     private final static Response RSP_TOO_MANY_REQUESTS = new Response(RsStatus.TOO_MANY_REQUESTS, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_INTERNAL_ERROR = new Response(RsStatus.INTERNAL_ERROR, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_NOT_IMPLEMENTED = new Response(RsStatus.NOT_IMPLEMENTED, Headers.EMPTY, Content.EMPTY);
+    private final static Response RSP_BAD_GATEWAY = new Response(RsStatus.BAD_GATEWAY, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_SERVICE_UNAVAILABLE = new Response(RsStatus.SERVICE_UNAVAILABLE, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_PARTIAL_CONTENT = new Response(RsStatus.PARTIAL_CONTENT, Headers.EMPTY, Content.EMPTY);
     private final static Response RSP_GATEWAY_TIMEOUT = new Response(RsStatus.GATEWAY_TIMEOUT, Headers.EMPTY, Content.EMPTY);

@@ -12,6 +12,9 @@ import com.artipie.auth.JwtTokens;
 import com.artipie.http.BaseSlice;
 import com.artipie.http.MainSlice;
 import com.artipie.http.Slice;
+import com.artipie.http.misc.ConfigDefaults;
+import com.artipie.http.misc.RepoNameMeterFilter;
+import com.artipie.http.misc.StorageExecutors;
 import com.artipie.http.slice.LoggingSlice;
 import com.artipie.jetty.http3.Http3Server;
 import com.artipie.jetty.http3.SslFactoryFromYaml;
@@ -106,6 +109,11 @@ public final class VertxMain {
     private com.artipie.settings.ConfigWatchService configWatch;
 
     /**
+     * Vert.x instance - must be closed on shutdown to release event loops and worker threads.
+     */
+    private Vertx vertx;
+
+    /**
      * Ctor.
      *
      * @param config Config file path.
@@ -126,8 +134,27 @@ public final class VertxMain {
      * @throws IOException In case of error reading settings.
      */
     public int start(final int apiPort) throws IOException {
-        quartz = new QuartzService();
-        this.settings = new SettingsFromPath(this.config).find(quartz);
+        // Pre-parse YAML to detect DB configuration for Quartz JDBC clustering
+        final com.amihaiemil.eoyaml.YamlMapping yamlContent =
+            com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
+        final com.amihaiemil.eoyaml.YamlMapping meta = yamlContent.yamlMapping("meta");
+        final Optional<javax.sql.DataSource> sharedDs;
+        if (meta != null && meta.yamlMapping("artifacts_database") != null) {
+            final javax.sql.DataSource ds =
+                new com.artipie.db.ArtifactDbFactory(meta, "artifacts").initialize();
+            sharedDs = Optional.of(ds);
+            quartz = new QuartzService(ds);
+            EcsLogger.info("com.artipie")
+                .message("Quartz JDBC clustering enabled with shared DataSource")
+                .eventCategory("scheduling")
+                .eventAction("quartz_jdbc_init")
+                .eventOutcome("success")
+                .log();
+        } else {
+            sharedDs = Optional.empty();
+            quartz = new QuartzService();
+        }
+        this.settings = new SettingsFromPath(this.config).find(quartz, sharedDs);
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
@@ -141,10 +168,10 @@ public final class VertxMain {
 
 
 
-        final Vertx vertx = VertxMain.vertx(settings.metrics());
+        this.vertx = VertxMain.vertx(settings.metrics());
         final com.artipie.settings.JwtSettings jwtSettings = settings.jwtSettings();
         final JWTAuth jwt = JWTAuth.create(
-            vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
+            this.vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
                 new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
             )
         );
@@ -164,7 +191,7 @@ public final class VertxMain {
             }
         }
         // Listen for repository change events to refresh runtime without restart
-        vertx.getDelegate().eventBus().consumer(
+        this.vertx.getDelegate().eventBus().consumer(
             RepositoryEvents.ADDRESS,
             msg -> {
                 try {
@@ -186,7 +213,7 @@ public final class VertxMain {
                                             .log();
                                         return;
                                     }
-                                    vertx.getDelegate().runOnContext(
+                                    VertxMain.this.vertx.getDelegate().runOnContext(
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             repos.config(name).ifPresent(cfg -> cfg.port().ifPresent(
@@ -211,7 +238,7 @@ public final class VertxMain {
                                                             this.listenOn(
                                                                 slice,
                                                                 prt,
-                                                                vertx,
+                                                                VertxMain.this.vertx,
                                                                 settings.metrics(),
                                                                 settings.httpServerRequestTimeout()
                                                             );
@@ -236,7 +263,7 @@ public final class VertxMain {
                                             .log();
                                         return;
                                     }
-                                    vertx.getDelegate().runOnContext(
+                                    VertxMain.this.vertx.getDelegate().runOnContext(
                                         nothing -> slices.invalidateRepo(name)
                                     );
                                 }
@@ -255,7 +282,7 @@ public final class VertxMain {
                                             .log();
                                         return;
                                     }
-                                    vertx.getDelegate().runOnContext(
+                                    VertxMain.this.vertx.getDelegate().runOnContext(
                                         nothing -> {
                                             slices.invalidateRepo(name);
                                             slices.invalidateRepo(target);
@@ -279,7 +306,7 @@ public final class VertxMain {
         final int main = this.listenOn(
             new MainSlice(settings, slices),
             this.port,
-            vertx,
+            this.vertx,
             settings.metrics(),
             settings.httpServerRequestTimeout()
         );
@@ -290,14 +317,14 @@ public final class VertxMain {
             .eventOutcome("success")
             .field("url.port", main)
             .log();
-        this.startRepos(vertx, settings, repos, this.port, slices);
+        this.startRepos(this.vertx, settings, repos, this.port, slices);
         
         // Deploy RestApi verticle with multiple instances for CPU scaling
         // Use 2x CPU cores to handle concurrent API requests efficiently
         final int apiInstances = Runtime.getRuntime().availableProcessors() * 2;
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
-        vertx.deployVerticle(
+        this.vertx.deployVerticle(
             () -> new RestApi(settings, apiPort, jwt),
             deployOpts,
             result -> {
@@ -333,13 +360,23 @@ public final class VertxMain {
                 final String metricsPath = metricsEndpoint.get().getKey();
                 final long metricsCacheTtlMs = 10_000L; // 10 second cache TTL as requested
                 final MeterRegistry metricsRegistry = BackendRegistries.getDefaultNow();
-                
+                StorageExecutors.registerMetrics(metricsRegistry);
+                settings.artifactMetadata().ifPresent(
+                    evtQueues -> io.micrometer.core.instrument.Gauge.builder(
+                        "artipie.events.queue.size",
+                        evtQueues.eventQueue(),
+                        java.util.Queue::size
+                    ).tag("type", "events")
+                        .description("Size of the artifact events queue")
+                        .register(metricsRegistry)
+                );
+
                 final DeploymentOptions metricsOpts = new DeploymentOptions()
                     .setWorker(true)
                     .setWorkerPoolName("metrics-scraper")
                     .setWorkerPoolSize(2);
                 
-                vertx.deployVerticle(
+                this.vertx.deployVerticle(
                     () -> new com.artipie.metrics.AsyncMetricsVerticle(
                         metricsRegistry, metricsPort, metricsPath, metricsCacheTtlMs
                     ),
@@ -347,13 +384,12 @@ public final class VertxMain {
                     metricsResult -> {
                         if (metricsResult.succeeded()) {
                             EcsLogger.info("com.artipie.metrics")
-                                .message("AsyncMetricsVerticle deployed as worker verticle")
+                                .message(String.format("AsyncMetricsVerticle deployed as worker verticle with cache TTL %dms", metricsCacheTtlMs))
                                 .eventCategory("metrics")
                                 .eventAction("metrics_verticle_deploy")
                                 .eventOutcome("success")
                                 .field("destination.port", metricsPort)
                                 .field("url.path", metricsPath)
-                                .field("cache.ttl.ms", metricsCacheTtlMs)
                                 .log();
                         } else {
                             EcsLogger.error("com.artipie.metrics")
@@ -401,23 +437,96 @@ public final class VertxMain {
             .eventAction("server_stop")
             .eventOutcome("success")
             .log();
-        this.servers.forEach(s -> {
-            s.stop();
-            EcsLogger.info("com.artipie")
-                .message("Artipie's server on port was stopped")
-                .eventCategory("server")
-                .eventAction("server_stop")
-                .eventOutcome("success")
-                .field("destination.port", s.port())
-                .log();
+        // 1. Stop HTTP/3 servers
+        this.http3.forEach((port, server) -> {
+            try {
+                server.stop();
+                EcsLogger.info("com.artipie")
+                    .message("HTTP/3 server on port stopped")
+                    .eventCategory("server")
+                    .eventAction("http3_stop")
+                    .eventOutcome("success")
+                    .field("destination.port", port)
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie")
+                    .message("Failed to stop HTTP/3 server")
+                    .eventCategory("server")
+                    .eventAction("http3_stop")
+                    .eventOutcome("failure")
+                    .field("destination.port", port)
+                    .error(e)
+                    .log();
+            }
         });
+        // 2. Stop HTTP/1.1+2 servers
+        this.servers.forEach(s -> {
+            try {
+                s.stop();
+                EcsLogger.info("com.artipie")
+                    .message("Artipie's server on port was stopped")
+                    .eventCategory("server")
+                    .eventAction("server_stop")
+                    .eventOutcome("success")
+                    .field("destination.port", s.port())
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie")
+                    .message("Failed to stop server")
+                    .eventCategory("server")
+                    .eventAction("server_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        });
+        // 3. Stop QuartzService
         if (quartz != null) {
-            quartz.stop();
+            try {
+                quartz.stop();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie")
+                    .message("Failed to stop QuartzService")
+                    .eventCategory("server")
+                    .eventAction("quartz_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
         }
+        // 4. Stop ConfigWatchService
         if (this.configWatch != null) {
-            this.configWatch.close();
+            try {
+                this.configWatch.close();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie")
+                    .message("Failed to close ConfigWatchService")
+                    .eventCategory("server")
+                    .eventAction("config_watch_stop")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
         }
-        // Close settings to cleanup storage resources (S3AsyncClient, etc.)
+        // 5. Shutdown BlockedThreadDiagnostics
+        try {
+            BlockedThreadDiagnostics.shutdownInstance();
+            EcsLogger.info("com.artipie")
+                .message("BlockedThreadDiagnostics shut down")
+                .eventCategory("server")
+                .eventAction("diagnostics_shutdown")
+                .eventOutcome("success")
+                .log();
+        } catch (final Exception e) {
+            EcsLogger.error("com.artipie")
+                .message("Failed to shutdown BlockedThreadDiagnostics")
+                .eventCategory("server")
+                .eventAction("diagnostics_shutdown")
+                .eventOutcome("failure")
+                .error(e)
+                .log();
+        }
+        // 6. Close settings (releases storage resources, S3AsyncClient, etc.)
         if (this.settings != null) {
             try {
                 this.settings.close();
@@ -432,6 +541,44 @@ public final class VertxMain {
                     .message("Failed to close settings")
                     .eventCategory("server")
                     .eventAction("resource_cleanup")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // 7. Shutdown storage executor pools
+        try {
+            com.artipie.http.misc.StorageExecutors.shutdown();
+            EcsLogger.info("com.artipie")
+                .message("Storage executor pools shut down")
+                .eventCategory("server")
+                .eventAction("executor_shutdown")
+                .eventOutcome("success")
+                .log();
+        } catch (final Exception e) {
+            EcsLogger.error("com.artipie")
+                .message("Failed to shutdown storage executor pools")
+                .eventCategory("server")
+                .eventAction("executor_shutdown")
+                .eventOutcome("failure")
+                .error(e)
+                .log();
+        }
+        // 8. Close Vert.x instance (LAST - closes event loops and worker threads)
+        if (this.vertx != null) {
+            try {
+                this.vertx.close();
+                EcsLogger.info("com.artipie")
+                    .message("Vert.x instance closed")
+                    .eventCategory("server")
+                    .eventAction("vertx_close")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie")
+                    .message("Failed to close Vert.x instance")
+                    .eventCategory("server")
+                    .eventAction("vertx_close")
                     .eventOutcome("failure")
                     .error(e)
                     .log();
@@ -693,21 +840,36 @@ public final class VertxMain {
             // Add common tags to all metrics
             registry.config().commonTags("job", "artipie");
 
-            // Configure registry to publish histogram buckets for all Timer metrics
+            // Add repo_name cardinality control filter (default max 50 distinct repos)
             registry.config().meterFilter(
-                new MeterFilter() {
-                    @Override
-                    public DistributionStatisticConfig configure(Meter.Id id, DistributionStatisticConfig config) {
-                        if (id.getType() == Meter.Type.TIMER) {
-                            return DistributionStatisticConfig.builder()
-                                .percentilesHistogram(true)
-                                .build()
-                                .merge(config);
-                        }
-                        return config;
-                    }
-                }
+                new RepoNameMeterFilter(
+                    ConfigDefaults.getInt("ARTIPIE_METRICS_MAX_REPOS", 50)
+                )
             );
+
+            // Configure registry to publish histogram buckets for all Timer metrics
+            // Opt-in via ARTIPIE_METRICS_PERCENTILES_HISTOGRAM env var (default: false)
+            if (Boolean.parseBoolean(
+                ConfigDefaults.get("ARTIPIE_METRICS_PERCENTILES_HISTOGRAM", "false")
+            )) {
+                registry.config().meterFilter(
+                    new MeterFilter() {
+                        @Override
+                        public DistributionStatisticConfig configure(
+                            final Meter.Id id,
+                            final DistributionStatisticConfig config
+                        ) {
+                            if (id.getType() == Meter.Type.TIMER) {
+                                return DistributionStatisticConfig.builder()
+                                    .percentilesHistogram(true)
+                                    .build()
+                                    .merge(config);
+                            }
+                            return config;
+                        }
+                    }
+                );
+            }
 
             // Initialize MicrometerMetrics with the registry
             com.artipie.metrics.MicrometerMetrics.initialize(registry);

@@ -203,11 +203,25 @@ public final class DownloadPackageSlice implements Slice {
         final Optional<String> clientETag
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata ->
-                // Try to get pre-computed abbreviated content first
-                this.npm.getAbbreviatedContentStream(packageName)
+            .flatMap(metadata -> {
+                // PERF: Early 304 exit - skip content loading if derived ETag matches
+                if (clientETag.isPresent() && metadata.abbreviatedHash().isPresent()) {
+                    final String tarballPrefix = this.getTarballPrefix(headers);
+                    final String derivedEtag = MetadataETag.derive(
+                        metadata.abbreviatedHash().get(), tarballPrefix
+                    );
+                    if (clientETag.get().equals(derivedEtag)) {
+                        return io.reactivex.Maybe.just(
+                            ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                                .header("ETag", derivedEtag)
+                                .header("Cache-Control", "public, max-age=300")
+                                .build()
+                        );
+                    }
+                }
+                // Try to get pre-computed abbreviated content
+                return this.npm.getAbbreviatedContentStream(packageName)
                     .flatMap(abbreviatedStream -> {
-                        // OPTIMIZATION: Use size from Content when available for pre-allocation
                         final long abbrevSize = abbreviatedStream.size().orElse(-1L);
                         return Concatenation.withSize(abbreviatedStream, abbrevSize)
                             .single()
@@ -248,8 +262,8 @@ public final class DownloadPackageSlice implements Slice {
                                     );
                                 });
                         })
-                    ))
-            )
+                    ));
+            })
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture();
@@ -257,7 +271,7 @@ public final class DownloadPackageSlice implements Slice {
 
     /**
      * Apply cooldown filtering to abbreviated metadata.
-     * 
+     *
      * Abbreviated metadata contains the "time" field with release dates
      * (added for pnpm compatibility in AbbreviatedMetadata.generate()).
      * CooldownMetadataService.filterMetadata() handles parsing and date extraction
@@ -404,8 +418,23 @@ public final class DownloadPackageSlice implements Slice {
         final Optional<String> clientETag
     ) {
         return this.npm.getPackageMetadataOnly(packageName)
-            .flatMap(metadata ->
-                this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
+            .flatMap(metadata -> {
+                // PERF: Early 304 exit - skip content loading if derived ETag matches
+                if (clientETag.isPresent() && metadata.contentHash().isPresent()) {
+                    final String tarballPrefix = this.getTarballPrefix(headers);
+                    final String derivedEtag = MetadataETag.derive(
+                        metadata.contentHash().get(), tarballPrefix
+                    );
+                    if (clientETag.get().equals(derivedEtag)) {
+                        return io.reactivex.Maybe.just(
+                            ResponseBuilder.from(RsStatus.NOT_MODIFIED)
+                                .header("ETag", derivedEtag)
+                                .header("Cache-Control", "public, max-age=300")
+                                .build()
+                        );
+                    }
+                }
+                return this.npm.getPackageContentStream(packageName).flatMap(contentStream -> {
                     // OPTIMIZATION: Use size from Content when available for pre-allocation
                     final long contentSize = contentStream.size().orElse(-1L);
                     return Concatenation.withSize(contentStream, contentSize)
@@ -465,8 +494,8 @@ public final class DownloadPackageSlice implements Slice {
                                 this.buildResponse(rawBytes, metadata, headers, false, clientETag)
                             );
                         });
-                })
-            )
+                });
+            })
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture();
@@ -482,28 +511,29 @@ public final class DownloadPackageSlice implements Slice {
         final Headers headers,
         final Optional<String> clientETag
     ) {
-        // MEMORY OPTIMIZATION: Use byte-level transformer instead of String + ClientContent
-        // This avoids creating multiple String copies of the metadata
         final String tarballPrefix = this.getTarballPrefix(headers);
-        final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-        final byte[] transformedBytes = transformer.transform(abbreviatedBytes, tarballPrefix);
-        
-        // Calculate ETag for caching using bytes (avoids String conversion)
-        final String etag = new MetadataETag(transformedBytes).calculate();
-        
-        // Check for 304 Not Modified
+        // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes to hash)
+        // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
+        final String etag = metadata.abbreviatedHash()
+            .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+            .orElseGet(() -> {
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                final byte[] transformed = transformer.transform(abbreviatedBytes, tarballPrefix);
+                return new MetadataETag(transformed).calculate();
+            });
+        // Check for 304 Not Modified BEFORE URL transformation
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                 .header("ETag", etag)
                 .header("Cache-Control", "public, max-age=300")
                 .build();
         }
-        
-        // Return abbreviated response - use transformed bytes directly
+        // Only transform bytes when we actually need to send them
+        final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+        final byte[] transformedBytes = transformer.transform(abbreviatedBytes, tarballPrefix);
         final Content streamedContent = new Content.From(
             Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
         );
-        
         return ResponseBuilder.ok()
             .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
             .header("Last-Modified", metadata.lastModified())
@@ -526,30 +556,28 @@ public final class DownloadPackageSlice implements Slice {
         final Optional<String> clientETag
     ) {
         try {
-            // MEMORY OPTIMIZATION: Use byte-level URL transformer instead of JSON parsing
-            // This reduces memory by ~60% - no JSON parse/serialize, just byte pattern matching
-            // Cached content has relative URLs like "/pkg/-/pkg.tgz", we prepend the host prefix
             final String tarballPrefix = this.getTarballPrefix(headers);
-            final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
-            final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
-            
             // For full metadata requests (abbreviated=false), we can skip JSON parsing
-            // Just use the transformed bytes directly
             if (!abbreviated) {
-                // MEMORY OPTIMIZATION: Use byte-based ETag to avoid String conversion
-                final String etag = new MetadataETag(transformedBytes).calculate();
-                
+                // PERF: Derive ETag from pre-computed hash + prefix (~100 bytes)
+                // instead of SHA-256 of full transformed content (3-5MB). ~1000x faster.
+                final String etag = metadata.contentHash()
+                    .map(hash -> MetadataETag.derive(hash, tarballPrefix))
+                    .orElseGet(() -> {
+                        final ByteLevelUrlTransformer t = new ByteLevelUrlTransformer();
+                        return new MetadataETag(t.transform(rawBytes, tarballPrefix)).calculate();
+                    });
                 if (clientETag.isPresent() && clientETag.get().equals(etag)) {
                     return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                         .header("ETag", etag)
                         .header("Cache-Control", "public, max-age=300")
                         .build();
                 }
-                
+                final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+                final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
                 final Content streamedContent = new Content.From(
                     Flowable.fromArray(ByteBuffer.wrap(transformedBytes))
                 );
-                
                 return ResponseBuilder.ok()
                     .header("Content-Type", "application/json; charset=utf-8")
                     .header("Last-Modified", metadata.lastModified())
@@ -559,26 +587,24 @@ public final class DownloadPackageSlice implements Slice {
                     .body(streamedContent)
                     .build();
             }
-            
             // Abbreviated requests should use serveAbbreviated() path, but handle fallback
+            final ByteLevelUrlTransformer transformer = new ByteLevelUrlTransformer();
+            final byte[] transformedBytes = transformer.transform(rawBytes, tarballPrefix);
             final String clientContent = new String(transformedBytes, StandardCharsets.UTF_8);
             final JsonObject fullJson = Json.createReader(new StringReader(clientContent)).readObject();
             final JsonObject enhanced = new MetadataEnhancer(fullJson).enhance();
             final JsonObject response = new AbbreviatedMetadata(enhanced).generate();
             final String responseStr = response.toString();
             final String etag = new MetadataETag(responseStr).calculate();
-
             if (clientETag.isPresent() && clientETag.get().equals(etag)) {
                 return ResponseBuilder.from(RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
                     .build();
             }
-
             final Content streamedContent = new Content.From(
                 Flowable.fromArray(ByteBuffer.wrap(responseStr.getBytes(StandardCharsets.UTF_8)))
             );
-
             return ResponseBuilder.ok()
                 .header("Content-Type", "application/vnd.npm.install-v1+json; charset=utf-8")
                 .header("Last-Modified", metadata.lastModified())

@@ -11,7 +11,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
@@ -86,6 +89,26 @@ final class RxFileTest {
             size,
             Matchers.equalTo((long) data.length)
         );
+    }
+
+    @Test
+    @Timeout(5)
+    void worksUnderHighConcurrency(@TempDir final Path tmp) throws Exception {
+        final Path dir = tmp.resolve("bounded-test");
+        Files.createDirectories(dir);
+        final int concurrency = 50;
+        final List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < concurrency; i++) {
+            final Path file = dir.resolve("file-" + i + ".dat");
+            Files.write(file, ("content-" + i).getBytes());
+            final RxFile rxfile = new RxFile(file);
+            futures.add(
+                CompletableFuture.runAsync(
+                    () -> rxfile.flow().toList().blockingGet()
+                )
+            );
+        }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
     }
 
     /**

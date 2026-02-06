@@ -11,6 +11,7 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
 import com.artipie.http.headers.WwwAuthenticate;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
 import org.slf4j.MDC;
 
@@ -87,8 +88,11 @@ public final class AuthzSlice implements Slice {
                                     .header(new WwwAuthenticate(challenge))
                                     .completedFuture();
                             }
-                        } catch (final UnsupportedOperationException ignored) {
-                            // fall through when scheme does not provide challenge
+                        } catch (final UnsupportedOperationException ex) {
+                            EcsLogger.debug("com.artipie.http.auth")
+                                .message("Auth scheme does not provide challenge")
+                                .error(ex)
+                                .log();
                         }
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(
