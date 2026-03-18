@@ -19,6 +19,7 @@ classes/
 .storage/data/**
 .storage/data/test/**
 artipie-main/docker-compose/artipie/data/**
+artipie-main/docker-compose/artipie/prod_repo/**
 artipie-main/docker-compose/artipie/artifacts/npm/node_modules/**
 artipie-main/docker-compose/artipie/cache/**
 artipie-main/docker-compose/artipie/artifacts/php/vendor/**
@@ -30,3 +31,15 @@ artipie-main/docker-compose/.env
 
 # AI agent task/analysis documents - not part of product documentation
 agents/
+
+# Git worktrees
+.worktrees/
+/benchmark/fixtures
+/benchmark/results
+/docs/plans
+/docs/superpowers
+*.csv
+*.png
+/.superpowers
+/artipie-ui/mockups
+artipie-backfill/dependency-reduced-pom.xml

@@ -15,6 +15,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -68,6 +70,13 @@ public final class GroupMetadataCache {
     private final String groupName;
 
     /**
+     * Last-known-good metadata (never expires).
+     * Populated on every successful put(), survives L1/L2 invalidation/expiry.
+     * Used as stale fallback when upstream is unreachable.
+     */
+    private final ConcurrentMap<String, byte[]> lastKnownGood;
+
+    /**
      * Create group metadata cache with defaults.
      * @param groupName Group repository name
      */
@@ -108,6 +117,7 @@ public final class GroupMetadataCache {
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
             .recordStats()
             .build();
+        this.lastKnownGood = new ConcurrentHashMap<>();
     }
 
     /**
@@ -156,11 +166,30 @@ public final class GroupMetadataCache {
     }
 
     /**
+     * Get stale (last-known-good) metadata. This data never expires and is
+     * populated on every successful {@link #put}. Use as fallback when all
+     * group members are unreachable and the primary cache has expired.
+     * @param path Metadata path
+     * @return Optional containing last-known-good bytes, or empty if never cached
+     */
+    public CompletableFuture<Optional<byte[]>> getStale(final String path) {
+        final byte[] data = this.lastKnownGood.get(path);
+        if (data != null) {
+            recordCacheHit("lkg");
+            return CompletableFuture.completedFuture(Optional.of(data));
+        }
+        recordCacheMiss("lkg");
+        return CompletableFuture.completedFuture(Optional.empty());
+    }
+
+    /**
      * Put metadata in cache (both L1 and L2).
      * @param path Metadata path
      * @param data Metadata bytes
      */
     public void put(final String path, final byte[] data) {
+        // Always update last-known-good (never expires)
+        this.lastKnownGood.put(path, data);
         // Put in L1
         final CachedMetadata entry = new CachedMetadata(data, Instant.now());
         this.l1Cache.put(path, entry);

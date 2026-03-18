@@ -119,8 +119,7 @@ public final class RepositoryRest extends BaseRest {
             final JsonObject body = BaseRest.readJsonObject(context);
             final String path = body == null ? null : body.getString("path", "").trim();
             if (path == null || path.isEmpty()) {
-                context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
-                    .end("path is required");
+                sendError(context, HttpStatus.BAD_REQUEST_400, "path is required");
                 return;
             }
             final String actor = context.user().principal().getString(AuthTokenRest.SUB);
@@ -137,8 +136,7 @@ public final class RepositoryRest extends BaseRest {
                             .userName(actor)
                             .error(error)
                             .log();
-                        context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                            .end(error.getMessage());
+                        sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                     } else if (deleted) {
                         EcsLogger.info("com.artipie.api")
                             .message("Package folder deleted via API")
@@ -151,8 +149,7 @@ public final class RepositoryRest extends BaseRest {
                             .log();
                         context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                     } else {
-                        context.response().setStatusCode(HttpStatus.NOT_FOUND_404)
-                            .end("Package folder not found: " + path);
+                        sendError(context, HttpStatus.NOT_FOUND_404, "Package folder not found: " + path);
                     }
                 });
         }
@@ -339,7 +336,7 @@ public final class RepositoryRest extends BaseRest {
                 context.response().setStatusCode(HttpStatus.OK_200).end();
             }
         } else {
-            context.response().setStatusCode(HttpStatus.FORBIDDEN_403).end();
+            sendError(context, HttpStatus.FORBIDDEN_403, "Insufficient permissions");
         }
     }
 
@@ -379,21 +376,19 @@ public final class RepositoryRest extends BaseRest {
         final RepositoryName name = new RepositoryName.FromRequest(context);
         final Optional<JsonObject> repo = this.repositoryConfig(name);
         if (repo.isEmpty()) {
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Repository not found");
             return;
         }
         final String type = repo.get().getString("type", "").trim();
         if (type.isEmpty()) {
-            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
-                .end("Repository type is required");
+            sendError(context, HttpStatus.BAD_REQUEST_400, "Repository type is required");
             return;
         }
         final JsonObject body = BaseRest.readJsonObject(context);
         final String artifact = body.getString("artifact", "").trim();
         final String version = body.getString("version", "").trim();
         if (artifact.isEmpty() || version.isEmpty()) {
-            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
-                .end("artifact and version are required");
+            sendError(context, HttpStatus.BAD_REQUEST_400, "artifact and version are required");
             return;
         }
         final String actor = context.user().principal().getString(AuthTokenRest.SUB);
@@ -412,8 +407,7 @@ public final class RepositoryRest extends BaseRest {
                         .field("package.version", version)
                         .error(error)
                         .log();
-                    context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .end(error.getMessage());
+                    sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                 }
             });
     }
@@ -436,8 +430,7 @@ public final class RepositoryRest extends BaseRest {
             final JsonObject body = BaseRest.readJsonObject(context);
             final String path = body == null ? null : body.getString("path", "").trim();
             if (path == null || path.isEmpty()) {
-                context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
-                    .end("path is required");
+                sendError(context, HttpStatus.BAD_REQUEST_400, "path is required");
                 return;
             }
             final String actor = context.user().principal().getString(AuthTokenRest.SUB);
@@ -450,12 +443,11 @@ public final class RepositoryRest extends BaseRest {
                             .eventAction("artifact_delete")
                             .eventOutcome("failure")
                             .field("repository.name", rname.toString())
-                            .field("artifact.path", path)
+                            .field("file.path", path)
                             .userName(actor)
                             .error(error)
                             .log();
-                        context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                            .end(error.getMessage());
+                        sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                     } else if (deleted) {
                         EcsLogger.info("com.artipie.api")
                             .message("Artifact deleted via API")
@@ -463,13 +455,12 @@ public final class RepositoryRest extends BaseRest {
                             .eventAction("artifact_delete")
                             .eventOutcome("success")
                             .field("repository.name", rname.toString())
-                            .field("artifact.path", path)
+                            .field("file.path", path)
                             .userName(actor)
                             .log();
                         context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                     } else {
-                        context.response().setStatusCode(HttpStatus.NOT_FOUND_404)
-                            .end("Artifact not found: " + path);
+                        sendError(context, HttpStatus.NOT_FOUND_404, "Artifact not found: " + path);
                     }
                 });
         }
@@ -480,13 +471,12 @@ public final class RepositoryRest extends BaseRest {
         final RepositoryName name = new RepositoryName.FromRequest(context);
         final Optional<JsonObject> repo = this.repositoryConfig(name);
         if (repo.isEmpty()) {
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "Repository not found");
             return;
         }
         final String type = repo.get().getString("type", "").trim();
         if (type.isEmpty()) {
-            context.response().setStatusCode(HttpStatus.BAD_REQUEST_400)
-                .end("Repository type is required");
+            sendError(context, HttpStatus.BAD_REQUEST_400, "Repository type is required");
             return;
         }
         final String actor = context.user().principal().getString(AuthTokenRest.SUB);
@@ -503,8 +493,7 @@ public final class RepositoryRest extends BaseRest {
                         .field("repository.name", name.toString())
                         .error(error)
                         .log();
-                    context.response().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .end(error.getMessage());
+                    sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                 }
             });
     }

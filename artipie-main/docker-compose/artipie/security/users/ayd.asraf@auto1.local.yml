@@ -1,0 +1,5 @@
+type: okta
+roles:
+  - reader
+  - admin
+email: "ayd.asraf@auto1.com"

@@ -69,7 +69,10 @@ public class RxFile {
      */
     public RxFile(final Path file) {
         this.file = file;
-        this.exec = Executors.newCachedThreadPool(THREAD_FACTORY);
+        this.exec = Executors.newFixedThreadPool(
+            Math.max(16, Runtime.getRuntime().availableProcessors() * 4),
+            THREAD_FACTORY
+        );
     }
 
     /**

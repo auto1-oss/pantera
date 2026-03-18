@@ -10,12 +10,19 @@ import com.artipie.asto.blocking.BlockingStorage;
 import com.artipie.auth.JwtTokens;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.CooldownSupport;
+import com.artipie.index.ArtifactIndex;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.RepoData;
 import com.artipie.settings.Settings;
 import com.artipie.settings.cache.ArtipieCaches;
+import com.artipie.settings.repo.CrudRepoSettings;
+import com.artipie.settings.users.CrudRoles;
+import com.artipie.settings.users.CrudUsers;
+import com.artipie.db.dao.RepositoryDao;
+import com.artipie.db.dao.UserDao;
+import com.artipie.db.dao.RoleDao;
 import com.artipie.http.log.EcsLogger;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.http.HttpServer;
@@ -26,6 +33,7 @@ import io.vertx.ext.web.handler.StaticHandler;
 import io.vertx.ext.web.openapi.RouterBuilder;
 import java.util.Arrays;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * Vert.x {@link io.vertx.core.Verticle} for exposing Rest API operations.
@@ -84,6 +92,17 @@ public final class RestApi extends AbstractVerticle {
     private final Settings settings;
 
     /**
+     * Artifact index for search operations.
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
+     * Database data source (nullable). When present, DAO-backed
+     * implementations are used instead of YAML-backed ones.
+     */
+    private final DataSource dataSource;
+
+    /**
      * Primary ctor.
      * @param caches Artipie settings caches
      * @param configsStorage Artipie settings storage
@@ -92,6 +111,10 @@ public final class RestApi extends AbstractVerticle {
      * @param keystore KeyStore
      * @param jwt Jwt authentication provider
      * @param events Artifact metadata events queue
+     * @param cooldown Cooldown service
+     * @param settings Artipie settings
+     * @param artifactIndex Artifact index for search
+     * @param dataSource Database data source, nullable
      */
     public RestApi(
         final ArtipieCaches caches,
@@ -102,7 +125,9 @@ public final class RestApi extends AbstractVerticle {
         final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
         final CooldownService cooldown,
-        final Settings settings
+        final Settings settings,
+        final ArtifactIndex artifactIndex,
+        final DataSource dataSource
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -113,6 +138,8 @@ public final class RestApi extends AbstractVerticle {
         this.events = events;
         this.cooldown = cooldown;
         this.settings = settings;
+        this.artifactIndex = artifactIndex;
+        this.dataSource = dataSource;
     }
 
     /**
@@ -120,13 +147,17 @@ public final class RestApi extends AbstractVerticle {
      * @param settings Artipie settings
      * @param port Port to start verticle on
      * @param jwt Jwt authentication provider
+     * @param dataSource Database data source, nullable
      */
-    public RestApi(final Settings settings, final int port, final JWTAuth jwt) {
+    public RestApi(final Settings settings, final int port, final JWTAuth jwt,
+        final DataSource dataSource) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt, settings.artifactMetadata(),
             CooldownSupport.create(settings),
-            settings
+            settings,
+            settings.artifactIndex(),
+            dataSource
         );
     }
 
@@ -137,8 +168,8 @@ public final class RestApi extends AbstractVerticle {
                 userRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/token-gen.yaml").compose(
                     tokenRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/settings.yaml").compose(
                         settingsRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/roles.yaml").compose(
-                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/cache.yaml").onSuccess(
-                                cacheRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, cacheRb)
+                            rolesRb -> RouterBuilder.create(this.vertx, "swagger-ui/yaml/search.yaml").onSuccess(
+                                searchRb -> this.startServices(repoRb, userRb, tokenRb, settingsRb, rolesRb, searchRb)
                             ).onFailure(Throwable::printStackTrace)
                         ).onFailure(Throwable::printStackTrace)
                     )
@@ -154,16 +185,20 @@ public final class RestApi extends AbstractVerticle {
      * @param tokenRb Token RouterBuilder
      * @param settingsRb Settings RouterBuilder
      * @param rolesRb Roles RouterBuilder
-     * @param cacheRb Cache RouterBuilder
+     * @param searchRb Search RouterBuilder
      */
     private void startServices(final RouterBuilder repoRb, final RouterBuilder userRb,
         final RouterBuilder tokenRb, final RouterBuilder settingsRb, final RouterBuilder rolesRb,
-        final RouterBuilder cacheRb) {
-        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, cacheRb);
+        final RouterBuilder searchRb) {
+        this.addJwtAuth(tokenRb, repoRb, userRb, settingsRb, rolesRb, searchRb);
         final BlockingStorage asto = new BlockingStorage(this.configsStorage);
+        final ManageRepoSettings manageRepo = new ManageRepoSettings(asto);
+        final CrudRepoSettings crs = this.dataSource != null
+            ? new RepositoryDao(this.dataSource)
+            : manageRepo;
         new RepositoryRest(
             this.caches.filtersCache(),
-            new ManageRepoSettings(asto),
+            crs,
             new RepoData(this.configsStorage, this.caches.storagesCache()),
             this.security.policy(), this.events,
             this.cooldown,
@@ -174,25 +209,31 @@ public final class RestApi extends AbstractVerticle {
         ).init(repoRb);
         if (this.security.policyStorage().isPresent()) {
             Storage policyStorage = this.security.policyStorage().get();
+            final CrudUsers users = this.dataSource != null
+                ? new UserDao(this.dataSource)
+                : new ManageUsers(new BlockingStorage(policyStorage));
             new UsersRest(
-                    new ManageUsers(new BlockingStorage(policyStorage)),
+                    users,
                     this.caches, this.security
             ).init(userRb);
             if (this.security.policy() instanceof CachedYamlPolicy) {
+                final CrudRoles roles = this.dataSource != null
+                    ? new RoleDao(this.dataSource)
+                    : new ManageRoles(new BlockingStorage(policyStorage));
                 new RolesRest(
-                        new ManageRoles(new BlockingStorage(policyStorage)),
+                        roles,
                         this.caches.policyCache(), this.security.policy()
                 ).init(rolesRb);
             }
         }
-        new SettingsRest(this.port, this.settings).init(settingsRb);
-        new CacheRest(this.security.policy()).init(cacheRb);
+        new SettingsRest(this.port, this.settings, manageRepo).init(settingsRb);
+        new SearchRest(this.artifactIndex, this.security.policy()).init(searchRb);
         final Router router = repoRb.createRouter();
         router.route("/*").subRouter(rolesRb.createRouter());
         router.route("/*").subRouter(userRb.createRouter());
         router.route("/*").subRouter(tokenRb.createRouter());
         router.route("/*").subRouter(settingsRb.createRouter());
-        router.route("/*").subRouter(cacheRb.createRouter());
+        router.route("/*").subRouter(searchRb.createRouter());
         // CRITICAL: Add simple health endpoint BEFORE StaticHandler
         // This avoids StaticHandler's file-serving leak for health checks
         router.get("/api/health").handler(ctx -> {

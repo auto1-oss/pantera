@@ -13,6 +13,7 @@ import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.settings.repo.RepoConfig;
 import com.artipie.maven.metadata.MavenMetadata;
+import com.artipie.maven.metadata.MavenTimestamp;
 import com.artipie.helm.metadata.IndexYaml;
 import com.artipie.helm.metadata.IndexYamlMapping;
 import com.artipie.http.log.EcsLogger;
@@ -140,11 +141,14 @@ public final class MergeShardsSlice implements Slice {
                         }).toCompletableFuture());
                     }
                     return CompletableFuture.allOf(lines.toArray(CompletableFuture[]::new))
-                        .thenApply(v -> {
-                            final StringBuilder sb = new StringBuilder();
-                            lines.forEach(fut -> sb.append(fut.join()));
-                            return String.format("<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>", sb.toString());
-                        })
+                        .thenApply(v ->
+                            String.format(
+                                "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
+                                lines.stream()
+                                    .map(CompletableFuture::join)
+                                    .collect(java.util.stream.Collectors.joining())
+                            )
+                        )
                         .thenCompose(html -> st.save(out, new Content.From(html.getBytes(StandardCharsets.UTF_8))));
                 }));
             }
@@ -451,7 +455,7 @@ public final class MergeShardsSlice implements Slice {
                                 .ifPresent(rel -> d.add("release").set(rel).up());
                             d.add("versions");
                             versions.forEach(ver -> d.add("version").set(ver).up());
-                            d.up().add("lastUpdated").set(String.format("%tY%<tm%<td%<tH%<tM", new java.util.Date())).up().up();
+                            d.up().add("lastUpdated").set(MavenTimestamp.now()).up().up();
                             final String xml;
                             try {
                                 xml = new Xembler(d).xml();
@@ -539,7 +543,7 @@ public final class MergeShardsSlice implements Slice {
                                 final String digest = obj.getString("sha256", null);
                                 final String name = obj.getString("name", chart);
                                 final String path = obj.getString("path", null);
-                                
+
                                 if (version != null && url != null) {
                                     // Use the path field from shard if available, it's more reliable
                                     if (path != null) {
@@ -564,22 +568,22 @@ public final class MergeShardsSlice implements Slice {
                                             }
                                         }
                                     }
-                                    
+
                                     final Map<String, Object> entry = new HashMap<>();
                                     // Required fields for Helm index.yaml
                                     entry.put("apiVersion", "v1");
                                     entry.put("name", name);
                                     entry.put("version", version);
                                     entry.put("created", new DateTimeNow().asString());
-                                    
+
                                     // URL should be an array in Helm index.yaml
                                     entry.put("urls", java.util.List.of(url));
-                                    
+
                                     // Use proper field name for digest
                                     if (digest != null && !digest.isBlank()) {
                                         entry.put("digest", digest);
                                     }
-                                    
+
                                     // Add appVersion, description, etc. if available in shard
                                     if (obj.containsKey("appVersion")) {
                                         entry.put("appVersion", obj.getString("appVersion"));
@@ -593,22 +597,40 @@ public final class MergeShardsSlice implements Slice {
                                     if (obj.containsKey("icon")) {
                                         entry.put("icon", obj.getString("icon"));
                                     }
-                                    
+
                                     versions.add(entry);
                                     vers.incrementAndGet();
                                 }
                             }
+                        }).exceptionally(err -> {
+                            com.artipie.http.log.EcsLogger.warn("com.artipie.http")
+                                .message("MergeShardsSlice: async operation failed")
+                                .eventCategory("merge_shards")
+                                .eventAction("async_error")
+                                .eventOutcome("failure")
+                                .error(err)
+                                .log();
+                            return null;
                         }));
                     }
                     
                     // Wait for all shard reads for this chart, then add to mapping
                     reads.add(CompletableFuture.allOf(chartReads.toArray(CompletableFuture[]::new))
                         .thenRun(() -> {
-                            if (!versions.isEmpty()) {
-                                synchronized (chartVersions) {
+                            synchronized (chartVersions) {
+                                if (!versions.isEmpty()) {
                                     chartVersions.put(chart, versions);
                                 }
                             }
+                        }).exceptionally(err -> {
+                            com.artipie.http.log.EcsLogger.warn("com.artipie.http")
+                                .message("MergeShardsSlice: async operation failed")
+                                .eventCategory("merge_shards")
+                                .eventAction("async_error")
+                                .eventOutcome("failure")
+                                .error(err)
+                                .log();
+                            return null;
                         }));
                 });
                 

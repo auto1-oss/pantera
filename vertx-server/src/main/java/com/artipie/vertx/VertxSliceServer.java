@@ -13,13 +13,17 @@ import com.artipie.http.Slice;
 import com.artipie.http.headers.Header;
 import com.artipie.http.log.EcsLogEvent;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.misc.ConfigDefaults;
 import com.artipie.http.slice.EcsLoggingSlice;
 import com.artipie.http.log.LogSanitizer;
 import co.elastic.apm.api.ElasticApm;
 import co.elastic.apm.api.Transaction;
 import com.artipie.http.rq.RequestLine;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.reactivex.Flowable;
 import io.vertx.core.Handler;
+import io.vertx.core.http.Http2Settings;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpVersion;
 import io.vertx.reactivex.core.Vertx;
@@ -46,6 +50,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Objects;
 
@@ -60,6 +65,25 @@ public final class VertxSliceServer implements Closeable {
     private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(2);
 
     /**
+     * Default maximum time to wait for in-flight requests to drain during shutdown.
+     */
+    private static final Duration DEFAULT_DRAIN_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Default body buffer threshold in bytes (1 MB).
+     * Request bodies smaller than this value are buffered in memory for simpler error handling.
+     * Request bodies equal to or larger than this value are streamed from disk to avoid OOM.
+     * Can be overridden via {@code ARTIPIE_BODY_BUFFER_THRESHOLD} environment variable
+     * or {@code artipie.body.buffer.threshold} system property.
+     */
+    public static final long DEFAULT_BODY_BUFFER_THRESHOLD = 1_048_576L;
+
+    /**
+     * Environment variable name for overriding the body buffer threshold.
+     */
+    private static final String ENV_BODY_BUFFER_THRESHOLD = "ARTIPIE_BODY_BUFFER_THRESHOLD";
+
+    /**
      * HTTP/2 forbidden headers per RFC 7540 Section 8.1.2.
      * These connection-specific headers MUST NOT be included in HTTP/2 messages.
      */
@@ -69,6 +93,29 @@ public final class VertxSliceServer implements Closeable {
         "proxy-connection",
         "transfer-encoding",
         "upgrade"
+    );
+
+    /**
+     * Content types that should NOT be compressed (already compressed or binary).
+     * When Vert.x compression is enabled, these types get {@code Content-Encoding: identity}
+     * to skip wasteful re-compression of already-compressed artifacts.
+     */
+    private static final Set<String> INCOMPRESSIBLE_TYPES = Set.of(
+        "application/octet-stream",
+        "application/java-archive",
+        "application/gzip",
+        "application/x-gzip",
+        "application/zip",
+        "application/x-tar",
+        "application/x-xz",
+        "application/x-bzip2",
+        "application/x-rpm",
+        "application/x-debian-package",
+        "application/x-compressed",
+        "application/x-compress",
+        "application/zstd",
+        "application/vnd.docker.image.rootfs.diff.tar.gzip",
+        "application/vnd.oci.image.layer.v1.tar+gzip"
     );
 
     /**
@@ -90,6 +137,27 @@ public final class VertxSliceServer implements Closeable {
      * Maximum time to process a single request.
      */
     private final Duration requestTimeout;
+
+    /**
+     * Maximum time to wait for in-flight requests to drain during shutdown.
+     */
+    private final Duration drainTimeout;
+
+    /**
+     * Body buffer threshold in bytes. Request bodies smaller than this value are
+     * buffered in memory; bodies equal to or larger are streamed from disk.
+     */
+    private final long bodyBufferThreshold;
+
+    /**
+     * Flag to reject new requests during graceful shutdown drain window.
+     */
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+
+    /**
+     * Counter of currently in-flight requests.
+     */
+    private final AtomicInteger inFlightRequests = new AtomicInteger(0);
 
     /**
      * The Http server reference (lock-free).
@@ -149,6 +217,16 @@ public final class VertxSliceServer implements Closeable {
             .setTcpNoDelay(true)
             .setUseAlpn(true)  // Enable ALPN for HTTP/2 negotiation
             .setHttp2ClearTextEnabled(true)  // Enable HTTP/2 over cleartext (h2c) for AWS NLB
+            // HTTP/2 flow control windows — RFC 7540 default for both stream and connection is 64 KB,
+            // which caps upload throughput to ~1 MB/s on a 55 ms LAN (window / RTT).
+            // setInitialSettings controls the per-stream INITIAL_WINDOW_SIZE sent in the SETTINGS frame.
+            // setHttp2ConnectionWindowSize controls the connection-level aggregate window (RFC 7540 §6.9).
+            // Enterprise standard: 16 MB/stream, 128 MB connection = throughput effectively unconstrained.
+            .setInitialSettings(
+                new Http2Settings()
+                    .setInitialWindowSize(16 * 1024 * 1024)
+            )
+            .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
             // HTTP Compression - matches JFrog/Nexus performance characteristics
             .setCompressionSupported(true)  // Enable gzip/deflate compression
             .setCompressionLevel(6),        // Balanced compression (1=fast, 9=best)
@@ -167,13 +245,59 @@ public final class VertxSliceServer implements Closeable {
         final HttpServerOptions options,
         final Duration requestTimeout
     ) {
+        this(vertx, served, options, requestTimeout, DEFAULT_DRAIN_TIMEOUT);
+    }
+
+    /**
+     * @param vertx The vertx.
+     * @param served The slice to be served.
+     * @param options The options to use.
+     * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
+     * @param drainTimeout Maximum time to wait for in-flight requests to drain during shutdown.
+     */
+    public VertxSliceServer(
+        final Vertx vertx,
+        final Slice served,
+        final HttpServerOptions options,
+        final Duration requestTimeout,
+        final Duration drainTimeout
+    ) {
+        this(vertx, served, options, requestTimeout, drainTimeout,
+            ConfigDefaults.getLong(ENV_BODY_BUFFER_THRESHOLD, DEFAULT_BODY_BUFFER_THRESHOLD));
+    }
+
+    /**
+     * @param vertx The vertx.
+     * @param served The slice to be served.
+     * @param options The options to use.
+     * @param requestTimeout Maximum time to process a single request. Zero disables timeout enforcement.
+     * @param drainTimeout Maximum time to wait for in-flight requests to drain during shutdown.
+     * @param bodyBufferThreshold Body buffer threshold in bytes. Bodies smaller than this are buffered
+     *     in memory; bodies equal to or larger are streamed from disk. Must be positive.
+     */
+    public VertxSliceServer(
+        final Vertx vertx,
+        final Slice served,
+        final HttpServerOptions options,
+        final Duration requestTimeout,
+        final Duration drainTimeout,
+        final long bodyBufferThreshold
+    ) {
         this.vertx = Objects.requireNonNull(vertx, "vertx must not be null");
         this.served = Objects.requireNonNull(served, "served must not be null");
         this.options = Objects.requireNonNull(options, "options must not be null");
         this.requestTimeout = Objects.requireNonNull(requestTimeout, "requestTimeout must not be null");
+        this.drainTimeout = Objects.requireNonNull(drainTimeout, "drainTimeout must not be null");
         if (requestTimeout.isNegative()) {
             throw new IllegalArgumentException("requestTimeout must be zero or positive");
         }
+        if (drainTimeout.isNegative()) {
+            throw new IllegalArgumentException("drainTimeout must be zero or positive");
+        }
+        if (bodyBufferThreshold <= 0) {
+            throw new IllegalArgumentException("bodyBufferThreshold must be positive");
+        }
+        this.bodyBufferThreshold = bodyBufferThreshold;
         this.serverRef = new AtomicReference<>();
     }
 
@@ -210,6 +334,7 @@ public final class VertxSliceServer implements Closeable {
      * @return Port the server is listening on.
      */
     public int start() {
+        this.shuttingDown.set(false);
         HttpServer server = this.vertx.createHttpServer(this.options);
         server.requestHandler(this.proxyHandler());
         
@@ -224,12 +349,47 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
-     * Stop the server.
+     * Stop the server with graceful drain of in-flight requests.
+     * This method blocks the calling thread for up to {@code drainTimeout}
+     * while waiting for in-flight requests to complete.
      */
     public void stop() {
         HttpServer server = this.serverRef.getAndSet(null);
         if (server != null) {
-            // Block OUTSIDE of any lock
+            // Phase 1: Reject new requests immediately
+            this.shuttingDown.set(true);
+            EcsLogger.info("com.artipie.vertx")
+                .message(String.format("Initiating graceful shutdown, draining %d in-flight requests", this.inFlightRequests.get()))
+                .eventCategory("http")
+                .eventAction("server_drain")
+                .log();
+            // Phase 2: Wait for in-flight requests to drain
+            final long deadline = System.currentTimeMillis() + this.drainTimeout.toMillis();
+            while (this.inFlightRequests.get() > 0 && System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            final int remaining = this.inFlightRequests.get();
+            if (remaining > 0) {
+                EcsLogger.warn("com.artipie.vertx")
+                    .message(String.format("Drain timeout expired with %d in-flight requests, forcing shutdown", remaining))
+                    .eventCategory("http")
+                    .eventAction("server_drain")
+                    .eventOutcome("timeout")
+                    .log();
+            } else {
+                EcsLogger.info("com.artipie.vertx")
+                    .message("All in-flight requests drained successfully")
+                    .eventCategory("http")
+                    .eventAction("server_drain")
+                    .eventOutcome("success")
+                    .log();
+            }
+            // Phase 3: Close the server
             server.rxClose().blockingAwait();
         } else {
             EcsLogger.warn("com.artipie.vertx")
@@ -239,6 +399,25 @@ public final class VertxSliceServer implements Closeable {
                 .eventOutcome("skipped")
                 .log();
         }
+    }
+
+    /**
+     * Get the current number of in-flight requests.
+     * Returns a point-in-time snapshot that may be stale immediately.
+     * @return Number of requests currently being processed
+     */
+    public int inFlightCount() {
+        return this.inFlightRequests.get();
+    }
+
+    /**
+     * Get the configured body buffer threshold in bytes.
+     * Request bodies smaller than this value are buffered in memory;
+     * bodies equal to or larger are streamed from disk.
+     * @return Body buffer threshold in bytes
+     */
+    public long bodyBufferThreshold() {
+        return this.bodyBufferThreshold;
     }
 
     @Override
@@ -253,6 +432,24 @@ public final class VertxSliceServer implements Closeable {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private Handler<HttpServerRequest> proxyHandler() {
         return (HttpServerRequest req) -> {
+            // FAST PATH: Handle NLB/load-balancer health checks directly in Vert.x
+            // without going through any middleware (metrics, logging, timeouts, futures).
+            // This guarantees zero connection leak risk and sub-millisecond response.
+            final String path = req.path();
+            if ("/.health".equals(path)) {
+                req.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json;charset=utf-8")
+                    .end("{\"status\":\"ok\"}");
+                return;
+            }
+            this.inFlightRequests.incrementAndGet();
+            if (this.shuttingDown.get()) {
+                this.inFlightRequests.decrementAndGet();
+                req.response().setStatusCode(503);
+                req.response().end("Service Unavailable: server is shutting down");
+                return;
+            }
             // Create APM transaction for this HTTP request
             final Transaction transaction = ElasticApm.startTransaction();
 
@@ -280,18 +477,21 @@ public final class VertxSliceServer implements Closeable {
                     transaction.addLabel("client.ip", req.remoteAddress().host());
                 }
 
-                // ENTERPRISE STREAMING: Stream request body directly to slice without buffering
-                // For large uploads (artifacts), this avoids loading entire body into heap
-                final boolean hasBody = req.headers().contains("Content-Length")
+                // Detect whether the request carries a body:
+                // 1. Content-Length header with non-zero value, OR
+                // 2. Transfer-Encoding: chunked (no Content-Length, size unknown)
+                final boolean hasContentLength = req.headers().contains("Content-Length")
                     && !"0".equals(req.getHeader("Content-Length"));
+                final boolean isChunked = "chunked".equalsIgnoreCase(
+                    req.getHeader("Transfer-Encoding"));
+                final boolean hasBody = hasContentLength || isChunked;
                 if (hasBody) {
-                    // STREAMING PATH: Convert Vert.x request to reactive stream
-                    // This allows slice to process body as it arrives without buffering
-                    final long contentLength = Long.parseLong(req.getHeader("Content-Length"));
+                    final long contentLength = hasContentLength
+                        ? Long.parseLong(req.getHeader("Content-Length")) : -1L;
 
-                    // For small bodies (<1MB), buffer for simplicity and error handling
-                    // For large bodies (>=1MB), stream directly to avoid OOM
-                    if (contentLength < 1_048_576) {
+                    // For small bodies with known size (< threshold), buffer for simpler error handling.
+                    // For large bodies or chunked transfers (unknown size), stream directly.
+                    if (hasContentLength && contentLength < this.bodyBufferThreshold) {
                         // Small body - buffer for simpler error handling
                         req.bodyHandler(body -> {
                             EcsLogger.debug("com.artipie.vertx")
@@ -322,11 +522,12 @@ public final class VertxSliceServer implements Closeable {
                                     }
                                 } finally {
                                     transaction.end();
+                                    this.inFlightRequests.decrementAndGet();
                                 }
                             });
                         });
                     } else {
-                        // Large body - stream directly to slice
+                        // Large body or chunked transfer - stream directly to slice
                         EcsLogger.debug("com.artipie.vertx")
                             .message("Streaming large request body")
                             .eventCategory("http")
@@ -355,6 +556,7 @@ public final class VertxSliceServer implements Closeable {
                                 }
                             } finally {
                                 transaction.end();
+                                this.inFlightRequests.decrementAndGet();
                             }
                         });
                     }
@@ -382,6 +584,7 @@ public final class VertxSliceServer implements Closeable {
                             }
                         } finally {
                             transaction.end();
+                            this.inFlightRequests.decrementAndGet();
                         }
                     });
                 }
@@ -396,6 +599,7 @@ public final class VertxSliceServer implements Closeable {
                 transaction.captureException(ex);
                 transaction.setResult("error");
                 transaction.end();
+                this.inFlightRequests.decrementAndGet();
                 guardedResponse.safeSendError(
                     "proxyHandler.exception",
                     HttpURLConnection.HTTP_INTERNAL_ERROR,
@@ -435,11 +639,12 @@ public final class VertxSliceServer implements Closeable {
     /**
      * Serve HTTP request with streaming body (for large uploads).
      *
-     * <p>ENTERPRISE STREAMING: This method converts Vert.x request stream directly to
-     * reactive Content without buffering, enabling memory-efficient large file uploads.</p>
+     * <p>Converts Vert.x request stream directly to reactive Content without buffering,
+     * enabling memory-efficient large file uploads. Supports both sized (Content-Length)
+     * and chunked (Transfer-Encoding: chunked) request bodies.</p>
      *
      * @param req HTTP request.
-     * @param contentLength Known content length for pre-allocation optimization.
+     * @param contentLength Known content length, or -1 if unknown (chunked transfer).
      * @param guardedResponse Thread-safe response guard.
      * @return Completion of request serving.
      */
@@ -473,20 +678,28 @@ public final class VertxSliceServer implements Closeable {
         // req.toFlowable() returns Flowable<Buffer> which we map to ByteBuffer
         final Flowable<ByteBuffer> bodyStream = req.toFlowable()
             .map(buffer -> {
-                final byte[] bytes = buffer.getBytes();
-                return ByteBuffer.wrap(bytes);
+                final ByteBuf netty = buffer.getByteBuf();
+                final ByteBuffer nio = ByteBuffer.allocate(netty.readableBytes());
+                netty.getBytes(netty.readerIndex(), nio);
+                nio.flip();
+                return nio;
             });
 
-        // Create Content with known size for optimal downstream processing
-        final Content requestBody = new Content.From(contentLength, bodyStream);
+        // Create Content: with known size when Content-Length is present,
+        // or without size for chunked transfers
+        final Content requestBody = contentLength >= 0
+            ? new Content.From(contentLength, bodyStream)
+            : new Content.From(bodyStream);
 
-        final CompletionStage<Response> response = withRequestTimeout(
-            loggedSlice.response(
-                new RequestLine(req.method().name(), req.uri(), req.version().toString()),
-                requestHeaders,
-                requestBody
-            ),
-            req
+        // No request timeout on the streaming path: body ingestion duration is
+        // unbounded (depends on file size and upload speed). The connection idle
+        // timeout (setIdleTimeout) handles truly stalled/dead uploads.
+        // This matches the Tomcat/Jetty model used by JFrog Artifactory and Nexus:
+        // no total wall-clock deadline for uploads, only idle-based protection.
+        final CompletionStage<Response> response = loggedSlice.response(
+            new RequestLine(req.method().name(), req.uri(), req.version().toString()),
+            requestHeaders,
+            requestBody
         );
         final CompletionStage<Void> continueFuture = continueResponseFut(requestHeaders, req.response());
         return response.thenCombine(continueFuture, (resp, ignored) -> resp)
@@ -543,7 +756,7 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
-     * Server HTTP request with buffered body (for small uploads <1MB).
+     * Server HTTP request with buffered body (for small uploads below buffer threshold).
      *
      * @param req HTTP request.
      * @param body Buffered request body (null if no body).
@@ -575,9 +788,13 @@ public final class VertxSliceServer implements Closeable {
 
         final boolean isHead = "HEAD".equals(req.method().name());
 
-        // Body already buffered, convert to Content
+        // Body already buffered, convert to Content (single copy via Netty ByteBuf)
+        final ByteBuf nettyBuf = body.getByteBuf();
+        final ByteBuffer nioBuf = ByteBuffer.allocate(nettyBuf.readableBytes());
+        nettyBuf.getBytes(nettyBuf.readerIndex(), nioBuf);
+        nioBuf.flip();
         final Content requestBody = new Content.From(
-            Flowable.just(ByteBuffer.wrap(body.getBytes()))
+            Flowable.just(nioBuf)
         );
 
         final CompletionStage<Response> response = withRequestTimeout(
@@ -841,6 +1058,19 @@ public final class VertxSliceServer implements Closeable {
 
         filteredHeaders.stream().forEach(h -> response.putHeader(h.getKey(), h.getValue()));
 
+        // Skip compression for already-compressed binary artifacts (jar, gz, tar, rpm, etc.)
+        // Setting Content-Encoding: identity tells Vert.x not to apply gzip compression,
+        // which would waste CPU for zero benefit on these content types.
+        final String contentType = response.headers().get("Content-Type");
+        if (contentType != null) {
+            final String baseType = contentType.contains(";")
+                ? contentType.substring(0, contentType.indexOf(';')).trim().toLowerCase(Locale.ROOT)
+                : contentType.trim().toLowerCase(Locale.ROOT);
+            if (INCOMPRESSIBLE_TYPES.contains(baseType)) {
+                response.putHeader("Content-Encoding", "identity");
+            }
+        }
+
         final ResponseTerminator terminator = new ResponseTerminator(response, promise, guardedResponse);
 
         if (body == null || (body.size().isPresent() && body.size().get() == 0L)) {
@@ -899,12 +1129,11 @@ public final class VertxSliceServer implements Closeable {
                     final long bytes = bytesWritten.get();
                     if (expectedBytes > 0 && bytes != expectedBytes) {
                         EcsLogger.error("com.artipie.vertx")
-                            .message("Incomplete transfer detected")
+                            .message(String.format("Incomplete transfer detected: expected %d bytes, wrote %d bytes", expectedBytes, bytes))
                             .eventCategory("http")
                             .eventAction("response_write")
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", bytes)
-                            .field("http.response.body.expected", expectedBytes)
                             .log();
                         terminator.fail(new java.io.IOException(
                             String.format("Incomplete transfer: expected %d bytes, wrote %d bytes",
@@ -1269,14 +1498,17 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
-     * Map {@link ByteBuffer} to {@link Buffer}.
+     * Map {@link ByteBuffer} to {@link Buffer} using zero-copy wrapping.
+     *
+     * <p>Uses Netty's {@link Unpooled#wrappedBuffer(ByteBuffer)} to create a Vert.x Buffer
+     * that shares the ByteBuffer's memory directly, eliminating the double memory copy
+     * (ByteBuffer to byte[] to Netty ByteBuf) that previously occurred on every response chunk.
+     * For a 100MB artifact download, this avoids 200MB of unnecessary heap allocations.</p>
      *
      * @param buffer Java byte buffer
-     * @return Vertx buffer
+     * @return Vertx buffer wrapping the same memory (zero-copy)
      */
     private static Buffer mapBuffer(final ByteBuffer buffer) {
-        final byte[] bytes = new byte[buffer.remaining()];
-        buffer.get(bytes);
-        return Buffer.buffer(bytes);
+        return Buffer.buffer(Unpooled.wrappedBuffer(buffer));
     }
 }

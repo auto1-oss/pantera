@@ -1,0 +1,108 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import type { UserInfo, AuthProvider } from '@/types'
+import * as authApi from '@/api/auth'
+
+export const useAuthStore = defineStore('auth', () => {
+  const token = ref<string | null>(sessionStorage.getItem('jwt'))
+  const user = ref<UserInfo | null>(null)
+  const providers = ref<AuthProvider[]>([])
+  const loading = ref(false)
+
+  const isAuthenticated = computed(() => !!token.value)
+  const isAdmin = computed(() => {
+    if (!user.value) return false
+    const perms = user.value.permissions ?? {}
+    return hasPerm(perms, 'api_user_permissions')
+      || hasPerm(perms, 'api_role_permissions')
+  })
+  const username = computed(() => user.value?.name ?? '')
+
+  async function login(uname: string, password: string) {
+    loading.value = true
+    try {
+      const resp = await authApi.login(uname, password)
+      token.value = resp.token
+      sessionStorage.setItem('jwt', resp.token)
+      await fetchUser()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function fetchUser() {
+    if (!token.value) return
+    try {
+      user.value = await authApi.getMe()
+    } catch {
+      logout()
+    }
+  }
+
+  async function fetchProviders() {
+    try {
+      const resp = await authApi.getProviders()
+      providers.value = resp.providers
+    } catch {
+      providers.value = []
+    }
+  }
+
+  async function ssoRedirect(providerName: string) {
+    const callbackUrl = window.location.origin + '/auth/callback'
+    const resp = await authApi.getProviderRedirect(providerName, callbackUrl)
+    sessionStorage.setItem('sso_state', resp.state)
+    sessionStorage.setItem('sso_provider', providerName)
+    sessionStorage.setItem('sso_callback_url', callbackUrl)
+    window.location.href = resp.url
+  }
+
+  async function handleOAuthCallback(code: string, state: string) {
+    const savedState = sessionStorage.getItem('sso_state')
+    const provider = sessionStorage.getItem('sso_provider')
+    const callbackUrl = sessionStorage.getItem('sso_callback_url')
+    sessionStorage.removeItem('sso_state')
+    sessionStorage.removeItem('sso_provider')
+    sessionStorage.removeItem('sso_callback_url')
+    if (!savedState || savedState !== state) {
+      throw new Error('Invalid OAuth state — possible CSRF attack')
+    }
+    if (!provider || !callbackUrl) {
+      throw new Error('Missing SSO session data')
+    }
+    loading.value = true
+    try {
+      const resp = await authApi.exchangeOAuthCode(code, provider, callbackUrl)
+      token.value = resp.token
+      sessionStorage.setItem('jwt', resp.token)
+      await fetchUser()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function logout() {
+    token.value = null
+    user.value = null
+    sessionStorage.removeItem('jwt')
+  }
+
+  function hasPerm(perms: Record<string, string[]>, key: string): boolean {
+    const val = perms[key]
+    return Array.isArray(val) && val.length > 0
+  }
+
+  function hasAction(key: string, action: string): boolean {
+    const perms = user.value?.permissions ?? {}
+    const val = perms[key]
+    return Array.isArray(val) && (val.includes(action) || val.includes('*'))
+  }
+
+  return {
+    token, user, providers, loading,
+    isAuthenticated, isAdmin, username,
+    login, logout, fetchUser, fetchProviders,
+    ssoRedirect, handleOAuthCallback,
+    hasAction,
+  }
+})

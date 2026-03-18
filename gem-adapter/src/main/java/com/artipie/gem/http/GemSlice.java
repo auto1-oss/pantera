@@ -4,6 +4,8 @@
  */
 package com.artipie.gem.http;
 
+import com.artipie.asto.Content;
+import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.gem.GemApiKeyAuth;
 import com.artipie.http.ResponseBuilder;
@@ -25,8 +27,13 @@ import com.artipie.security.perms.Action;
 import com.artipie.security.perms.AdapterBasicPermission;
 import com.artipie.security.policy.Policy;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.zip.GZIPOutputStream;
 
 /**
  * A slice, which servers gem packages.
@@ -34,6 +41,37 @@ import java.util.Queue;
  */
 @SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 public final class GemSlice extends Slice.Wrap {
+
+    /**
+     * Specs file names required by the RubyGems protocol.
+     */
+    private static final String[] SPECS_FILES = {
+        "specs.4.8", "specs.4.8.gz",
+        "latest_specs.4.8", "latest_specs.4.8.gz",
+        "prerelease_specs.4.8", "prerelease_specs.4.8.gz",
+    };
+
+    /**
+     * Empty Ruby Marshal array: Marshal.dump([]) = \x04\x08[\x00.
+     */
+    private static final byte[] EMPTY_MARSHAL_ARRAY = {0x04, 0x08, 0x5b, 0x00};
+
+    /**
+     * Gzipped empty Ruby Marshal array.
+     */
+    private static final byte[] EMPTY_MARSHAL_ARRAY_GZ;
+
+    static {
+        try {
+            final ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzout = new GZIPOutputStream(bos)) {
+                gzout.write(EMPTY_MARSHAL_ARRAY);
+            }
+            EMPTY_MARSHAL_ARRAY_GZ = bos.toByteArray();
+        } catch (final IOException err) {
+            throw new UncheckedIOException(err);
+        }
+    }
 
     /**
      * @param storage The storage.
@@ -136,6 +174,33 @@ public final class GemSlice extends Slice.Wrap {
                 )
             )
         );
+        GemSlice.initEmptySpecs(storage);
+    }
+
+    /**
+     * Initialize empty specs files if they don't exist in storage.
+     * The RubyGems protocol requires specs.4.8.gz to be present even
+     * for empty repositories. Without them, all gem client operations fail.
+     *
+     * @param storage Repository storage
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void initEmptySpecs(final Storage storage) {
+        for (final String name : GemSlice.SPECS_FILES) {
+            final Key key = new Key.From(name);
+            try {
+                if (!storage.exists(key).join()) {
+                    final byte[] data = name.endsWith(".gz")
+                        ? EMPTY_MARSHAL_ARRAY_GZ
+                        : EMPTY_MARSHAL_ARRAY;
+                    storage.save(key, new Content.From(data)).join();
+                }
+            } catch (final Exception err) {
+                System.err.println(
+                    "GemSlice: failed to init specs file " + name + ": " + err
+                );
+            }
+        }
     }
 
     /**

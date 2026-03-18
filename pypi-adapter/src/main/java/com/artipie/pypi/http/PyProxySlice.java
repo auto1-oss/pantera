@@ -6,6 +6,7 @@ package com.artipie.pypi.http;
 
 import com.artipie.asto.Storage;
 import com.artipie.asto.cache.FromStorageCache;
+import com.artipie.asto.cache.StreamThroughCache;
 import com.artipie.cooldown.CooldownService;
 import com.artipie.cooldown.NoopCooldownService;
 import com.artipie.http.ResponseBuilder;
@@ -120,7 +121,7 @@ public final class PyProxySlice extends Slice.Wrap {
                         auth,
                         new AuthClientSlice(new UriClientSlice(clients, remote), auth),
                         cache,
-                        new FromStorageCache(cache),
+                        new StreamThroughCache(cache),
                         events,
                         rname,
                         rtype,

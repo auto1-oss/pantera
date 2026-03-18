@@ -381,6 +381,58 @@ public final class MavenGroupSliceTest {
         );
     }
 
+    @Test
+    void returnsStaleMetadataWhenAllMembersFailAndCacheExpired() throws Exception {
+        // Pre-populate a GroupMetadataCache with stale data
+        final GroupMetadataCache cache = new GroupMetadataCache("stale-test-group");
+        final String staleMetadata = "<?xml version=\"1.0\"?><metadata>"
+            + "<groupId>com.stale</groupId>"
+            + "<artifactId>fallback</artifactId>"
+            + "<versioning><versions>"
+            + "<version>1.0-stale</version>"
+            + "</versions></versioning></metadata>";
+        final String stalePath = "/com/stale/fallback/maven-metadata.xml";
+        // Directly put into cache (populates both L1 and last-known-good)
+        cache.put(stalePath, staleMetadata.getBytes(StandardCharsets.UTF_8));
+        // Invalidate L1/L2 to simulate cache expiry
+        cache.invalidate(stalePath);
+
+        // All members return 503 (upstream down)
+        final Map<String, Slice> members = new HashMap<>();
+        members.put("repo1", new StaticSlice(RsStatus.SERVICE_UNAVAILABLE));
+
+        final MavenGroupSlice slice = new MavenGroupSlice(
+            new FakeGroupSlice(),
+            "stale-test-group",
+            List.of("repo1"),
+            new MapResolver(members),
+            8080,
+            0,
+            cache
+        );
+
+        final Response response = slice.response(
+            new RequestLine("GET", stalePath),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).get(10, TimeUnit.SECONDS);
+
+        MatcherAssert.assertThat(
+            "Stale metadata is returned when all members fail",
+            response.status(),
+            Matchers.equalTo(RsStatus.OK)
+        );
+
+        final String body = new String(
+            response.body().asBytes(), StandardCharsets.UTF_8
+        );
+        MatcherAssert.assertThat(
+            "Response contains stale version",
+            body,
+            Matchers.containsString("<version>1.0-stale</version>")
+        );
+    }
+
     // Helper classes
 
     private static final class MapResolver implements SliceResolver {

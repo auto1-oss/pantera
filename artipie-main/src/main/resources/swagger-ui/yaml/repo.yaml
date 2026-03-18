@@ -3,7 +3,7 @@ info:
   version: 1.0.0
   title: Artipie - OpenAPI 3.0
   description:
-    This is Atripie Server based on the OpenAPI 3.0 specification.
+    This is Artipie Server based on the OpenAPI 3.0 specification.
   license:
     name: MIT
 externalDocs:
@@ -16,6 +16,7 @@ paths:
   /api/v1/repository/list:
     get:
       summary: List all repositories.
+      description: Returns the names of all configured repositories. Requires read permission on the repository API.
       operationId: listAll
       tags:
         - repository
@@ -41,6 +42,10 @@ paths:
   /api/v1/repository/{rname}:
     get:
       summary: Get repository settings
+      description: |
+        Returns the full configuration for a repository, including type, storage,
+        permissions, and any proxy/group settings. Returns 404 if the repository
+        does not exist, or 409 if duplicate configuration files are found.
       operationId: getRepo
       tags:
         - repository
@@ -64,10 +69,22 @@ paths:
                   - $ref: '#/components/schemas/FullRepository'
         '400':
           description: Wrong repository name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '409':
           description: Repository has settings duplicates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -78,6 +95,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     head:
       summary: Checks if repository settings exist
+      description: Lightweight check for repository existence. Returns 200 if the repository exists, 404 otherwise.
       operationId: existRepo
       tags:
         - repository
@@ -95,10 +113,22 @@ paths:
           description: Repository exists
         '400':
           description: Wrong repository name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '409':
           description: Repository has settings duplicates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -109,6 +139,10 @@ paths:
                 $ref: "#/components/schemas/Error"
     put:
       summary: Create or update repository
+      description: |
+        Creates a new repository or updates an existing one. The request body must
+        contain the repository configuration including type and storage. Requires
+        create permission for new repositories or update permission for existing ones.
       operationId: createOrUpdateRepo
       tags:
         - repository
@@ -133,6 +167,16 @@ paths:
           description: Repository was created or updated
         '400':
           description: Wrong repository name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -143,6 +187,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     delete:
       summary: Remove repository
+      description: Permanently removes a repository and its configuration. The repository storage data is not deleted. Requires delete permission.
       operationId: removeRepo
       tags:
         - repository
@@ -160,8 +205,16 @@ paths:
           description: Remove a repository with name {rname}
         '400':
           description: Wrong repository name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -173,6 +226,7 @@ paths:
   /api/v1/repository/{rname}/move:
     put:
       summary: Move repository
+      description: Renames/moves a repository by changing its configuration key. Returns 404 if the source repository does not exist, or 409 if the target name conflicts.
       operationId: moveRepo
       tags:
         - repository
@@ -197,10 +251,22 @@ paths:
           description: Repository moved successfully
         '400':
           description: Wrong repository name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '409':
           description: Repository has settings duplicates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -236,10 +302,18 @@ paths:
           description: Cooldown removed
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -266,10 +340,18 @@ paths:
           description: All cooldown entries removed
         '400':
           description: Invalid repository configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -308,10 +390,18 @@ paths:
           description: Artifact deleted successfully
         '400':
           description: Invalid request (missing path)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           description: Repository or artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -350,10 +440,18 @@ paths:
           description: Package folder deleted successfully
         '400':
           description: Invalid request (missing path)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           description: Repository or package folder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: unexpected error
           content:
@@ -456,6 +554,10 @@ paths:
           description: Alias was removed successfully
         '404':
           description: Alias does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -541,6 +643,10 @@ paths:
           description: Alias was removed successfully
         '404':
           description: Alias does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         default:
@@ -820,5 +926,9 @@ components:
   responses:
     UnauthorizedError:
       description: "Access token is missing or invalid"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 security:
   - bearerAuth: []

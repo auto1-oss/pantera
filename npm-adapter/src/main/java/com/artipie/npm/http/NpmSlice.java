@@ -89,15 +89,6 @@ public final class NpmSlice implements Slice {
      * Ctor with existing front and default parameters for free access.
      * @param base Base URL.
      * @param storage Storage for package
-     */
-    public NpmSlice(final URL base, final Storage storage) {
-        this(base, storage, Policy.FREE, NpmSlice.ANONYMOUS, "*", Optional.empty());
-    }
-
-    /**
-     * Ctor with existing front and default parameters for free access.
-     * @param base Base URL.
-     * @param storage Storage for package
      * @param events Events queue
      */
     public NpmSlice(final URL base, final Storage storage, final Queue<ArtifactEvent> events) {

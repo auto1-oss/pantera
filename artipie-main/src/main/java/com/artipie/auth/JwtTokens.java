@@ -12,6 +12,7 @@ import com.artipie.settings.JwtSettings;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.JWTOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
+import java.util.UUID;
 
 /**
  * Implementation to manage JWT tokens.
@@ -70,6 +71,27 @@ public final class JwtTokens implements Tokens {
         return this.provider.generateToken(
             new JsonObject().put(AuthTokenRest.SUB, user.name())
                 .put(AuthTokenRest.CONTEXT, user.authContext()),
+            opts
+        );
+    }
+
+    /**
+     * Generate token with a specific expiry and token ID for revocation support.
+     * @param user User to issue token for
+     * @param expirySeconds Expiry in seconds (0 or negative = permanent)
+     * @param jti Unique token ID for tracking/revocation
+     * @return String token
+     */
+    public String generate(final AuthUser user, final int expirySeconds, final UUID jti) {
+        final JWTOptions opts = new JWTOptions();
+        if (expirySeconds > 0) {
+            opts.setExpiresInSeconds(expirySeconds);
+        }
+        return this.provider.generateToken(
+            new JsonObject()
+                .put(AuthTokenRest.SUB, user.name())
+                .put(AuthTokenRest.CONTEXT, user.authContext())
+                .put("jti", jti.toString()),
             opts
         );
     }

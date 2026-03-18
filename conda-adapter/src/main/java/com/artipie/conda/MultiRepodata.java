@@ -68,7 +68,9 @@ public interface MultiRepodata {
             final JsonFactory factory = new JsonFactory();
             try {
                 final Path ftars = Files.createTempFile("tars", Unique.EXT);
+                ftars.toFile().deleteOnExit();
                 final Path fcondas = Files.createTempFile("condas", Unique.EXT);
+                fcondas.toFile().deleteOnExit();
                 try {
                     try (
                         OutputStream otars = new BufferedOutputStream(Files.newOutputStream(ftars));

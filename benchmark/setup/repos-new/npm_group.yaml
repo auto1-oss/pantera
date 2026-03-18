@@ -1,0 +1,5 @@
+repo:
+  type: npm-group
+  members:
+    - npm
+    - npm_proxy

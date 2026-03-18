@@ -73,6 +73,18 @@ public class HttpClientSettings {
             if (!Strings.isNullOrEmpty(maxQueuedPerDest)) {
                 res.setMaxRequestsQueuedPerDestination(Integer.parseInt(maxQueuedPerDest));
             }
+            final String bucketSize = mapping.string("jetty_bucket_size");
+            if (!Strings.isNullOrEmpty(bucketSize)) {
+                res.setJettyBucketSize(Integer.parseInt(bucketSize));
+            }
+            final String directMem = mapping.string("jetty_direct_memory");
+            if (!Strings.isNullOrEmpty(directMem)) {
+                res.setJettyDirectMemory(Long.parseLong(directMem));
+            }
+            final String heapMem = mapping.string("jetty_heap_memory");
+            if (!Strings.isNullOrEmpty(heapMem)) {
+                res.setJettyHeapMemory(Long.parseLong(heapMem));
+            }
             final YamlMapping jks = mapping.yamlMapping("jks");
             if (jks != null) {
                 res.setJksPath(
@@ -205,6 +217,21 @@ public class HttpClientSettings {
     private int maxRequestsQueuedPerDestination;
 
     /**
+     * Jetty buffer pool max bucket size (buffers per size class).
+     */
+    private int jettyBucketSize;
+
+    /**
+     * Jetty buffer pool max direct memory in bytes.
+     */
+    private long jettyDirectMemory;
+
+    /**
+     * Jetty buffer pool max heap memory in bytes.
+     */
+    private long jettyHeapMemory;
+
+    /**
      * Default connect timeout in milliseconds.
      */
     public static final long DEFAULT_CONNECT_TIMEOUT = 15_000L;
@@ -238,6 +265,22 @@ public class HttpClientSettings {
      */
     public static final long DEFAULT_PROXY_TIMEOUT = 60L;
 
+    /**
+     * Default Jetty buffer pool bucket size.
+     * Controls max buffers per size class to prevent O(n) eviction spikes.
+     */
+    public static final int DEFAULT_JETTY_BUCKET_SIZE = 1024;
+
+    /**
+     * Default Jetty buffer pool max direct memory in bytes (2 GB).
+     */
+    public static final long DEFAULT_JETTY_DIRECT_MEMORY = 2L * 1024L * 1024L * 1024L;
+
+    /**
+     * Default Jetty buffer pool max heap memory in bytes (1 GB).
+     */
+    public static final long DEFAULT_JETTY_HEAP_MEMORY = 1L * 1024L * 1024L * 1024L;
+
     public HttpClientSettings() {
         this.trustAll = false;
         this.followRedirects = true;
@@ -248,6 +291,9 @@ public class HttpClientSettings {
         this.connectionAcquireTimeout = DEFAULT_CONNECTION_ACQUIRE_TIMEOUT;
         this.maxConnectionsPerDestination = DEFAULT_MAX_CONNECTIONS_PER_DESTINATION;
         this.maxRequestsQueuedPerDestination = DEFAULT_MAX_REQUESTS_QUEUED_PER_DESTINATION;
+        this.jettyBucketSize = DEFAULT_JETTY_BUCKET_SIZE;
+        this.jettyDirectMemory = DEFAULT_JETTY_DIRECT_MEMORY;
+        this.jettyHeapMemory = DEFAULT_JETTY_HEAP_MEMORY;
         this.proxies = new ArrayList<>();
         proxySettingsFromSystem("http")
             .ifPresent(this::addProxy);
@@ -398,6 +444,33 @@ public class HttpClientSettings {
 
     public HttpClientSettings setMaxRequestsQueuedPerDestination(final int maxRequestsQueuedPerDestination) {
         this.maxRequestsQueuedPerDestination = maxRequestsQueuedPerDestination;
+        return this;
+    }
+
+    public int jettyBucketSize() {
+        return jettyBucketSize;
+    }
+
+    public HttpClientSettings setJettyBucketSize(final int jettyBucketSize) {
+        this.jettyBucketSize = jettyBucketSize;
+        return this;
+    }
+
+    public long jettyDirectMemory() {
+        return jettyDirectMemory;
+    }
+
+    public HttpClientSettings setJettyDirectMemory(final long jettyDirectMemory) {
+        this.jettyDirectMemory = jettyDirectMemory;
+        return this;
+    }
+
+    public long jettyHeapMemory() {
+        return jettyHeapMemory;
+    }
+
+    public HttpClientSettings setJettyHeapMemory(final long jettyHeapMemory) {
+        this.jettyHeapMemory = jettyHeapMemory;
         return this;
     }
 }

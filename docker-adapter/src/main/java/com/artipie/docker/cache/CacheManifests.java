@@ -10,9 +10,9 @@ import com.artipie.docker.ManifestReference;
 import com.artipie.docker.Manifests;
 import com.artipie.docker.Repo;
 import com.artipie.docker.Tags;
-import com.artipie.docker.asto.CheckedBlobSource;
 import com.artipie.docker.manifest.Manifest;
 import com.artipie.docker.manifest.ManifestLayer;
+import com.artipie.docker.misc.ImageTag;
 import com.artipie.docker.misc.JoinedTagsSource;
 import com.artipie.docker.misc.Pagination;
 import com.artipie.http.log.EcsLogger;
@@ -27,13 +27,11 @@ import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Collection;
-import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
  * Cache implementation of {@link Repo}.
@@ -122,6 +120,7 @@ public final class CacheManifests implements Manifests {
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         final long startTime = System.currentTimeMillis();
+        final String requestOwner = MDC.get("user.name");
         return this.origin.manifests().get(ref).handle(
             (original, throwable) -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -129,12 +128,23 @@ public final class CacheManifests implements Manifests {
                 if (throwable == null) {
                     if (original.isPresent()) {
                         this.recordProxyMetric("success", duration);
+                        EcsLogger.info("com.artipie.docker.proxy")
+                            .message("CacheManifests origin returned manifest")
+                            .eventCategory("repository")
+                            .eventAction("cache_manifest_get")
+                            .eventOutcome("success")
+                            .field("repository.name", this.rname)
+                            .field("container.image.name", this.name)
+                            .field("container.image.hash.all", ref.digest())
+                            .field("url.original", this.upstreamUrl)
+                            .duration(duration)
+                            .log();
                         Manifest manifest = original.get();
                         if (Manifest.MANIFEST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_V1.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_LIST_SCHEMA2.equals(manifest.mediaType()) ||
                             Manifest.MANIFEST_OCI_INDEX.equals(manifest.mediaType())) {
-                            this.copy(ref);
+                            this.copy(ref, requestOwner);
                             result = CompletableFuture.completedFuture(original);
                         } else {
                             EcsLogger.warn("com.artipie.docker")
@@ -151,6 +161,17 @@ public final class CacheManifests implements Manifests {
                         }
                     } else {
                         this.recordProxyMetric("not_found", duration);
+                        EcsLogger.info("com.artipie.docker.proxy")
+                            .message("CacheManifests origin returned empty, falling back to cache")
+                            .eventCategory("repository")
+                            .eventAction("cache_manifest_get")
+                            .eventOutcome("not_found")
+                            .field("repository.name", this.rname)
+                            .field("container.image.name", this.name)
+                            .field("container.image.hash.all", ref.digest())
+                            .field("url.original", this.upstreamUrl)
+                            .duration(duration)
+                            .log();
                         result = this.cache.manifests().get(ref).exceptionally(ignored -> original);
                     }
                 } else {
@@ -164,7 +185,7 @@ public final class CacheManifests implements Manifests {
                         .field("repository.name", this.rname)
                         .field("container.image.name", this.name)
                         .field("container.image.hash.all", ref.digest())
-                        .field("url.upstream", this.upstreamUrl)
+                        .field("url.original", this.upstreamUrl)
                         .error(throwable)
                         .log();
                     result = this.cache.manifests().get(ref);
@@ -185,12 +206,13 @@ public final class CacheManifests implements Manifests {
      * Copy manifest by reference from original to cache.
      *
      * @param ref Manifest reference.
+     * @param owner Authenticated user login captured from request thread.
      * @return Copy completion.
      */
-    private CompletionStage<Void> copy(final ManifestReference ref) {
+    private CompletionStage<Void> copy(final ManifestReference ref, final String owner) {
         return this.origin.manifests().get(ref)
             .thenApply(Optional::get)
-            .thenCompose(manifest -> this.copySequentially(ref, manifest))
+            .thenCompose(manifest -> this.copySequentially(ref, manifest, owner))
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
@@ -210,18 +232,20 @@ public final class CacheManifests implements Manifests {
             );
     }
 
+    /**
+     * Cache manifest JSON and record events. Blobs are now cached via CachingBlob
+     * on first access, so no separate blob pre-fetching is needed.
+     *
+     * @param ref Manifest reference
+     * @param manifest The manifest
+     * @param owner Authenticated user login captured from request thread.
+     * @return Completion when manifest is cached
+     */
     private CompletionStage<Void> copySequentially(
         final ManifestReference ref,
-        final Manifest manifest
+        final Manifest manifest,
+        final String owner
     ) {
-        final CompletionStage<Void> blobsCopy;
-        if (manifest.isManifestList()) {
-            // For manifest lists (multi-platform images), cache all child manifests and their blobs
-            blobsCopy = this.cacheManifestListChildren(manifest);
-        } else {
-            // For single-platform manifests, cache config and layers in PARALLEL
-            blobsCopy = this.cacheBlobsInParallel(manifest);
-        }
         final boolean needRelease = this.events.isPresent() || this.inspector.isPresent();
         final CompletionStage<Optional<Long>> release = needRelease
             ? this.releaseTimestamp(manifest)
@@ -239,115 +263,9 @@ public final class CacheManifests implements Manifests {
                     return Optional.empty();
                 })
             : CompletableFuture.completedFuture(Optional.empty());
-        return blobsCopy.thenCombine(
-            release,
-            (ignored, rel) -> rel
-        ).thenCompose(
-            rel -> this.finalizeManifestCache(ref, manifest, rel)
+        return release.thenCompose(
+            rel -> this.finalizeManifestCache(ref, manifest, rel, owner)
         );
-    }
-
-    /**
-     * Cache all child manifests from a manifest list (multi-platform image).
-     * This ensures that when a client pulls a specific platform, the manifest and blobs are cached.
-     *
-     * @param manifestList The manifest list (fat manifest)
-     * @return Completion stage when all children are cached
-     */
-    private CompletionStage<Void> cacheManifestListChildren(final Manifest manifestList) {
-        final Collection<Digest> children = manifestList.manifestListChildren();
-        if (children.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        EcsLogger.info("com.artipie.docker")
-            .message("Caching manifest list children")
-            .eventCategory("repository")
-            .eventAction("manifest_list_cache")
-            .field("repository.name", this.rname)
-            .field("container.image.name", this.name)
-            .field("manifest.children.count", children.size())
-            .log();
-        // Cache all child manifests in parallel
-        final List<CompletableFuture<Void>> childCaches = children.stream()
-            .map(digest -> this.cacheChildManifest(digest))
-            .collect(Collectors.toList());
-        return CompletableFuture.allOf(childCaches.toArray(new CompletableFuture[0]));
-    }
-
-    /**
-     * Cache a single child manifest and its blobs.
-     *
-     * @param digest The child manifest digest
-     * @return Completion when the child and its blobs are cached
-     */
-    private CompletableFuture<Void> cacheChildManifest(final Digest digest) {
-        final ManifestReference childRef = ManifestReference.from(digest);
-        return this.origin.manifests().get(childRef)
-            .thenCompose(opt -> {
-                if (opt.isEmpty()) {
-                    EcsLogger.warn("com.artipie.docker")
-                        .message("Child manifest not found in origin")
-                        .eventCategory("repository")
-                        .eventAction("manifest_child_cache")
-                        .eventOutcome("not_found")
-                        .field("repository.name", this.rname)
-                        .field("container.image.name", this.name)
-                        .field("container.image.hash.all", digest.string())
-                        .log();
-                    return CompletableFuture.completedFuture(null);
-                }
-                final Manifest child = opt.get();
-                // Cache the child's blobs (config + layers) in parallel, then save the manifest
-                return this.cacheBlobsInParallel(child)
-                    .thenCompose(ignored ->
-                        this.cache.manifests().put(childRef, child.content())
-                    )
-                    .thenAccept(ignored ->
-                        EcsLogger.debug("com.artipie.docker")
-                            .message("Cached child manifest")
-                            .eventCategory("repository")
-                            .eventAction("manifest_child_cache")
-                            .eventOutcome("success")
-                            .field("repository.name", this.rname)
-                            .field("container.image.name", this.name)
-                            .field("container.image.hash.all", digest.string())
-                            .log()
-                    );
-            })
-            .exceptionally(ex -> {
-                EcsLogger.warn("com.artipie.docker")
-                    .message("Failed to cache child manifest")
-                    .eventCategory("repository")
-                    .eventAction("manifest_child_cache")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.rname)
-                    .field("container.image.name", this.name)
-                    .field("container.image.hash.all", digest.string())
-                    .error(ex)
-                    .log();
-                return null;
-            });
-    }
-
-    /**
-     * Cache config and layers in parallel (instead of sequentially).
-     *
-     * @param manifest The manifest whose blobs to cache
-     * @return Completion when all blobs are cached
-     */
-    private CompletionStage<Void> cacheBlobsInParallel(final Manifest manifest) {
-        // Collect all blob copy futures
-        final List<CompletableFuture<Void>> blobCopies = new java.util.ArrayList<>();
-        // Add config blob
-        blobCopies.add(this.copy(manifest.config()).toCompletableFuture());
-        // Add layer blobs (only those without external URLs)
-        for (final ManifestLayer layer : manifest.layers()) {
-            if (layer.urls().isEmpty()) {
-                blobCopies.add(this.copy(layer.digest()).toCompletableFuture());
-            }
-        }
-        // Execute all blob copies in parallel
-        return CompletableFuture.allOf(blobCopies.toArray(new CompletableFuture[0]));
     }
 
     /**
@@ -357,12 +275,14 @@ public final class CacheManifests implements Manifests {
      * @param ref Manifest reference
      * @param manifest The manifest
      * @param rel Release timestamp from config
+     * @param owner Authenticated user login captured from request thread.
      * @return Completion when manifest is saved and events recorded
      */
     private CompletionStage<Void> finalizeManifestCache(
         final ManifestReference ref,
         final Manifest manifest,
-        final Optional<Long> rel
+        final Optional<Long> rel,
+        final String owner
     ) {
         // Get inspector release date asynchronously (FIX: removed blocking .join())
         final CompletionStage<Optional<Long>> inspectorReleaseFuture = this.inspector
@@ -379,61 +299,46 @@ public final class CacheManifests implements Manifests {
                     ins.recordRelease(this.name, manifest.digest().string(), instant);
                 })
             );
-            this.events.ifPresent(queue -> {
-                final long created = System.currentTimeMillis();
-                // Get owner: 1. From inspector cache, 2. From MDC (set by auth), 3. Default
-                String owner = this.inspector
-                    .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
-                    .orElse(null);
-                if (owner == null || owner.isEmpty()) {
-                    final String mdcUser = MDC.get("user.name");
-                    if (mdcUser != null && !mdcUser.isEmpty() && !"anonymous".equals(mdcUser)) {
-                        owner = mdcUser;
-                    } else {
-                        owner = ArtifactEvent.DEF_OWNER;
-                    }
-                }
-                queue.add(
-                    new ArtifactEvent(
-                        CacheManifests.REPO_TYPE,
-                        this.rname,
-                        owner,
-                        this.name,
-                        ref.digest(),
-                        manifest.isManifestList()
-                            ? 0L
-                            : manifest.layers().stream().mapToLong(ManifestLayer::size).sum(),
-                        created,
-                        effectiveRelease.orElse(null)
-                    )
+            final CompletionStage<Long> sizeFuture = manifest.isManifestList()
+                ? resolveManifestListSize(this.origin, manifest)
+                : CompletableFuture.completedFuture(
+                    manifest.layers().stream().mapToLong(ManifestLayer::size).sum()
                 );
-            });
-            return this.cache.manifests().put(ref, manifest.content())
-                .thenApply(ignored -> null);
-        });
-    }
-
-    /**
-     * Copy blob by digest from original to cache.
-     *
-     * @param digest Blob digest.
-     * @return Copy completion.
-     */
-    private CompletionStage<Void> copy(final Digest digest) {
-        return this.origin.layers().get(digest).thenCompose(
-            blob -> {
-                if (blob.isEmpty()) {
-                    throw new IllegalArgumentException(
-                        String.format("Failed loading blob %s", digest)
+            return sizeFuture.thenCompose(size -> {
+                this.events.filter(q -> ImageTag.valid(ref.digest())).ifPresent(queue -> {
+                    final long created = System.currentTimeMillis();
+                    // Get owner: 1. From inspector cache (skip UNKNOWN), 2. From request thread, 3. Default
+                    // Inspector may store UNKNOWN when DockerProxyCooldownSlice resolves the user
+                    // from pre-auth headers (Bearer token users have no artipie_login there).
+                    // Filter out UNKNOWN so we fall through to requestOwner from MDC.
+                    String effectiveOwner = this.inspector
+                        .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))
+                        .filter(o -> !ArtifactEvent.DEF_OWNER.equals(o))
+                        .orElse(null);
+                    if (effectiveOwner == null || effectiveOwner.isEmpty()) {
+                        if (owner != null && !owner.isEmpty() && !"anonymous".equals(owner)) {
+                            effectiveOwner = owner;
+                        } else {
+                            effectiveOwner = ArtifactEvent.DEF_OWNER;
+                        }
+                    }
+                    queue.add(
+                        new ArtifactEvent(
+                            CacheManifests.REPO_TYPE,
+                            this.rname,
+                            effectiveOwner,
+                            this.name,
+                            ref.digest(),
+                            size,
+                            created,
+                            effectiveRelease.orElse(null)
+                        )
                     );
-                }
-                return blob.get().content();
-            }
-        ).thenCompose(
-            content -> this.cache.layers().put(new CheckedBlobSource(content, digest))
-        ).thenCompose(
-            blob -> CompletableFuture.allOf()
-        );
+                });
+                return this.cache.manifests().putUnchecked(ref, manifest.content())
+                    .thenApply(ignored -> null);
+            });
+        });
     }
 
     private CompletionStage<Optional<Long>> releaseTimestamp(final Manifest manifest) {
@@ -473,6 +378,39 @@ public final class CacheManifests implements Manifests {
     }
 
     /**
+     * Resolve total size of a manifest list by fetching child manifests
+     * from the origin repo and summing their layer sizes.
+     *
+     * @param repo Repository containing the child manifests
+     * @param manifestList The manifest list
+     * @return Future with total size in bytes
+     */
+    private static CompletableFuture<Long> resolveManifestListSize(
+        final Repo repo, final Manifest manifestList
+    ) {
+        final Collection<Digest> children = manifestList.manifestListChildren();
+        if (children.isEmpty()) {
+            return CompletableFuture.completedFuture(0L);
+        }
+        CompletableFuture<Long> result = CompletableFuture.completedFuture(0L);
+        for (final Digest child : children) {
+            result = result.thenCompose(
+                running -> repo.manifests()
+                    .get(ManifestReference.from(child))
+                    .thenApply(opt -> {
+                        if (opt.isPresent() && !opt.get().isManifestList()) {
+                            return running + opt.get().layers().stream()
+                                .mapToLong(ManifestLayer::size).sum();
+                        }
+                        return running;
+                    })
+                    .exceptionally(ex -> running)
+            );
+        }
+        return result;
+    }
+
+    /**
      * Record proxy request metric.
      */
     private void recordProxyMetric(final String result, final long duration) {
@@ -505,14 +443,17 @@ public final class CacheManifests implements Manifests {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.docker")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

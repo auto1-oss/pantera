@@ -201,9 +201,9 @@ public final class MetadataUrlRewriter {
             distBuilder.add("original_url", originalUrl);
         }
         
-        // Add rewritten proxy URL
+        // Add rewritten proxy URL (with .zip extension for clarity)
         final String proxyUrl = String.format(
-            "%s/dist/%s/%s",
+            "%s/dist/%s/%s.zip",
             this.baseUrl,
             packageName,
             version

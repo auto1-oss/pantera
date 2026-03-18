@@ -92,6 +92,7 @@ public interface RpmMetadata {
                         continue;
                     }
                     final Path temp = Files.createTempFile("rpm-index", RpmMetadata.SUFFIX);
+                    temp.toFile().deleteOnExit();
                     try {
                         final long res;
                         final XmlMaid maid;
@@ -152,6 +153,7 @@ public interface RpmMetadata {
         public void perform(final Collection<Package.Meta> packages) {
             try {
                 final Path temp = Files.createTempFile("rpm-primary-append", RpmMetadata.SUFFIX);
+                temp.toFile().deleteOnExit();
                 try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(temp))) {
                     final MetadataItem primary = this.items.stream()
                         .filter(item -> item.type == XmlPackage.PRIMARY)

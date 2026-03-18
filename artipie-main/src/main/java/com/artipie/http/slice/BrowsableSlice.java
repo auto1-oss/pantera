@@ -272,6 +272,21 @@ public final class BrowsableSlice implements Slice {
             boolean unwrapped = false;
             
             try {
+                // Try DispatchedStorage unwrapping
+                if (className.equals("DispatchedStorage")) {
+                    final java.lang.reflect.Field delegate =
+                        current.getClass().getDeclaredField("delegate");
+                    delegate.setAccessible(true);
+                    final Storage next = (Storage) delegate.get(current);
+                    EcsLogger.debug("com.artipie.http")
+                        .message("Unwrapped DispatchedStorage to: " + next.getClass().getSimpleName())
+                        .eventCategory("http")
+                        .eventAction("storage_unwrap")
+                        .log();
+                    current = next;
+                    unwrapped = true;
+                }
+
                 // Try DiskCacheStorage unwrapping
                 if (className.equals("DiskCacheStorage")) {
                     final java.lang.reflect.Field backend =

@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -24,6 +26,11 @@ import java.util.stream.Collectors;
  * @since 0.24
  */
 final class Proposals {
+
+    /**
+     * Logger.
+     */
+    private static final Logger LOGGER = Logger.getLogger(Proposals.class.getName());
 
     /**
      * Storage.
@@ -120,6 +127,42 @@ final class Proposals {
      */
     public CompletionStage<Void> delete(final String uuid) {
         return this.storage.delete(this.proposalKey(uuid));
+    }
+
+    /**
+     * Remove all expired proposals for this target key.
+     * Proposals that have no expiration (empty content) are never removed.
+     *
+     * @return Completion of cleanup operation.
+     */
+    public CompletionStage<Void> cleanExpired() {
+        final Instant now = Instant.now();
+        return this.storage.list(new RootKey(this.target)).thenCompose(
+            keys -> CompletableFuture.allOf(
+                keys.stream()
+                    .map(
+                        key -> this.valueIfPresent(key).thenCompose(
+                            value -> value.map(
+                                content -> content.asStringFuture().thenCompose(
+                                    expiration -> {
+                                        if (!expiration.isEmpty()
+                                            && !Instant.parse(expiration).isAfter(now)) {
+                                            LOGGER.log(
+                                                Level.FINE,
+                                                "Deleting expired lock proposal: {0}",
+                                                key
+                                            );
+                                            return this.storage.delete(key);
+                                        }
+                                        return CompletableFuture.allOf();
+                                    }
+                                )
+                            ).orElse(CompletableFuture.allOf())
+                        ).toCompletableFuture()
+                    )
+                    .toArray(CompletableFuture[]::new)
+            )
+        );
     }
 
     /**

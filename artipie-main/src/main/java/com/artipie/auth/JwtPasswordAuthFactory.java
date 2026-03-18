@@ -85,11 +85,10 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
             }
         }
         EcsLogger.info("com.artipie.auth")
-            .message("JWT-as-password authentication initialized")
+            .message(String.format("JWT-as-password authentication initialized: requireUsernameMatch=%s", requireUsernameMatch))
             .eventCategory("authentication")
             .eventAction("jwt_password_init")
             .eventOutcome("success")
-            .field("require_username_match", requireUsernameMatch)
             .log();
         return new JwtPasswordAuth(jwtAuth, requireUsernameMatch);
     }

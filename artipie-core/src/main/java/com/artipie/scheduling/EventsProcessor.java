@@ -16,9 +16,18 @@ import org.quartz.JobExecutionContext;
  * set by {@link org.quartz} mechanism via setters. Note, that job instance is created by
  * {@link org.quartz} on every execution, but job data is not.
  * <p/>
- * In the case of {@link EventProcessingError} processor tries to process the event three times,
- * if on the third time processing failed, job is shut down and event is not returned to queue.
+ * In the case of {@link EventProcessingError} processor retries each individual event up to three
+ * times. If all attempts fail, the event is dropped (logged) and processing continues with the
+ * next event. The job is never stopped due to individual event failures.
  * <p/>
+ * Supports two data-binding modes:
+ * <ul>
+ *   <li><b>Direct (RAM mode):</b> Queue and Consumer are set directly via
+ *       {@link #setElements(Queue)} and {@link #setAction(Consumer)}.</li>
+ *   <li><b>Registry (JDBC mode):</b> Registry keys are set via
+ *       {@link #setElements_key(String)} and {@link #setAction_key(String)},
+ *       and actual objects are looked up from {@link JobDataRegistry}.</li>
+ * </ul>
  * <a href="https://github.com/quartz-scheduler/quartz/blob/main/docs/tutorials/tutorial-lesson-02.md">Read more.</a>
  * @param <T> Elements type to process
  * @since 1.3
@@ -43,32 +52,40 @@ public final class EventsProcessor<T> extends QuartzJob {
     @Override
     @SuppressWarnings("PMD.CognitiveComplexity")
     public void execute(final JobExecutionContext context) {
+        this.resolveFromRegistry(context);
         if (this.action == null || this.elements == null) {
             super.stopJob(context);
         } else {
             int cnt = 0;
-            int error = 0;
             while (!this.elements.isEmpty()) {
                 final T item = this.elements.poll();
                 if (item != null) {
-                    try {
-                        cnt = cnt + 1;
-                        this.action.accept(item);
-                    } catch (final EventProcessingError ex) {
-                        EcsLogger.error("com.artipie.scheduling")
-                            .message("Event processing failed (retry " + error + "/" + MAX_RETRY + ")")
-                            .eventCategory("scheduling")
-                            .eventAction("event_process")
-                            .eventOutcome("failure")
-                            .error(ex)
-                            .log();
-                        if (error > EventsProcessor.MAX_RETRY) {
-                            this.stopJob(context);
+                    boolean processed = false;
+                    for (int attempt = 0; attempt < EventsProcessor.MAX_RETRY; attempt++) {
+                        try {
+                            this.action.accept(item);
+                            cnt = cnt + 1;
+                            processed = true;
                             break;
+                        } catch (final EventProcessingError ex) {
+                            EcsLogger.error("com.artipie.scheduling")
+                                .message("Event processing failed (attempt "
+                                    + (attempt + 1) + "/" + MAX_RETRY + ")")
+                                .eventCategory("scheduling")
+                                .eventAction("event_process")
+                                .eventOutcome("failure")
+                                .error(ex)
+                                .log();
                         }
-                        error = error + 1;
-                        cnt = cnt - 1;
-                        this.elements.add(item);
+                    }
+                    if (!processed) {
+                        EcsLogger.error("com.artipie.scheduling")
+                            .message("Dropping event after " + MAX_RETRY
+                                + " failed attempts")
+                            .eventCategory("scheduling")
+                            .eventAction("event_drop")
+                            .eventOutcome("failure")
+                            .log();
                     }
                 }
             }
@@ -83,7 +100,7 @@ public final class EventsProcessor<T> extends QuartzJob {
     }
 
     /**
-     * Set elements queue from job context.
+     * Set elements queue from job context (RAM mode).
      * @param queue Queue with elements to process
      */
     public void setElements(final Queue<T> queue) {
@@ -91,11 +108,44 @@ public final class EventsProcessor<T> extends QuartzJob {
     }
 
     /**
-     * Set elements consumer from job context.
+     * Set elements consumer from job context (RAM mode).
      * @param consumer Action to consume the element
      */
     public void setAction(final Consumer<T> consumer) {
         this.action = consumer;
+    }
+
+    /**
+     * Set registry key for elements queue (JDBC mode).
+     * @param key Registry key to look up the queue from {@link JobDataRegistry}
+     */
+    @SuppressWarnings("PMD.MethodNamingConventions")
+    public void setElements_key(final String key) {
+        this.elements = JobDataRegistry.lookup(key);
+    }
+
+    /**
+     * Set registry key for action consumer (JDBC mode).
+     * @param key Registry key to look up the consumer from {@link JobDataRegistry}
+     */
+    @SuppressWarnings("PMD.MethodNamingConventions")
+    public void setAction_key(final String key) {
+        this.action = JobDataRegistry.lookup(key);
+    }
+
+    /**
+     * Resolve elements and action from the job data registry if registry keys
+     * are present in the context and the fields are not yet set.
+     * @param context Job execution context
+     */
+    private void resolveFromRegistry(final JobExecutionContext context) {
+        final org.quartz.JobDataMap data = context.getMergedJobDataMap();
+        if (this.elements == null && data.containsKey("elements_key")) {
+            this.elements = JobDataRegistry.lookup(data.getString("elements_key"));
+        }
+        if (this.action == null && data.containsKey("action_key")) {
+            this.action = JobDataRegistry.lookup(data.getString("action_key"));
+        }
     }
 
 }

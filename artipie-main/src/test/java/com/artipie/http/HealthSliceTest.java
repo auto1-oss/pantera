@@ -5,19 +5,17 @@
 package com.artipie.http;
 
 import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.http.hm.ResponseAssert;
 import com.artipie.http.rq.RequestLine;
 import com.artipie.http.rq.RqMethod;
-import com.artipie.test.TestSettings;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collection;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Function;
+import javax.json.Json;
+import javax.json.JsonObject;
+import javax.json.JsonReader;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Test case for {@link HealthSlice}.
@@ -25,78 +23,25 @@ import java.util.function.Function;
  * @since 0.10
  */
 final class HealthSliceTest {
-    /**
-     * Request line for health endpoint.
-     */
+
     private static final RequestLine REQ_LINE = new RequestLine(RqMethod.GET, "/.health");
 
     @Test
-    void returnsOkForValidStorage() {
-        ResponseAssert.check(
-            new HealthSlice(new TestSettings()).response(
-                REQ_LINE, Headers.EMPTY, Content.EMPTY
-            ).join(),
-            RsStatus.OK, "[{\"storage\":\"ok\"}]".getBytes()
+    void returnsOkImmediately() {
+        final Response response = new HealthSlice().response(
+            REQ_LINE, Headers.EMPTY, Content.EMPTY
+        ).join();
+        MatcherAssert.assertThat(
+            "status should be OK",
+            response.status(), Matchers.is(RsStatus.OK)
         );
-    }
-
-    @Test
-    void returnsBadRequestForBrokenStorage() {
-        ResponseAssert.check(
-            new HealthSlice(new TestSettings(new FakeStorage())).response(
-                REQ_LINE, Headers.EMPTY, Content.EMPTY
-            ).join(),
-            RsStatus.SERVICE_UNAVAILABLE, "[{\"storage\":\"failure\"}]".getBytes()
-        );
-    }
-
-    /**
-     * Implementation of broken storage.
-     * All methods throw exception.
-     *
-     * @since 0.10
-     */
-    private static class FakeStorage implements Storage {
-        @Override
-        public CompletableFuture<Boolean> exists(final Key key) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<Collection<Key>> list(final Key prefix) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<Void> save(final Key key, final Content content) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<Void> move(final Key source, final Key destination) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<? extends Meta> metadata(final Key key) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<Content> value(final Key key) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public CompletableFuture<Void> delete(final Key key) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public <T> CompletionStage<T> exclusively(
-            final Key key,
-            final Function<Storage, CompletionStage<T>> function) {
-            throw new UnsupportedOperationException();
+        final String body = new String(response.body().asBytes(), StandardCharsets.UTF_8);
+        try (JsonReader reader = Json.createReader(new StringReader(body))) {
+            final JsonObject json = reader.readObject();
+            MatcherAssert.assertThat(
+                "status field should be ok",
+                json.getString("status"), Matchers.is("ok")
+            );
         }
     }
 }

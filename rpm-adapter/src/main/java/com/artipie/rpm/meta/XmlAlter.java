@@ -60,6 +60,7 @@ public interface XmlAlter {
         @Override
         public void pkgAttr(final String tag, final String value) throws IOException {
             final Path trf = Files.createTempFile("", ".xml");
+            trf.toFile().deleteOnExit();
             try (
                 InputStream input = Files.newInputStream(this.file);
                 OutputStream out = Files.newOutputStream(trf)) {

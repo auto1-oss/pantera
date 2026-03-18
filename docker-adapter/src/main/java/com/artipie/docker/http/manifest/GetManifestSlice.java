@@ -15,7 +15,9 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.headers.ContentType;
+import com.artipie.http.headers.Login;
 import com.artipie.http.rq.RequestLine;
+import org.slf4j.MDC;
 
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;
@@ -29,33 +31,21 @@ public class GetManifestSlice extends DockerActionSlice {
     @Override
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
-        try {
-            java.nio.file.Files.writeString(
-                java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
-                "GET request for: " + request.reference() + ", method=" + line.method() + "\n",
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.APPEND
-            );
-        } catch (Exception e) {}
-
-        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
-        // GET requests should have empty body, but we must consume it to complete the request
-        return body.asBytesFuture().thenCompose(ignored ->
-            this.docker.repo(request.name())
+        // Capture the authenticated login before crossing the async boundary.
+        // AuthzSlice adds artipie_login to headers; body.asBytesFuture() may complete
+        // on a different thread (Vert.x event loop) where MDC.user.name is not set.
+        // Re-setting MDC inside the thenCompose ensures CacheManifests.get() sees
+        // the correct owner when it calls MDC.get("user.name").
+        final String login = new Login(headers).getValue();
+        // Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            MDC.put("user.name", login);
+            return this.docker.repo(request.name())
                 .manifests()
                 .get(request.reference())
                 .thenApply(
                     manifest -> manifest.map(
                         found -> {
-                            try {
-                                java.nio.file.Files.writeString(
-                                    java.nio.file.Paths.get("/var/artipie/get-manifest-debug.log"),
-                                    "Manifest found, size=" + found.size() + ", mediaType=" + found.mediaType() + "\n",
-                                    java.nio.file.StandardOpenOption.CREATE,
-                                    java.nio.file.StandardOpenOption.APPEND
-                                );
-                            } catch (Exception e) {}
-
                             Response response = ResponseBuilder.ok()
                                 .header(ContentType.mime(found.mediaType()))
                                 .header(new DigestHeader(found.digest()))
@@ -64,15 +54,14 @@ public class GetManifestSlice extends DockerActionSlice {
 
                             // Log response headers at DEBUG level for diagnostics
                             com.artipie.http.log.EcsLogger.debug("com.artipie.docker")
-                                .message("GET manifest response headers")
+                                .message(String.format("GET manifest response: digest=%s", found.digest()))
                                 .eventCategory("repository")
                                 .eventAction("manifest_get")
                                 .field("container.image.name", request.name())
                                 .field("container.image.tag", request.reference().digest())
                                 .field("file.type", found.mediaType())
                                 .field("package.checksum", found.digest())
-                                .field("http.response.headers.Content-Type", found.mediaType())
-                                .field("http.response.headers.Docker-Content-Digest", found.digest())
+                                .field("http.response.mime_type", found.mediaType())
                                 .log();
 
                             return response;
@@ -83,7 +72,20 @@ public class GetManifestSlice extends DockerActionSlice {
                             .build()
                     )
                 )
-        );
+                .exceptionally(err -> {
+                    com.artipie.http.log.EcsLogger.warn("com.artipie.docker")
+                        .message("Manifest GET failed with exception, returning 404")
+                        .eventCategory("repository")
+                        .eventAction("manifest_get")
+                        .eventOutcome("failure")
+                        .field("container.image.name", request.name())
+                        .error(err)
+                        .log();
+                    return ResponseBuilder.notFound()
+                        .jsonBody(new ManifestError(request.reference()).json())
+                        .build();
+                });
+        });
     }
 
     @Override

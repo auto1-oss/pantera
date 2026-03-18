@@ -85,6 +85,7 @@ public final class Http3Server {
         try {
             // Create PEM directory for QUIC native library (required by Quiche)
             final Path pemDir = Files.createTempDirectory("http3-pem");
+            pemDir.toFile().deleteOnExit();
             
             // Configure QUIC with Quiche native library
             final QuicheServerQuicConfiguration serverQuicConfig = 

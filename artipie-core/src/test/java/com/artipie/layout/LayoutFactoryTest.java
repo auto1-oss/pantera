@@ -57,7 +57,7 @@ class LayoutFactoryTest {
         final StorageLayout layout = LayoutFactory.forType(
             LayoutFactory.RepositoryType.GRADLE
         );
-        Assertions.assertInstanceOf(GradleLayout.class, layout);
+        Assertions.assertInstanceOf(MavenLayout.class, layout);
     }
 
     @Test

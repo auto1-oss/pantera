@@ -257,6 +257,43 @@ public final class RepoConfig {
         return Optional.ofNullable(this.repoYaml().yamlMapping("settings"));
     }
 
+    /**
+     * Group routing rules for directing requests to specific members
+     * based on path prefix or pattern matching.
+     *
+     * @return List of routing rules or empty list if not specified.
+     */
+    public List<com.artipie.group.RoutingRule> routingRules() {
+        final YamlSequence seq = this.repoYaml.yamlSequence("routing");
+        if (seq == null) {
+            return Collections.emptyList();
+        }
+        final List<com.artipie.group.RoutingRule> rules = new ArrayList<>(seq.size());
+        seq.forEach(node -> {
+            if (node instanceof YamlMapping mapping) {
+                final String member = mapping.string("member");
+                if (member == null || member.isEmpty()) {
+                    throw new IllegalStateException("routing rule missing 'member' field");
+                }
+                final String prefix = mapping.string("prefix");
+                final String pattern = mapping.string("pattern");
+                if (prefix != null && !prefix.isEmpty()) {
+                    rules.add(new com.artipie.group.RoutingRule.PathPrefix(member, prefix));
+                } else if (pattern != null && !pattern.isEmpty()) {
+                    rules.add(new com.artipie.group.RoutingRule.PathPattern(member, pattern));
+                } else {
+                    throw new IllegalStateException(
+                        "routing rule for member '" + member
+                            + "' must have 'prefix' or 'pattern'"
+                    );
+                }
+            } else {
+                throw new IllegalStateException("`routing` element is not mapping in group config");
+            }
+        });
+        return rules;
+    }
+
     public Optional<HttpClientSettings> httpClientSettings() {
         final YamlMapping client = this.repoYaml().yamlMapping("http_client");
         return client != null ? Optional.of(HttpClientSettings.from(client)) : Optional.empty();

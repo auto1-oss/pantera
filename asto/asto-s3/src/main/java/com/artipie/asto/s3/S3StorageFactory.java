@@ -18,6 +18,8 @@ import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
+import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.retry.RetryMode;
 import software.amazon.awssdk.http.async.SdkAsyncHttpClient;
@@ -145,6 +147,14 @@ public final class S3StorageFactory implements StorageFactory {
         final Duration writeTmo = Duration.ofMillis(optLong(http, "write-timeout-millis").orElse(120_000L));  // Increased to 2 minutes
         final Duration idleMax = Duration.ofMillis(optLong(http, "connection-max-idle-millis").orElse(30_000L));  // Reduced to 30s for faster cleanup
 
+        if (maxConc < 64) {
+            java.util.logging.Logger.getLogger(S3StorageFactory.class.getName()).warning(
+                String.format(
+                    "S3 max-concurrency=%d is low for production use. Recommend >= 256 for mixed read/write workloads.",
+                    maxConc
+                )
+            );
+        }
         final SdkAsyncHttpClient netty = NettyNioAsyncHttpClient.builder()
             .maxConcurrency(maxConc)
             .maxPendingConnectionAcquires(maxPend)
@@ -166,11 +176,12 @@ public final class S3StorageFactory implements StorageFactory {
         final boolean dualstack = "true".equalsIgnoreCase(cfg.string("dualstack"));
         builder.serviceConfiguration(
             S3Configuration.builder()
-                .checksumValidationEnabled(true)
                 .dualstackEnabled(dualstack)
                 .pathStyleAccessEnabled(pathStyle)
                 .build()
         );
+        builder.requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED);
+        builder.responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED);
 
         // Retries and adaptive backoff
         builder.overrideConfiguration(

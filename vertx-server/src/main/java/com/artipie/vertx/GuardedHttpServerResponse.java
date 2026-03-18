@@ -109,11 +109,10 @@ public final class GuardedHttpServerResponse {
             } catch (Exception e) {
                 // Response may have been ended by Vert.x internally
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Response end() failed (likely already ended by Vert.x)")
+                    .message(String.format("Response end() failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_end")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
@@ -121,12 +120,10 @@ public final class GuardedHttpServerResponse {
         } else {
             // Already terminated by another path
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }
@@ -149,23 +146,20 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Response end(body) failed (likely already ended by Vert.x)")
+                    .message(String.format("Response end(body) failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_end")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
             }
         } else {
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }
@@ -193,23 +187,20 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 EcsLogger.debug("com.artipie.vertx")
-                    .message("Error response failed (likely already ended)")
+                    .message(String.format("Error response failed (likely already ended), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_error")
-                    .field("request.id", this.requestId)
-                    .field("caller", caller)
+                    .field("http.request.id", this.requestId)
                     .error(e)
                     .log();
                 return false;
             }
         } else {
             EcsLogger.warn("com.artipie.vertx")
-                .message("End has already been called: '" + this.requestId + "'")
+                .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_error_duplicate")
-                .field("request.id", this.requestId)
-                .field("caller", caller)
-                .field("terminated.by", this.terminatedBy.get())
+                .field("http.request.id", this.requestId)
                 .log();
             return false;
         }

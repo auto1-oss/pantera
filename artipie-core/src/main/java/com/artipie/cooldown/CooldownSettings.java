@@ -8,7 +8,6 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Global and per-repo-type cooldown configuration.
@@ -23,21 +22,21 @@ public final class CooldownSettings {
     /**
      * Whether cooldown logic is enabled globally.
      */
-    private final boolean enabled;
+    private volatile boolean enabled;
 
     /**
      * Minimum allowed age for an artifact release. If an artifact's release time
      * is within this window (i.e. too fresh), it will be blocked until it reaches
      * the minimum allowed age.
      */
-    private final Duration minimumAllowedAge;
+    private volatile Duration minimumAllowedAge;
 
     /**
      * Per-repo-type overrides.
      * Key: repository type (maven, npm, docker, etc.)
      * Value: RepoTypeConfig with enabled flag and minimum age
      */
-    private final Map<String, RepoTypeConfig> repoTypeOverrides;
+    private volatile Map<String, RepoTypeConfig> repoTypeOverrides;
 
     /**
      * Ctor with global settings only.
@@ -106,6 +105,29 @@ public final class CooldownSettings {
     public Duration minimumAllowedAgeFor(final String repoType) {
         final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase());
         return override != null ? override.minimumAllowedAge() : this.minimumAllowedAge;
+    }
+
+    /**
+     * Get a copy of per-repo-type overrides.
+     *
+     * @return Map of repo type to config
+     */
+    public Map<String, RepoTypeConfig> repoTypeOverrides() {
+        return new HashMap<>(this.repoTypeOverrides);
+    }
+
+    /**
+     * Update cooldown settings in-place for hot reload.
+     *
+     * @param newEnabled Whether cooldown is enabled
+     * @param newMinAge New global minimum allowed age
+     * @param overrides New per-repo-type overrides
+     */
+    public void update(final boolean newEnabled, final Duration newMinAge,
+        final Map<String, RepoTypeConfig> overrides) {
+        this.enabled = newEnabled;
+        this.minimumAllowedAge = Objects.requireNonNull(newMinAge);
+        this.repoTypeOverrides = new HashMap<>(Objects.requireNonNull(overrides));
     }
 
     /**

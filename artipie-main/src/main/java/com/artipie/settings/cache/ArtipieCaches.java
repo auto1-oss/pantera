@@ -6,6 +6,7 @@ package com.artipie.settings.cache;
 
 import com.artipie.asto.misc.Cleanable;
 import com.artipie.cache.StoragesCache;
+import com.artipie.security.policy.CachedDbPolicy;
 import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.security.policy.Policy;
 
@@ -103,6 +104,8 @@ public interface ArtipieCaches {
             final Cleanable<String> res;
             if (this.policy instanceof CachedYamlPolicy) {
                 res = (CachedYamlPolicy) this.policy;
+            } else if (this.policy instanceof CachedDbPolicy) {
+                res = (CachedDbPolicy) this.policy;
             } else {
                 res = new Cleanable<>() {
                     @Override

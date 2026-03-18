@@ -8,7 +8,7 @@ import com.artipie.cooldown.CooldownReason;
 import java.time.Instant;
 import java.util.Optional;
 
-final class DbBlockRecord {
+public final class DbBlockRecord {
 
     private final long id;
     private final String repoType;
@@ -54,55 +54,55 @@ final class DbBlockRecord {
         this.installedBy = installedBy;
     }
 
-    long id() {
+    public long id() {
         return this.id;
     }
 
-    String repoType() {
+    public String repoType() {
         return this.repoType;
     }
 
-    String repoName() {
+    public String repoName() {
         return this.repoName;
     }
 
-    String artifact() {
+    public String artifact() {
         return this.artifact;
     }
 
-    String version() {
+    public String version() {
         return this.version;
     }
 
-    CooldownReason reason() {
+    public CooldownReason reason() {
         return this.reason;
     }
 
-    BlockStatus status() {
+    public BlockStatus status() {
         return this.status;
     }
 
-    String blockedBy() {
+    public String blockedBy() {
         return this.blockedBy;
     }
 
-    Instant blockedAt() {
+    public Instant blockedAt() {
         return this.blockedAt;
     }
 
-    Instant blockedUntil() {
+    public Instant blockedUntil() {
         return this.blockedUntil;
     }
 
-    Optional<Instant> unblockedAt() {
+    public Optional<Instant> unblockedAt() {
         return this.unblockedAt;
     }
 
-    Optional<String> unblockedBy() {
+    public Optional<String> unblockedBy() {
         return this.unblockedBy;
     }
 
-    Optional<String> installedBy() {
+    public Optional<String> installedBy() {
         return this.installedBy;
     }
 }

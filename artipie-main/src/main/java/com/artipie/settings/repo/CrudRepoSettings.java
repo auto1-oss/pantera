@@ -49,6 +49,16 @@ public interface CrudRepoSettings {
     void save(RepositoryName rname, JsonStructure value);
 
     /**
+     * Add new repository with actor tracking.
+     * @param rname Repository name
+     * @param value New repository settings
+     * @param actor Username performing the action
+     */
+    default void save(RepositoryName rname, JsonStructure value, String actor) {
+        save(rname, value);
+    }
+
+    /**
      * Remove repository.
      * @param rname Repository name
      */

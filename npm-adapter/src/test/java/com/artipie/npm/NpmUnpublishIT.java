@@ -28,6 +28,8 @@ import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 
+import java.util.LinkedList;
+
 /**
  * IT for `npm unpublish` command.
  * @since 0.8
@@ -69,7 +71,7 @@ final class NpmUnpublishIT {
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage)),
+            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage, new LinkedList<>())),
             port
         );
         this.server.start();

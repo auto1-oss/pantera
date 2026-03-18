@@ -17,8 +17,6 @@ import com.artipie.docker.http.upload.PostUploadSlice;
 import com.artipie.docker.http.upload.PutUploadSlice;
 import com.artipie.http.Slice;
 import com.artipie.http.auth.AuthScheme;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BasicAuthScheme;
 import com.artipie.http.rt.MethodRule;
 import com.artipie.http.rt.RtRulePath;
 import com.artipie.http.rt.SliceRoute;
@@ -47,17 +45,6 @@ public final class DockerSlice extends Slice.Wrap {
      */
     public DockerSlice(final Docker docker, final Queue<ArtifactEvent> events) {
         this(docker, Policy.FREE, AuthScheme.NONE, Optional.of(events));
-    }
-
-    /**
-     * @param docker Docker repository.
-     * @param perms Access permissions.
-     * @param auth Authentication mechanism used in BasicAuthScheme.
-     * @deprecated Use constructor accepting {@link AuthScheme}.
-     */
-    @Deprecated
-    public DockerSlice(final Docker docker, final Policy<?> perms, final Authentication auth) {
-        this(docker, perms, new BasicAuthScheme(auth), Optional.empty());
     }
 
     /**
@@ -112,6 +99,9 @@ public final class DockerSlice extends Slice.Wrap {
                     ),
                     RtRulePath.route(MethodRule.GET, PathPatterns.CATALOG,
                         auth(new CatalogSlice(docker), policy, auth)
+                    ),
+                    RtRulePath.route(MethodRule.GET, PathPatterns.REFERRERS,
+                        auth(new ReferrersSlice(docker), policy, auth)
                     )
                 )
             )

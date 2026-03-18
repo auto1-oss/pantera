@@ -31,6 +31,7 @@ import javax.json.JsonObject;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedList;
 
 /**
  * Make sure the library is compatible with npm cli tools.
@@ -77,7 +78,7 @@ public final class NpmIT {
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new NpmSlice(URI.create(this.url).toURL(), this.repo),
+            new NpmSlice(URI.create(this.url).toURL(), this.repo, new LinkedList<>()),
             port
         );
         this.server.start();

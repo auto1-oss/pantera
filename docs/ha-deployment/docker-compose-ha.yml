@@ -1,0 +1,247 @@
+# Artipie HA Deployment - Docker Compose
+#
+# This compose file runs multiple Artipie instances behind an nginx load
+# balancer, with shared PostgreSQL, Valkey, and S3-compatible storage.
+#
+# Prerequisites:
+#   - Copy nginx-ha.conf and artipie-ha.yml into the same directory
+#   - Create .env file with required secrets (see env.example below)
+#
+# Usage:
+#   docker compose -f docker-compose-ha.yml up -d
+#
+# Scaling:
+#   To add more Artipie instances, duplicate the artipie-2 service block
+#   and add the new server to nginx-ha.conf upstream block, then:
+#   docker compose -f docker-compose-ha.yml up -d --force-recreate nginx
+#
+# env.example:
+#   ARTIPIE_VERSION=latest
+#   POSTGRES_USER=artipie
+#   POSTGRES_PASSWORD=<generate-strong-password>
+#   MINIO_ROOT_USER=minioadmin
+#   MINIO_ROOT_PASSWORD=<generate-strong-password>
+#   JWT_SECRET=<generate-strong-secret>
+
+version: "3.8"
+
+services:
+  # ---------- Shared Infrastructure ----------
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-artipie}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-artipie}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - artipie-ha
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artipie}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8.1.4
+    restart: unless-stopped
+    command:
+      - valkey-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks:
+      - artipie-ha
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - valkey-data:/data
+
+  # S3-compatible object storage for shared artifact and config storage.
+  # In production, replace with AWS S3, GCS, or any S3-compatible service.
+  s3:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - s3data:/data
+    networks:
+      - artipie-ha
+    ports:
+      - "9001:9001"  # MinIO console (optional, for debugging)
+
+  # ---------- Artipie Instances ----------
+  # All instances share the same configuration, database, cache, and storage.
+  # They are stateless and can be scaled horizontally.
+
+  artipie-1:
+    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      s3: { condition: service_started }
+    cpus: 4
+    mem_limit: 6gb
+    mem_reservation: 6gb
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc:
+        soft: 65536
+        hard: 65536
+    environment:
+      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+      - POSTGRES_USER=${POSTGRES_USER:-artipie}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
+    volumes:
+      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+    networks:
+      - artipie-ha
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  artipie-2:
+    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      s3: { condition: service_started }
+    cpus: 4
+    mem_limit: 6gb
+    mem_reservation: 6gb
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc:
+        soft: 65536
+        hard: 65536
+    environment:
+      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+      - POSTGRES_USER=${POSTGRES_USER:-artipie}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
+    volumes:
+      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+    networks:
+      - artipie-ha
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  artipie-3:
+    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+      s3: { condition: service_started }
+    cpus: 4
+    mem_limit: 6gb
+    mem_reservation: 6gb
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc:
+        soft: 65536
+        hard: 65536
+    environment:
+      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
+      - POSTGRES_USER=${POSTGRES_USER:-artipie}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
+    volumes:
+      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+    networks:
+      - artipie-ha
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ---------- Load Balancer ----------
+
+  nginx:
+    image: nginx:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx-ha.conf:/etc/nginx/conf.d/default.conf:ro
+      # Uncomment to enable TLS:
+      # - ./ssl/artipie.crt:/etc/nginx/ssl/artipie.crt:ro
+      # - ./ssl/artipie.key:/etc/nginx/ssl/artipie.key:ro
+    depends_on:
+      artipie-1: { condition: service_healthy }
+      artipie-2: { condition: service_healthy }
+      artipie-3: { condition: service_healthy }
+    networks:
+      - artipie-ha
+
+  # ---------- Monitoring (Optional) ----------
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus-ha.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    depends_on:
+      - artipie-1
+      - artipie-2
+      - artipie-3
+    networks:
+      - artipie-ha
+
+networks:
+  artipie-ha:
+    driver: bridge
+
+volumes:
+  pgdata:
+  valkey-data:
+  s3data:
+  prometheus-data:

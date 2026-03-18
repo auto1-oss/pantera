@@ -6,6 +6,7 @@ package com.artipie.npm.proxy.http;
 
 import com.artipie.cooldown.CooldownDependency;
 import com.artipie.cooldown.CooldownInspector;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.npm.proxy.NpmRemote;
 import com.artipie.npm.proxy.model.NpmPackage;
 import com.vdurmont.semver4j.Semver;
@@ -231,8 +232,11 @@ final class NpmCooldownInspector implements CooldownInspector,
                         if (candidate.satisfies(range)) {
                             return Optional.of(new CooldownDependency(name, candidate.getValue()));
                         }
-                    } catch (final SemverException ignored) {
-                        // Continue to next version
+                    } catch (final SemverException ex) {
+                        EcsLogger.debug("com.artipie.npm")
+                            .message("Failed to evaluate semver range")
+                            .error(ex)
+                            .log();
                     }
                 }
 

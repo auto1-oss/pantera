@@ -6,6 +6,7 @@ package com.artipie.http.headers;
 
 import com.artipie.http.Headers;
 import com.artipie.http.auth.AuthzSlice;
+import com.artipie.http.log.EcsLogger;
 import com.artipie.scheduling.ArtifactEvent;
 import org.slf4j.MDC;
 
@@ -84,7 +85,11 @@ public final class Login extends Header {
                 if (!credentials.isBlank()) {
                     return Optional.of(credentials);
                 }
-            } catch (final IllegalArgumentException ignored) {
+            } catch (final IllegalArgumentException ex) {
+                EcsLogger.debug("com.artipie.http")
+                    .message("Failed to decode Basic auth credentials")
+                    .error(ex)
+                    .log();
                 return Optional.empty();
             }
         }

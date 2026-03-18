@@ -44,10 +44,12 @@ public final class ProxyDownloadSlice implements Slice {
 
     /**
      * Pattern to match rewritten download URLs.
-     * The repo prefix is stripped by TrimPathSlice, so path arrives as: /dist/{vendor}/{package}/{version}
+     * The repo prefix is stripped by TrimPathSlice, so path arrives as:
+     * /dist/{vendor}/{package}/{version}.zip  (new format)
+     * /dist/{vendor}/{package}/{version}      (legacy, no extension)
      */
     private static final Pattern DOWNLOAD_PATTERN = Pattern.compile(
-        "^/dist/(?<vendor>[^/]+)/(?<package>[^/]+)/(?<version>.+)$"
+        "^/dist/(?<vendor>[^/]+)/(?<package>[^/]+)/(?<version>.+?)(?:\\.zip)?$"
     );
 
     /**
@@ -193,98 +195,136 @@ public final class ProxyDownloadSlice implements Slice {
                 Instant.now()
             );
 
-            return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
-                if (result.blocked()) {
+            // Cache-first: check local storage before network calls
+            // New format uses .zip extension; also check legacy key without it
+            final Key distKey = new Key.From(
+                "dist", vendor, pkg, version + ".zip"
+            );
+            final Key legacyKey = new Key.From("dist", vendor, pkg, version);
+            return this.storage.exists(distKey).thenCompose(cached -> {
+                if (cached) {
+                    return CompletableFuture.completedFuture(distKey);
+                }
+                // Fall back to legacy key (no .zip)
+                return this.storage.exists(legacyKey).thenApply(
+                    legacy -> legacy ? legacyKey : null
+                );
+            }).thenCompose(foundKey -> {
+                if (foundKey != null) {
                     EcsLogger.info("com.artipie.composer")
-                        .message("Cooldown blocked download")
+                        .message("Cache HIT for dist artifact")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
-                        .eventOutcome("blocked")
+                        .eventOutcome("cache_hit")
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .log();
-                    return CompletableFuture.completedFuture(
-                        CooldownResponses.forbidden(result.block().orElseThrow())
+                    this.emitEvent(packageName, version, headers);
+                    return this.storage.value(foundKey).thenApply(content ->
+                        ResponseBuilder.ok()
+                            .header("Content-Type", "application/zip")
+                            .body(content)
+                            .build()
                     );
                 }
-
-                // Look up original URL from cached metadata
-                return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
-                    if (originalUrl.isEmpty()) {
-                        EcsLogger.error("com.artipie.composer")
-                            .message("Could not find original URL for package")
+                // Cache miss — evaluate cooldown, then fetch from upstream
+                return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
+                    if (result.blocked()) {
+                        EcsLogger.info("com.artipie.composer")
+                            .message("Cooldown blocked download")
                             .eventCategory("repository")
                             .eventAction("proxy_download")
-                            .eventOutcome("failure")
+                            .eventOutcome("blocked")
                             .field("package.name", packageName)
                             .field("package.version", version)
                             .log();
                         return CompletableFuture.completedFuture(
-                            ResponseBuilder.notFound().build()
+                            CooldownResponses.forbidden(result.block().orElseThrow())
                         );
                     }
+                    return this.fetchAndCache(
+                        line, headers, packageName, version, distKey
+                    );
+                });
+            });
+        });
+    }
 
-                    final String orig = originalUrl.get();
-                    EcsLogger.info("com.artipie.composer")
-                        .message("Fetching from original URL")
+    /**
+     * Fetch dist from upstream, cache to storage, then return response.
+     */
+    private CompletableFuture<Response> fetchAndCache(
+        final RequestLine line,
+        final Headers headers,
+        final String packageName,
+        final String version,
+        final Key distKey
+    ) {
+        return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
+            if (originalUrl.isEmpty()) {
+                EcsLogger.error("com.artipie.composer")
+                    .message("Could not find original URL for package")
+                    .eventCategory("repository")
+                    .eventAction("proxy_download")
+                    .eventOutcome("failure")
+                    .field("package.name", packageName)
+                    .field("package.version", version)
+                    .log();
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.notFound().build()
+                );
+            }
+            final String orig = originalUrl.get();
+            final URI ouri = URI.create(orig);
+            final Slice target;
+            if (sameHost(this.remoteBase, ouri)) {
+                target = this.remote;
+            } else {
+                target = new UriClientSlice(this.clients, baseOf(ouri));
+            }
+            final String pathWithQuery = buildPathWithQuery(ouri);
+            final RequestLine newLine = RequestLine.from(
+                line.method().value() + " " + pathWithQuery + " " + line.version()
+            );
+            final Headers out = buildUpstreamHeaders(headers);
+            EcsLogger.debug("com.artipie.composer")
+                .message("Fetching dist from upstream")
+                .eventCategory("repository")
+                .eventAction("proxy_download")
+                .field("url.original", orig)
+                .log();
+            return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
+                if (!response.status().success()) {
+                    EcsLogger.warn("com.artipie.composer")
+                        .message("Upstream download failed")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
+                        .eventOutcome("failure")
                         .field("package.name", packageName)
                         .field("package.version", version)
-                        .field("url.original", orig)
+                        .field("http.response.status_code", response.status().code())
                         .log();
-
-                    final URI ouri = URI.create(orig);
-                    // Decide which slice to use: same-host -> reuse remote; other host -> build dynamic slice
-                    final Slice target;
-                    if (sameHost(this.remoteBase, ouri)) {
-                        target = this.remote;
-                    } else {
-                        // Build client for target host without applying remote auth
-                        target = new UriClientSlice(this.clients, baseOf(ouri));
-                    }
-
-                    // Build path+query request line for target host
-                    final String pathWithQuery = buildPathWithQuery(ouri);
-                    final RequestLine newLine = RequestLine.from(
-                        line.method().value() + " " + pathWithQuery + " " + line.version()
-                    );
-
-                    // Prepare minimal safe headers for upstream
-                    final Headers out = buildUpstreamHeaders(headers);
-
-                    // Fetch from original URL using chosen slice
-                    // Note: Headers are already cleaned by buildUpstreamHeaders
-                    EcsLogger.debug("com.artipie.composer")
-                        .message("Proxying to upstream")
+                    return CompletableFuture.completedFuture(response);
+                }
+                // Buffer content, save to storage, then return
+                return response.body().asBytesFuture().thenCompose(bytes -> {
+                    EcsLogger.info("com.artipie.composer")
+                        .message("Caching dist artifact to storage")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
-                        .field("url.domain", baseOf(ouri))
-                        .field("url.path", pathWithQuery)
+                        .eventOutcome("success")
+                        .field("package.name", packageName)
+                        .field("package.version", version)
+                        .field("file.size", bytes.length)
                         .log();
-                    return target.response(newLine, out, Content.EMPTY).thenApply(response -> {
-                        if (response.status().success()) {
-                            EcsLogger.info("com.artipie.composer")
-                                .message("Successfully downloaded package")
-                                .eventCategory("repository")
-                                .eventAction("proxy_download")
-                                .eventOutcome("success")
-                                .field("package.name", packageName)
-                                .field("package.version", version)
-                                .log();
-                            this.emitEvent(packageName, version, headers);
-                        } else {
-                            EcsLogger.warn("com.artipie.composer")
-                                .message("Download failed")
-                                .eventCategory("repository")
-                                .eventAction("proxy_download")
-                                .eventOutcome("failure")
-                                .field("package.name", packageName)
-                                .field("package.version", version)
-                                .field("http.response.status_code", response.status().code())
-                                .log();
-                        }
-                        return response;
+                    return this.storage.save(
+                        distKey, new Content.From(bytes)
+                    ).thenApply(unused -> {
+                        this.emitEvent(packageName, version, headers);
+                        return ResponseBuilder.ok()
+                            .header("Content-Type", "application/zip")
+                            .body(new Content.From(bytes))
+                            .build();
                     });
                 });
             });

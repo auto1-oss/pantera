@@ -15,9 +15,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import org.reactivestreams.Publisher;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
@@ -134,11 +138,46 @@ final class MultipartUpload {
     }
 
     /**
-     * Completes the upload.
+     * Maximum retry attempts for CompleteMultipartUpload.
+     */
+    private static final int MAX_COMPLETE_RETRIES = 3;
+
+    /**
+     * Completes the upload with retry on transient S3 errors.
      *
      * @return Completion stage which is completed when success response received from S3.
      */
     public CompletionStage<Void> complete() {
+        return this.completeWithRetry(0);
+    }
+
+    /**
+     * Attempt to complete multipart upload with retry on transient errors.
+     * @param attempt Current attempt number (0-based).
+     * @return Completion stage.
+     */
+    private CompletionStage<Void> completeWithRetry(final int attempt) {
+        return this.doComplete().handle((res, err) -> {
+            if (err != null && attempt < MAX_COMPLETE_RETRIES
+                && MultipartUpload.isRetryable(err)) {
+                final long delay = (long) Math.pow(2, attempt) * 500L;
+                return CompletableFuture.runAsync(
+                    () -> { },
+                    CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS)
+                ).thenCompose(v -> this.completeWithRetry(attempt + 1));
+            }
+            if (err != null) {
+                return CompletableFuture.<Void>failedFuture(err);
+            }
+            return CompletableFuture.completedFuture(res);
+        }).thenCompose(Function.identity());
+    }
+
+    /**
+     * Execute the CompleteMultipartUpload API call.
+     * @return Completion stage.
+     */
+    private CompletionStage<Void> doComplete() {
         return this.bucket.completeMultipartUpload(
             CompleteMultipartUploadRequest.builder()
                 .key(this.key.string())
@@ -155,6 +194,20 @@ final class MultipartUpload {
                 )
                 .build()
         ).thenApply(ignored -> null);
+    }
+
+    /**
+     * Check if the error is a retryable S3 transient error.
+     * @param err The throwable to check.
+     * @return True if this is a transient error that can be retried.
+     */
+    private static boolean isRetryable(final Throwable err) {
+        final Throwable cause = err.getCause() != null ? err.getCause() : err;
+        if (cause instanceof S3Exception) {
+            final int code = ((S3Exception) cause).statusCode();
+            return code == 503 || code == 500 || code == 429;
+        }
+        return false;
     }
 
     /**

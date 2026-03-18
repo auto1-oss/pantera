@@ -155,13 +155,12 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
         this.server.listen(ar -> {
             if (ar.succeeded()) {
                 EcsLogger.info("com.artipie.metrics.AsyncMetricsVerticle")
-                    .message("Async metrics server started")
+                    .message(String.format("Async metrics server started with cache TTL %dms", this.cacheTtlMs))
                     .eventCategory("configuration")
                     .eventAction("metrics_server_start")
                     .eventOutcome("success")
                     .field("destination.port", this.port)
                     .field("url.path", this.path)
-                    .field("cache.ttl.ms", this.cacheTtlMs)
                     .log();
                 startPromise.complete();
             } else {
@@ -263,7 +262,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     promise.fail(e);
                 }
             }
-        }, false, ar -> { // false = don't order results, allow concurrent execution
+        }, true, ar -> { // true = serialize scrapes to prevent cache overwrite race
             if (ar.succeeded()) {
                 respondWithMetrics(request, ar.result().toString(), false,
                     System.currentTimeMillis() - startTime);
@@ -333,12 +332,11 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
         // Log slow scrapes (> 1 second)
         if (scrapeDuration > 1000) {
             EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
-                .message("Slow metrics scrape detected")
+                .message(String.format("Slow metrics scrape detected: %d bytes", result.getBytes(StandardCharsets.UTF_8).length))
                 .eventCategory("metrics")
                 .eventAction("scrape")
                 .eventOutcome("slow")
                 .field("event.duration", scrapeDuration)
-                .field("metrics.size.bytes", result.getBytes(StandardCharsets.UTF_8).length)
                 .log();
         }
 

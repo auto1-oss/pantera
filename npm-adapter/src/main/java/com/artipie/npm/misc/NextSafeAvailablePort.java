@@ -5,6 +5,7 @@
 
 package com.artipie.npm.misc;
 
+import com.artipie.http.log.EcsLogger;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
@@ -80,7 +81,7 @@ public class NextSafeAvailablePort {
      * @param port The port to check for availability
      * @return If the ports is available
      */
-    @SuppressWarnings({"PMD.EmptyCatchBlock", "PMD.OnlyOneReturn"})
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.OnlyOneReturn"})
     private static boolean available(final int port) {
         try (ServerSocket sersock = new ServerSocket(port);
             DatagramSocket dgrmsock = new DatagramSocket(port)
@@ -88,8 +89,11 @@ public class NextSafeAvailablePort {
             sersock.setReuseAddress(true);
             dgrmsock.setReuseAddress(true);
             return true;
-        } catch (IOException exp) {
-            // should not be thrown
+        } catch (final IOException ex) {
+            EcsLogger.debug("com.artipie.npm")
+                .message("Port not available")
+                .error(ex)
+                .log();
         }
         return false;
     }

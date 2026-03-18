@@ -40,7 +40,8 @@ public final class ContentAsStream<T> {
      * CRITICAL: Without this, CompletableFuture.supplyAsync() uses ForkJoinPool.commonPool()
      * which can block Vert.x event loop threads, causing "Thread blocked" warnings.
      */
-    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newCachedThreadPool(
+    private static final ExecutorService BLOCKING_EXECUTOR = Executors.newFixedThreadPool(
+        Math.max(16, Runtime.getRuntime().availableProcessors() * 4),
         new ThreadFactoryBuilder()
             .setNameFormat(POOL_NAME + ".worker-%d")
             .setDaemon(true)

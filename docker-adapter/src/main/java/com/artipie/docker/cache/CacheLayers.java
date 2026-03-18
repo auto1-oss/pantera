@@ -8,6 +8,7 @@ import com.artipie.docker.Blob;
 import com.artipie.docker.Digest;
 import com.artipie.docker.Layers;
 import com.artipie.docker.asto.BlobSource;
+import com.artipie.http.log.EcsLogger;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -84,17 +85,20 @@ public final class CacheLayers implements Layers {
                     if (cached.isPresent()) {
                         result = CompletableFuture.completedFuture(cached);
                     } else {
-                        // Cache miss - fetch from origin (proxy)
+                        // Cache miss - fetch from origin, wrap with CachingBlob for streaming cache
                         final long startTime = System.currentTimeMillis();
                         result = this.origin.get(digest)
                             .thenApply(blob -> {
                                 final long duration = System.currentTimeMillis() - startTime;
                                 if (blob.isPresent()) {
                                     this.recordProxyMetric("success", duration);
+                                    return Optional.<Blob>of(
+                                        new CachingBlob(blob.get(), this.cache)
+                                    );
                                 } else {
                                     this.recordProxyMetric("not_found", duration);
+                                    return blob;
                                 }
-                                return blob;
                             })
                             .exceptionally(error -> {
                                 final long duration = System.currentTimeMillis() - startTime;
@@ -104,23 +108,33 @@ public final class CacheLayers implements Layers {
                             });
                     }
                 } else {
-                    // Cache error - fetch from origin
+                    // Cache error - fetch from origin, wrap with CachingBlob
                     final long startTime = System.currentTimeMillis();
                     result = this.origin.get(digest)
                         .thenApply(blob -> {
                             final long duration = System.currentTimeMillis() - startTime;
                             if (blob.isPresent()) {
                                 this.recordProxyMetric("success", duration);
+                                return Optional.<Blob>of(
+                                    new CachingBlob(blob.get(), this.cache)
+                                );
                             } else {
                                 this.recordProxyMetric("not_found", duration);
+                                return blob;
                             }
-                            return blob;
                         })
                         .exceptionally(error -> {
                             final long duration = System.currentTimeMillis() - startTime;
                             this.recordProxyMetric("exception", duration);
                             this.recordUpstreamErrorMetric(error);
-                            throw new java.util.concurrent.CompletionException(error);
+                            EcsLogger.warn("com.artipie.docker")
+                                .message("Both cache and origin failed for blob")
+                                .eventCategory("repository")
+                                .eventAction("blob_get")
+                                .eventOutcome("failure")
+                                .error(error)
+                                .log();
+                            return Optional.empty();
                         });
                 }
                 return result;
@@ -161,14 +175,17 @@ public final class CacheLayers implements Layers {
     /**
      * Record metric safely (only if metrics are enabled).
      */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"})
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
             if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            // Ignore metric errors - don't fail requests
+            EcsLogger.debug("com.artipie.docker")
+                .message("Failed to record metric")
+                .error(ex)
+                .log();
         }
     }
 }

@@ -471,32 +471,60 @@ public final class FileSystemBrowseSlice implements Slice {
      */
     private static Path getBasePath(final Storage storage) {
         try {
+            // Unwrap decorators to find SubStorage / FileStorage
+            final Storage unwrapped = unwrapDecorators(storage);
             // Check if this is SubStorage
-            if (storage.getClass().getSimpleName().equals("SubStorage")) {
+            if (unwrapped.getClass().getSimpleName().equals("SubStorage")) {
                 // Extract prefix from SubStorage
-                final Field prefixField = storage.getClass().getDeclaredField("prefix");
+                final Field prefixField = unwrapped.getClass().getDeclaredField("prefix");
                 prefixField.setAccessible(true);
-                final Key prefix = (Key) prefixField.get(storage);
-                
-                // Extract origin (wrapped FileStorage)
-                final Field originField = storage.getClass().getDeclaredField("origin");
+                final Key prefix = (Key) prefixField.get(unwrapped);
+
+                // Extract origin (wrapped FileStorage, possibly via DispatchedStorage)
+                final Field originField = unwrapped.getClass().getDeclaredField("origin");
                 originField.setAccessible(true);
-                final Storage origin = (Storage) originField.get(storage);
-                
+                final Storage origin = unwrapDecorators((Storage) originField.get(unwrapped));
+
                 // Get FileStorage base path
                 final Path basePath = getFileStoragePath(origin);
-                
+
                 // Combine base path + prefix
                 return basePath.resolve(prefix.string());
             } else {
                 // Direct FileStorage
-                return getFileStoragePath(storage);
+                return getFileStoragePath(unwrapped);
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to access storage base path", e);
         }
     }
-    
+
+    /**
+     * Unwrap decorator storages (DispatchedStorage, etc.) to find the
+     * underlying SubStorage or FileStorage.
+     *
+     * @param storage Storage to unwrap
+     * @return Unwrapped storage
+     */
+    private static Storage unwrapDecorators(final Storage storage) {
+        Storage current = storage;
+        for (int depth = 0; depth < 10; depth++) {
+            final String name = current.getClass().getSimpleName();
+            if ("DispatchedStorage".equals(name)) {
+                try {
+                    final Field delegate = current.getClass().getDeclaredField("delegate");
+                    delegate.setAccessible(true);
+                    current = (Storage) delegate.get(current);
+                } catch (Exception e) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        return current;
+    }
+
     /**
      * Extract the dir field from FileStorage.
      *

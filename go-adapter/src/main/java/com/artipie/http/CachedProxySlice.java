@@ -478,7 +478,13 @@ final class CachedProxySlice implements Slice {
                 .findFirst()
                 .map(Header::getValue)
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)));
-        } catch (final DateTimeParseException ignored) {
+        } catch (final DateTimeParseException ex) {
+            EcsLogger.warn("com.artipie.go")
+                .message("Failed to parse Last-Modified header: " + ex.getParsedString())
+                .eventCategory("http")
+                .eventAction("header_parse")
+                .eventOutcome("failure")
+                .log();
             return Optional.empty();
         }
     }

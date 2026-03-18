@@ -6,10 +6,10 @@
     <parent>
         <groupId>com.artipie</groupId>
         <artifactId>artipie</artifactId>
-        <version>1.20.12</version>
+        <version>1.22.0</version>
     </parent>
     <artifactId>asto</artifactId>
-    <version>1.20.12</version>
+    <version>1.22.0</version>
     <packaging>pom</packaging>
     <name>asto</name>
     <description>A simple Java storage</description>
@@ -21,20 +21,12 @@
     </properties>
     <modules>
         <module>asto-core</module>
-        <module>asto-redis</module>
         <module>asto-s3</module>
         <module>asto-vertx-file</module>
-        <module>asto-etcd</module>
         <module>asto-artipie</module>
     </modules>
     <dependencies>
         <!-- tests -->
-        <dependency>
-            <groupId>io.etcd</groupId>
-            <artifactId>jetcd-test</artifactId>
-            <version>0.5.11</version>
-            <scope>test</scope>
-        </dependency>
         <!-- TestNG compatibility layer with Junit5 -->
         <dependency>
             <groupId>com.github.testng-team</groupId>

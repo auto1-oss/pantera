@@ -138,9 +138,10 @@ public final class TrimPathSlice implements Slice {
         if (result == null || result.isEmpty()) {
             return "/";
         }
-        if (result.charAt(0) != '/') {
-            return '/' + result;
+        String path = result;
+        if (path.charAt(0) != '/') {
+            path = '/' + path;
         }
-        return result;
+        return path.replaceAll("/+", "/");
     }
 }

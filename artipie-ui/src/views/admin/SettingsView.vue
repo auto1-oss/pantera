@@ -1,0 +1,749 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import {
+  getSettings, updatePrefixes, updateSettingsSection,
+  getCooldownConfig, updateCooldownConfig, toggleAuthProvider,
+  updateAuthProviderConfig,
+} from '@/api/settings'
+import { useConfigStore } from '@/stores/config'
+import { useNotificationStore } from '@/stores/notifications'
+import AppLayout from '@/components/layout/AppLayout.vue'
+import Card from 'primevue/card'
+import Button from 'primevue/button'
+import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
+import InputSwitch from 'primevue/inputswitch'
+import AutoComplete from 'primevue/autocomplete'
+import Tag from 'primevue/tag'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
+import Dialog from 'primevue/dialog'
+import Textarea from 'primevue/textarea'
+import type { Settings, CooldownConfig } from '@/types'
+
+const config = useConfigStore()
+const notify = useNotificationStore()
+const uiVersion = __APP_VERSION__
+
+const settings = ref<Settings | null>(null)
+const loading = ref(true)
+const saving = ref<string | null>(null)
+
+// Editable state
+const prefixes = ref('')
+const jwtExpires = ref(false)
+const jwtExpirySeconds = ref(86400)
+const httpProxyTimeout = ref(60)
+const httpConnTimeout = ref(15000)
+const httpIdleTimeout = ref(30000)
+const httpFollowRedirects = ref(true)
+const httpAcquireTimeout = ref(30000)
+const httpMaxConns = ref(64)
+const httpMaxQueued = ref(256)
+const httpServerTimeout = ref('PT2M')
+
+// Cooldown config
+const cooldownConfig = ref<CooldownConfig | null>(null)
+const cooldownEnabled = ref(false)
+const cooldownAge = ref('7d')
+const newRepoType = ref('')
+
+// Proxy repo types for autocomplete
+const allProxyTypes = [
+  'maven-proxy', 'docker-proxy', 'npm-proxy', 'pypi-proxy',
+  'helm-proxy', 'go-proxy', 'nuget-proxy', 'debian-proxy',
+  'rpm-proxy', 'conda-proxy', 'gem-proxy', 'conan-proxy',
+  'hex-proxy', 'php-proxy', 'file-proxy',
+]
+const proxyTypeSuggestions = ref<string[]>([])
+function searchProxyTypes(event: { query: string }) {
+  const q = (event.query ?? '').toLowerCase()
+  const existing = new Set(Object.keys(cooldownConfig.value?.repo_types ?? {}))
+  const available = allProxyTypes.filter(t => !existing.has(t))
+  if (!q) {
+    proxyTypeSuggestions.value = available
+  } else {
+    proxyTypeSuggestions.value = available.filter(t => t.includes(q))
+  }
+}
+
+// External links
+const grafanaUrl = ref('')
+
+onMounted(async () => {
+  try {
+    const [s, cd] = await Promise.all([
+      getSettings(),
+      getCooldownConfig().catch(() => null),
+    ])
+    settings.value = s
+    prefixes.value = (s.prefixes ?? []).join(', ')
+    grafanaUrl.value = config.grafanaUrl
+    if (s.jwt) {
+      jwtExpires.value = s.jwt.expires
+      jwtExpirySeconds.value = s.jwt.expiry_seconds
+    }
+    if (s.http_client) {
+      httpProxyTimeout.value = s.http_client.proxy_timeout
+      httpConnTimeout.value = s.http_client.connection_timeout
+      httpIdleTimeout.value = s.http_client.idle_timeout
+      httpFollowRedirects.value = s.http_client.follow_redirects
+      httpAcquireTimeout.value = s.http_client.connection_acquire_timeout
+      httpMaxConns.value = s.http_client.max_connections_per_destination
+      httpMaxQueued.value = s.http_client.max_requests_queued_per_destination
+    }
+    if (s.http_server) {
+      httpServerTimeout.value = s.http_server.request_timeout
+    }
+    if (cd) {
+      cooldownConfig.value = cd
+      cooldownEnabled.value = cd.enabled
+      cooldownAge.value = cd.minimum_allowed_age
+    }
+  } catch {
+    notify.error('Failed to load settings')
+  } finally {
+    loading.value = false
+  }
+})
+
+const jwtExpiryHours = computed(() => {
+  const s = jwtExpirySeconds.value
+  if (s >= 86400 && s % 86400 === 0) return `${s / 86400}d`
+  if (s >= 3600 && s % 3600 === 0) return `${s / 3600}h`
+  if (s >= 60 && s % 60 === 0) return `${s / 60}m`
+  return `${s}s`
+})
+
+const repoTypeOverrides = computed(() => {
+  if (!cooldownConfig.value?.repo_types) return []
+  return Object.entries(cooldownConfig.value.repo_types).map(([name, cfg]) => ({
+    name,
+    enabled: cfg.enabled,
+    minimum_allowed_age: cfg.minimum_allowed_age ?? cooldownAge.value,
+  }))
+})
+
+async function savePrefixes() {
+  saving.value = 'prefixes'
+  try {
+    const list = prefixes.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    await updatePrefixes(list)
+    notify.success('Prefixes updated')
+  } catch {
+    notify.error('Failed to update prefixes')
+  } finally {
+    saving.value = null
+  }
+}
+
+async function saveSection(section: string, data: Record<string, unknown>) {
+  saving.value = section
+  try {
+    await updateSettingsSection(section, data)
+    notify.success(`${section} settings saved`)
+  } catch {
+    notify.error(`Failed to save ${section} settings`)
+  } finally {
+    saving.value = null
+  }
+}
+
+function saveJwt() {
+  saveSection('jwt', {
+    expires: jwtExpires.value,
+    expiry_seconds: jwtExpirySeconds.value,
+  })
+}
+
+function saveHttpClient() {
+  saveSection('http_client', {
+    proxy_timeout: httpProxyTimeout.value,
+    connection_timeout: httpConnTimeout.value,
+    idle_timeout: httpIdleTimeout.value,
+    follow_redirects: httpFollowRedirects.value,
+    connection_acquire_timeout: httpAcquireTimeout.value,
+    max_connections_per_destination: httpMaxConns.value,
+    max_requests_queued_per_destination: httpMaxQueued.value,
+  })
+}
+
+function saveHttpServer() {
+  saveSection('http_server', {
+    request_timeout: httpServerTimeout.value,
+  })
+}
+
+async function handleToggleProvider(prov: { id: number; enabled: boolean }) {
+  try {
+    await toggleAuthProvider(prov.id, !prov.enabled)
+    prov.enabled = !prov.enabled
+    notify.success(`Provider ${prov.enabled ? 'enabled' : 'disabled'}`)
+  } catch {
+    notify.error('Failed to toggle provider')
+  }
+}
+
+async function saveCooldown() {
+  saving.value = 'cooldown'
+  try {
+    const payload: CooldownConfig = {
+      enabled: cooldownEnabled.value,
+      minimum_allowed_age: cooldownAge.value,
+      repo_types: {},
+    }
+    if (cooldownConfig.value?.repo_types) {
+      payload.repo_types = { ...cooldownConfig.value.repo_types }
+    }
+    await updateCooldownConfig(payload)
+    cooldownConfig.value = payload
+    notify.success('Cooldown settings saved (hot reloaded)')
+  } catch {
+    notify.error('Failed to save cooldown settings')
+  } finally {
+    saving.value = null
+  }
+}
+
+function ensureCooldownConfig(): CooldownConfig {
+  if (!cooldownConfig.value) {
+    cooldownConfig.value = {
+      enabled: cooldownEnabled.value,
+      minimum_allowed_age: cooldownAge.value,
+      repo_types: {},
+    }
+  }
+  return cooldownConfig.value
+}
+
+function toggleRepoType(name: string) {
+  const cfg = ensureCooldownConfig()
+  const existing = cfg.repo_types ?? {}
+  const current = existing[name]
+  if (!current) return
+  cooldownConfig.value = {
+    ...cfg,
+    repo_types: { ...existing, [name]: { ...current, enabled: !current.enabled } },
+  }
+}
+
+function updateRepoTypeAge(name: string, age: string) {
+  const cfg = ensureCooldownConfig()
+  const existing = cfg.repo_types ?? {}
+  const current = existing[name]
+  if (!current) return
+  cooldownConfig.value = {
+    ...cfg,
+    repo_types: { ...existing, [name]: { ...current, minimum_allowed_age: age } },
+  }
+}
+
+function removeRepoType(name: string) {
+  if (!cooldownConfig.value?.repo_types) return
+  const copy = { ...cooldownConfig.value.repo_types }
+  delete copy[name]
+  cooldownConfig.value = { ...cooldownConfig.value, repo_types: copy }
+}
+
+function addRepoType() {
+  const name = newRepoType.value.trim().toLowerCase()
+  if (!name) return
+  const cfg = ensureCooldownConfig()
+  const existing = cfg.repo_types ?? {}
+  cooldownConfig.value = {
+    ...cfg,
+    repo_types: {
+      ...existing,
+      [name]: { enabled: true, minimum_allowed_age: cooldownAge.value },
+    },
+  }
+  newRepoType.value = ''
+}
+
+function saveExternalLinks() {
+  config.grafanaUrl = grafanaUrl.value
+  notify.success('External links updated')
+}
+
+const SENSITIVE_KEYS = ['secret', 'password', 'token', 'key', 'credential']
+function isSensitiveKey(key: string): boolean {
+  const lower = key.toLowerCase()
+  return SENSITIVE_KEYS.some(s => lower.includes(s))
+}
+function formatConfigVal(val: unknown): string {
+  if (val === null || val === undefined) return '—'
+  if (typeof val === 'object') return JSON.stringify(val)
+  return String(val)
+}
+
+// Auth provider editing
+const editingProvider = ref<{ id: number; type: string; config: Record<string, unknown> } | null>(null)
+const editProviderVisible = ref(false)
+const editProviderFields = ref<{ key: string; value: string }[]>([])
+const editProviderAdvanced = ref(false)
+const editProviderJson = ref('')
+const savingProvider = ref(false)
+
+function openEditProvider(prov: { id: number; type: string; config?: Record<string, unknown> }) {
+  editingProvider.value = { id: prov.id, type: prov.type, config: prov.config ?? {} }
+  const cfg = prov.config ?? {}
+  editProviderFields.value = Object.entries(cfg).map(([key, value]) => ({
+    key,
+    value: typeof value === 'object' ? JSON.stringify(value) : String(value ?? ''),
+  }))
+  editProviderJson.value = JSON.stringify(cfg, null, 2)
+  editProviderAdvanced.value = false
+  editProviderVisible.value = true
+}
+
+function addProviderField() {
+  editProviderFields.value.push({ key: '', value: '' })
+}
+
+function removeProviderField(index: number) {
+  editProviderFields.value.splice(index, 1)
+}
+
+async function saveProviderConfig() {
+  if (!editingProvider.value) return
+  savingProvider.value = true
+  try {
+    let cfg: Record<string, unknown>
+    if (editProviderAdvanced.value) {
+      cfg = JSON.parse(editProviderJson.value)
+    } else {
+      cfg = {}
+      for (const f of editProviderFields.value) {
+        if (f.key) {
+          try { cfg[f.key] = JSON.parse(f.value) } catch { cfg[f.key] = f.value }
+        }
+      }
+    }
+    await updateAuthProviderConfig(editingProvider.value.id, cfg)
+    // Update local state
+    if (settings.value?.credentials) {
+      const p = (settings.value.credentials as any[]).find((c: any) => c.id === editingProvider.value!.id)
+      if (p) p.config = cfg
+    }
+    notify.success('Provider config updated')
+    editProviderVisible.value = false
+  } catch (e: unknown) {
+    notify.error('Failed to update provider config', e instanceof Error ? e.message : '')
+  } finally {
+    savingProvider.value = false
+  }
+}
+</script>
+
+<template>
+  <AppLayout>
+    <div class="max-w-5xl space-y-6">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">System Settings</h1>
+
+      <!-- Server Info -->
+      <Card v-if="settings" class="shadow-sm">
+        <template #title>Server Info</template>
+        <template #content>
+          <div class="grid grid-cols-2 gap-4 text-sm">
+            <div><span class="text-gray-500">Port:</span> {{ settings.port }}</div>
+            <div><span class="text-gray-500">Version:</span> {{ settings.version?.includes('${') ? 'unknown' : settings.version }} <span class="text-gray-400">(UI {{ uiVersion }})</span></div>
+            <div>
+              <span class="text-gray-500">Database:</span>
+              <Tag
+                :value="settings.database?.configured ? 'Connected' : 'Not configured'"
+                :severity="settings.database?.configured ? 'success' : 'warn'"
+                class="ml-2"
+              />
+            </div>
+            <div>
+              <span class="text-gray-500">Valkey Cache:</span>
+              <Tag
+                :value="settings.caches?.valkey_configured ? 'Connected' : 'Not configured'"
+                :severity="settings.caches?.valkey_configured ? 'success' : 'warn'"
+                class="ml-2"
+              />
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Prefixes -->
+      <Card class="shadow-sm">
+        <template #title>Global Path Prefixes</template>
+        <template #content>
+          <p class="text-sm text-gray-500 mb-3">
+            Comma-separated list of path prefixes for repository routing
+          </p>
+          <div class="flex gap-3">
+            <InputText v-model="prefixes" class="flex-1" placeholder="e.g. maven, docker, npm" />
+            <Button
+              label="Save"
+              icon="pi pi-save"
+              :loading="saving === 'prefixes'"
+              @click="savePrefixes"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- JWT -->
+      <Card class="shadow-sm">
+        <template #title>JWT / Session</template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="jwtExpires" />
+              <span class="text-sm">Tokens expire</span>
+            </div>
+            <div v-if="jwtExpires" class="flex items-center gap-3">
+              <label class="text-sm text-gray-500 w-40">Expiry (seconds)</label>
+              <InputNumber v-model="jwtExpirySeconds" :min="60" :max="2592000" class="flex-1" />
+              <Tag :value="jwtExpiryHours" severity="info" />
+            </div>
+            <Button
+              label="Save JWT"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'jwt'"
+              @click="saveJwt"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- Authentication Providers -->
+      <Card v-if="settings?.credentials" class="shadow-sm">
+        <template #title>Authentication Providers</template>
+        <template #content>
+          <div
+            v-if="settings.credentials.length === 0"
+            class="text-gray-400 text-sm"
+          >
+            No authentication providers configured
+          </div>
+          <DataTable v-else :value="settings.credentials" stripedRows class="text-sm">
+            <Column field="type" header="Type" style="width: 150px">
+              <template #body="{ data }">
+                <span class="font-mono text-xs font-medium text-gray-200 whitespace-nowrap">{{ data.type }}</span>
+              </template>
+            </Column>
+            <Column field="priority" header="Priority" style="width: 70px; text-align: center" />
+            <Column field="enabled" header="Status" style="width: 80px">
+              <template #body="{ data }">
+                <InputSwitch
+                  :modelValue="data.enabled"
+                  @update:modelValue="handleToggleProvider(data)"
+                />
+              </template>
+            </Column>
+            <Column header="Configuration">
+              <template #body="{ data }">
+                <div v-if="data.config && Object.keys(data.config).length > 0" class="flex flex-wrap gap-x-6 gap-y-1">
+                  <div
+                    v-for="(val, key) in data.config"
+                    :key="key"
+                    class="flex items-center gap-1.5 text-xs"
+                  >
+                    <span class="text-gray-500 font-mono">{{ key }}:</span>
+                    <span class="text-gray-300 font-mono">{{ isSensitiveKey(String(key)) ? '••••••••' : formatConfigVal(val) }}</span>
+                  </div>
+                </div>
+                <span v-else class="text-gray-500 text-xs">—</span>
+              </template>
+            </Column>
+            <Column header="" style="width: 50px">
+              <template #body="{ data }">
+                <Button
+                  icon="pi pi-pencil"
+                  text
+                  size="small"
+                  @click="openEditProvider(data)"
+                />
+              </template>
+            </Column>
+          </DataTable>
+          <p class="text-xs text-gray-400 mt-3">
+            Toggle the switch to enable/disable providers. Click the edit button to modify config.
+            Secret values are masked in the table but editable in the dialog.
+          </p>
+
+          <!-- Edit Provider Dialog -->
+          <Dialog v-model:visible="editProviderVisible" :header="`Edit ${editingProvider?.type ?? ''} Configuration`" modal class="w-[600px]">
+            <div class="space-y-4">
+              <div class="flex items-center gap-2 mb-3">
+                <input type="checkbox" id="provAdvMode" v-model="editProviderAdvanced" class="cursor-pointer" />
+                <label for="provAdvMode" class="text-sm text-gray-500 cursor-pointer">Advanced mode (raw JSON)</label>
+              </div>
+
+              <!-- Advanced JSON mode -->
+              <div v-if="editProviderAdvanced">
+                <Textarea v-model="editProviderJson" rows="10" class="w-full font-mono text-sm" />
+              </div>
+
+              <!-- Form-based editing -->
+              <div v-else class="space-y-2">
+                <div
+                  v-for="(field, idx) in editProviderFields"
+                  :key="idx"
+                  class="flex items-center gap-2"
+                >
+                  <InputText
+                    v-model="field.key"
+                    placeholder="Key"
+                    class="w-40 text-sm font-mono"
+                  />
+                  <InputText
+                    v-model="field.value"
+                    placeholder="Value"
+                    class="flex-1 text-sm"
+                    :type="field.key.toLowerCase().includes('secret') || field.key.toLowerCase().includes('password') ? 'password' : 'text'"
+                  />
+                  <Button
+                    icon="pi pi-trash"
+                    text
+                    size="small"
+                    severity="danger"
+                    @click="removeProviderField(idx)"
+                  />
+                </div>
+                <Button
+                  label="Add Field"
+                  icon="pi pi-plus"
+                  text
+                  size="small"
+                  @click="addProviderField"
+                />
+              </div>
+            </div>
+            <template #footer>
+              <Button label="Cancel" severity="secondary" text @click="editProviderVisible = false" />
+              <Button label="Save" icon="pi pi-save" :loading="savingProvider" @click="saveProviderConfig" />
+            </template>
+          </Dialog>
+        </template>
+      </Card>
+
+      <!-- Cooldown Configuration -->
+      <Card class="shadow-sm">
+        <template #title>Cooldown Configuration</template>
+        <template #subtitle>
+          Controls artifact freshness enforcement for proxy repositories.
+          Changes apply immediately (hot reload).
+        </template>
+        <template #content>
+          <div class="space-y-5">
+            <!-- Global toggle -->
+            <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div>
+                <div class="font-medium text-sm">Global Cooldown</div>
+                <div class="text-xs text-gray-500">Enable cooldown enforcement for all proxy repos</div>
+              </div>
+              <InputSwitch v-model="cooldownEnabled" />
+            </div>
+
+            <!-- Global age -->
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-500 w-44">Default minimum age</label>
+              <InputText
+                v-model="cooldownAge"
+                class="w-32"
+                placeholder="7d"
+              />
+              <span class="text-xs text-gray-400">e.g. 7d, 24h, 30m</span>
+            </div>
+
+            <!-- Per-repo-type overrides -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="text-sm font-medium">Per-Repository-Type Overrides</h4>
+              </div>
+              <div v-if="repoTypeOverrides.length === 0" class="text-gray-400 text-xs mb-3">
+                No per-type overrides. Global settings apply to all proxy repo types.
+              </div>
+              <div v-else class="space-y-2 mb-3">
+                <div
+                  v-for="rt in repoTypeOverrides"
+                  :key="rt.name"
+                  class="flex items-center gap-3 p-2 bg-gray-50 dark:bg-gray-800 rounded"
+                >
+                  <Tag :value="rt.name" class="min-w-[120px]" />
+                  <InputSwitch
+                    :modelValue="rt.enabled"
+                    @update:modelValue="toggleRepoType(rt.name)"
+                  />
+                  <span class="text-xs text-gray-500">{{ rt.enabled ? 'Enabled' : 'Disabled' }}</span>
+                  <InputText
+                    :modelValue="rt.minimum_allowed_age"
+                    class="w-24 text-sm"
+                    placeholder="7d"
+                    @update:modelValue="(v: string) => updateRepoTypeAge(rt.name, v)"
+                  />
+                  <Button
+                    icon="pi pi-trash"
+                    text
+                    size="small"
+                    severity="danger"
+                    @click="removeRepoType(rt.name)"
+                  />
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <AutoComplete
+                  v-model="newRepoType"
+                  :suggestions="proxyTypeSuggestions"
+                  @complete="searchProxyTypes"
+                  :completeOnFocus="true"
+                  class="w-56 text-sm"
+                  inputClass="w-full"
+                  placeholder="Select proxy type..."
+                  @keyup.enter="addRepoType"
+                />
+                <Button
+                  label="Add Override"
+                  icon="pi pi-plus"
+                  size="small"
+                  outlined
+                  @click="addRepoType"
+                />
+              </div>
+            </div>
+
+            <Button
+              label="Save Cooldown"
+              icon="pi pi-save"
+              :loading="saving === 'cooldown'"
+              @click="saveCooldown"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- HTTP Client -->
+      <Card class="shadow-sm">
+        <template #title>HTTP Client (Proxy)</template>
+        <template #content>
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Proxy Timeout (s)</label>
+                <InputNumber v-model="httpProxyTimeout" :min="1" :max="600" class="w-full" />
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Connection Timeout (ms)</label>
+                <InputNumber v-model="httpConnTimeout" :min="1000" :max="120000" class="w-full" />
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Idle Timeout (ms)</label>
+                <InputNumber v-model="httpIdleTimeout" :min="0" :max="300000" class="w-full" />
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Acquire Timeout (ms)</label>
+                <InputNumber v-model="httpAcquireTimeout" :min="0" :max="300000" class="w-full" />
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Max Connections / Dest</label>
+                <InputNumber v-model="httpMaxConns" :min="1" :max="2048" class="w-full" />
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Max Queued / Dest</label>
+                <InputNumber v-model="httpMaxQueued" :min="1" :max="10000" class="w-full" />
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="httpFollowRedirects" />
+              <span class="text-sm">Follow redirects</span>
+            </div>
+            <Button
+              label="Save HTTP Client"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'http_client'"
+              @click="saveHttpClient"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- HTTP Server -->
+      <Card class="shadow-sm">
+        <template #title>HTTP Server</template>
+        <template #content>
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm text-gray-500 block mb-1">
+                Request Timeout (ISO-8601, e.g. PT2M)
+              </label>
+              <InputText v-model="httpServerTimeout" class="w-full" placeholder="PT2M" />
+            </div>
+            <Button
+              label="Save HTTP Server"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'http_server'"
+              @click="saveHttpServer"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- Metrics (read-only) -->
+      <Card v-if="settings?.metrics" class="shadow-sm">
+        <template #title>Metrics</template>
+        <template #content>
+          <div class="space-y-2 text-sm">
+            <div>
+              <span class="text-gray-500">Enabled:</span>
+              <Tag
+                :value="settings.metrics.enabled ? 'Yes' : 'No'"
+                :severity="settings.metrics.enabled ? 'success' : 'warn'"
+                class="ml-2"
+              />
+            </div>
+            <div v-if="settings.metrics.enabled">
+              <span class="text-gray-500">Endpoint:</span>
+              <span class="font-mono ml-2">{{ settings.metrics.endpoint }}</span>
+              <span class="text-gray-400 ml-2">port {{ settings.metrics.port }}</span>
+            </div>
+            <div v-if="settings.metrics.enabled" class="flex gap-2">
+              <Tag v-if="settings.metrics.jvm" value="JVM" severity="info" />
+              <Tag v-if="settings.metrics.http" value="HTTP" severity="info" />
+              <Tag v-if="settings.metrics.storage" value="Storage" severity="info" />
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- External Links -->
+      <Card class="shadow-sm">
+        <template #title>External Links</template>
+        <template #content>
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm text-gray-500 block mb-1">Grafana URL</label>
+              <InputText v-model="grafanaUrl" class="w-full" placeholder="https://grafana.example.com" />
+            </div>
+            <div>
+              <span class="text-sm text-gray-500">Health Endpoint:</span>
+              <a
+                :href="`${config.apiBaseUrl}/health`"
+                target="_blank"
+                class="text-blue-500 hover:underline ml-2 text-sm"
+              >
+                {{ config.apiBaseUrl }}/health
+              </a>
+            </div>
+            <Button
+              label="Save Links"
+              icon="pi pi-save"
+              size="small"
+              @click="saveExternalLinks"
+            />
+          </div>
+        </template>
+      </Card>
+    </div>
+  </AppLayout>
+</template>

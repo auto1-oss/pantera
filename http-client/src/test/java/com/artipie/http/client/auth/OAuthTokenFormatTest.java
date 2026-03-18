@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 class OAuthTokenFormatTest {
 
     @Test
-    void shouldReadToken() {
+    void shouldReadAccessToken() {
         MatcherAssert.assertThat(
             new OAuthTokenFormat().token(
                 String.join(
@@ -30,6 +30,26 @@ class OAuthTokenFormatTest {
                 ).getBytes()
             ),
             new IsEqual<>("mF_9.B5f-4.1JqM")
+        );
+    }
+
+    @Test
+    void shouldReadDockerTokenField() {
+        MatcherAssert.assertThat(
+            new OAuthTokenFormat().token(
+                "{\"token\":\"dhi-registry-token-value\"}".getBytes()
+            ),
+            new IsEqual<>("dhi-registry-token-value")
+        );
+    }
+
+    @Test
+    void shouldPreferAccessTokenOverToken() {
+        MatcherAssert.assertThat(
+            new OAuthTokenFormat().token(
+                "{\"access_token\":\"preferred\",\"token\":\"fallback\"}".getBytes()
+            ),
+            new IsEqual<>("preferred")
         );
     }
 }

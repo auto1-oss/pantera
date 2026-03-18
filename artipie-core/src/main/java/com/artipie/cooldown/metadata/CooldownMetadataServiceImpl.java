@@ -294,13 +294,13 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             }
 
             EcsLogger.debug("com.artipie.cooldown.metadata")
-                .message("Evaluating cooldown for versions")
+                .message(String.format(
+                    "Evaluating cooldown for versions: %d total, %d to evaluate",
+                    allVersions.size(), versionsToEvaluate.size()))
                 .eventCategory("cooldown")
                 .eventAction("metadata_filter")
                 .field("repository.type", repoType)
                 .field("package.name", packageName)
-                .field("versions.total", allVersions.size())
-                .field("versions.evaluating", versionsToEvaluate.size())
                 .log();
 
             return new FilterContext<>(
@@ -349,12 +349,12 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 }
 
                 EcsLogger.debug("com.artipie.cooldown.metadata")
-                    .message("Cooldown evaluation complete")
+                    .message(String.format(
+                        "Cooldown evaluation complete: %d versions blocked", blockedVersions.size()))
                     .eventCategory("cooldown")
                     .eventAction("metadata_filter")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
-                    .field("versions.blocked", blockedVersions.size())
                     .log();
 
                 // Note: Blocked versions gauge is updated by JdbcCooldownService on block/unblock
@@ -383,12 +383,12 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     if (newLatest.isPresent()) {
                         filtered = ctx.filter.updateLatest(filtered, newLatest.get());
                         EcsLogger.debug("com.artipie.cooldown.metadata")
-                            .message("Updated latest version (by release date)")
+                            .message(String.format(
+                                "Updated latest version (by release date): %s -> %s",
+                                currentLatest.get(), newLatest.get()))
                             .eventCategory("cooldown")
                             .eventAction("metadata_filter")
                             .field("package.name", ctx.packageName)
-                            .field("latest.old", currentLatest.get())
-                            .field("latest.new", newLatest.get())
                             .log();
                     }
                 }
@@ -399,15 +399,15 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 // Log performance
                 final long durationMs = (System.nanoTime() - ctx.startTime) / 1_000_000;
                 EcsLogger.info("com.artipie.cooldown.metadata")
-                    .message("Metadata filtering complete")
+                    .message(String.format(
+                        "Metadata filtering complete: %d total versions, %d blocked",
+                        ctx.allVersions.size(), blockedVersions.size()))
                     .eventCategory("cooldown")
                     .eventAction("metadata_filter")
                     .eventOutcome("success")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
-                    .field("versions.total", ctx.allVersions.size())
-                    .field("versions.blocked", blockedVersions.size())
-                    .field("duration_ms", durationMs)
+                    .field("event.duration", durationMs * 1_000_000L)
                     .log();
 
                 // Record metrics via CooldownMetrics
@@ -501,10 +501,10 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         if (!releaseDates.isEmpty()) {
             ((MetadataAwareInspector) inspector).preloadReleaseDates(releaseDates);
             EcsLogger.debug("com.artipie.cooldown.metadata")
-                .message("Preloaded release dates from metadata")
+                .message(String.format(
+                    "Preloaded %d release dates from metadata", releaseDates.size()))
                 .eventCategory("cooldown")
                 .eventAction("metadata_filter")
-                .field("dates.count", releaseDates.size())
                 .log();
         }
     }

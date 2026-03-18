@@ -150,4 +150,37 @@ final class HttpClientSettingsTest {
         assertThat(HttpClientSettings.DEFAULT_MAX_REQUESTS_QUEUED_PER_DESTINATION, equalTo(256));
         assertThat(HttpClientSettings.DEFAULT_PROXY_TIMEOUT, equalTo(60L));
     }
+
+    @Test
+    @DisplayName("Default Jetty buffer pool settings match constants")
+    void defaultJettyBufferPoolSettings() {
+        final HttpClientSettings settings = new HttpClientSettings();
+        assertThat(
+            "Default bucket size should be 1024",
+            settings.jettyBucketSize(),
+            equalTo(HttpClientSettings.DEFAULT_JETTY_BUCKET_SIZE)
+        );
+        assertThat(
+            "Default direct memory should be 2 GB",
+            settings.jettyDirectMemory(),
+            equalTo(HttpClientSettings.DEFAULT_JETTY_DIRECT_MEMORY)
+        );
+        assertThat(
+            "Default heap memory should be 1 GB",
+            settings.jettyHeapMemory(),
+            equalTo(HttpClientSettings.DEFAULT_JETTY_HEAP_MEMORY)
+        );
+    }
+
+    @Test
+    @DisplayName("Jetty buffer pool settings can be customized via fluent setters")
+    void jettyBufferPoolCanBeCustomized() {
+        final HttpClientSettings settings = new HttpClientSettings()
+            .setJettyBucketSize(512)
+            .setJettyDirectMemory(4L * 1024L * 1024L * 1024L)
+            .setJettyHeapMemory(2L * 1024L * 1024L * 1024L);
+        assertThat(settings.jettyBucketSize(), equalTo(512));
+        assertThat(settings.jettyDirectMemory(), equalTo(4L * 1024L * 1024L * 1024L));
+        assertThat(settings.jettyHeapMemory(), equalTo(2L * 1024L * 1024L * 1024L));
+    }
 }

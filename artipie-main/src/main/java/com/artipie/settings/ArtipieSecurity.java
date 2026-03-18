@@ -7,11 +7,13 @@ package com.artipie.settings;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.asto.Storage;
 import com.artipie.http.auth.Authentication;
+import com.artipie.security.policy.CachedDbPolicy;
 import com.artipie.security.policy.PoliciesLoader;
 import com.artipie.security.policy.Policy;
 import com.artipie.security.policy.YamlPolicyConfig;
 import com.artipie.settings.cache.CachedUsers;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * Artipie security: authentication and permissions policy.
@@ -78,8 +80,23 @@ public interface ArtipieSecurity {
          */
         public FromYaml(final YamlMapping settings, final Authentication auth,
             final Optional<Storage> asto) {
+            this(settings, auth, asto, null);
+        }
+
+        /**
+         * Ctor with optional database source. When a DataSource is provided,
+         * {@link CachedDbPolicy} is used instead of YAML-backed policy.
+         * @param settings Yaml settings
+         * @param auth Authentication instance
+         * @param asto Policy storage
+         * @param dataSource Database data source, nullable
+         */
+        public FromYaml(final YamlMapping settings, final Authentication auth,
+            final Optional<Storage> asto, final DataSource dataSource) {
             this.auth = auth;
-            this.plc = FromYaml.initPolicy(settings);
+            this.plc = dataSource != null
+                ? new CachedDbPolicy(dataSource)
+                : FromYaml.initPolicy(settings);
             this.asto = asto;
         }
 

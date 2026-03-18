@@ -229,6 +229,7 @@ public final class Goproxy {
     @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
     private Single<Path> archive(final String prefix, final String target) throws IOException {
         final Path zip = Files.createTempFile("", ".zip");
+        zip.toFile().deleteOnExit();
         return this.storage.list(new Key.From(prefix))
             .flatMapCompletable(
                 keys -> {

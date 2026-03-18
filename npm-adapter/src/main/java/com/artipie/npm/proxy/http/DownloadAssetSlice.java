@@ -181,8 +181,11 @@ public final class DownloadAssetSlice implements Slice {
                         if (!Strings.isNullOrEmpty(lm)) {
                             millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
                         }
-                    } catch (final Exception ignored) {
-                        // ignore parse failures
+                    } catch (final Exception ex) {
+                        EcsLogger.debug("com.artipie.npm")
+                            .message("Failed to parse asset lastModified for proxy event")
+                            .error(ex)
+                            .log();
                     }
                     queue.add(
                         new ProxyArtifactEvent(
@@ -242,13 +245,13 @@ public final class DownloadAssetSlice implements Slice {
                 if (result.blocked()) {
                     final var block = result.block().orElseThrow();
                     EcsLogger.info("com.artipie.npm")
-                        .message("Asset download blocked by cooldown")
+                        .message(String.format(
+                            "Asset download blocked by cooldown: reason=%s, blockedUntil=%s",
+                            block.reason(), block.blockedUntil()))
                         .eventCategory("cooldown")
                         .eventAction("asset_blocked")
                         .field("package.name", req.artifact())
                         .field("package.version", req.version())
-                        .field("block.reason", block.reason().toString())
-                        .field("block.blockedUntil", block.blockedUntil().toString())
                         .log();
                     return CompletableFuture.completedFuture(
                         CooldownResponses.forbidden(block)
@@ -268,8 +271,11 @@ public final class DownloadAssetSlice implements Slice {
                             if (!Strings.isNullOrEmpty(lm)) {
                                 millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
                             }
-                        } catch (final Exception ignored) {
-                            // ignore parse failures
+                        } catch (final Exception ex) {
+                            EcsLogger.debug("com.artipie.npm")
+                                .message("Failed to parse asset lastModified for proxy event")
+                                .error(ex)
+                                .log();
                         }
                         queue.add(
                             new ProxyArtifactEvent(

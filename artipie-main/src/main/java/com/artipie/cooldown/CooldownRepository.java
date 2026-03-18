@@ -17,11 +17,11 @@ import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
 
-final class CooldownRepository {
+public final class CooldownRepository {
 
     private final DataSource dataSource;
 
-    CooldownRepository(final DataSource dataSource) {
+    public CooldownRepository(final DataSource dataSource) {
         this.dataSource = Objects.requireNonNull(dataSource);
     }
 
@@ -111,31 +111,76 @@ final class CooldownRepository {
         }
     }
 
-    void updateStatus(
-        final long blockId,
-        final BlockStatus status,
-        final Optional<Instant> unblockedAt,
-        final Optional<String> unblockedBy
-    ) {
-        final String sql =
-            "UPDATE artifact_cooldowns SET status = ?, unblocked_at = ?, unblocked_by = ? WHERE id = ?";
+    /**
+     * Delete a cooldown block record by id.
+     * Callers must log the record details before calling this method.
+     * @param blockId Record id to delete
+     */
+    void deleteBlock(final long blockId) {
+        final String sql = "DELETE FROM artifact_cooldowns WHERE id = ?";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, status.name());
-            if (unblockedAt.isPresent()) {
-                stmt.setLong(2, unblockedAt.get().toEpochMilli());
-            } else {
-                stmt.setNull(2, java.sql.Types.BIGINT);
-            }
-            if (unblockedBy.isPresent()) {
-                stmt.setString(3, unblockedBy.get());
-            } else {
-                stmt.setNull(3, java.sql.Types.VARCHAR);
-            }
-            stmt.setLong(4, blockId);
+            stmt.setLong(1, blockId);
             stmt.executeUpdate();
         } catch (final SQLException err) {
-            throw new IllegalStateException("Failed to update cooldown status", err);
+            throw new IllegalStateException("Failed to delete cooldown block", err);
+        }
+    }
+
+    /**
+     * Delete all active blocks for a repository in a single statement.
+     * @param repoType Repository type
+     * @param repoName Repository name
+     * @return Number of deleted rows
+     */
+    int deleteActiveBlocksForRepo(final String repoType, final String repoName) {
+        final String sql =
+            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, repoName);
+            stmt.setString(3, BlockStatus.ACTIVE.name());
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to delete active blocks for repo", err);
+        }
+    }
+
+    /**
+     * Delete all active blocks globally. Used when cooldown is disabled.
+     * @param actor Username performing the action
+     * @return Number of deleted rows
+     */
+    public int unblockAll(final String actor) {
+        final String sql = "DELETE FROM artifact_cooldowns WHERE status = ?";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, BlockStatus.ACTIVE.name());
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to unblock all cooldown blocks", err);
+        }
+    }
+
+    /**
+     * Delete all active blocks for a specific repo type. Used when a repo type
+     * cooldown override is disabled.
+     * @param repoType Repository type (e.g. "maven-proxy")
+     * @param actor Username performing the action
+     * @return Number of deleted rows
+     */
+    public int unblockByRepoType(final String repoType, final String actor) {
+        final String sql =
+            "DELETE FROM artifact_cooldowns WHERE repo_type = ? AND status = ?";
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, repoType);
+            stmt.setString(2, BlockStatus.ACTIVE.name());
+            return stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(
+                "Failed to unblock blocks for repo type " + repoType, err);
         }
     }
 
@@ -168,7 +213,7 @@ final class CooldownRepository {
      * @param repoName Repository name
      * @return Count of active blocks
      */
-    long countActiveBlocks(final String repoType, final String repoName) {
+    public long countActiveBlocks(final String repoType, final String repoName) {
         final String sql =
             "SELECT COUNT(*) FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
         try (Connection conn = this.dataSource.getConnection();
@@ -320,6 +365,107 @@ final class CooldownRepository {
         } catch (final SQLException err) {
             throw new IllegalStateException("Failed to unmark all-blocked packages for repo", err);
         }
+    }
+
+    /**
+     * Find all active blocks across all repos, paginated, with optional search.
+     * @param offset Row offset
+     * @param limit Max rows
+     * @param search Optional search term (filters artifact, repo_name, version)
+     * @return List of active block records
+     */
+    public List<DbBlockRecord> findAllActivePaginated(
+        final int offset, final int limit, final String search
+    ) {
+        final boolean hasSearch = search != null && !search.isBlank();
+        final String sql;
+        if (hasSearch) {
+            sql = "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
+                + "FROM artifact_cooldowns WHERE status = ? "
+                + "AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?) "
+                + "ORDER BY blocked_at DESC LIMIT ? OFFSET ?";
+        } else {
+            sql = "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
+                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
+                + "FROM artifact_cooldowns WHERE status = ? "
+                + "ORDER BY blocked_at DESC LIMIT ? OFFSET ?";
+        }
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            int idx = 1;
+            stmt.setString(idx++, BlockStatus.ACTIVE.name());
+            if (hasSearch) {
+                final String pattern = "%" + search.trim() + "%";
+                stmt.setString(idx++, pattern);
+                stmt.setString(idx++, pattern);
+                stmt.setString(idx++, pattern);
+            }
+            stmt.setInt(idx++, limit);
+            stmt.setInt(idx, offset);
+            try (ResultSet rs = stmt.executeQuery()) {
+                final List<DbBlockRecord> result = new ArrayList<>();
+                while (rs.next()) {
+                    result.add(readRecord(rs));
+                }
+                return result;
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to query active cooldowns", err);
+        }
+    }
+
+    /**
+     * Find all active blocks (no search filter).
+     * @param offset Row offset
+     * @param limit Max rows
+     * @return List of active block records
+     */
+    public List<DbBlockRecord> findAllActivePaginated(final int offset, final int limit) {
+        return this.findAllActivePaginated(offset, limit, null);
+    }
+
+    /**
+     * Count total active blocks across all repos, with optional search.
+     * @param search Optional search term
+     * @return Total count
+     */
+    public long countTotalActiveBlocks(final String search) {
+        final boolean hasSearch = search != null && !search.isBlank();
+        final String sql;
+        if (hasSearch) {
+            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ? "
+                + "AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)";
+        } else {
+            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ?";
+        }
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(sql)) {
+            int idx = 1;
+            stmt.setString(idx++, BlockStatus.ACTIVE.name());
+            if (hasSearch) {
+                final String pattern = "%" + search.trim() + "%";
+                stmt.setString(idx++, pattern);
+                stmt.setString(idx++, pattern);
+                stmt.setString(idx, pattern);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+                return 0;
+            }
+        } catch (final SQLException err) {
+            throw new IllegalStateException("Failed to count active cooldowns", err);
+        }
+    }
+
+    /**
+     * Count total active blocks (no search filter).
+     * @return Total count
+     */
+    public long countTotalActiveBlocks() {
+        return this.countTotalActiveBlocks(null);
     }
 
     List<String> cachedVersions(

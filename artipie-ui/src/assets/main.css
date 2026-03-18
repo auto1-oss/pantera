@@ -1,0 +1,57 @@
+@import "tailwindcss";
+@import "primeicons/primeicons.css";
+
+:root {
+  --app-sidebar-width: 240px;
+  --app-sidebar-collapsed-width: 64px;
+  --app-header-height: 56px;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dark-only theme */
+.dark .p-card {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 14px;
+}
+
+.dark .p-inputtext:focus {
+  border-color: #d97b2a !important;
+  box-shadow: 0 0 0 3px rgba(217,123,42,0.1) !important;
+}
+
+.dark .p-button:not(.p-button-secondary):not(.p-button-text):not(.p-button-outlined):not(.p-button-danger):not(.p-button-success):not(.p-button-warn):not(.p-button-info) {
+  background: #d97b2a;
+  border-color: #d97b2a;
+}
+.dark .p-button:not(.p-button-secondary):not(.p-button-text):not(.p-button-outlined):not(.p-button-danger):not(.p-button-success):not(.p-button-warn):not(.p-button-info):hover {
+  background: #c06a1f;
+  border-color: #c06a1f;
+}
+
+.dark .p-datatable .p-datatable-tbody > tr { background: #111827; }
+.dark .p-datatable .p-datatable-tbody > tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+.dark .p-datatable .p-datatable-tbody > tr:hover { background: rgba(217,123,42,0.04) !important; }
+
+.dark .p-dialog .p-dialog-content,
+.dark .p-dialog .p-dialog-header,
+.dark .p-dialog .p-dialog-footer { background: #1e293b; }
+.dark .p-dialog .p-dialog-header { border-bottom-color: #374151; }
+.dark .p-dialog .p-dialog-footer { border-top-color: #374151; }
+
+.dark .p-breadcrumb { background: transparent; border: none; padding: 0; }
+.dark .p-paginator { background: transparent; border: none; }
+
+/* Tooltip: prevent line breaks */
+.p-tooltip .p-tooltip-text { white-space: nowrap !important; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }

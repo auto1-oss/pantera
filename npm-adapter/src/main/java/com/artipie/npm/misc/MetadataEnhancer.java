@@ -4,6 +4,7 @@
  */
 package com.artipie.npm.misc;
 
+import com.artipie.http.log.EcsLogger;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
@@ -240,8 +241,11 @@ public final class MetadataEnhancer {
         if (versionMeta.containsKey("_publishTime")) {
             try {
                 return Instant.parse(versionMeta.getString("_publishTime"));
-            } catch (Exception ignored) {
-                // Fall through to next check
+            } catch (final Exception ex) {
+                EcsLogger.debug("com.artipie.npm")
+                    .message("Failed to parse _publishTime field")
+                    .error(ex)
+                    .log();
             }
         }
 
@@ -249,8 +253,11 @@ public final class MetadataEnhancer {
         if (versionMeta.containsKey("_time")) {
             try {
                 return Instant.parse(versionMeta.getString("_time"));
-            } catch (Exception ignored) {
-                // Fall through to next check
+            } catch (final Exception ex) {
+                EcsLogger.debug("com.artipie.npm")
+                    .message("Failed to parse _time field")
+                    .error(ex)
+                    .log();
             }
         }
 
@@ -258,8 +265,11 @@ public final class MetadataEnhancer {
         if (versionMeta.containsKey("publishTime")) {
             try {
                 return Instant.parse(versionMeta.getString("publishTime"));
-            } catch (Exception ignored) {
-                // Fall through to default
+            } catch (final Exception ex) {
+                EcsLogger.debug("com.artipie.npm")
+                    .message("Failed to parse publishTime field")
+                    .error(ex)
+                    .log();
             }
         }
 

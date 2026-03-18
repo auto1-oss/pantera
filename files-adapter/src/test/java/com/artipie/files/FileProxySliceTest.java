@@ -8,7 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.cache.FromRemoteCache;
+import com.artipie.asto.cache.StreamThroughCache;
 import com.artipie.asto.memory.InMemoryStorage;
 import com.artipie.http.Headers;
 import com.artipie.http.ResponseBuilder;
@@ -92,7 +92,7 @@ final class FileProxySliceTest {
                         .body(body)
                         .build()
                 ),
-                new FromRemoteCache(this.storage)
+                new StreamThroughCache(this.storage)
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -122,7 +122,7 @@ final class FileProxySliceTest {
             "Does not return body from cache",
             new FileProxySlice(
                 new SliceSimple(ResponseBuilder.internalError().build()),
-                new FromRemoteCache(this.storage)
+                new StreamThroughCache(this.storage)
             ),
             new SliceHasResponse(
                 Matchers.allOf(
@@ -147,7 +147,7 @@ final class FileProxySliceTest {
             "Incorrect status, 404 is expected",
             new FileProxySlice(
                 new SliceSimple(ResponseBuilder.badRequest().build()),
-                new FromRemoteCache(this.storage)
+                new StreamThroughCache(this.storage)
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),

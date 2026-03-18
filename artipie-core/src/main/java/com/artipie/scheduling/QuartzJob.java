@@ -10,7 +10,6 @@ import org.quartz.Job;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobKey;
 import org.quartz.SchedulerException;
-import org.quartz.impl.StdSchedulerFactory;
 
 /**
  * Super class for classes, which implement {@link Job} interface.
@@ -21,6 +20,11 @@ public abstract class QuartzJob implements Job {
 
     /**
      * Stop the job and log error.
+     * Uses {@code context.getScheduler()} to get the correct scheduler
+     * instance (important for JDBC/clustered mode where
+     * {@code new StdSchedulerFactory().getScheduler()} would return
+     * a different default scheduler, making deleteJob a no-op on the
+     * real JDBC store).
      * @param context Job context
      */
     protected void stopJob(final JobExecutionContext context) {
@@ -33,7 +37,7 @@ public abstract class QuartzJob implements Job {
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
                 .log();
-            new StdSchedulerFactory().getScheduler().deleteJob(key);
+            context.getScheduler().deleteJob(key);
             EcsLogger.error("com.artipie.scheduling")
                 .message("Job stopped")
                 .eventCategory("scheduling")

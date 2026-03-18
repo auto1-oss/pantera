@@ -10,11 +10,14 @@ import com.artipie.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -62,6 +65,11 @@ public class MetadataCache {
      * Used to prevent cache collisions in group repositories.
      */
     private final String repoName;
+
+    /**
+     * Keys currently being refreshed in background (stale-while-revalidate).
+     */
+    private final ConcurrentHashMap.KeySetView<Key, Boolean> refreshing;
     
     /**
      * Create metadata cache with default 12h TTL and 10K max size.
@@ -120,6 +128,7 @@ public class MetadataCache {
         this.twoTier = actualValkey != null;
         this.l2 = this.twoTier ? actualValkey.async() : null;
         this.repoName = repoName != null ? repoName : "default";
+        this.refreshing = ConcurrentHashMap.newKeySet();
         this.cache = this.buildCaffeineCache(ttl, maxSize, this.twoTier);
     }
 
@@ -136,9 +145,10 @@ public class MetadataCache {
         final int maxSize,
         final boolean twoTier
     ) {
-        final Duration l1Ttl = twoTier ? Duration.ofMinutes(5) : ttl;
+        // Hard expiry = 2x soft TTL to support stale-while-revalidate.
+        // Entries stay in cache past soft TTL but get background-refreshed.
+        final Duration l1Ttl = twoTier ? Duration.ofMinutes(10) : ttl.multipliedBy(2);
         final int l1Size = twoTier ? Math.max(1000, maxSize / 10) : maxSize;
-        
         return Caffeine.newBuilder()
             .maximumSize(l1Size)
             .expireAfterWrite(l1Ttl.toMillis(), TimeUnit.MILLISECONDS)
@@ -160,8 +170,22 @@ public class MetadataCache {
         // L1: Check in-memory cache
         final CachedMetadata l1Cached = this.cache.getIfPresent(key);
         if (l1Cached != null) {
-            // CRITICAL: Create fresh Content instance from bytes
-            // This prevents "already consumed" Publisher errors
+            if (!l1Cached.isStale(this.ttl)) {
+                return CompletableFuture.completedFuture(Optional.of(l1Cached.content()));
+            }
+            // Stale-while-revalidate: past max-stale boundary forces fresh fetch
+            if (l1Cached.isStale(this.ttl.multipliedBy(3))) {
+                this.cache.invalidate(key);
+                this.refreshing.remove(key);
+                return this.fetchAndCache(key, remote);
+            }
+            // Within stale window: serve cached, trigger background refresh
+            if (this.refreshing.add(key)) {
+                CompletableFuture.runAsync(() ->
+                    this.fetchAndCache(key, remote)
+                        .whenComplete((res, err) -> this.refreshing.remove(key))
+                );
+            }
             return CompletableFuture.completedFuture(Optional.of(l1Cached.content()));
         }
 
@@ -252,7 +276,7 @@ public class MetadataCache {
         
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String redisKey = "maven:metadata:" + key.string();
+            final String redisKey = "maven:metadata:" + this.repoName + ":" + key.string();
             this.l2.del(redisKey);
         }
     }
@@ -268,12 +292,8 @@ public class MetadataCache {
         
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
-            final String scanPattern = "maven:metadata:" + prefix + "*";
-            this.l2.keys(scanPattern).thenAccept(keys -> {
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]));
-                }
-            });
+            final String scanPattern = "maven:metadata:" + this.repoName + ":" + prefix + "*";
+            this.scanAndDelete(scanPattern);
         }
     }
     
@@ -288,11 +308,7 @@ public class MetadataCache {
         
         // Clear L2 (if enabled)
         if (this.twoTier) {
-            this.l2.keys("maven:metadata:*").thenAccept(keys -> {
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]));
-                }
-            });
+            this.scanAndDelete("maven:metadata:" + this.repoName + ":*");
         }
     }
     
@@ -322,6 +338,31 @@ public class MetadataCache {
         return this.cache.estimatedSize();
     }
     
+    /**
+     * Scan and delete keys matching pattern using cursor-based SCAN.
+     * Avoids blocking KEYS command that freezes Redis on large datasets.
+     * @param pattern Redis key pattern (glob-style)
+     */
+    private CompletableFuture<Void> scanAndDelete(final String pattern) {
+        return this.scanAndDeleteStep(ScanCursor.INITIAL, pattern);
+    }
+
+    private CompletableFuture<Void> scanAndDeleteStep(
+        final ScanCursor cursor, final String pattern
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(100))
+            .toCompletableFuture()
+            .thenCompose(result -> {
+                if (!result.getKeys().isEmpty()) {
+                    this.l2.del(result.getKeys().toArray(new String[0]));
+                }
+                if (result.isFinished()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.scanAndDeleteStep(result, pattern);
+            });
+    }
+
     /**
      * Cached metadata entry with timestamp.
      *
@@ -360,6 +401,15 @@ public class MetadataCache {
          */
         Content content() {
             return new Content.From(this.bytes);
+        }
+
+        /**
+         * Check if this entry is past the soft TTL (stale-while-revalidate).
+         * @param softTtl Soft TTL duration
+         * @return True if entry age exceeds soft TTL
+         */
+        boolean isStale(final Duration softTtl) {
+            return Duration.between(this.timestamp, Instant.now()).compareTo(softTtl) > 0;
         }
     }
 }

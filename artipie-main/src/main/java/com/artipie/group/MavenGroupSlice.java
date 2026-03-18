@@ -104,6 +104,34 @@ public final class MavenGroupSlice implements Slice {
         this.metadataCache = new GroupMetadataCache(group);
     }
 
+    /**
+     * Constructor with injectable cache (for testing).
+     * @param delegate Delegate group slice
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param resolver Slice resolver
+     * @param port Server port
+     * @param depth Nesting depth
+     * @param cache Group metadata cache to use
+     */
+    public MavenGroupSlice(
+        final Slice delegate,
+        final String group,
+        final List<String> members,
+        final SliceResolver resolver,
+        final int port,
+        final int depth,
+        final GroupMetadataCache cache
+    ) {
+        this.delegate = delegate;
+        this.group = group;
+        this.members = members;
+        this.resolver = resolver;
+        this.port = port;
+        this.depth = depth;
+        this.metadataCache = cache;
+    }
+
     @Override
     public CompletableFuture<Response> response(
         final RequestLine line,
@@ -283,18 +311,35 @@ public final class MavenGroupSlice implements Slice {
                 final long fetchDuration = System.currentTimeMillis() - fetchStartTime;
 
                 if (metadataList.isEmpty()) {
-                    EcsLogger.warn("com.artipie.maven")
-                        .message("No metadata found in any member")
-                        .eventCategory("repository")
-                        .eventAction("metadata_merge")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.group)
-                        .field("url.path", path)
-                        .field("fetch.duration.ms", fetchDuration)
-                        .log();
-                    return CompletableFuture.completedFuture(
-                        ResponseBuilder.notFound().build()
-                    );
+                    // All members failed — try last-known-good stale fallback
+                    return MavenGroupSlice.this.metadataCache.getStale(cacheKey)
+                        .thenApply(stale -> {
+                            if (stale.isPresent()) {
+                                EcsLogger.warn("com.artipie.maven")
+                                    .message("Returning stale metadata (all members failed)")
+                                    .eventCategory("repository")
+                                    .eventAction("metadata_merge")
+                                    .eventOutcome("stale_fallback")
+                                    .field("repository.name", MavenGroupSlice.this.group)
+                                    .field("url.path", path)
+                                    .field("event.duration", fetchDuration * 1_000_000L)
+                                    .log();
+                                return ResponseBuilder.ok()
+                                    .header("Content-Type", "application/xml")
+                                    .body(stale.get())
+                                    .build();
+                            }
+                            EcsLogger.warn("com.artipie.maven")
+                                .message("No metadata found in any member and no stale fallback")
+                                .eventCategory("repository")
+                                .eventAction("metadata_merge")
+                                .eventOutcome("failure")
+                                .field("repository.name", MavenGroupSlice.this.group)
+                                .field("url.path", path)
+                                .field("event.duration", fetchDuration * 1_000_000L)
+                                .log();
+                            return ResponseBuilder.notFound().build();
+                        });
                 }
 
                 // Track merge duration separately (actual XML processing time)
@@ -316,28 +361,26 @@ public final class MavenGroupSlice implements Slice {
                         // Log slow fetches (>500ms) - expected for proxy repos
                         if (fetchDuration > 500) {
                             EcsLogger.info("com.artipie.maven")
-                                .message("Slow member fetch (" + metadataList.size() + " members)")
+                                .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_fetch")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
+                                .field("event.duration", fetchDuration * 1_000_000L)
                                 .log();
                         }
 
                         // Log slow merges (>50ms) - indicates actual performance issue
                         if (mergeDuration > 50) {
                             EcsLogger.warn("com.artipie.maven")
-                                .message("Slow metadata merge (" + metadataList.size() + " members)")
+                                .message(String.format("Slow metadata merge (%d members), fetch took %dms", metadataList.size(), fetchDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_merge")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("fetch.duration.ms", fetchDuration)
-                                .field("merge.duration.ms", mergeDuration)
+                                .field("event.duration", mergeDuration * 1_000_000L)
                                 .log();
                         }
 

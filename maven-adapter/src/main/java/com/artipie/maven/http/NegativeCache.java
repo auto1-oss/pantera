@@ -10,6 +10,8 @@ import com.artipie.cache.NegativeCacheConfig;
 import com.artipie.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -375,11 +377,7 @@ public final class NegativeCache {
         // Invalidate L2 (if enabled)
         if (this.twoTier) {
             final String scanPattern = "negative:maven-proxy:" + this.repoName + ":" + prefix + "*";
-            this.l2.keys(scanPattern).thenAccept(keys -> {
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]));
-                }
-            });
+            this.scanAndDelete(scanPattern);
         }
     }
 
@@ -393,14 +391,44 @@ public final class NegativeCache {
 
         // Clear L2 (if enabled)
         if (this.twoTier) {
-            this.l2.keys("negative:maven-proxy:" + this.repoName + ":*").thenAccept(keys -> {
-                if (keys != null && !keys.isEmpty()) {
-                    this.l2.del(keys.toArray(new String[0]));
-                }
-            });
+            this.scanAndDelete("negative:maven-proxy:" + this.repoName + ":*");
         }
     }
     
+    /**
+     * Recursive async scan that collects all matching keys and deletes them in batches.
+     * Uses SCAN instead of KEYS to avoid blocking the Redis server.
+     *
+     * @param pattern Glob pattern to match keys
+     * @return Future that completes when all matching keys are deleted
+     */
+    private CompletableFuture<Void> scanAndDelete(final String pattern) {
+        return this.scanAndDeleteStep(ScanCursor.INITIAL, pattern);
+    }
+
+    /**
+     * Single step of the recursive SCAN-and-delete loop.
+     *
+     * @param cursor Current scan cursor
+     * @param pattern Glob pattern to match keys
+     * @return Future that completes when this step and all subsequent steps finish
+     */
+    private CompletableFuture<Void> scanAndDeleteStep(
+        final ScanCursor cursor, final String pattern
+    ) {
+        return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(100))
+            .toCompletableFuture()
+            .thenCompose(result -> {
+                if (!result.getKeys().isEmpty()) {
+                    this.l2.del(result.getKeys().toArray(new String[0]));
+                }
+                if (result.isFinished()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return this.scanAndDeleteStep(result, pattern);
+            });
+    }
+
     /**
      * Remove expired entries (periodic cleanup).
      * Caffeine handles expiry automatically, but calling this

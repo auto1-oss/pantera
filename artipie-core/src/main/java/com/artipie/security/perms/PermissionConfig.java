@@ -13,6 +13,10 @@ import com.artipie.asto.factory.Config;
 import java.util.Collection;
 import java.util.Set;
 import java.util.stream.Collectors;
+import javax.json.JsonArray;
+import javax.json.JsonObject;
+import javax.json.JsonString;
+import javax.json.JsonValue;
 
 /**
  * Permission configuration.
@@ -194,6 +198,127 @@ public interface PermissionConfig extends Config {
         @Override
         public boolean isEmpty() {
             return this.seq == null || this.seq.isEmpty();
+        }
+    }
+
+    /**
+     * Permission config from JSON object. Used by database-backed policy
+     * to bridge JSON permission data into the PermissionConfig interface.
+     * @since 1.21
+     */
+    final class FromJsonObject implements PermissionConfig {
+
+        /**
+         * JSON object to read permission from.
+         */
+        private final JsonObject json;
+
+        /**
+         * Ctor.
+         * @param json JSON object to read permission from
+         */
+        public FromJsonObject(final JsonObject json) {
+            this.json = json;
+        }
+
+        @Override
+        public String string(final String key) {
+            if (this.json.containsKey(key)) {
+                return this.json.getString(key);
+            }
+            return null;
+        }
+
+        @Override
+        public Set<String> sequence(final String key) {
+            final JsonArray arr = this.json.getJsonArray(key);
+            return arr.stream()
+                .map(v -> ((JsonString) v).getString())
+                .collect(Collectors.toSet());
+        }
+
+        @Override
+        public Set<String> keys() {
+            return this.json.keySet();
+        }
+
+        @Override
+        public PermissionConfig config(final String key) {
+            final JsonValue val = this.json.get(key);
+            if (val instanceof JsonObject) {
+                return new FromJsonObject((JsonObject) val);
+            } else if (val instanceof JsonArray) {
+                return new FromJsonArray((JsonArray) val);
+            }
+            throw new IllegalArgumentException(
+                String.format("JSON sub-config not found for key: %s", key)
+            );
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return this.json == null || this.json.isEmpty();
+        }
+    }
+
+    /**
+     * Permission config from JSON array. Used by database-backed policy
+     * to bridge JSON permission data into the PermissionConfig interface.
+     * In this implementation, method {@link FromJsonArray#keys()} returns
+     * the array elements as a set of strings.
+     * @since 1.21
+     */
+    final class FromJsonArray implements PermissionConfig {
+
+        /**
+         * JSON array.
+         */
+        private final JsonArray arr;
+
+        /**
+         * Ctor.
+         * @param arr JSON array
+         */
+        public FromJsonArray(final JsonArray arr) {
+            this.arr = arr;
+        }
+
+        @Override
+        public Set<String> keys() {
+            return this.arr.stream()
+                .map(v -> ((JsonString) v).getString())
+                .collect(Collectors.toSet());
+        }
+
+        @Override
+        public String string(final String index) {
+            return this.arr.getString(Integer.parseInt(index));
+        }
+
+        @Override
+        public Collection<String> sequence(final String index) {
+            return this.arr.getJsonArray(Integer.parseInt(index)).stream()
+                .map(v -> ((JsonString) v).getString())
+                .collect(Collectors.toSet());
+        }
+
+        @Override
+        public PermissionConfig config(final String index) {
+            final int ind = Integer.parseInt(index);
+            final JsonValue val = this.arr.get(ind);
+            if (val instanceof JsonObject) {
+                return new FromJsonObject((JsonObject) val);
+            } else if (val instanceof JsonArray) {
+                return new FromJsonArray((JsonArray) val);
+            }
+            throw new IllegalArgumentException(
+                String.format("Sub config by index %s not found", index)
+            );
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return this.arr == null || this.arr.isEmpty();
         }
     }
 }

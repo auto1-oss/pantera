@@ -10,6 +10,7 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
+import java.util.Optional;
 import javax.json.Json;
 import javax.json.JsonObjectBuilder;
 import org.eclipse.jetty.http.HttpStatus;
@@ -31,18 +32,38 @@ public final class SettingsRest extends BaseRest {
     private final Settings settings;
 
     /**
+     * Repository settings manager (optional, for dashboard stats).
+     */
+    private final Optional<ManageRepoSettings> crs;
+
+    /**
      * Ctor.
      * @param port Artipie port
      * @param settings Artipie settings
      */
     public SettingsRest(final int port, final Settings settings) {
+        this(port, settings, null);
+    }
+
+    /**
+     * Ctor with repo settings for dashboard.
+     * @param port Artipie port
+     * @param settings Artipie settings
+     * @param crs Repository settings manager
+     */
+    public SettingsRest(final int port, final Settings settings,
+        final ManageRepoSettings crs) {
         this.port = port;
         this.settings = settings;
+        this.crs = Optional.ofNullable(crs);
     }
 
     @Override
     @SuppressWarnings("PMD.AvoidDuplicateLiterals")
     public void init(final RouterBuilder rbr) {
+        rbr.operation("getDashboard")
+            .handler(this::getDashboard)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
         rbr.operation("port")
             .handler(this::portRest)
             .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
@@ -52,6 +73,23 @@ public final class SettingsRest extends BaseRest {
         rbr.operation("updateGlobalPrefixes")
             .handler(this::updateGlobalPrefixes)
             .failureHandler(this.errorHandler(HttpStatus.BAD_REQUEST_400));
+    }
+
+    /**
+     * Dashboard statistics.
+     * @param context Request context
+     */
+    private void getDashboard(final RoutingContext context) {
+        final JsonObject dashboard = new JsonObject()
+            .put("port", this.port)
+            .put("version", new com.artipie.misc.ArtipieProperties().version());
+        this.crs.ifPresent(
+            manage -> dashboard.put("repositories", manage.listAll().size())
+        );
+        context.response()
+            .setStatusCode(HttpStatus.OK_200)
+            .putHeader("Content-Type", "application/json")
+            .end(dashboard.encode());
     }
 
     /**
@@ -102,18 +140,15 @@ public final class SettingsRest extends BaseRest {
             for (int i = 0; i < prefixesArray.size(); i++) {
                 prefixes.add(prefixesArray.getString(i));
             }
-            
             // Validate: check for conflicts with existing repository names
-            final java.util.Collection<String> existingRepos = 
+            final java.util.Collection<String> existingRepos =
                 this.settings.repoConfigsStorage().list(com.artipie.asto.Key.ROOT)
                     .join().stream()
                     .map(key -> key.string().replaceAll("\\.yaml|\\.yml$", ""))
                     .collect(java.util.stream.Collectors.toList());
-            
             final java.util.List<String> conflicts = prefixes.stream()
                 .filter(existingRepos::contains)
                 .collect(java.util.stream.Collectors.toList());
-            
             if (!conflicts.isEmpty()) {
                 context.response()
                     .setStatusCode(HttpStatus.CONFLICT_409)
@@ -127,13 +162,10 @@ public final class SettingsRest extends BaseRest {
                         .encode());
                 return;
             }
-            
             // Update in-memory configuration
             this.settings.prefixes().update(prefixes);
-            
             // Persist to artipie.yaml file using the persistence service
             new PrefixesPersistence(this.settings.configPath()).save(prefixes);
-            
             context.response()
                 .setStatusCode(HttpStatus.OK_200)
                 .end();

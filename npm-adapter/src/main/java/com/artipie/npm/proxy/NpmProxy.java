@@ -11,11 +11,14 @@ import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.npm.proxy.model.NpmAsset;
 import com.artipie.npm.proxy.model.NpmPackage;
+import com.artipie.http.log.EcsLogger;
 import io.reactivex.Maybe;
+import io.reactivex.schedulers.Schedulers;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * NPM Proxy.
@@ -44,6 +47,12 @@ public class NpmProxy {
      * Metadata TTL - how long before cached metadata is considered stale.
      */
     private final Duration metadataTtl;
+
+    /**
+     * Packages currently being refreshed in background (stale-while-revalidate).
+     * Prevents duplicate refresh operations for the same package.
+     */
+    private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
 
     /**
      * Ctor.
@@ -105,6 +114,7 @@ public class NpmProxy {
         this.storage = storage;
         this.remote = remote;
         this.metadataTtl = metadataTtl;
+        this.refreshing = ConcurrentHashMap.newKeySet();
     }
 
     /**
@@ -129,12 +139,10 @@ public class NpmProxy {
         return this.storage.getPackageMetadata(name)
             .flatMap(metadata -> {
                 if (this.isStale(metadata.lastRefreshed())) {
-                    // TTL expired - try to refresh from upstream
-                    // If refresh fails, fall back to stale cached metadata
-                    return this.remotePackageMetadataAndSave(name)
-                        .switchIfEmpty(Maybe.just(metadata));
+                    // Stale-while-revalidate: serve stale immediately,
+                    // trigger background refresh for next request
+                    this.backgroundRefresh(name);
                 }
-                // Still fresh - return cached immediately
                 return Maybe.just(metadata);
             })
             .switchIfEmpty(Maybe.defer(() -> this.remotePackageMetadataAndSave(name)));
@@ -151,12 +159,10 @@ public class NpmProxy {
         return this.storage.getPackageMetadata(name)
             .flatMap(metadata -> {
                 if (this.isStale(metadata.lastRefreshed())) {
-                    // TTL expired - try to refresh from upstream
-                    return this.remotePackageAndSave(name)
-                        .flatMap(saved -> this.storage.getPackageContent(name))
-                        .switchIfEmpty(this.storage.getPackageContent(name));
+                    // Stale-while-revalidate: serve stale immediately,
+                    // trigger background refresh for next request
+                    this.backgroundRefresh(name);
                 }
-                // Still fresh - return cached content
                 return this.storage.getPackageContent(name);
             })
             .switchIfEmpty(Maybe.defer(() -> {
@@ -179,12 +185,10 @@ public class NpmProxy {
         return this.storage.getPackageMetadata(name)
             .flatMap(metadata -> {
                 if (this.isStale(metadata.lastRefreshed())) {
-                    // TTL expired - try to refresh from upstream
-                    return this.remotePackageAndSave(name)
-                        .flatMap(saved -> this.storage.getAbbreviatedContent(name))
-                        .switchIfEmpty(this.storage.getAbbreviatedContent(name));
+                    // Stale-while-revalidate: serve stale immediately,
+                    // trigger background refresh for next request
+                    this.backgroundRefresh(name);
                 }
-                // Still fresh - return cached abbreviated content
                 return this.storage.getAbbreviatedContent(name);
             })
             .switchIfEmpty(Maybe.defer(() -> {
@@ -212,6 +216,76 @@ public class NpmProxy {
     private boolean isStale(final OffsetDateTime lastRefreshed) {
         final Duration age = Duration.between(lastRefreshed, OffsetDateTime.now());
         return age.compareTo(this.metadataTtl) > 0;
+    }
+
+    /**
+     * Trigger background refresh of a package (stale-while-revalidate pattern).
+     * Serves stale content immediately while refreshing in background.
+     * Uses a ConcurrentHashMap.KeySetView to deduplicate in-flight refreshes.
+     * @param name Package name
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void backgroundRefresh(final String name) {
+        if (this.refreshing.add(name)) {
+            // Try conditional request first if we have a stored upstream ETag
+            this.conditionalRefresh(name)
+                .subscribeOn(Schedulers.io())
+                .doFinally(() -> this.refreshing.remove(name))
+                .subscribe(
+                    saved -> EcsLogger.debug("com.artipie.npm.proxy")
+                        .message("Background refresh completed")
+                        .eventCategory("cache")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("success")
+                        .field("package.name", name)
+                        .log(),
+                    err -> EcsLogger.warn("com.artipie.npm.proxy")
+                        .message("Background refresh failed")
+                        .eventCategory("cache")
+                        .eventAction("stale_while_revalidate")
+                        .eventOutcome("failure")
+                        .field("package.name", name)
+                        .error(err)
+                        .log(),
+                    () -> this.refreshing.remove(name)
+                );
+        }
+    }
+
+    /**
+     * Attempt conditional refresh using stored upstream ETag.
+     * If upstream returns 304 (not modified), just update the refresh timestamp.
+     * Otherwise, do a full refresh.
+     * @param name Package name
+     * @return Completion signal
+     */
+    private Maybe<Boolean> conditionalRefresh(final String name) {
+        return this.storage.getPackageMetadata(name)
+            .flatMap(metadata -> {
+                if (metadata.upstreamEtag().isPresent()
+                    && this.remote instanceof HttpNpmRemote) {
+                    // Try conditional request with If-None-Match
+                    return ((HttpNpmRemote) this.remote)
+                        .loadPackageConditional(name, metadata.upstreamEtag().get())
+                        .flatMap(pkg -> this.storage.save(pkg).andThen(Maybe.just(Boolean.TRUE)))
+                        .switchIfEmpty(Maybe.defer(() -> {
+                            // 304 Not Modified — just update refresh timestamp
+                            final NpmPackage.Metadata updated = new NpmPackage.Metadata(
+                                metadata.lastModified(),
+                                OffsetDateTime.now(),
+                                metadata.contentHash().orElse(null),
+                                metadata.abbreviatedHash().orElse(null),
+                                metadata.upstreamEtag().orElse(null)
+                            );
+                            return this.storage.saveMetadataOnly(name, updated)
+                                .andThen(Maybe.just(Boolean.TRUE));
+                        }));
+                }
+                // No stored ETag or not HttpNpmRemote — do full refresh
+                return this.remotePackageAndSave(name)
+                    .defaultIfEmpty(Boolean.FALSE);
+            })
+            .switchIfEmpty(Maybe.defer(() -> this.remotePackageAndSave(name)));
     }
 
     /**

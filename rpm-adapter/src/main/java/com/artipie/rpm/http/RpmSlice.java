@@ -40,22 +40,6 @@ public final class RpmSlice extends Slice.Wrap {
      * @param policy Access policy.
      * @param auth Auth details.
      * @param config Repository configuration.
-     */
-    public RpmSlice(
-        final Storage storage,
-        final Policy<?> policy,
-        final Authentication auth,
-        final RepoConfig config
-    ) {
-        this(storage, policy, auth, null, config, Optional.empty());
-    }
-
-    /**
-     * Ctor.
-     * @param storage Storage
-     * @param policy Access policy.
-     * @param auth Auth details.
-     * @param config Repository configuration.
      * @param events Artifact events queue
      */
     public RpmSlice(

@@ -51,7 +51,7 @@ public final class HttpNpmRemote implements NpmRemote {
     public Maybe<NpmPackage> loadPackage(final String name) {
         // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
         return RxFuture.maybe(
-            this.performRemoteRequest(name).thenCompose(
+            this.performRemoteRequest(name, Headers.EMPTY).thenCompose(
                 pair -> pair.getKey().asStringFuture().thenApply(
                     str -> {
                         // Transform to cached format (strip upstream URLs)
@@ -62,7 +62,8 @@ public final class HttpNpmRemote implements NpmRemote {
                             name,
                             cachedContent,
                             HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
-                            OffsetDateTime.now()
+                            OffsetDateTime.now(),
+                            HttpNpmRemote.extractETag(pair.getValue())
                         );
                     }
                 )
@@ -101,7 +102,7 @@ public final class HttpNpmRemote implements NpmRemote {
     public Maybe<NpmAsset> loadAsset(final String path, final Path tmp) {
         // Use non-blocking RxFuture.maybe instead of blocking Maybe.fromFuture
         return RxFuture.maybe(
-            this.performRemoteRequest(path).thenApply(
+            this.performRemoteRequest(path, Headers.EMPTY).thenApply(
                 pair -> new NpmAsset(
                     path,
                     pair.getKey(),
@@ -143,17 +144,55 @@ public final class HttpNpmRemote implements NpmRemote {
     }
 
     /**
+     * Load package with conditional request (If-None-Match).
+     * Returns empty if upstream returns 304 (content unchanged).
+     * @param name Package name
+     * @param etag ETag to send as If-None-Match
+     * @return Package or empty if unchanged
+     */
+    public Maybe<NpmPackage> loadPackageConditional(final String name, final String etag) {
+        final Headers conditionalHeaders = Headers.from("If-None-Match", etag);
+        return RxFuture.maybe(
+            this.performRemoteRequest(name, conditionalHeaders).thenCompose(
+                pair -> pair.getKey().asStringFuture().thenApply(
+                    str -> {
+                        final String cachedContent = new CachedContent(str, name).valueString();
+                        return new NpmPackage(
+                            name,
+                            cachedContent,
+                            HttpNpmRemote.lastModifiedOrNow(pair.getValue()),
+                            OffsetDateTime.now(),
+                            HttpNpmRemote.extractETag(pair.getValue())
+                        );
+                    }
+                )
+            )
+        ).onErrorResumeNext(
+            throwable -> {
+                if (HttpNpmRemote.isNotModified(throwable)) {
+                    return Maybe.empty();
+                }
+                if (HttpNpmRemote.isNotFoundError(throwable)) {
+                    return Maybe.empty();
+                }
+                return Maybe.error(throwable);
+            }
+        );
+    }
+
+    /**
      * Performs request to remote and returns remote body and headers in CompletableFuture.
      * @param name Asset name
+     * @param extraHeaders Additional headers to send (e.g., If-None-Match)
      * @return Completable action with content and headers
      */
-    private CompletableFuture<Pair<Content, Headers>> performRemoteRequest(final String name) {
-        // URL-encode the package name for scoped packages like @authn8/mcp-server -> @authn8%2fmcp-server
-        // The npm registry expects the slash within scoped package names to be URL-encoded
+    private CompletableFuture<Pair<Content, Headers>> performRemoteRequest(
+        final String name, final Headers extraHeaders
+    ) {
         final String encodedName = encodePackageName(name);
         return this.origin.response(
             new RequestLine(RqMethod.GET, String.format("/%s", encodedName)),
-            Headers.EMPTY, Content.EMPTY
+            extraHeaders, Content.EMPTY
         ).thenCompose(response -> {
             if (response.status().success()) {
                 return CompletableFuture.completedFuture(
@@ -225,6 +264,35 @@ public final class HttpNpmRemote implements NpmRemote {
      * @param throwable The error to check
      * @return True if this is a 404 Not Found error, false for other errors
      */
+    /**
+     * Extract ETag header from response.
+     * @param headers Response headers
+     * @return ETag value or null
+     */
+    private static String extractETag(final Headers headers) {
+        final RqHeaders hdr = new RqHeaders(headers, "ETag");
+        if (!hdr.isEmpty()) {
+            return hdr.get(0);
+        }
+        return null;
+    }
+
+    /**
+     * Check if error is 304 Not Modified.
+     * @param throwable Error to check
+     * @return True if 304
+     */
+    private static boolean isNotModified(final Throwable throwable) {
+        Throwable cause = throwable;
+        if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        if (cause instanceof ArtipieHttpException) {
+            return ((ArtipieHttpException) cause).status().code() == 304;
+        }
+        return false;
+    }
+
     private static boolean isNotFoundError(final Throwable throwable) {
         Throwable cause = throwable;
         // Unwrap CompletionException if present

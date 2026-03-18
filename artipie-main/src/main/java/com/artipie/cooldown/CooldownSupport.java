@@ -11,14 +11,21 @@ import com.artipie.cooldown.metadata.CooldownMetadataServiceImpl;
 import com.artipie.cooldown.metadata.FilteredMetadataCache;
 import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.artipie.cooldown.metadata.NoopCooldownMetadataService;
+import com.artipie.db.dao.SettingsDao;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.trace.TraceContextExecutor;
 import com.artipie.settings.Settings;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.json.JsonObject;
 
 /**
  * Factory for cooldown services.
@@ -76,6 +83,9 @@ public final class CooldownSupport {
     public static CooldownService create(final Settings settings, final Executor executor) {
         return settings.artifactsDatabase()
             .map(ds -> {
+                // Load DB-persisted cooldown config and apply over YAML defaults.
+                // This ensures overrides saved via the UI survive container restarts.
+                loadDbCooldownSettings(settings.cooldown(), ds);
                 EcsLogger.info("com.artipie.cooldown")
                     .message("Creating JdbcCooldownService (enabled: " + settings.cooldown().enabled() + ", min age: " + settings.cooldown().minimumAllowedAge().toString() + ")")
                     .eventCategory("configuration")
@@ -145,5 +155,86 @@ public final class CooldownSupport {
             COOLDOWN_EXECUTOR,
             50 // max versions to evaluate
         );
+    }
+
+    /**
+     * Load cooldown settings from DB and apply to in-memory CooldownSettings.
+     * DB settings (saved via the UI) take precedence over YAML defaults.
+     * @param csettings In-memory cooldown settings to update
+     * @param ds Database data source
+     */
+    @SuppressWarnings("PMD.CognitiveComplexity")
+    private static void loadDbCooldownSettings(
+        final CooldownSettings csettings,
+        final javax.sql.DataSource ds
+    ) {
+        try {
+            final SettingsDao dao = new SettingsDao(ds);
+            final Optional<JsonObject> dbConfig = dao.get("cooldown");
+            if (dbConfig.isEmpty()) {
+                return;
+            }
+            final JsonObject cfg = dbConfig.get();
+            final boolean enabled = cfg.getBoolean("enabled", csettings.enabled());
+            final Duration minAge = cfg.containsKey("minimum_allowed_age")
+                ? parseDuration(cfg.getString("minimum_allowed_age"))
+                : csettings.minimumAllowedAge();
+            final Map<String, CooldownSettings.RepoTypeConfig> overrides = new HashMap<>();
+            if (cfg.containsKey("repo_types")) {
+                final JsonObject repoTypes = cfg.getJsonObject("repo_types");
+                for (final String key : repoTypes.keySet()) {
+                    final JsonObject rt = repoTypes.getJsonObject(key);
+                    overrides.put(
+                        key.toLowerCase(Locale.ROOT),
+                        new CooldownSettings.RepoTypeConfig(
+                            rt.getBoolean("enabled", true),
+                            rt.containsKey("minimum_allowed_age")
+                                ? parseDuration(rt.getString("minimum_allowed_age"))
+                                : minAge
+                        )
+                    );
+                }
+            }
+            csettings.update(enabled, minAge, overrides);
+            EcsLogger.info("com.artipie.cooldown")
+                .message("Loaded cooldown settings from database (enabled: "
+                    + enabled + ", overrides: " + overrides.size() + ")")
+                .eventCategory("configuration")
+                .eventAction("cooldown_db_load")
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.artipie.cooldown")
+                .message("Failed to load cooldown settings from DB, using YAML defaults: "
+                    + ex.getMessage())
+                .eventCategory("configuration")
+                .eventAction("cooldown_db_load")
+                .eventOutcome("failure")
+                .log();
+        }
+    }
+
+    /**
+     * Parse duration string (e.g. "7d", "24h", "30m") to Duration.
+     * @param value Duration string
+     * @return Duration
+     */
+    private static Duration parseDuration(final String value) {
+        if (value == null || value.isEmpty()) {
+            return Duration.ofHours(CooldownSettings.DEFAULT_HOURS);
+        }
+        final String trimmed = value.trim().toLowerCase(Locale.ROOT);
+        final String num = trimmed.replaceAll("[^0-9]", "");
+        if (num.isEmpty()) {
+            return Duration.ofHours(CooldownSettings.DEFAULT_HOURS);
+        }
+        final long amount = Long.parseLong(num);
+        if (trimmed.endsWith("d")) {
+            return Duration.ofDays(amount);
+        } else if (trimmed.endsWith("h")) {
+            return Duration.ofHours(amount);
+        } else if (trimmed.endsWith("m")) {
+            return Duration.ofMinutes(amount);
+        }
+        return Duration.ofHours(amount);
     }
 }

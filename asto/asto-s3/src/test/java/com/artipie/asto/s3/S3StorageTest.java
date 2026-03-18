@@ -16,6 +16,7 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amihaiemil.eoyaml.Yaml;
 import com.artipie.asto.Content;
 import com.artipie.asto.Key;
+import com.artipie.asto.ListResult;
 import com.artipie.asto.Meta;
 import com.artipie.asto.Storage;
 import com.artipie.asto.blocking.BlockingStorage;
@@ -332,6 +333,53 @@ class S3StorageTest {
             Matchers.stringContainsInOrder(
                 "S3", S3_MOCK.getHost(), String.valueOf(S3_MOCK.getMappedPort(9090)), this.bucket
             )
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void shouldListMoreThan1000Objects() throws Exception {
+        final int total = 1050;
+        final String prefix = "many/";
+        final ObjectMetadata meta = new ObjectMetadata();
+        meta.setContentLength(1);
+        for (int idx = 0; idx < total; idx += 1) {
+            s3Client.putObject(
+                this.bucket,
+                String.format("%s%04d", prefix, idx),
+                new ByteArrayInputStream(new byte[]{1}),
+                meta
+            );
+        }
+        final Collection<Key> keys = this.storage()
+            .list(new Key.From("many")).join();
+        MatcherAssert.assertThat(
+            "should list all objects beyond S3 1000 page limit",
+            keys.size(),
+            new IsEqual<>(total)
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void shouldListMoreThan1000ObjectsWithDelimiter() throws Exception {
+        final int total = 1050;
+        final ObjectMetadata meta = new ObjectMetadata();
+        meta.setContentLength(1);
+        for (int idx = 0; idx < total; idx += 1) {
+            s3Client.putObject(
+                this.bucket,
+                String.format("multi/sub%04d/file.txt", idx),
+                new ByteArrayInputStream(new byte[]{1}),
+                meta
+            );
+        }
+        final ListResult result = this.storage()
+            .list(new Key.From("multi"), "/").join();
+        MatcherAssert.assertThat(
+            "should list all directory prefixes beyond S3 page limit",
+            result.directories().size(),
+            new IsEqual<>(total)
         );
     }
 

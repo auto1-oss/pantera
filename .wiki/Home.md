@@ -107,9 +107,13 @@ To add a new repository or update an existing repository, you have to simply cre
 configuration `yaml` files in the directory `/var/artipie/repo` or use the [REST API](./Rest-api)
 to create/update repositories dynamically without restart.
 
-## New and notable
+## New and notable (1.20.14)
 
 - Dynamic repositories: create, update, move and delete repositories at runtime via REST with no restart. See [REST API](./Rest-api).
 - Bearer auth everywhere: all repositories support bearer token authentication for uploads and downloads in addition to Basic auth.
 - PostgreSQL artifacts DB: artifacts metadata are written to PostgreSQL (SQLite support deprecated). See [Artifacts metadata](./Configuration-Metadata).
 - ARM64 support: official Docker images and the service run on `linux/amd64` and `linux/arm64` architectures.
+- [HA Deployment](Configuration-HA): multi-instance deployment with shared PostgreSQL, Valkey, and S3 storage for high availability.
+- [Health Checks](Configuration-Health): built-in `/.health` endpoint reports per-component status for load balancer integration.
+- [Search API](./Rest-api#search-api): full-text artifact search with cursor pagination and relevance ranking.
+- [Cooldown management](./Rest-api#cooldown-management): unblock artefacts or clear all cooldown entries per repository via REST API.

@@ -7,6 +7,7 @@ package com.artipie.api;
 import com.artipie.http.auth.AuthUser;
 import com.artipie.security.policy.Policy;
 import io.vertx.core.Handler;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.User;
 import io.vertx.ext.web.RoutingContext;
 import java.security.Permission;
@@ -51,7 +52,13 @@ public final class AuthzHandler implements Handler<RoutingContext> {
         ).implies(this.perm)) {
             context.next();
         } else {
-            context.response().setStatusCode(HttpStatus.SC_FORBIDDEN).end();
+            context.response()
+                .setStatusCode(HttpStatus.SC_FORBIDDEN)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject()
+                    .put("code", HttpStatus.SC_FORBIDDEN)
+                    .put("message", "Access denied: insufficient permissions")
+                    .encode());
         }
     }
 }

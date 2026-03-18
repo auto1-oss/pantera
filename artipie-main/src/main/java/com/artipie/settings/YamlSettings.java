@@ -13,10 +13,15 @@ import com.artipie.api.ssl.KeyStoreFactory;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import com.artipie.asto.SubStorage;
+import com.artipie.asto.misc.Cleanable;
 import com.artipie.asto.factory.Config;
 import com.artipie.asto.factory.StoragesLoader;
+import com.artipie.auth.AuthFromDb;
 import com.artipie.auth.AuthFromEnv;
+import com.artipie.cache.CacheInvalidationPubSub;
 import com.artipie.cache.GlobalCacheConfig;
+import com.artipie.cache.NegativeCacheConfig;
+import com.artipie.cache.PublishingCleanable;
 import com.artipie.cache.StoragesCache;
 import com.artipie.cache.ValkeyConnection;
 import com.artipie.cooldown.CooldownSettings;
@@ -30,10 +35,14 @@ import com.artipie.http.client.HttpClientSettings;
 import com.artipie.scheduling.ArtifactEvent;
 import com.artipie.scheduling.MetadataEventQueues;
 import com.artipie.scheduling.QuartzService;
+import com.artipie.security.policy.CachedYamlPolicy;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.settings.cache.CachedUsers;
 import com.artipie.settings.cache.GuavaFiltersCache;
+import com.artipie.settings.cache.PublishingFiltersCache;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.index.ArtifactIndex;
+import com.artipie.index.DbArtifactIndex;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
@@ -150,9 +159,32 @@ public final class YamlSettings implements Settings {
     private final JwtSettings jwtSettings;
 
     /**
+     * Artifact index (PostgreSQL-backed).
+     */
+    private final ArtifactIndex artifactIndex;
+
+    /**
      * Path to artipie.yaml config file.
      */
     private final Path configFilePath;
+
+    /**
+     * Redis pub/sub for cross-instance cache invalidation, or null if Valkey is not configured.
+     * @since 1.20.13
+     */
+    private final CacheInvalidationPubSub cachePubSub;
+
+    /**
+     * Valkey connection for proper cleanup on shutdown, or null if Valkey is not configured.
+     * @since 1.20.13
+     */
+    private final ValkeyConnection valkeyConn;
+
+    /**
+     * Guard flag to make {@link #close()} idempotent without spurious error logs.
+     * @since 1.20.13
+     */
+    private volatile boolean closed;
 
     /**
      * Tracked storages for proper cleanup.
@@ -171,8 +203,26 @@ public final class YamlSettings implements Settings {
      * @param path Path to the folder with yaml settings file
      * @param quartz Quartz service
      */
-    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path, final QuartzService quartz) {
+        this(content, path, quartz, Optional.empty());
+    }
+
+    /**
+     * Ctor with optional pre-created DataSource.
+     * <p>
+     * When a shared DataSource is provided, it is reused instead of creating a
+     * new connection pool. This allows VertxMain to share one HikariCP pool
+     * between Quartz JDBC clustering and artifact operations.
+     *
+     * @param content YAML file content.
+     * @param path Path to the folder with yaml settings file
+     * @param quartz Quartz service
+     * @param shared Pre-created DataSource to reuse, or empty to create a new one
+     * @since 1.20.13
+     */
+    @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
+    public YamlSettings(final YamlMapping content, final Path path,
+        final QuartzService quartz, final Optional<DataSource> shared) {
         // Config file can be artipie.yaml or artipie.yml
         this.configFilePath = YamlSettings.findConfigFile(path);
         this.meta = content.yamlMapping("meta");
@@ -183,23 +233,70 @@ public final class YamlSettings implements Settings {
         // Parse JWT settings first - needed for auth cache TTL capping
         this.jwtSettings = JwtSettings.fromYaml(this.meta());
         final Optional<ValkeyConnection> valkey = YamlSettings.initValkey(this.meta());
+        this.valkeyConn = valkey.orElse(null);
         // Initialize global cache config for all adapters
         GlobalCacheConfig.initialize(valkey);
         // Initialize unified negative cache config
-        com.artipie.cache.NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
+        NegativeCacheConfig.initialize(this.meta().yamlMapping("caches"));
         // Initialize cooldown metadata cache config
         FilteredMetadataCacheConfig.initialize(this.meta().yamlMapping("caches"));
-        final CachedUsers auth = YamlSettings.initAuth(this.meta(), valkey, this.jwtSettings);
+        // Initialize database early so AuthFromDb can be used in auth chain
+        if (shared.isPresent()) {
+            this.artifactsDb = shared;
+        } else {
+            this.artifactsDb = YamlSettings.initArtifactsDb(this.meta());
+        }
+        final CachedUsers auth = YamlSettings.initAuth(
+            this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null)
+        );
         this.security = new ArtipieSecurity.FromYaml(
-            this.meta(), auth, new PolicyStorage(this.meta()).parse()
+            this.meta(), auth, new PolicyStorage(this.meta()).parse(),
+            this.artifactsDb.orElse(null)
         );
-        this.acach = new ArtipieCaches.All(
-            auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
-        );
+        // Initialize cross-instance cache invalidation via Redis pub/sub
+        if (valkey.isPresent()) {
+            final CacheInvalidationPubSub ps =
+                new CacheInvalidationPubSub(valkey.get());
+            this.cachePubSub = ps;
+            ps.register("auth", auth);
+            final GuavaFiltersCache filters = new GuavaFiltersCache();
+            ps.register("filters", filters);
+            final Cleanable<String> policyCache;
+            if (this.security.policy() instanceof Cleanable) {
+                policyCache = (Cleanable<String>) this.security.policy();
+                ps.register("policy", policyCache);
+            }
+            this.acach = new ArtipieCaches.All(
+                new PublishingCleanable(auth, ps, "auth"),
+                new StoragesCache(),
+                this.security.policy(),
+                new PublishingFiltersCache(filters, ps)
+            );
+        } else {
+            this.cachePubSub = null;
+            this.acach = new ArtipieCaches.All(
+                auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
+            );
+        }
         this.mctx = new MetricsContext(this.meta());
         this.lctx = new LoggingContext(this.meta());
         this.cooldown = YamlCooldownSettings.fromMeta(this.meta());
-        this.artifactsDb = YamlSettings.initArtifactsDb(this.meta());
+        // Initialize artifact index
+        final YamlMapping indexConfig = this.meta.yamlMapping("artifact_index");
+        final boolean indexEnabled = indexConfig != null
+            && "true".equals(indexConfig.string("enabled"));
+        if (indexEnabled && this.artifactsDb.isPresent()) {
+            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+        } else if (indexEnabled) {
+            throw new IllegalStateException(
+                "artifact_index.enabled=true requires artifacts_database to be configured"
+            );
+        } else if (this.artifactsDb.isPresent()) {
+            // Auto-enable DB-backed index when database is configured
+            this.artifactIndex = new DbArtifactIndex(this.artifactsDb.get());
+        } else {
+            this.artifactIndex = ArtifactIndex.NOP;
+        }
         this.events = this.artifactsDb.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
@@ -293,6 +390,11 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public Optional<ValkeyConnection> valkeyConnection() {
+        return Optional.ofNullable(this.valkeyConn);
+    }
+
+    @Override
     public PrefixesConfig prefixes() {
         return this.prefixesConfig;
     }
@@ -303,12 +405,30 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public ArtifactIndex artifactIndex() {
+        return this.artifactIndex;
+    }
+
+    @Override
     public void close() {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
         EcsLogger.info("com.artipie.settings")
             .message("Closing YamlSettings and cleaning up storage resources")
             .eventCategory("configuration")
             .eventAction("settings_close")
             .log();
+        // Close ordering is critical — dependencies flow downward:
+        // 1. Tracked storages (may use DataSource / Valkey indirectly)
+        // 2. Artifact index (uses DataSource via its executor)
+        // 3. Cache pub/sub (uses ValkeyConnection's pub/sub connections)
+        // 4. HikariDataSource (safe after index executor drained)
+        // 5. ValkeyConnection (safe after pub/sub closed)
+        // 6. Clear tracked storages list
+        // Note: VertxMain.stop() closes HTTP servers before calling this,
+        // so in-flight requests should have drained by the time we get here.
         for (final Storage storage : this.trackedStorages) {
             try {
                 // Try to close via factory first (preferred method)
@@ -342,6 +462,83 @@ public final class YamlSettings implements Settings {
                     .log();
             }
         }
+        // Close artifact index
+        if (this.artifactIndex != null && this.artifactIndex != ArtifactIndex.NOP) {
+            try {
+                this.artifactIndex.close();
+                EcsLogger.info("com.artipie.settings")
+                    .message("Closed artifact index")
+                    .eventCategory("configuration")
+                    .eventAction("index_close")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to close artifact index")
+                    .eventCategory("configuration")
+                    .eventAction("index_close")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // Close cache invalidation pub/sub
+        if (this.cachePubSub != null) {
+            try {
+                this.cachePubSub.close();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to close cache invalidation pub/sub")
+                    .eventCategory("configuration")
+                    .eventAction("pubsub_close")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
+        // Close artifacts database connection pool
+        if (this.artifactsDb.isPresent()) {
+            final javax.sql.DataSource ds = this.artifactsDb.get();
+            if (ds instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) ds).close();
+                    EcsLogger.info("com.artipie.settings")
+                        .message("Closed artifacts database connection pool")
+                        .eventCategory("configuration")
+                        .eventAction("database_close")
+                        .eventOutcome("success")
+                        .log();
+                } catch (final Exception e) {
+                    EcsLogger.error("com.artipie.settings")
+                        .message("Failed to close artifacts database connection pool")
+                        .eventCategory("configuration")
+                        .eventAction("database_close")
+                        .eventOutcome("failure")
+                        .error(e)
+                        .log();
+                }
+            }
+        }
+        // Close Valkey connection pool
+        if (this.valkeyConn != null) {
+            try {
+                this.valkeyConn.close();
+                EcsLogger.info("com.artipie.settings")
+                    .message("Closed Valkey connection")
+                    .eventCategory("configuration")
+                    .eventAction("valkey_close")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception e) {
+                EcsLogger.error("com.artipie.settings")
+                    .message("Failed to close Valkey connection")
+                    .eventCategory("configuration")
+                    .eventAction("valkey_close")
+                    .eventOutcome("failure")
+                    .error(e)
+                    .log();
+            }
+        }
         this.trackedStorages.clear();
         EcsLogger.info("com.artipie.settings")
             .message("YamlSettings cleanup complete")
@@ -357,15 +554,15 @@ public final class YamlSettings implements Settings {
      * @return Storage type string (e.g., "s3", "fs") or null if unknown
      */
     private String detectStorageType(final Storage storage) {
-        final String className = storage.getClass().getSimpleName().toLowerCase();
+        Storage target = storage;
+        if (target instanceof com.artipie.http.misc.DispatchedStorage) {
+            target = ((com.artipie.http.misc.DispatchedStorage) target).unwrap();
+        }
+        final String className = target.getClass().getSimpleName().toLowerCase();
         if (className.contains("s3")) {
             return "s3";
         } else if (className.contains("file")) {
             return "fs";
-        } else if (className.contains("etcd")) {
-            return "etcd";
-        } else if (className.contains("redis")) {
-            return "redis";
         }
         return null;
     }
@@ -494,46 +691,65 @@ public final class YamlSettings implements Settings {
     }
 
     /**
-     * Initialise authentication. If `credentials` section is absent or empty,
-     * {@link AuthFromEnv} is used.
+     * Initialise authentication. When a database is available, {@link AuthFromDb}
+     * is used as the primary authenticator. File-based and other providers from
+     * the YAML credentials section are added as fallbacks.
      * @param settings Yaml settings
      * @param valkey Optional Valkey connection for L2 cache
      * @param jwtSettings JWT settings for cache TTL capping
+     * @param dataSource Database data source (nullable)
      * @return Authentication
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     private static CachedUsers initAuth(
         final YamlMapping settings,
         final Optional<ValkeyConnection> valkey,
-        final JwtSettings jwtSettings
+        final JwtSettings jwtSettings,
+        final DataSource dataSource
     ) {
         Authentication res;
-        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
-        if (creds == null || creds.isEmpty()) {
+        if (dataSource != null) {
+            // Database is the primary source of truth for user credentials
+            res = new AuthFromDb(dataSource);
             EcsLogger.info("com.artipie.security")
-                .message("Credentials yaml section is absent or empty, using AuthFromEnv()")
+                .message("Using AuthFromDb as primary authenticator")
                 .eventCategory("authentication")
                 .eventAction("auth_init")
-                .field("event.provider", "env")
+                .field("event.provider", "db")
                 .log();
-            res = new AuthFromEnv();
         } else {
+            res = new AuthFromEnv();
+        }
+        // Add YAML-configured providers as fallbacks (SSO, env, etc.)
+        final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
+        if (creds != null && !creds.isEmpty()) {
             final AuthLoader loader = new AuthLoader();
-            final List<Authentication> auths = creds.values().stream().map(
-                node -> node.asMapping().string(YamlSettings.NODE_TYPE)
-            ).map(type -> loader.newObject(type, settings)).toList();
-            res = auths.get(0);
-            for (final Authentication auth : auths.subList(1, auths.size())) {
-                res = new Authentication.Joined(res, auth);
+            for (final YamlNode node : creds.values()) {
+                final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
+                // Skip "artipie" file-based auth when DB is primary
+                if (dataSource != null && "artipie".equals(type)) {
+                    continue;
+                }
+                try {
+                    final Authentication auth = loader.newObject(type, settings);
+                    res = new Authentication.Joined(res, auth);
+                } catch (final Exception ex) {
+                    EcsLogger.warn("com.artipie.security")
+                        .message("Failed to load auth provider: " + type)
+                        .eventCategory("authentication")
+                        .eventAction("auth_init")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
+                }
             }
         }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {
             EcsLogger.info("com.artipie.settings")
-                .message("Initializing auth cache with Valkey L2 cache and JWT TTL cap")
+                .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap: expires=%s, expirySeconds=%d", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")
-                .field("jwt_expires", jwtSettings.expires())
-                .field("jwt_expiry_seconds", jwtSettings.expirySeconds())
                 .log();
             return new CachedUsers(res, valkey.get(), jwtSettings);
         } else {

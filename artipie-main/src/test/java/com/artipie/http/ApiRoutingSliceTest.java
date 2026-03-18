@@ -14,6 +14,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.URI;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -54,7 +55,7 @@ class ApiRoutingSliceTest {
             Headers.EMPTY,
             Content.EMPTY
         ).join();
-        
+
         MatcherAssert.assertThat(
             "Path should be rewritten correctly",
             captured.get(),
@@ -75,7 +76,7 @@ class ApiRoutingSliceTest {
             Headers.EMPTY,
             Content.EMPTY
         ).join();
-        
+
         MatcherAssert.assertThat(
             "Path should be rewritten",
             captured.get().getPath(),
@@ -101,7 +102,7 @@ class ApiRoutingSliceTest {
             Headers.EMPTY,
             Content.EMPTY
         ).join();
-        
+
         MatcherAssert.assertThat(
             "Root API path should be rewritten",
             captured.get(),
@@ -122,11 +123,53 @@ class ApiRoutingSliceTest {
             Headers.EMPTY,
             Content.EMPTY
         ).join();
-        
+
         MatcherAssert.assertThat(
             "Non-API paths should pass through unchanged",
             captured.get(),
             Matchers.equalTo("/direct/repo/path")
+        );
+    }
+
+    /**
+     * When repo registry is available and segments[1] is NOT a known repo,
+     * the first segment should be treated as repo_name, not repo_type.
+     * This handles: /api/npm/@scope%2fpkg -> /npm/@scope/pkg
+     * and: /api/npm/some-package -> /npm/some-package
+     */
+    @ParameterizedTest
+    @CsvSource({
+        // Scoped npm package: npm is repo name, @ayd%2fnpm-proxy-test is path
+        "/api/npm/@ayd%2fnpm-proxy-test,/npm/@ayd/npm-proxy-test",
+        // Non-scoped package: npm is repo name, some-package is path
+        "/api/npm/some-package,/npm/some-package",
+        // With prefix
+        "/test_prefix/api/npm/@ayd%2fnpm-proxy-test,/test_prefix/npm/@ayd/npm-proxy-test",
+        "/test_prefix/api/npm/some-package,/test_prefix/npm/some-package",
+        // repo_type + repo_name still works when repo name exists in registry
+        "/api/npm/npm/some-package,/npm/some-package",
+        "/test_prefix/api/npm/npm/@ayd%2fnpm-proxy-test,/test_prefix/npm/@ayd/npm-proxy-test"
+    })
+    void shouldDisambiguateWithRepoRegistry(final String input, final String expected) {
+        // Registry knows about repo "npm" but NOT "some-package" or "@ayd..."
+        final Set<String> knownRepos = Set.of("npm");
+        final AtomicReference<String> captured = new AtomicReference<>();
+        new ApiRoutingSlice(
+            (line, headers, body) -> {
+                captured.set(line.uri().getPath());
+                return ResponseBuilder.ok().completedFuture();
+            },
+            knownRepos::contains
+        ).response(
+            new RequestLine(RqMethod.PUT, input),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        MatcherAssert.assertThat(
+            "Path should be rewritten correctly with repo registry",
+            captured.get(),
+            Matchers.equalTo(expected)
         );
     }
 }

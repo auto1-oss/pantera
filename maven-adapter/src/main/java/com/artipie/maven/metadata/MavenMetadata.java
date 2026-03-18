@@ -8,7 +8,7 @@ import com.artipie.asto.Content;
 import com.artipie.asto.Key;
 import com.artipie.asto.Storage;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+
 import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -56,7 +56,7 @@ public final class MavenMetadata {
         copy.add("versions");
         items.forEach(version -> copy.add("version").set(version).up());
         copy.up();
-        copy.addIf("lastUpdated").set(Instant.now().toEpochMilli()).up();
+        copy.addIf("lastUpdated").set(MavenTimestamp.now()).up();
         copy.up();
         return new MavenMetadata(copy);
     }

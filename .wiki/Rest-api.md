@@ -156,6 +156,88 @@ Both operations require update permissions on the repository. The first endpoint
 artefact version and any dependencies that were blocked alongside it. The second endpoint clears all
 pending cooldown entries for the repository. Successful calls return `204 No Content`.
 
+## Search API
+
+When the artifact index is enabled (see [Configuration-Metadata](./Configuration-Metadata)), the following
+search endpoints are available:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/api/v1/search?query=...&cursor=...&limit=...` | Full-text artifact search with cursor pagination |
+| `GET`  | `/api/v1/search/locate?repo=...&name=...` | Locate a specific artifact by repository and name |
+| `GET`  | `/api/v1/search/reindex` | Trigger metadata reindex |
+| `GET`  | `/api/v1/search/stats` | Search index statistics (document count, warmup status) |
+
+All search endpoints require JWT authentication. The `/search/reindex` endpoint additionally requires
+admin-level permissions.
+
+### Full-text search
+
+The `query` parameter supports free-text search. Results are ranked by relevance using
+PostgreSQL `ts_rank()` when the query matches the tsvector index. Wildcard characters
+(`*`, `?`) automatically fall back to `LIKE`-based matching.
+
+Use `cursor` and `limit` for pagination. The response includes a `next_cursor` value
+that should be passed as `cursor` in the subsequent request to fetch the next page.
+
+**Example: search for an artifact**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search?query=my-library&limit=10"
+```
+
+**Example: paginate through results**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search?query=my-library&limit=10&cursor=eyJvZmZzZXQiOjEwfQ"
+```
+
+### Locate artifact
+
+The `/search/locate` endpoint finds a specific artifact by repository name and artifact
+name. This is useful for determining whether a particular version exists in a given
+repository.
+
+**Example: locate an artifact**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search/locate?repo=my-maven&name=com.example:my-library"
+```
+
+### Reindex and stats
+
+**Example: trigger reindex**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search/reindex"
+```
+
+**Example: check index stats**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8086/api/v1/search/stats"
+```
+
+## Health API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/.health` | System health check |
+
+The health endpoint does not require authentication. It returns per-component status
+and an overall system status. See [Health Checks](./Configuration-Health) for full
+details on response format, status values, and load balancer integration.
+
+## Import API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/import` | Global import endpoint for bulk artifact migration |
+
+The import endpoint accepts bulk artifact data for migration into Artipie repositories.
+This is useful when migrating artifacts from another repository manager. The endpoint
+requires JWT authentication with admin-level permissions.
+
 ## Storage aliases
 [Storage aliases](./Configuration-Storage#Storage-Aliases) can also be managed with Rest API, 
 there are methods to read, create, update and remove aliases. Note, that concrete storage settings 

@@ -15,11 +15,14 @@ import com.artipie.http.Headers;
 import com.artipie.http.Response;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.headers.ContentType;
+import com.artipie.http.headers.Login;
 import com.artipie.http.log.EcsLogger;
 import com.artipie.http.rq.RequestLine;
+import org.slf4j.MDC;
+
+import java.nio.ByteBuffer;
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;
-import java.nio.ByteBuffer;
 
 import io.reactivex.Flowable;
 
@@ -41,10 +44,13 @@ public class HeadManifestSlice extends DockerActionSlice {
             .field("container.image.tag", request.reference().digest())
             .log();
 
-        // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
-        // HEAD requests should have empty body, but we must consume it to complete the request
-        return body.asBytesFuture().thenCompose(ignored ->
-            this.docker.repo(request.name()).manifests()
+        // Capture the authenticated login before crossing the async boundary.
+        // Mirrors the same fix in GetManifestSlice: body.asBytesFuture() may complete
+        // on a different thread where MDC.user.name is not set.
+        final String login = new Login(headers).getValue();
+        return body.asBytesFuture().thenCompose(ignored -> {
+            MDC.put("user.name", login);
+            return this.docker.repo(request.name()).manifests()
                 .get(request.reference())
                 .thenApply(
                     manifest -> manifest.map(
@@ -85,8 +91,8 @@ public class HeadManifestSlice extends DockerActionSlice {
                                 .build();
                         }
                     )
-                )
-        );
+                );
+        });
     }
 
     @Override

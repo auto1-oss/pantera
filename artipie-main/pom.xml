@@ -26,7 +26,7 @@ SOFTWARE.
     <parent>
         <artifactId>artipie</artifactId>
         <groupId>com.artipie</groupId>
-        <version>1.20.12</version>
+        <version>1.22.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>artipie-main</artifactId>
@@ -41,13 +41,13 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>artipie-core</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-core</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
             <exclusions>
                 <exclusion>
@@ -58,23 +58,20 @@ SOFTWARE.
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
-            <artifactId>asto-etcd</artifactId>
-            <version>1.20.12</version>
-        </dependency>
-        <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>asto-redis</artifactId>
-            <version>1.20.12</version>
-        </dependency>
-        <dependency>
-            <groupId>com.artipie</groupId>
             <artifactId>asto-s3</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>asto-vertx-file</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
+        </dependency>
+        <!-- RxJava3: previously a transitive dependency via asto-redis/redisson,
+             now explicit since asto-redis was removed from the build -->
+        <dependency>
+            <groupId>io.reactivex.rxjava3</groupId>
+            <artifactId>rxjava</artifactId>
+            <version>3.1.6</version>
         </dependency>
         <dependency>
             <groupId>com.jcabi</groupId>
@@ -98,13 +95,13 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>vertx-server</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>http-client</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -126,11 +123,6 @@ SOFTWARE.
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
             <version>${guava.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.etcd</groupId>
-            <artifactId>jetcd-core</artifactId>
-            <version>0.7.1</version>
         </dependency>
         <dependency>
             <groupId>io.prometheus</groupId>
@@ -241,7 +233,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.22.1</version>
+            <version>2.24.3</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>
@@ -263,25 +255,25 @@ SOFTWARE.
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>files-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>npm-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>hexpm-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>maven-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
             <exclusions>
                 <exclusion>
@@ -290,82 +282,71 @@ SOFTWARE.
                 </exclusion>
             </exclusions>
         </dependency>
-        <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>gradle-adapter</artifactId>
-            <version>1.20.12</version>
-            <scope>compile</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>com.jcabi</groupId>
-                    <artifactId>jcabi-xml</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
+        <!-- gradle-adapter removed: gradle types now alias to maven -->
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>rpm-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>gem-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>composer-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>go-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>nuget-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>pypi-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>helm-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>docker-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>debian-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>conda-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.artipie</groupId>
             <artifactId>conan-adapter</artifactId>
-            <version>1.20.12</version>
+            <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -394,8 +375,51 @@ SOFTWARE.
             <version>1.5.1</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <version>10.22.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <version>10.22.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>0.4</version>
+        </dependency>
+        <!-- Vert.x WebClient (used by WebhookDispatcher + API integration tests) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web-client</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+        <!-- Vert.x JUnit 5 extension for API integration tests -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>artipie.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>artipie.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

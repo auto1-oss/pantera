@@ -1,0 +1,33 @@
+<settings>
+  <servers>
+    <server>
+      <id>artipie</id>
+      <username>artipie</username>
+      <password>artipie</password>
+    </server>
+  </servers>
+  <profiles>
+    <profile>
+      <id>bench</id>
+      <repositories>
+        <repository>
+          <id>artipie</id>
+          <url>http://localhost:9081/maven</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+    </profile>
+    <profile>
+      <id>bench-group</id>
+      <repositories>
+        <repository>
+          <id>artipie</id>
+          <url>http://localhost:9081/maven_group</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+    </profile>
+  </profiles>
+</settings>

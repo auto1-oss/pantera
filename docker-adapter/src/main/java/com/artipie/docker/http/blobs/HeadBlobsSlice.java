@@ -17,6 +17,8 @@ import com.artipie.http.ResponseBuilder;
 import com.artipie.http.headers.ContentType;
 import com.artipie.http.rq.RequestLine;
 
+import com.artipie.http.log.EcsLogger;
+
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;
 import java.nio.ByteBuffer;
@@ -54,6 +56,19 @@ public class HeadBlobsSlice extends DockerActionSlice {
                             .completedFuture()
                     )
                 )
+                .exceptionally(err -> {
+                    EcsLogger.warn("com.artipie.docker")
+                        .message("Blob HEAD failed with exception, returning 404")
+                        .eventCategory("repository")
+                        .eventAction("blob_head")
+                        .eventOutcome("failure")
+                        .field("package.checksum", request.digest().string())
+                        .error(err)
+                        .log();
+                    return ResponseBuilder.notFound()
+                        .jsonBody(new BlobUnknownError(request.digest()).json())
+                        .build();
+                })
         );
     }
 

@@ -11,6 +11,7 @@ import java.util.function.Consumer;
 import org.awaitility.Awaitility;
 import org.cactoos.list.ListOf;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.quartz.Job;
@@ -67,6 +68,19 @@ public final class QuartzServiceTest {
         this.service.schedulePeriodicJob(2, 3, TestJob.class, data);
         this.service.start();
         Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> count.get() > 12);
+    }
+
+    @Test
+    void doubleStopDoesNotThrow() {
+        final QuartzService svc = new QuartzService();
+        svc.start();
+        Assertions.assertDoesNotThrow(
+            () -> {
+                svc.stop();
+                svc.stop();
+            },
+            "Calling stop() twice must not throw an exception"
+        );
     }
 
     /**

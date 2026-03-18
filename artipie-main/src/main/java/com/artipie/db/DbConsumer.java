@@ -5,19 +5,22 @@
 package com.artipie.db;
 
 import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.group.GroupNegativeCache;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.misc.ConfigDefaults;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import javax.sql.DataSource;
 
@@ -30,12 +33,14 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     /**
      * Default buffer time in seconds.
      */
-    private static final int DEFAULT_BUFFER_TIME_SECONDS = 2;
+    private static final int DEFAULT_BUFFER_TIME_SECONDS =
+        ConfigDefaults.getInt("ARTIPIE_DB_BUFFER_SECONDS", 2);
 
     /**
      * Default buffer size (max events per batch).
      */
-    private static final int DEFAULT_BUFFER_SIZE = 50;
+    private static final int DEFAULT_BUFFER_SIZE =
+        ConfigDefaults.getInt("ARTIPIE_DB_BATCH_SIZE", 200);
 
     /**
      * Publish subject
@@ -91,8 +96,11 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * @param record Artifact event that was persisted
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
-        final EcsLogger logger = EcsLogger.info("com.artipie.audit")
-            .message("Artifact publish recorded")
+        final String msg = record.releaseDate().isPresent()
+            ? String.format("Artifact publish recorded (release=%s)", record.releaseDate().get())
+            : "Artifact publish recorded";
+        EcsLogger.info("com.artipie.audit")
+            .message(msg)
             .eventCategory("artifact")
             .eventAction("artifact_publish")
             .eventOutcome("success")
@@ -101,50 +109,8 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             .field("package.name", record.artifactName())
             .field("package.version", record.artifactVersion())
             .field("package.size", record.size())
-            .userName(record.owner());
-        record.releaseDate().ifPresent(release -> logger.field("artifact.release", release));
-        logger.log();
-    }
-
-    /**
-     * Invalidate group negative cache for a package.
-     * This ensures newly published packages are immediately visible via group repos.
-     * @param packageName Package name (e.g., "@retail/backoffice-interaction-notes")
-     */
-    private static void invalidateGroupNegativeCache(final String packageName) {
-        try {
-            GroupNegativeCache.invalidatePackageGlobally(packageName)
-                .whenComplete((v, err) -> {
-                    if (err != null) {
-                        EcsLogger.warn("com.artipie.db")
-                            .message("Failed to invalidate group negative cache")
-                            .eventCategory("cache")
-                            .eventAction("invalidate_negative_cache")
-                            .eventOutcome("failure")
-                            .field("package.name", packageName)
-                            .error(err)
-                            .log();
-                    } else {
-                        EcsLogger.debug("com.artipie.db")
-                            .message("Invalidated group negative cache for published package")
-                            .eventCategory("cache")
-                            .eventAction("invalidate_negative_cache")
-                            .eventOutcome("success")
-                            .field("package.name", packageName)
-                            .log();
-                    }
-                });
-        } catch (final Exception ex) {
-            // Don't fail the publish if cache invalidation fails
-            EcsLogger.warn("com.artipie.db")
-                .message("Exception during group negative cache invalidation")
-                .eventCategory("cache")
-                .eventAction("invalidate_negative_cache")
-                .eventOutcome("failure")
-                .field("package.name", packageName)
-                .error(ex)
-                .log();
-        }
+            .userName(record.owner())
+            .log();
     }
 
     /**
@@ -152,6 +118,12 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * @since 0.31
      */
     private final class DbObserver implements Observer<List<ArtifactEvent>> {
+
+        /**
+         * Tracks consecutive batch commit failures to prevent infinite re-queuing.
+         * Reset to 0 on successful commit; events are dropped after 3 consecutive failures.
+         */
+        private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
 
         @Override
         public void onSubscribe(final @NonNull Disposable disposable) {
@@ -182,11 +154,12 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             try (
                 Connection conn = DbConsumer.this.source.getConnection();
                 PreparedStatement upsert = conn.prepareStatement(
-                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner) " +
-                    "VALUES (?,?,?,?,?,?,?,?) " +
+                    "INSERT INTO artifacts (repo_type, repo_name, name, version, size, created_date, release_date, owner, path_prefix) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?) " +
                     "ON CONFLICT (repo_name, name, version) " +
                     "DO UPDATE SET repo_type = EXCLUDED.repo_type, size = EXCLUDED.size, " +
-                    "created_date = EXCLUDED.created_date, release_date = EXCLUDED.release_date, owner = EXCLUDED.owner"
+                    "created_date = EXCLUDED.created_date, release_date = EXCLUDED.release_date, " +
+                    "owner = EXCLUDED.owner, path_prefix = COALESCE(EXCLUDED.path_prefix, artifacts.path_prefix)"
                 );
                 PreparedStatement deletev = conn.prepareStatement(
                     "DELETE FROM artifacts WHERE repo_name = ? AND name = ? AND version = ?;"
@@ -209,13 +182,9 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setLong(6, record.createdDate());
                             upsert.setLong(7, release);
                             upsert.setString(8, record.owner());
+                            upsert.setString(9, record.pathPrefix());
                             upsert.execute();
                             logArtifactPublish(record);
-                            // Invalidate group negative cache for npm packages
-                            // This ensures newly published packages are immediately visible via group repos
-                            if ("npm".equals(record.repoType())) {
-                                invalidateGroupNegativeCache(record.artifactName());
-                            }
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());
@@ -240,19 +209,71 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     }
                 }
                 conn.commit();
+                this.consecutiveFailures.set(0);
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.db")
-                    .message("Failed to commit artifact events batch (" + sortedEvents.size() + " events)")
-                    .eventCategory("database")
-                    .eventAction("batch_commit")
-                    .eventOutcome("failure")
-                    .error(ex)
-                    .log();
-                sortedEvents.forEach(DbConsumer.this.subject::onNext);
+                final int failures = this.consecutiveFailures.incrementAndGet();
+                if (failures <= 3) {
+                    EcsLogger.error("com.artipie.db")
+                        .message("Batch commit failed, re-queuing " + sortedEvents.size()
+                            + " events (attempt " + failures + "/3)")
+                        .eventCategory("database")
+                        .eventAction("batch_commit")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
+                    final long backoffMs = Math.min(
+                        1000L * (1L << (failures - 1)), 8000L
+                    );
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (final InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                    sortedEvents.forEach(DbConsumer.this.subject::onNext);
+                } else {
+                    EcsLogger.error("com.artipie.db")
+                        .message("Writing " + sortedEvents.size()
+                            + " events to dead-letter after " + failures
+                            + " consecutive batch failures")
+                        .eventCategory("database")
+                        .eventAction("batch_dead_letter")
+                        .eventOutcome("failure")
+                        .error(ex)
+                        .log();
+                    try {
+                        final DeadLetterWriter dlWriter = new DeadLetterWriter(
+                            Path.of(System.getProperty(
+                                "artipie.home", "/var/artipie"
+                            )).resolve(".dead-letter")
+                        );
+                        dlWriter.write(sortedEvents, ex, failures);
+                    } catch (final IOException dlError) {
+                        EcsLogger.error("com.artipie.db")
+                            .message(String.format(
+                                "Failed to write dead-letter file, dropping %d events",
+                                sortedEvents.size()))
+                            .eventCategory("database")
+                            .eventAction("dead_letter_write")
+                            .eventOutcome("failure")
+                            .error(dlError)
+                            .log();
+                    }
+                }
                 error = true;
             }
-            if (!error) {
-                errors.forEach(DbConsumer.this.subject::onNext);
+            if (!error && !errors.isEmpty()) {
+                if (errors.size() <= 5) {
+                    // Only re-queue a small number of individual errors
+                    errors.forEach(DbConsumer.this.subject::onNext);
+                } else {
+                    EcsLogger.error("com.artipie.db")
+                        .message("Dropping " + errors.size()
+                            + " individually failed events (too many errors in batch)")
+                        .eventCategory("database")
+                        .eventAction("event_drop")
+                        .eventOutcome("failure")
+                        .log();
+                }
             }
         }
 

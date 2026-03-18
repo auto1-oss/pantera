@@ -73,11 +73,36 @@ public final class MetadataETag {
     /**
      * Calculate weak ETag (prefixed with W/).
      * Weak ETags allow semantic equivalence rather than byte-for-byte equality.
-     * 
+     *
      * @return Weak ETag string
      */
     public String calculateWeak() {
         return "W/" + this.calculate();
+    }
+
+    /**
+     * Derive ETag from a pre-computed content hash and a modifier (e.g., tarball URL prefix).
+     * This is ~1000x faster than computing SHA-256 of the full content since it only hashes
+     * ~100 bytes (the stored hash + modifier) instead of 3-5MB of metadata.
+     *
+     * @param storedHash Pre-computed SHA-256 hex of the raw content
+     * @param modifier Additional modifier that affects the final content (e.g., tarball prefix)
+     * @return Derived ETag string
+     */
+    public static String derive(final String storedHash, final String modifier) {
+        try {
+            final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(storedHash.getBytes(StandardCharsets.UTF_8));
+            digest.update(modifier.getBytes(StandardCharsets.UTF_8));
+            final byte[] hash = digest.digest();
+            final StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 not available", ex);
+        }
     }
     
     /**

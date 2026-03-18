@@ -64,47 +64,46 @@ public final class MainSlice extends Slice.Wrap {
             events,
             true
         );
-        // Wrap entire routing in TimeoutSlice to prevent request leaks
-        // Without this, hung requests never timeout and accumulate indefinitely
-        return new TimeoutSlice(
-            new SliceRoute(
-                MainSlice.EMPTY_PATH,
-                new RtRulePath(
-                    new RtRule.ByPath(Pattern.compile("/\\.health")),
-                    new HealthSlice(settings)
+        // No wall-clock timeout here — idle-based timeout is handled by Vert.x
+        // (HttpServerOptions.setIdleTimeout). A global wall-clock timeout kills
+        // legitimate large transfers (multi-GB Docker blobs, Maven artifacts).
+        return new SliceRoute(
+            MainSlice.EMPTY_PATH,
+            new RtRulePath(
+                new RtRule.ByPath(Pattern.compile("/\\.health")),
+                new HealthSlice()
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    MethodRule.GET,
+                    new RtRule.ByPath("/.version")
                 ),
-                new RtRulePath(
-                    new RtRule.All(
-                        MethodRule.GET,
-                        new RtRule.ByPath("/.version")
-                    ),
-                    new VersionSlice(new ArtipieProperties())
+                new VersionSlice(new ArtipieProperties())
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath("/\\.import/.*"),
+                    new RtRule.Any(MethodRule.PUT, MethodRule.POST)
                 ),
-                new RtRulePath(
-                    new RtRule.All(
-                        new RtRule.ByPath("/\\.import/.*"),
-                        new RtRule.Any(MethodRule.PUT, MethodRule.POST)
-                    ),
-                    new ImportSlice(imports)
+                new ImportSlice(imports)
+            ),
+            new RtRulePath(
+                new RtRule.All(
+                    new RtRule.ByPath("/\\.merge/.*"),
+                    MethodRule.POST
                 ),
-                new RtRulePath(
-                    new RtRule.All(
-                        new RtRule.ByPath("/\\.merge/.*"),
-                        MethodRule.POST
-                    ),
-                    new MergeShardsSlice(slices)
-                ),
-                new RtRulePath(
-                    RtRule.FALLBACK,
-                    new DockerRoutingSlice(
-                        settings,
-                        new ApiRoutingSlice(
-                            new SliceByPath(slices, settings.prefixes())
-                        )
+                new MergeShardsSlice(slices)
+            ),
+            new RtRulePath(
+                RtRule.FALLBACK,
+                new DockerRoutingSlice(
+                    settings,
+                    new ApiRoutingSlice(
+                        new SliceByPath(slices, settings.prefixes()),
+                        slices.repositories()
                     )
                 )
-            ),
-            settings.httpClientSettings().proxyTimeout()  // Use configured timeout (default 120s)
+            )
         );
     }
 }

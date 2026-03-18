@@ -34,8 +34,60 @@ The database has a single table `artifacts` with the following structure:
 
 All fields are NOT NULL; a UNIQUE constraint is created on `(repo_name, name, version)`.
 
+### Full-text search (tsvector)
+
+The `artifacts` table includes a `search_tokens` column of type `tsvector`. This column is
+auto-populated by a PostgreSQL trigger on every INSERT and UPDATE. The trigger concatenates
+`repo_name`, `name`, and `version` into a single text-search vector so no application-side
+indexing is required.
+
+Full-text queries use `ts_rank()` to order results by relevance. When the query string
+contains wildcard characters (`*` or `?`), the search engine automatically falls back to
+`LIKE`-based matching so that glob-style patterns still work.
+
+### Connection pool environment variables
+
+The following environment variables tune the HikariCP connection pool used for PostgreSQL.
+They can be set as system environment variables or passed via `-D` JVM flags:
+
+| Variable                           | Default   | Description                                      |
+|------------------------------------|-----------|--------------------------------------------------|
+| `ARTIPIE_DB_CONNECTION_TIMEOUT_MS` | 5000      | Maximum time (ms) to wait for a connection       |
+| `ARTIPIE_DB_IDLE_TIMEOUT_MS`      | 600000    | Maximum time (ms) a connection may sit idle       |
+| `ARTIPIE_DB_MAX_LIFETIME_MS`      | 1800000   | Maximum lifetime (ms) of a connection in the pool |
+
+These defaults are suitable for most single-instance deployments. In HA setups with many
+concurrent writers you may need to lower `ARTIPIE_DB_IDLE_TIMEOUT_MS` or raise the pool
+size to avoid connection starvation.
+
 Migration note: earlier versions supported SQLite via `sqlite_data_file_path`. This is deprecated in favor of PostgreSQL.
 Please migrate your data and update the configuration to use the `postgres_*` settings.
+
+## Artifact Index (Lucene)
+
+Artipie supports a Lucene-based artifact index for fast O(1) group repository lookups.
+To enable this, add the following section to the main configuration file (`meta` section):
+
+```yaml
+meta:
+  artifact_index:
+    enabled: true                     # Enable Lucene artifact index (default: false)
+    directory: /var/artipie/index     # Path for Lucene index files (required if enabled)
+    warmup_on_startup: true           # Scan repos on startup to populate index (default: true)
+```
+
+| Field              | Required | Default | Description                                              |
+|--------------------|----------|---------|----------------------------------------------------------|
+| enabled            | no       | false   | Enable or disable the Lucene artifact index              |
+| directory          | yes*     | -       | Filesystem path for Lucene index files (*required if enabled) |
+| warmup_on_startup  | no       | true    | Scan all repository storage on startup to populate index |
+
+When the index is enabled:
+- On startup, `IndexWarmupService` scans all repository storage to build the initial index (unless `warmup_on_startup` is `false`)
+- During warmup, group repositories fall back to querying all members (fan-out)
+- Once warmup completes, group lookups return immediately from the index
+- Artifact uploads and deletes automatically update the index via the event pipeline
+- The REST API exposes search and stats endpoints under `/api/v1/search/`
 
 ## Maven, NPM and PyPI proxy adapters
 

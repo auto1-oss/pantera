@@ -8,6 +8,7 @@ import com.artipie.asto.Storage;
 import com.artipie.asto.cache.Cache;
 import com.artipie.http.ResponseBuilder;
 import com.artipie.http.Slice;
+import com.artipie.http.cache.ProxyCacheConfig;
 import com.artipie.http.client.ClientSlices;
 import com.artipie.http.client.UriClientSlice;
 import com.artipie.http.client.auth.AuthClientSlice;
@@ -102,6 +103,7 @@ public final class MavenProxySlice extends Slice.Wrap {
      * @param negativeCacheTtl TTL for negative cache (404s)
      * @param negativeCacheEnabled Whether negative caching is enabled
      */
+    @SuppressWarnings("PMD.UnusedFormalParameter")
     public MavenProxySlice(
         final ClientSlices clients,
         final URI remote,
@@ -116,24 +118,22 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Duration negativeCacheTtl,
         final boolean negativeCacheEnabled
     ) {
-        this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype, cooldown, storage,
-            metadataTtl, negativeCacheTtl, negativeCacheEnabled);
+        this(remote(clients, remote, auth), cache, events, rname, remote.toString(), rtype,
+            cooldown, storage, metadataTtl);
     }
 
-    private MavenProxySlice(
-        final Slice remote,
-        final Cache cache,
-        final Optional<Queue<ProxyArtifactEvent>> events,
-        final String rname,
-        final String upstreamUrl,
-        final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
-        final Optional<Storage> storage
-    ) {
-        this(remote, cache, events, rname, upstreamUrl, rtype, cooldown, storage,
-            Duration.ofHours(24), Duration.ofHours(24), true);
-    }
-
+    /**
+     * Internal constructor with resolved remote slice.
+     * @param remote Resolved remote slice
+     * @param cache Repository cache
+     * @param events Artifact events queue
+     * @param rname Repository name
+     * @param upstreamUrl Upstream URL string
+     * @param rtype Repository type
+     * @param cooldown Cooldown service
+     * @param storage Storage for persisting checksums
+     * @param metadataTtl TTL for metadata cache
+     */
     private MavenProxySlice(
         final Slice remote,
         final Cache cache,
@@ -143,15 +143,19 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rtype,
         final com.artipie.cooldown.CooldownService cooldown,
         final Optional<Storage> storage,
-        final Duration metadataTtl,
-        final Duration negativeCacheTtl,
-        final boolean negativeCacheEnabled
+        final Duration metadataTtl
     ) {
-        this(remote, cache, events, rname, upstreamUrl, rtype, cooldown, new MavenCooldownInspector(remote),
-            storage, metadataTtl, negativeCacheTtl, negativeCacheEnabled);
+        super(
+            buildRoute(remote, cache, events, rname, upstreamUrl, rtype,
+                cooldown, new MavenCooldownInspector(remote), storage, metadataTtl)
+        );
     }
 
-    private MavenProxySlice(
+    /**
+     * Build the routing slice with ChecksumProxySlice wrapping CachedProxySlice.
+     */
+    @SuppressWarnings({"PMD.ExcessiveParameterList", "PMD.CloseResource"})
+    private static Slice buildRoute(
         final Slice remote,
         final Cache cache,
         final Optional<Queue<ProxyArtifactEvent>> events,
@@ -161,30 +165,37 @@ public final class MavenProxySlice extends Slice.Wrap {
         final com.artipie.cooldown.CooldownService cooldown,
         final MavenCooldownInspector inspector,
         final Optional<Storage> storage,
-        final Duration metadataTtl,
-        final Duration negativeCacheTtl,
-        final boolean negativeCacheEnabled
+        final Duration metadataTtl
     ) {
-        super(
-            new SliceRoute(
-                new RtRulePath(
-                    MethodRule.HEAD,
-                    new HeadProxySlice(remote)
-                ),
-                new RtRulePath(
-                    MethodRule.GET,
-                    // Wrap with ChecksumProxySlice to auto-generate .sha1/.md5 files
-                    // This dramatically improves Maven client performance by eliminating
-                    // "Checksum validation failed, no checksums available" errors
-                    new ChecksumProxySlice(
-                        new CachedProxySlice(remote, cache, events, rname, upstreamUrl, rtype, cooldown, inspector,
-                            storage, metadataTtl, negativeCacheTtl, negativeCacheEnabled)
+        // Build ProxyCacheConfig with cooldown enabled so BaseCachedProxySlice
+        // delegates to the cooldown service for freshness enforcement.
+        final ProxyCacheConfig config = ProxyCacheConfig.withCooldown();
+        // Create MetadataCache with provided TTL
+        final com.artipie.cache.ValkeyConnection valkeyConn =
+            com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+        final MetadataCache metadataCache = new MetadataCache(
+            metadataTtl,
+            new MavenCacheConfig().metadataMaxSize(),
+            valkeyConn,
+            rname
+        );
+        return new SliceRoute(
+            new RtRulePath(
+                MethodRule.HEAD,
+                new HeadProxySlice(remote)
+            ),
+            new RtRulePath(
+                MethodRule.GET,
+                new ChecksumProxySlice(
+                    new CachedProxySlice(
+                        remote, cache, events, rname, upstreamUrl, rtype,
+                        cooldown, inspector, storage, config, metadataCache
                     )
-                ),
-                new RtRulePath(
-                    RtRule.FALLBACK,
-                    new SliceSimple(ResponseBuilder.methodNotAllowed().build())
                 )
+            ),
+            new RtRulePath(
+                RtRule.FALLBACK,
+                new SliceSimple(ResponseBuilder.methodNotAllowed().build())
             )
         );
     }

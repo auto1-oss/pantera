@@ -173,7 +173,11 @@ final class JdbcCooldownServiceTest {
         };
         this.service.evaluate(request, inspector).join();
         this.service.unblockAll("npm-proxy", "npm", "eve").join();
-        MatcherAssert.assertThat(this.status("npm", "main", "1.0.0"), Matchers.is("INACTIVE"));
+        MatcherAssert.assertThat(
+            "Record should be deleted after unblock",
+            this.recordExists("npm", "main", "1.0.0"),
+            Matchers.is(false)
+        );
     }
 
     @Test
@@ -229,6 +233,22 @@ final class JdbcCooldownServiceTest {
             stmt.setLong(6, System.currentTimeMillis());
             stmt.setString(7, "tester");
             stmt.executeUpdate();
+        } catch (final SQLException err) {
+            throw new IllegalStateException(err);
+        }
+    }
+
+    private boolean recordExists(final String repo, final String artifact, final String version) {
+        try (Connection conn = this.dataSource.getConnection();
+            PreparedStatement stmt = conn.prepareStatement(
+                "SELECT 1 FROM artifact_cooldowns WHERE repo_name = ? AND artifact = ? AND version = ?"
+            )) {
+            stmt.setString(1, repo);
+            stmt.setString(2, artifact);
+            stmt.setString(3, version);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next();
+            }
         } catch (final SQLException err) {
             throw new IllegalStateException(err);
         }

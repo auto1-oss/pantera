@@ -71,6 +71,19 @@ public final class AstoManifests implements Manifests {
     }
 
     @Override
+    public CompletableFuture<Manifest> putUnchecked(ManifestReference ref, Content content) {
+        return content.asBytesFuture()
+            .thenCompose(
+                bytes -> this.blobs.put(new TrustedBlobSource(bytes))
+                    .thenApply(digest -> new Manifest(digest, bytes))
+                    .thenCompose(
+                        manifest -> this.addManifestLinks(ref, manifest.digest())
+                            .thenApply(nothing -> manifest)
+                    )
+            );
+    }
+
+    @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         EcsLogger.debug("com.artipie.docker")
             .message("AstoManifests.get() called")

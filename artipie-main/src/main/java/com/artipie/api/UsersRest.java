@@ -4,6 +4,10 @@
  */
 package com.artipie.api;
 
+import com.artipie.api.perms.ApiAliasPermission;
+import com.artipie.api.perms.ApiRepositoryPermission;
+import com.artipie.api.perms.ApiRolePermission;
+import com.artipie.api.perms.ApiSearchPermission;
 import com.artipie.api.perms.ApiUserPermission;
 import com.artipie.asto.misc.Cleanable;
 import com.artipie.http.auth.AuthUser;
@@ -13,6 +17,7 @@ import com.artipie.settings.ArtipieSecurity;
 import com.artipie.settings.cache.ArtipieCaches;
 import com.artipie.settings.users.CrudUsers;
 import com.artipie.http.log.EcsLogger;
+import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
 import java.io.StringReader;
@@ -87,6 +92,9 @@ public final class UsersRest extends BaseRest {
 
     @Override
     public void init(final RouterBuilder rbr) {
+        rbr.operation("getCurrentUser")
+            .handler(this::getCurrentUser)
+            .failureHandler(this.errorHandler(HttpStatus.INTERNAL_SERVER_ERROR_500));
         rbr.operation("listAllUsers")
             .handler(
                 new AuthzHandler(
@@ -157,7 +165,7 @@ public final class UsersRest extends BaseRest {
                 .field("user.name", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "User not found");
             return;
         }
         this.ucache.invalidate(uname);
@@ -182,7 +190,7 @@ public final class UsersRest extends BaseRest {
                 .field("user.name", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "User not found");
             return;
         }
         this.ucache.invalidate(uname);
@@ -207,7 +215,7 @@ public final class UsersRest extends BaseRest {
                 .field("user.name", uname)
                 .error(err)
                 .log();
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "User not found");
             return;
         }
         this.ucache.invalidate(uname);
@@ -238,7 +246,7 @@ public final class UsersRest extends BaseRest {
             this.pcache.invalidate(uname);
             context.response().setStatusCode(HttpStatus.CREATED_201).end();
         } else {
-            context.response().setStatusCode(HttpStatus.FORBIDDEN_403).end();
+            sendError(context, HttpStatus.FORBIDDEN_403, "Insufficient permissions");
         }
     }
 
@@ -253,7 +261,7 @@ public final class UsersRest extends BaseRest {
         if (usr.isPresent()) {
             context.response().setStatusCode(HttpStatus.OK_200).end(usr.get().toString());
         } else {
-            context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+            sendError(context, HttpStatus.NOT_FOUND_404, "User not found");
         }
     }
 
@@ -287,11 +295,57 @@ public final class UsersRest extends BaseRest {
                     .field("user.name", uname)
                     .error(err)
                     .log();
-                context.response().setStatusCode(HttpStatus.NOT_FOUND_404).end();
+                sendError(context, HttpStatus.NOT_FOUND_404, "User not found");
             }
         } else {
-            context.response().setStatusCode(HttpStatus.UNAUTHORIZED_401).end();
+            sendError(context, HttpStatus.UNAUTHORIZED_401, "Invalid old password");
         }
+    }
+
+    /**
+     * Get current authenticated user info and effective permissions.
+     * @param context Request context
+     */
+    private void getCurrentUser(final RoutingContext context) {
+        final String sub = context.user().principal().getString(AuthTokenRest.SUB);
+        final String ctx = context.user().principal().getString(AuthTokenRest.CONTEXT);
+        final AuthUser authUser = new AuthUser(sub, ctx);
+        final PermissionCollection perms = this.policy.getPermissions(authUser);
+        final io.vertx.core.json.JsonObject permissions = new io.vertx.core.json.JsonObject()
+            .put("api_repository_permissions",
+                perms.implies(new ApiRepositoryPermission(
+                    ApiRepositoryPermission.RepositoryAction.READ)))
+            .put("api_user_permissions",
+                perms.implies(new ApiUserPermission(ApiUserPermission.UserAction.READ)))
+            .put("api_role_permissions",
+                perms.implies(new ApiRolePermission(ApiRolePermission.RoleAction.READ)))
+            .put("api_alias_permissions",
+                perms.implies(new ApiAliasPermission(ApiAliasPermission.AliasAction.READ)))
+            .put("api_cache_permissions", false)
+            .put("api_search_permissions",
+                perms.implies(ApiSearchPermission.READ));
+        final io.vertx.core.json.JsonObject result = new io.vertx.core.json.JsonObject()
+            .put("name", sub)
+            .put("context", ctx != null ? ctx : "artipie")
+            .put("permissions", permissions);
+        final Optional<JsonObject> userInfo = this.users.get(sub);
+        if (userInfo.isPresent()) {
+            final JsonObject info = userInfo.get();
+            if (info.containsKey("email")) {
+                result.put("email", info.getString("email"));
+            }
+            if (info.containsKey("groups")) {
+                result.put("groups",
+                    new JsonArray(info.getJsonArray("groups").getValuesAs(
+                        javax.json.JsonString.class).stream()
+                        .map(javax.json.JsonString::getString)
+                        .collect(java.util.stream.Collectors.toList())));
+            }
+        }
+        context.response()
+            .setStatusCode(HttpStatus.OK_200)
+            .putHeader("Content-Type", "application/json")
+            .end(result.encode());
     }
 
 }

@@ -5,6 +5,7 @@
 package com.artipie.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
+import com.artipie.http.log.EcsLogger;
 import java.util.Optional;
 
 /**
@@ -110,8 +111,11 @@ public final class JwtSettings {
                 if (expirySeconds <= 0) {
                     expirySeconds = DEFAULT_EXPIRY_SECONDS;
                 }
-            } catch (final NumberFormatException ignored) {
-                // Use default
+            } catch (final NumberFormatException ex) {
+                EcsLogger.warn("com.artipie.settings")
+                    .message("Invalid JWT expiry-seconds value, using default")
+                    .error(ex)
+                    .log();
             }
         }
         String secret = jwt.string("secret");

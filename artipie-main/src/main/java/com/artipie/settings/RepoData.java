@@ -18,9 +18,12 @@ import com.artipie.asto.SubStorage;
 import com.artipie.cache.StoragesCache;
 import com.artipie.http.log.EcsLogger;
 
+import com.artipie.misc.Json2Yaml;
+import com.artipie.settings.repo.CrudRepoSettings;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import javax.json.JsonStructure;
 
 /**
  * Repository data management.
@@ -105,7 +108,7 @@ public final class RepoData {
                                             .eventAction("artifact_delete")
                                             .eventOutcome("success")
                                             .field("repository.name", repo)
-                                            .field("artifact.path", artifactPath)
+                                            .field("file.path", artifactPath)
                                             .field("files.count", keys.size())
                                             .log();
                                         return true;
@@ -121,7 +124,7 @@ public final class RepoData {
                                 .eventAction("artifact_delete")
                                 .eventOutcome("success")
                                 .field("repository.name", repo)
-                                .field("artifact.path", artifactPath)
+                                .field("file.path", artifactPath)
                                 .log();
                             return true;
                         });
@@ -211,11 +214,11 @@ public final class RepoData {
     }
 
     /**
-     * Obtain storage from repository settings.
+     * Obtain storage from repository settings (YAML config file).
      * @param rname Repository name
      * @return Abstract storage
      */
-    private CompletionStage<Storage> repoStorage(final RepositoryName rname) {
+    public CompletionStage<Storage> repoStorage(final RepositoryName rname) {
         return new ConfigFile(String.format("%s.yaml", rname.toString()))
             .valueFrom(this.configStorage)
             .thenCompose(Content::asStringFuture)
@@ -251,5 +254,41 @@ public final class RepoData {
                 return res;
 
             });
+    }
+
+    /**
+     * Obtain storage with DB fallback. Tries YAML config first,
+     * then falls back to reading from CrudRepoSettings (DB).
+     * @param rname Repository name
+     * @param crs Repository settings CRUD (DB fallback)
+     * @return Abstract storage
+     */
+    public CompletionStage<Storage> repoStorage(
+        final RepositoryName rname, final CrudRepoSettings crs
+    ) {
+        return this.repoStorage(rname).exceptionallyCompose(err -> {
+            if (crs == null || !crs.exists(rname)) {
+                return CompletableFuture.failedFuture(err);
+            }
+            return CompletableFuture.supplyAsync(() -> {
+                final JsonStructure config = crs.value(rname);
+                if (config == null) {
+                    throw new IllegalStateException("Repository not found: " + rname);
+                }
+                final javax.json.JsonObject jobj = config.asJsonObject();
+                final javax.json.JsonObject repo = jobj.containsKey("repo")
+                    ? jobj.getJsonObject("repo") : jobj;
+                if (!repo.containsKey(RepoData.STORAGE)) {
+                    throw new IllegalStateException(
+                        "No storage config in repository: " + rname
+                    );
+                }
+                final javax.json.JsonObject storageJson =
+                    repo.getJsonObject(RepoData.STORAGE);
+                final YamlMapping storageYaml =
+                    new Json2Yaml().apply(storageJson.toString());
+                return this.storagesCache.storage(storageYaml);
+            });
+        });
     }
 }

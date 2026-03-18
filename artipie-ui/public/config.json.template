@@ -1,0 +1,6 @@
+{
+  "apiBaseUrl": "$API_BASE_URL",
+  "grafanaUrl": "$GRAFANA_URL",
+  "appTitle": "$APP_TITLE",
+  "defaultPageSize": $DEFAULT_PAGE_SIZE
+}

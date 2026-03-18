@@ -7,6 +7,7 @@ package com.artipie.db;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.artipie.ArtipieException;
 import com.artipie.http.log.EcsLogger;
+import com.artipie.http.misc.ConfigDefaults;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
@@ -107,7 +108,8 @@ public final class ArtifactDbFactory {
      *
      * @since 1.19.2
      */
-    static final int DEFAULT_POOL_MAX_SIZE = 50;
+    static final int DEFAULT_POOL_MAX_SIZE =
+        ConfigDefaults.getInt("ARTIPIE_DB_POOL_MAX", 50);
 
     /**
      * Default connection pool minimum idle.
@@ -115,7 +117,8 @@ public final class ArtifactDbFactory {
      *
      * @since 1.19.2
      */
-    static final int DEFAULT_POOL_MIN_IDLE = 10;
+    static final int DEFAULT_POOL_MIN_IDLE =
+        ConfigDefaults.getInt("ARTIPIE_DB_POOL_MIN", 10);
 
     /**
      * Default buffer time in seconds.
@@ -200,16 +203,23 @@ public final class ArtifactDbFactory {
         hikariConfig.setPassword(password);
         hikariConfig.setMaximumPoolSize(poolMaxSize);
         hikariConfig.setMinimumIdle(poolMinIdle);
-        hikariConfig.setConnectionTimeout(30000); // 30 seconds
-        hikariConfig.setIdleTimeout(600000); // 10 minutes
-        hikariConfig.setMaxLifetime(1800000); // 30 minutes
+        hikariConfig.setConnectionTimeout(
+            ConfigDefaults.getLong("ARTIPIE_DB_CONNECTION_TIMEOUT_MS", 5000L)
+        );
+        hikariConfig.setIdleTimeout(
+            ConfigDefaults.getLong("ARTIPIE_DB_IDLE_TIMEOUT_MS", 600_000L)
+        );
+        hikariConfig.setMaxLifetime(
+            ConfigDefaults.getLong("ARTIPIE_DB_MAX_LIFETIME_MS", 1_800_000L)
+        );
         hikariConfig.setPoolName("ArtipieDB-Pool");
 
-        // Enable connection leak detection (120 seconds threshold)
-        // Logs a warning if a connection is not returned to the pool within 120 seconds
-        // Increased from 60s to reduce false positives during batch processing
-        // DbConsumer batch operations can take >60s under high load
-        hikariConfig.setLeakDetectionThreshold(120000); // 120 seconds
+        // Enable connection leak detection (300 seconds threshold)
+        // Logs a warning if a connection is not returned to the pool within 300 seconds
+        // Increased to reduce false positives during large batch processing (200 events/batch)
+        hikariConfig.setLeakDetectionThreshold(
+            ConfigDefaults.getLong("ARTIPIE_DB_LEAK_DETECTION_MS", 300000)
+        );
 
         // Enable metrics and logging for connection pool monitoring
         hikariConfig.setRegisterMbeans(true); // Enable JMX metrics
@@ -302,6 +312,10 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS release_date BIGINT"
             );
+            // Migration: Add path_prefix column for path-based group index lookup
+            statement.executeUpdate(
+                "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS path_prefix VARCHAR"
+            );
             
             // Performance indexes for artifacts table
             statement.executeUpdate(
@@ -319,6 +333,110 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_release_date ON artifacts(release_date) WHERE release_date IS NOT NULL"
             );
+            // Covering index for locate() — enables index-only scan
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_locate ON artifacts (name, repo_name) INCLUDE (repo_type)"
+            );
+            // Covering index for browse operations
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_browse ON artifacts (repo_name, name, version) INCLUDE (size, created_date, owner)"
+            );
+            // Index for path-prefix based locate() queries (group resolution)
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_artifacts_path_prefix ON artifacts (path_prefix, repo_name) WHERE path_prefix IS NOT NULL"
+            );
+            // Migration: Add tsvector column for full-text search (B1)
+            // Uses 'simple' config to avoid language-specific stemming on artifact names
+            try {
+                statement.executeUpdate(
+                    "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS search_tokens tsvector"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to add search_tokens column (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            // GIN index for fast full-text search on search_tokens
+            try {
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_search ON artifacts USING gin(search_tokens)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to create GIN index idx_artifacts_search (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            // Trigger function to auto-populate search_tokens on INSERT/UPDATE.
+            // Uses translate() to replace dots, slashes, dashes, and underscores
+            // with spaces so each component becomes a separate searchable token.
+            // Without this, "auto1.base.test.txt" is one opaque token and
+            // searching for "test" won't match.
+            try {
+                statement.executeUpdate(
+                    String.join(
+                        "\n",
+                        "CREATE OR REPLACE FUNCTION artifacts_search_update() RETURNS trigger AS $$",
+                        "BEGIN",
+                        "  NEW.search_tokens := to_tsvector('simple',",
+                        "    translate(coalesce(NEW.name, ''), './-_', '    ') || ' ' ||",
+                        "    translate(coalesce(NEW.version, ''), './-_', '    ') || ' ' ||",
+                        "    coalesce(NEW.owner, '') || ' ' ||",
+                        "    translate(coalesce(NEW.repo_name, ''), './-_', '    ') || ' ' ||",
+                        "    translate(coalesce(NEW.repo_type, ''), './-_', '    '));",
+                        "  RETURN NEW;",
+                        "END;",
+                        "$$ LANGUAGE plpgsql;"
+                    )
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to create artifacts_search_update function")
+                    .error(ex)
+                    .log();
+            }
+            // Attach trigger to artifacts table (drop first for idempotent re-creation)
+            try {
+                statement.executeUpdate(
+                    "DROP TRIGGER IF EXISTS trg_artifacts_search ON artifacts"
+                );
+                statement.executeUpdate(
+                    String.join(
+                        "\n",
+                        "CREATE TRIGGER trg_artifacts_search",
+                        "  BEFORE INSERT OR UPDATE ON artifacts",
+                        "  FOR EACH ROW EXECUTE FUNCTION artifacts_search_update();"
+                    )
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to create trigger trg_artifacts_search")
+                    .error(ex)
+                    .log();
+            }
+            // Backfill search_tokens for all rows using the same translate logic
+            // as the trigger — splits dots/slashes/dashes/underscores into
+            // separate tokens for partial matching.
+            try {
+                statement.executeUpdate(
+                    String.join(
+                        " ",
+                        "UPDATE artifacts SET search_tokens = to_tsvector('simple',",
+                        "translate(coalesce(name, ''), './-_', '    ') || ' ' ||",
+                        "translate(coalesce(version, ''), './-_', '    ') || ' ' ||",
+                        "coalesce(owner, '') || ' ' ||",
+                        "translate(coalesce(repo_name, ''), './-_', '    ') || ' ' ||",
+                        "translate(coalesce(repo_type, ''), './-_', '    '))",
+                        "WHERE TRUE"
+                    )
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to backfill search_tokens (may have no rows)")
+                    .error(ex)
+                    .log();
+            }
             statement.executeUpdate(
                 String.join(
                     "\n",
@@ -349,15 +467,21 @@ public final class ArtifactDbFactory {
                 statement.executeUpdate(
                     "ALTER TABLE artifact_cooldowns DROP CONSTRAINT IF EXISTS cooldown_parent_fk"
                 );
-            } catch (SQLException ignored) {
-                // Constraint may not exist
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to drop constraint cooldown_parent_fk (may not exist)")
+                    .error(ex)
+                    .log();
             }
             try {
                 statement.executeUpdate(
                     "ALTER TABLE artifact_cooldowns DROP COLUMN IF EXISTS parent_block_id"
                 );
-            } catch (SQLException ignored) {
-                // Column may not exist
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.artipie.db")
+                    .message("Failed to drop column parent_block_id (may not exist)")
+                    .error(ex)
+                    .log();
             }
             // Migration: Drop artifact_cooldown_attempts table (no longer used)
             statement.executeUpdate(
@@ -368,6 +492,18 @@ public final class ArtifactDbFactory {
             );
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_cooldowns_status ON artifact_cooldowns(status)"
+            );
+            // Composite index for paginated active blocks query (ORDER BY blocked_at DESC)
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_status_blocked_at ON artifact_cooldowns(status, blocked_at DESC)"
+            );
+            // Composite index for per-repo active block counts
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_repo_status ON artifact_cooldowns(repo_type, repo_name, status)"
+            );
+            // Index for server-side search within active blocks
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_status_artifact ON artifact_cooldowns(status, artifact, repo_name)"
             );
             statement.executeUpdate(
                 "UPDATE artifact_cooldowns SET status = 'INACTIVE' WHERE status = 'MANUAL'"
