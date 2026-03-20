@@ -121,11 +121,11 @@ final class MavenProxySliceITCase {
 
     @Test
     void downloadsJarFromCache() throws Exception {
-        new TestResource("com/pantera/helloworld")
+        new TestResource("com/artipie/helloworld")
             .addFilesTo(this.storage, new Key.From("com", "pantera", "helloworld"));
         final HttpURLConnection con = (HttpURLConnection) URI.create(
             String.format(
-                "http://localhost:%s/com/pantera/helloworld/0.1/helloworld-0.1.jar", this.port
+                "http://localhost:%s/com/artipie/helloworld/0.1/helloworld-0.1.jar", this.port
             )
         ).toURL().openConnection();
         con.setRequestMethod("GET");

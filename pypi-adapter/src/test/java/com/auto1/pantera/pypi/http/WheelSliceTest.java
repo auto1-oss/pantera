@@ -63,8 +63,8 @@ class WheelSliceTest {
     @Test
     void savesContentAndReturnsOk() throws IOException {
         final String boundary = "simple boundary";
-        final String filename = "pantera-sample-0.2.tar";
-        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
+        final String filename = "artipie-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/artipie-sample-0.2.tar").asBytes();
         MatcherAssert.assertThat(
             "Returns CREATED status",
             new WheelSlice(this.asto, Optional.of(this.queue), "test"),
@@ -79,7 +79,7 @@ class WheelSliceTest {
         );
         MatcherAssert.assertThat(
             "Saves content to storage",
-                this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
+                this.asto.value(new Key.From("artipie-sample", "0.2", filename)).join().asBytes(),
             new IsEqual<>(body)
         );
         MatcherAssert.assertThat(
@@ -88,11 +88,11 @@ class WheelSliceTest {
         MatcherAssert.assertThat(
             "Artifact event stored per package",
             this.queue.peek().artifactName(),
-            new IsEqual<>("pantera-sample")
+            new IsEqual<>("artipie-sample")
         );
         MatcherAssert.assertThat(
             "Creates package index in .pypi folder",
-            this.asto.exists(new Key.From(".pypi", "pantera-sample", "pantera-sample.html")).join()
+            this.asto.exists(new Key.From(".pypi", "artipie-sample", "artipie-sample.html")).join()
         );
         MatcherAssert.assertThat(
             "Creates repo index in .pypi folder",
@@ -137,8 +137,8 @@ class WheelSliceTest {
     @Test
     void returnsBadRequestIfFileNameIsInvalid() throws IOException {
         final String boundary = RandomStringUtils.random(10);
-        final String filename = "pantera-sample-2020.tar.bz2";
-        final byte[] body = new TestResource("pypi_repo/pantera-sample-2.1.tar.bz2").asBytes();
+        final String filename = "artipie-sample-2020.tar.bz2";
+        final byte[] body = new TestResource("pypi_repo/artipie-sample-2.1.tar.bz2").asBytes();
         MatcherAssert.assertThat(
             "Returns BAD_REQUEST status",
             new WheelSlice(this.asto, Optional.of(this.queue), "test"),

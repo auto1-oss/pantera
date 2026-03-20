@@ -61,11 +61,11 @@ final class MavenProxyAuthIT {
     void shouldGetDependency() throws Exception {
         this.containers.putResourceToPantera(
             "pantera",
-            "com/pantera/helloworld/maven-metadata.xml",
+            "com/artipie/helloworld/maven-metadata.xml",
             "/var/pantera/data/my-maven/com/pantera/helloworld/maven-metadata.xml"
         );
-        MavenITCase.getResourceFiles("com/pantera/helloworld/0.1")
-            .stream().map(item -> String.join("/", "com/pantera/helloworld/0.1", item))
+        MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
+            .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
             .forEach(
                 item -> this.containers.putResourceToPantera(
                     item, String.join("/", "/var/pantera/data/my-maven", item)
@@ -85,7 +85,7 @@ final class MavenProxyAuthIT {
             "Artifact was not cached in proxy",
             "/var/pantera/data/my-maven-proxy/com/pantera/helloworld/0.1/helloworld-0.1.jar",
             new IsEqual<>(
-                new TestResource("com/pantera/helloworld/0.1/helloworld-0.1.jar").asBytes()
+                new TestResource("com/artipie/helloworld/0.1/helloworld-0.1.jar").asBytes()
             )
         );
     }

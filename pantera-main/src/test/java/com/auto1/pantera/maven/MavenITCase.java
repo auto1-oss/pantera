@@ -64,11 +64,11 @@ public final class MavenITCase {
     })
     void downloadsArtifact(final String type, final String vers, final String stn,
         final String repo) throws Exception {
-        final String meta = String.format("com/pantera/%s/maven-metadata.xml", type);
+        final String meta = String.format("com/artipie/%s/maven-metadata.xml", type);
         this.containers.putResourceToPantera(
             meta, String.format("/var/pantera/data/%s/%s", repo, meta)
         );
-        final String base = String.format("com/pantera/%s/%s", type, vers);
+        final String base = String.format("com/artipie/%s/%s", type, vers);
         MavenITCase.getResourceFiles(base).stream().map(r -> String.join("/", base, r)).forEach(
             item -> this.containers.putResourceToPantera(
                 item, String.format("/var/pantera/data/%s/%s", repo, item)
