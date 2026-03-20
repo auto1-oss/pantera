@@ -222,7 +222,7 @@ final class Proposals {
          * @param target Target key.
          */
         protected RootKey(final Key target) {
-            super(new From(new From(".artipie-locks"), new From(target)));
+            super(new From(new From(".pantera-locks"), new From(target)));
         }
     }
 }

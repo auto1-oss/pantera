@@ -179,13 +179,13 @@ public final class ArtifactDbFactory {
         final String user = resolveEnvVar(
             config != null && config.string(ArtifactDbFactory.YAML_USER) != null 
                 ? config.string(ArtifactDbFactory.YAML_USER) 
-                : "artipie"
+                : "pantera"
         );
-            
+
         final String password = resolveEnvVar(
-            config != null && config.string(ArtifactDbFactory.YAML_PASSWORD) != null 
-                ? config.string(ArtifactDbFactory.YAML_PASSWORD) 
-                : "artipie"
+            config != null && config.string(ArtifactDbFactory.YAML_PASSWORD) != null
+                ? config.string(ArtifactDbFactory.YAML_PASSWORD)
+                : "pantera"
         );
 
         final int poolMaxSize = config != null && config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE) != null

@@ -94,7 +94,7 @@ public final class StreamThroughCache implements Cache {
         final Path tempFile;
         final FileChannel channel;
         try {
-            tempFile = Files.createTempFile("artipie-stc-", ".tmp");
+            tempFile = Files.createTempFile("pantera-stc-", ".tmp");
             tempFile.toFile().deleteOnExit();
             channel = FileChannel.open(
                 tempFile,

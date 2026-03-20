@@ -51,7 +51,7 @@ final class PanteraMetaSidecar {
     /**
      * Sidecar file suffix appended to the artifact path.
      */
-    static final String SUFFIX = ".artipie-meta.json";
+    static final String SUFFIX = ".pantera-meta.json";
 
     /**
      * Logger.

@@ -130,7 +130,7 @@ public class AuthTest {
             new AllOf<>(
                 Arrays.asList(
                     new RsHasStatus(RsStatus.UNAUTHORIZED),
-                    new RsHasHeaders(new Header("WWW-Authenticate", "Basic realm=\"artipie\""))
+                    new RsHasHeaders(new Header("WWW-Authenticate", "Basic realm=\"pantera\""))
                 )
             )
         );

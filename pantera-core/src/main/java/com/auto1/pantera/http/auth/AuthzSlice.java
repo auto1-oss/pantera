@@ -25,7 +25,7 @@ public final class AuthzSlice implements Slice {
     /**
      * Header for artipie login.
      */
-    public static final String LOGIN_HDR = "artipie_login";
+    public static final String LOGIN_HDR = "pantera_login";
 
     /**
      * Origin.

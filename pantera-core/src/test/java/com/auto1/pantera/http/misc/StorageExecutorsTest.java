@@ -27,7 +27,7 @@ final class StorageExecutorsTest {
             () -> Thread.currentThread().getName()
         ).get();
         assertThat("Read pool thread should have correct name",
-            name, startsWith("artipie-io-read-"));
+            name, startsWith("pantera-io-read-"));
     }
 
     @Test
@@ -36,7 +36,7 @@ final class StorageExecutorsTest {
             () -> Thread.currentThread().getName()
         ).get();
         assertThat("Write pool thread should have correct name",
-            name, startsWith("artipie-io-write-"));
+            name, startsWith("pantera-io-write-"));
     }
 
     @Test
@@ -45,7 +45,7 @@ final class StorageExecutorsTest {
             () -> Thread.currentThread().getName()
         ).get();
         assertThat("List pool thread should have correct name",
-            name, startsWith("artipie-io-list-"));
+            name, startsWith("pantera-io-list-"));
     }
 
     @Test

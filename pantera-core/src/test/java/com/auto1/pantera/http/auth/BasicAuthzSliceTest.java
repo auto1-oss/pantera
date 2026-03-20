@@ -66,7 +66,7 @@ class BasicAuthzSliceTest {
                 Headers.from(new Authorization.Basic("aaa", "bbbb")),
                 Content.EMPTY
             ).join(),
-            RsStatus.UNAUTHORIZED, new Header("WWW-Authenticate", "Basic realm=\"artipie\"")
+            RsStatus.UNAUTHORIZED, new Header("WWW-Authenticate", "Basic realm=\"pantera\"")
         );
     }
 
@@ -108,11 +108,11 @@ class BasicAuthzSliceTest {
                 )
             ).response(
                 new RequestLine("DELETE", "/baz", "HTTP/1.3"),
-                Headers.from(new Header("WWW-Authenticate", "Basic realm=\"artipie\"")),
+                Headers.from(new Header("WWW-Authenticate", "Basic realm=\"pantera\"")),
                 Content.EMPTY
             ).join(),
             RsStatus.UNAUTHORIZED,
-            new Header("WWW-Authenticate", "Basic realm=\"artipie\"")
+            new Header("WWW-Authenticate", "Basic realm=\"pantera\"")
         );
     }
 

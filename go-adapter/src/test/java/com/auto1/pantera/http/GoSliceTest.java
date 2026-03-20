@@ -293,7 +293,7 @@ class GoSliceTest {
     private static AllOf<Response> unauthorized() {
         return new AllOf<>(
             new RsHasStatus(RsStatus.UNAUTHORIZED),
-            new RsHasHeaders(new Header("WWW-Authenticate", "Basic realm=\"artipie\""))
+            new RsHasHeaders(new Header("WWW-Authenticate", "Basic realm=\"pantera\""))
         );
     }
 

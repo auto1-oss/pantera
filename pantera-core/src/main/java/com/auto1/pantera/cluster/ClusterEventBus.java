@@ -42,7 +42,7 @@ public final class ClusterEventBus implements AutoCloseable {
     /**
      * Channel prefix for all event bus topics.
      */
-    static final String CHANNEL_PREFIX = "artipie:events:";
+    static final String CHANNEL_PREFIX = "pantera:events:";
 
     /**
      * Message field separator between instance ID and payload.

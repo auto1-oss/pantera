@@ -34,7 +34,7 @@ public final class CachedArtifactMetadataStore {
     /**
      * Metadata file suffix.
      */
-    private static final String META_SUFFIX = ".artipie-meta.json";
+    private static final String META_SUFFIX = ".pantera-meta.json";
 
     /**
      * Backing storage.

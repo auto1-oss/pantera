@@ -35,7 +35,7 @@ public final class BasicAuthScheme implements AuthScheme {
      * Basic authentication challenge.
      */
     private static final String CHALLENGE =
-        String.format("%s realm=\"artipie\"", BasicAuthScheme.NAME);
+        String.format("%s realm=\"pantera\"", BasicAuthScheme.NAME);
 
     /**
      * Pool name for metrics identification.

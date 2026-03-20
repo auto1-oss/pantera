@@ -26,12 +26,12 @@ public final class PostgreSQLTestConfig {
     /**
      * Username for tests.
      */
-    private static final String USERNAME = "artipie";
+    private static final String USERNAME = "pantera";
 
     /**
      * Password for tests.
      */
-    private static final String PASSWORD = "artipie";
+    private static final String PASSWORD = "pantera";
 
     /**
      * Private constructor to prevent instantiation.
@@ -50,7 +50,7 @@ public final class PostgreSQLTestConfig {
             .withUsername(USERNAME)
             .withPassword(PASSWORD)
             .withReuse(true)
-            .withLabel("test-container", "artipie-postgres");
+            .withLabel("test-container", "pantera-postgres");
     }
 
     /**

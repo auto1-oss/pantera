@@ -112,7 +112,7 @@ class NuGetPackagePublishTest {
             ).join(),
             new ResponseMatcher(
                 RsStatus.UNAUTHORIZED,
-                new Header("WWW-Authenticate", "Basic realm=\"artipie\"")
+                new Header("WWW-Authenticate", "Basic realm=\"pantera\"")
             )
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());

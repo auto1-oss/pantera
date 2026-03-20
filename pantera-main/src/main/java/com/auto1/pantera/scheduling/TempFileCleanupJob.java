@@ -223,8 +223,8 @@ public final class TempFileCleanupJob implements Job {
             && file.getParent().getFileName() != null
             && ".tmp".equals(file.getParent().getFileName().toString());
         return name.endsWith(".tmp")
-            || name.startsWith("artipie-cache-")
-            || name.startsWith("artipie-stc-")
+            || name.startsWith("pantera-cache-")
+            || name.startsWith("pantera-stc-")
             || intmpdir
             || name.contains(".part-");
     }

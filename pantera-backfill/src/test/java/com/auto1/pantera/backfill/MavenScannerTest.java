@@ -159,7 +159,7 @@ final class MavenScannerTest {
         Files.writeString(dir.resolve("hamcrest-json-0.2.jar.sha256"), "hash");
         Files.writeString(dir.resolve("hamcrest-json-0.2.jar.md5"), "hash");
         Files.writeString(
-            dir.resolve("hamcrest-json-0.2.jar.artipie-meta.json"), "{}"
+            dir.resolve("hamcrest-json-0.2.jar.pantera-meta.json"), "{}"
         );
         final MavenScanner scanner = new MavenScanner("maven");
         final List<ArtifactRecord> records = scanner.scan(temp, "proxy-repo")

@@ -36,7 +36,7 @@ public final class LockCleanupScheduler implements AutoCloseable {
     /**
      * Root prefix for all lock proposals in storage.
      */
-    private static final Key LOCKS_ROOT = new Key.From(".artipie-locks");
+    private static final Key LOCKS_ROOT = new Key.From(".pantera-locks");
 
     /**
      * Default cleanup interval in seconds.

@@ -76,7 +76,7 @@ final class DispatchedStorageTest {
         );
         assertThat(
             "exists() completion should run on the read pool",
-            threadName.get(), startsWith("artipie-io-read-")
+            threadName.get(), startsWith("pantera-io-read-")
         );
     }
 
@@ -100,7 +100,7 @@ final class DispatchedStorageTest {
         );
         assertThat(
             "save() completion should run on the write pool",
-            threadName.get(), startsWith("artipie-io-write-")
+            threadName.get(), startsWith("pantera-io-write-")
         );
     }
 
@@ -121,7 +121,7 @@ final class DispatchedStorageTest {
         );
         assertThat(
             "list() completion should run on the list pool",
-            threadName.get(), startsWith("artipie-io-list-")
+            threadName.get(), startsWith("pantera-io-list-")
         );
     }
 
@@ -147,7 +147,7 @@ final class DispatchedStorageTest {
         );
         assertThat(
             "deleteAll() completion should run on the write pool",
-            threadName.get(), startsWith("artipie-io-write-")
+            threadName.get(), startsWith("pantera-io-write-")
         );
     }
 

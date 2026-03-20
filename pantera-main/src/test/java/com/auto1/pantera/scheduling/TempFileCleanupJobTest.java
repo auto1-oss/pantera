@@ -23,10 +23,10 @@ public final class TempFileCleanupJobTest {
 
     @Test
     void deletesOldTmpFiles(@TempDir final Path dir) throws Exception {
-        final Path old = dir.resolve("artipie-stc-abc123.tmp");
+        final Path old = dir.resolve("pantera-stc-abc123.tmp");
         Files.writeString(old, "old data");
         setOldTimestamp(old, 120);
-        final Path recent = dir.resolve("artipie-stc-def456.tmp");
+        final Path recent = dir.resolve("pantera-stc-def456.tmp");
         Files.writeString(recent, "recent data");
         TempFileCleanupJob.cleanup(dir, 60L);
         Assertions.assertFalse(
@@ -41,19 +41,19 @@ public final class TempFileCleanupJobTest {
 
     @Test
     void deletesOldPanteraCacheFiles(@TempDir final Path dir) throws Exception {
-        final Path old = dir.resolve("artipie-cache-data");
+        final Path old = dir.resolve("pantera-cache-data");
         Files.writeString(old, "cache data");
         setOldTimestamp(old, 90);
-        final Path recent = dir.resolve("artipie-cache-fresh");
+        final Path recent = dir.resolve("pantera-cache-fresh");
         Files.writeString(recent, "fresh cache");
         TempFileCleanupJob.cleanup(dir, 60L);
         Assertions.assertFalse(
             Files.exists(old),
-            "Old artipie-cache- file should have been deleted"
+            "Old pantera-cache- file should have been deleted"
         );
         Assertions.assertTrue(
             Files.exists(recent),
-            "Recent artipie-cache- file should be kept"
+            "Recent pantera-cache- file should be kept"
         );
     }
 
@@ -147,10 +147,10 @@ public final class TempFileCleanupJobTest {
 
     @Test
     void usesDefaultMaxAge(@TempDir final Path dir) throws Exception {
-        final Path old = dir.resolve("artipie-stc-test.tmp");
+        final Path old = dir.resolve("pantera-stc-test.tmp");
         Files.writeString(old, "data");
         setOldTimestamp(old, 120);
-        final Path recent = dir.resolve("artipie-stc-new.tmp");
+        final Path recent = dir.resolve("pantera-stc-new.tmp");
         Files.writeString(recent, "new data");
         TempFileCleanupJob.cleanup(dir, TempFileCleanupJob.DEFAULT_MAX_AGE_MINUTES);
         Assertions.assertFalse(
@@ -166,16 +166,16 @@ public final class TempFileCleanupJobTest {
     @Test
     void isTempFileMatchesCorrectPatterns() {
         Assertions.assertTrue(
-            TempFileCleanupJob.isTempFile(Path.of("/tmp/artipie-stc-abc.tmp")),
-            "Should match artipie-stc-*.tmp"
+            TempFileCleanupJob.isTempFile(Path.of("/tmp/pantera-stc-abc.tmp")),
+            "Should match pantera-stc-*.tmp"
         );
         Assertions.assertTrue(
             TempFileCleanupJob.isTempFile(Path.of("/tmp/something.tmp")),
             "Should match *.tmp"
         );
         Assertions.assertTrue(
-            TempFileCleanupJob.isTempFile(Path.of("/tmp/artipie-cache-data")),
-            "Should match artipie-cache-*"
+            TempFileCleanupJob.isTempFile(Path.of("/tmp/pantera-cache-data")),
+            "Should match pantera-cache-*"
         );
         Assertions.assertTrue(
             TempFileCleanupJob.isTempFile(Path.of("/cache/.tmp/uuid-file")),
@@ -198,13 +198,13 @@ public final class TempFileCleanupJobTest {
     @Test
     void deletesOldPanteraStcFilesWithoutTmpExtension(@TempDir final Path dir)
         throws Exception {
-        final Path old = dir.resolve("artipie-stc-nosuffix");
+        final Path old = dir.resolve("pantera-stc-nosuffix");
         Files.writeString(old, "stc data");
         setOldTimestamp(old, 120);
         TempFileCleanupJob.cleanup(dir, 60L);
         Assertions.assertFalse(
             Files.exists(old),
-            "Old artipie-stc- file without .tmp extension should have been deleted"
+            "Old pantera-stc- file without .tmp extension should have been deleted"
         );
     }
 

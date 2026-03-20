@@ -62,7 +62,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                     return CompletableFuture.completedFuture(
                         AuthScheme.result(
                             AuthUser.ANONYMOUS,
-                            String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                            String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                                 BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                         )
                     );
@@ -72,7 +72,7 @@ public final class CombinedAuthScheme implements AuthScheme {
                 () -> CompletableFuture.completedFuture(
                     AuthScheme.result(
                         AuthUser.ANONYMOUS,
-                        String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                        String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                             BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                     )
                 )
@@ -91,7 +91,7 @@ public final class CombinedAuthScheme implements AuthScheme {
         return CompletableFuture.completedFuture(
             AuthScheme.result(
                 user,
-                String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                     BasicAuthScheme.NAME, BearerAuthScheme.NAME)
             )
         );
@@ -108,7 +108,7 @@ public final class CombinedAuthScheme implements AuthScheme {
             .thenApply(
                 user -> AuthScheme.result(
                     user,
-                    String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )
             );

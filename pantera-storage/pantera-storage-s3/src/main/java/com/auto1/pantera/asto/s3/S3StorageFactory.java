@@ -240,7 +240,7 @@ public final class S3StorageFactory implements StorageFactory {
             if (roleArn == null) {
                 throw new IllegalArgumentException("credentials.roleArn is required for assume-role");
             }
-            final String session = Optional.ofNullable(creds.string("sessionName")).orElse("artipie-session");
+            final String session = Optional.ofNullable(creds.string("sessionName")).orElse("pantera-session");
             final String externalId = creds.string("externalId");
             final AwsCredentialsProvider source = creds.config("source").isEmpty()
                 ? DefaultCredentialsProvider.create()

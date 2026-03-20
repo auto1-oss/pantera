@@ -65,7 +65,7 @@ final class SecurityAuditProxySlice implements Slice {
                 // Skip ALL internal/proxy headers
                 if (name.equals("host")
                     || name.equals("authorization")
-                    || name.equals("artipie_login")
+                    || name.equals("pantera_login")
                     || name.startsWith("x-real")      // x-real-ip, etc.
                     || name.startsWith("x-forwarded") // x-forwarded-for, x-forwarded-proto
                     || name.startsWith("x-fullpath")  // internal artipie header

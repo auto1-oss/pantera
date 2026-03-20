@@ -35,7 +35,7 @@ public final class CombinedAuthzSlice implements Slice {
     /**
      * Header for artipie login.
      */
-    public static final String LOGIN_HDR = "artipie_login";
+    public static final String LOGIN_HDR = "pantera_login";
 
     /**
      * Pool name for metrics identification.
@@ -189,7 +189,7 @@ public final class CombinedAuthzSlice implements Slice {
                         return CompletableFuture.completedFuture(
                             AuthScheme.result(
                                 AuthUser.ANONYMOUS,
-                                String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                                     BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                             )
                         );
@@ -199,7 +199,7 @@ public final class CombinedAuthzSlice implements Slice {
                 () -> CompletableFuture.completedFuture(
                     AuthScheme.result(
                         AuthUser.ANONYMOUS,
-                        String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                        String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                             BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                     )
                 )
@@ -225,7 +225,7 @@ public final class CombinedAuthzSlice implements Slice {
                 );
                 return AuthScheme.result(
                     user,
-                    String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 );
             },
@@ -244,7 +244,7 @@ public final class CombinedAuthzSlice implements Slice {
             .thenApply(
                 user -> AuthScheme.result(
                     user,
-                    String.format("%s realm=\"artipie\", %s realm=\"artipie\"",
+                    String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
                         BasicAuthScheme.NAME, BearerAuthScheme.NAME)
                 )
             );

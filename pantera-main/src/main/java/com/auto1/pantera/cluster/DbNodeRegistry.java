@@ -23,7 +23,7 @@ import javax.sql.DataSource;
  * automatically considered dead after missing heartbeats.
  * </p>
  * <p>
- * Schema: artipie_nodes(node_id VARCHAR PRIMARY KEY, hostname VARCHAR,
+ * Schema: pantera_nodes(node_id VARCHAR PRIMARY KEY, hostname VARCHAR,
  *   port INT, started_at TIMESTAMP, last_heartbeat TIMESTAMP, status VARCHAR)
  * </p>
  *
@@ -60,7 +60,7 @@ public final class DbNodeRegistry {
     }
 
     /**
-     * Create the artipie_nodes table if it does not exist.
+     * Create the pantera_nodes table if it does not exist.
      * Should be called once during application startup.
      * @throws SQLException On database error
      */
@@ -70,7 +70,7 @@ public final class DbNodeRegistry {
             stmt.executeUpdate(
                 String.join(
                     "\n",
-                    "CREATE TABLE IF NOT EXISTS artipie_nodes(",
+                    "CREATE TABLE IF NOT EXISTS pantera_nodes(",
                     "   node_id VARCHAR(255) PRIMARY KEY,",
                     "   hostname VARCHAR(255) NOT NULL,",
                     "   port INT NOT NULL,",
@@ -81,13 +81,13 @@ public final class DbNodeRegistry {
                 )
             );
             stmt.executeUpdate(
-                "CREATE INDEX IF NOT EXISTS idx_nodes_status ON artipie_nodes(status)"
+                "CREATE INDEX IF NOT EXISTS idx_pantera_nodes_status ON pantera_nodes(status)"
             );
             stmt.executeUpdate(
-                "CREATE INDEX IF NOT EXISTS idx_nodes_heartbeat ON artipie_nodes(last_heartbeat)"
+                "CREATE INDEX IF NOT EXISTS idx_pantera_nodes_heartbeat ON pantera_nodes(last_heartbeat)"
             );
             EcsLogger.info(DbNodeRegistry.LOGGER)
-                .message("artipie_nodes table initialized")
+                .message("pantera_nodes table initialized")
                 .eventCategory("database")
                 .eventAction("create_table")
                 .eventOutcome("success")
@@ -108,7 +108,7 @@ public final class DbNodeRegistry {
             PreparedStatement pstmt = conn.prepareStatement(
                 String.join(
                     "\n",
-                    "INSERT INTO artipie_nodes(node_id, hostname, port, started_at, last_heartbeat, status)",
+                    "INSERT INTO pantera_nodes(node_id, hostname, port, started_at, last_heartbeat, status)",
                     "VALUES(?, ?, ?, ?, ?, ?)",
                     "ON CONFLICT(node_id) DO UPDATE SET",
                     "   hostname = EXCLUDED.hostname,",
@@ -146,7 +146,7 @@ public final class DbNodeRegistry {
         final Timestamp now = Timestamp.from(Instant.now());
         try (Connection conn = this.source.getConnection();
             PreparedStatement pstmt = conn.prepareStatement(
-                "UPDATE artipie_nodes SET last_heartbeat = ?, status = ? WHERE node_id = ?"
+                "UPDATE pantera_nodes SET last_heartbeat = ?, status = ? WHERE node_id = ?"
             )) {
             pstmt.setTimestamp(1, now);
             pstmt.setString(2, DbNodeRegistry.STATUS_ACTIVE);
@@ -182,7 +182,7 @@ public final class DbNodeRegistry {
     public void deregister(final String nodeId) throws SQLException {
         try (Connection conn = this.source.getConnection();
             PreparedStatement pstmt = conn.prepareStatement(
-                "UPDATE artipie_nodes SET status = ? WHERE node_id = ?"
+                "UPDATE pantera_nodes SET status = ? WHERE node_id = ?"
             )) {
             pstmt.setString(1, DbNodeRegistry.STATUS_STOPPED);
             pstmt.setString(2, nodeId);
@@ -215,7 +215,7 @@ public final class DbNodeRegistry {
                 String.join(
                     "\n",
                     "SELECT node_id, hostname, started_at, last_heartbeat",
-                    "FROM artipie_nodes",
+                    "FROM pantera_nodes",
                     "WHERE status = ? AND last_heartbeat >= ?",
                     "ORDER BY started_at"
                 )
@@ -260,7 +260,7 @@ public final class DbNodeRegistry {
         final int evicted;
         try (Connection conn = this.source.getConnection();
             PreparedStatement pstmt = conn.prepareStatement(
-                "DELETE FROM artipie_nodes WHERE last_heartbeat < ?"
+                "DELETE FROM pantera_nodes WHERE last_heartbeat < ?"
             )) {
             pstmt.setTimestamp(1, cutoff);
             evicted = pstmt.executeUpdate();

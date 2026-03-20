@@ -33,9 +33,9 @@ public final class JwtWhoAmISlice implements Slice {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenApply(ignored -> {
             // Extract authenticated username from context header set by auth slices
-            // The CombinedAuthzSliceWrap/BearerAuthzSlice adds "artipie_login" header
+            // The CombinedAuthzSliceWrap/BearerAuthzSlice adds "pantera_login" header
             // after JWT validation
-            final String username = new RqHeaders(headers, "artipie_login").stream()
+            final String username = new RqHeaders(headers, "pantera_login").stream()
                 .findFirst()
                 .orElse(null);
 

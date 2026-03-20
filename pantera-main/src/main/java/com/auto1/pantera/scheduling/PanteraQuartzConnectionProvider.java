@@ -28,7 +28,7 @@ public final class PanteraQuartzConnectionProvider implements ConnectionProvider
      * The data source name used in Quartz configuration properties.
      * Must match the value of {@code org.quartz.jobStore.dataSource}.
      */
-    public static final String DS_NAME = "artipieDS";
+    public static final String DS_NAME = "panteraDS";
 
     /**
      * Underlying data source (typically HikariCP).

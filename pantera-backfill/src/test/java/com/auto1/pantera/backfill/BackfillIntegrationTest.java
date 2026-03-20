@@ -387,10 +387,10 @@ final class BackfillIntegrationTest {
     void insertsRecordsIntoPostgres(@TempDir final Path tmp) throws Exception {
         final String dbUrl = System.getenv("BACKFILL_IT_DB_URL");
         final String dbUser = System.getenv().getOrDefault(
-            "BACKFILL_IT_DB_USER", "artipie"
+            "BACKFILL_IT_DB_USER", "pantera"
         );
         final String dbPassword = System.getenv().getOrDefault(
-            "BACKFILL_IT_DB_PASSWORD", "artipie"
+            "BACKFILL_IT_DB_PASSWORD", "pantera"
         );
         final String repoName = "it-pg-maven-" + System.nanoTime();
         final Path artifact = tmp.resolve("org/test/pglib");
@@ -464,10 +464,10 @@ final class BackfillIntegrationTest {
     void upsertIsIdempotent(@TempDir final Path tmp) throws Exception {
         final String dbUrl = System.getenv("BACKFILL_IT_DB_URL");
         final String dbUser = System.getenv().getOrDefault(
-            "BACKFILL_IT_DB_USER", "artipie"
+            "BACKFILL_IT_DB_USER", "pantera"
         );
         final String dbPassword = System.getenv().getOrDefault(
-            "BACKFILL_IT_DB_PASSWORD", "artipie"
+            "BACKFILL_IT_DB_PASSWORD", "pantera"
         );
         final String repoName = "it-pg-idempotent-" + System.nanoTime();
         final Path artifact = tmp.resolve("org/test/idem");

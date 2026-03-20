@@ -665,7 +665,7 @@ public final class VertxMain {
                 .eventOutcome("success")
                 .log();
             app.stop();
-        }, "artipie-shutdown-hook"));
+        }, "pantera-shutdown-hook"));
 
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
         EcsLogger.info("com.auto1.pantera")
@@ -857,7 +857,7 @@ public final class VertxMain {
             final MeterRegistry registry = BackendRegistries.getDefaultNow();
 
             // Add common tags to all metrics
-            registry.config().commonTags("job", "artipie");
+            registry.config().commonTags("job", "pantera");
 
             // Add repo_name cardinality control filter (default max 50 distinct repos)
             registry.config().meterFilter(

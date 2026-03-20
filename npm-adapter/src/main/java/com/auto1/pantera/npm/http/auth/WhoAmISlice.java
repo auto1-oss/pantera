@@ -31,8 +31,8 @@ public final class WhoAmISlice implements Slice {
         // CRITICAL FIX: Consume request body to prevent Vert.x resource leak
         return body.asBytesFuture().thenApply(ignored -> {
             // Extract authenticated username from context header set by auth slices
-            // The BearerAuthzSlice/CombinedAuthzSliceWrap adds "artipie_login" header
-            final String username = new RqHeaders(headers, "artipie_login").stream()
+            // The BearerAuthzSlice/CombinedAuthzSliceWrap adds "pantera_login" header
+            final String username = new RqHeaders(headers, "pantera_login").stream()
                 .findFirst()
                 .orElse(null);
 

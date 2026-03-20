@@ -55,12 +55,12 @@ public final class BackfillCli {
     /**
      * Default database user.
      */
-    private static final String DEFAULT_DB_USER = "artipie";
+    private static final String DEFAULT_DB_USER = "pantera";
 
     /**
      * Default database password.
      */
-    private static final String DEFAULT_DB_PASSWORD = "artipie";
+    private static final String DEFAULT_DB_PASSWORD = "pantera";
 
     /**
      * Default owner.
@@ -421,13 +421,13 @@ public final class BackfillCli {
         options.addOption(
             Option.builder().longOpt("db-user")
                 .hasArg().argName("USER")
-                .desc("Database user (default: artipie)")
+                .desc("Database user (default: pantera)")
                 .build()
         );
         options.addOption(
             Option.builder().longOpt("db-password")
                 .hasArg().argName("PASS")
-                .desc("Database password (default: artipie)")
+                .desc("Database password (default: pantera)")
                 .build()
         );
         options.addOption(

@@ -59,7 +59,7 @@ class DbNodeRegistryTest {
         // Drop and recreate for clean state
         try (Connection conn = this.source.getConnection();
             Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("DROP TABLE IF EXISTS artipie_nodes");
+            stmt.executeUpdate("DROP TABLE IF EXISTS pantera_nodes");
         }
         this.registry = new DbNodeRegistry(this.source);
         this.registry.createTable();
@@ -161,7 +161,7 @@ class DbNodeRegistryTest {
         try (Connection conn = this.source.getConnection();
             Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(
-                "UPDATE artipie_nodes SET last_heartbeat = TIMESTAMP '2020-01-01 00:00:00'"
+                "UPDATE pantera_nodes SET last_heartbeat = TIMESTAMP '2020-01-01 00:00:00'"
                     + " WHERE node_id = 'node-stale'"
             );
         }
@@ -187,7 +187,7 @@ class DbNodeRegistryTest {
         try (Connection conn = this.source.getConnection();
             Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(
-                "UPDATE artipie_nodes SET last_heartbeat = TIMESTAMP '2020-01-01 00:00:00'"
+                "UPDATE pantera_nodes SET last_heartbeat = TIMESTAMP '2020-01-01 00:00:00'"
                     + " WHERE node_id = 'node-stale'"
             );
         }

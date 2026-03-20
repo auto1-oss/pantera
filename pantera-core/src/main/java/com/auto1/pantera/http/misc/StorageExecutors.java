@@ -36,7 +36,7 @@ public final class StorageExecutors {
             "PANTERA_IO_READ_THREADS",
             Runtime.getRuntime().availableProcessors() * 4
         ),
-        namedThreadFactory("artipie-io-read-%d")
+        namedThreadFactory("pantera-io-read-%d")
     );
 
     /**
@@ -47,7 +47,7 @@ public final class StorageExecutors {
             "PANTERA_IO_WRITE_THREADS",
             Runtime.getRuntime().availableProcessors() * 2
         ),
-        namedThreadFactory("artipie-io-write-%d")
+        namedThreadFactory("pantera-io-write-%d")
     );
 
     /**
@@ -58,7 +58,7 @@ public final class StorageExecutors {
             "PANTERA_IO_LIST_THREADS",
             Runtime.getRuntime().availableProcessors()
         ),
-        namedThreadFactory("artipie-io-list-%d")
+        namedThreadFactory("pantera-io-list-%d")
     );
 
     private StorageExecutors() {

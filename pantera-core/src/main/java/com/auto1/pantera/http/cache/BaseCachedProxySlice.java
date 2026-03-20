@@ -565,7 +565,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Path tempFile;
         final FileChannel channel;
         try {
-            tempFile = Files.createTempFile("artipie-cache-", ".tmp");
+            tempFile = Files.createTempFile("pantera-cache-", ".tmp");
             tempFile.toFile().deleteOnExit();
             channel = FileChannel.open(
                 tempFile,

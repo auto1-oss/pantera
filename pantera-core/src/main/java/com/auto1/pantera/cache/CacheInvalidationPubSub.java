@@ -36,7 +36,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
     /**
      * Redis channel name for cache invalidation messages.
      */
-    static final String CHANNEL = "artipie:cache:invalidate";
+    static final String CHANNEL = "pantera:cache:invalidate";
 
     /**
      * Wildcard key used for invalidateAll messages.

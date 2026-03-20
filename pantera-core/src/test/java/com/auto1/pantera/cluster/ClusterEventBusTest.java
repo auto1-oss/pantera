@@ -28,9 +28,9 @@ final class ClusterEventBusTest {
     @Test
     void channelPrefixIsConsistent() {
         Assertions.assertEquals(
-            "artipie:events:",
+            "pantera:events:",
             ClusterEventBus.CHANNEL_PREFIX,
-            "Channel prefix must follow the artipie:events: convention"
+            "Channel prefix must follow the pantera:events: convention"
         );
     }
 

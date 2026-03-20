@@ -98,8 +98,8 @@ public final class MetadataMavenITCase {
                 source.setServerName(System.getProperty("test.postgres.host", "localhost"));
                 source.setPortNumber(Integer.parseInt(System.getProperty("test.postgres.port", "5432")));
                 source.setDatabaseName(System.getProperty("test.postgres.database", "artifacts"));
-                source.setUser(System.getProperty("test.postgres.user", "artipie"));
-                source.setPassword(System.getProperty("test.postgres.password", "artipie"));
+                source.setUser(System.getProperty("test.postgres.user", "pantera"));
+                source.setPassword(System.getProperty("test.postgres.password", "pantera"));
                 try (
                     Connection conn = source.getConnection();
                     Statement stat = conn.createStatement()

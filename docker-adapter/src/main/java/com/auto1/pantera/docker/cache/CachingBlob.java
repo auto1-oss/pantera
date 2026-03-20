@@ -62,7 +62,7 @@ final class CachingBlob implements Blob {
             final Path tmp;
             final FileChannel ch;
             try {
-                tmp = Files.createTempFile("artipie-blob-", ".part");
+                tmp = Files.createTempFile("pantera-blob-", ".part");
                 tmp.toFile().deleteOnExit();
                 ch = FileChannel.open(
                     tmp,

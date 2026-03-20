@@ -320,7 +320,7 @@ public final class UploadSlice implements Slice {
         }
         final PackageOuterClass.Package pckg = PackageOuterClass.Package.newBuilder()
             .setName(name.get())
-            .setRepository("artipie")
+            .setRepository("pantera")
             .addAllReleases(releases.get())
             .addReleases(release)
             .build();

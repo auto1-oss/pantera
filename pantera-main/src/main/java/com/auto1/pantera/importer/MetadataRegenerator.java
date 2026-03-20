@@ -216,7 +216,7 @@ public final class MetadataRegenerator {
             || normalized.endsWith(".lastupdated")
             || normalized.endsWith("_remote.repositories")
             || normalized.contains(".tmp")
-            || normalized.contains(".artipie-locks")) {
+            || normalized.contains(".pantera-locks")) {
             return CompletableFuture.completedFuture(null);
         }
         final String[] segments = path.split("/");
@@ -390,7 +390,7 @@ public final class MetadataRegenerator {
             || lower.startsWith("packages.json") 
             || lower.startsWith("p2/")
             || lower.contains(".tmp")
-            || lower.contains(".artipie-locks")) {
+            || lower.contains(".pantera-locks")) {
             return CompletableFuture.completedFuture(null);
         }
         final boolean isZip = lower.endsWith(".zip");
@@ -644,7 +644,7 @@ public final class MetadataRegenerator {
         // Skip metadata files, temp files, and lock files
         if (lower.startsWith(".pypi/")
             || lower.contains(".tmp")
-            || lower.contains(".artipie-locks")) {
+            || lower.contains(".pantera-locks")) {
             return CompletableFuture.completedFuture(null);
         }
         if (!(lower.endsWith(".whl")
@@ -824,7 +824,7 @@ public final class MetadataRegenerator {
                             && !lower.endsWith(".lastupdated")
                             && !lower.endsWith("_remote.repositories")
                             && !lower.contains(".tmp")
-                            && !lower.contains(".artipie-locks");
+                            && !lower.contains(".pantera-locks");
                     })
                     .map(path -> {
                         final Key artifactKey = new Key.From(path);

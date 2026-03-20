@@ -143,7 +143,7 @@ class NuGetPackageMetadataTest {
             response.headers().stream()
                 .anyMatch(header ->
                     header.getKey().equalsIgnoreCase("WWW-Authenticate")
-                        && header.getValue().contains("Basic realm=\"artipie\"")
+                        && header.getValue().contains("Basic realm=\"pantera\"")
                 )
         );
     }
