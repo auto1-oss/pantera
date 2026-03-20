@@ -28,11 +28,11 @@ SOFTWARE.
   <artifactId>sample-for-deployment</artifactId>
   <version>1.0</version>
   <packaging>jar</packaging>
-  <name>A sample project for deployment into artipie</name>
+  <name>A sample project for deployment into Pantera</name>
   <distributionManagement>
     <repository>
-      <id>artipie</id>
-      <url>http://artipie.artipie:8080/my-maven</url>
+      <id>pantera</id>
+      <url>http://pantera:8080/my-maven</url>
     </repository>
   </distributionManagement>
 </project>

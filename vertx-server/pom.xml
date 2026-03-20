@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!--
 The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
-https://github.com/auto1-oss/pantera/tree/master/artipie/blob/master/LICENSE.txt
+https://github.com/auto1-oss/pantera/blob/master/LICENSE.txt
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -14,7 +14,7 @@ https://github.com/auto1-oss/pantera/tree/master/artipie/blob/master/LICENSE.txt
   <version>1.22.0</version>
   <packaging>jar</packaging>
   <name>The Vert.x server</name>
-  <description>A Vert.x which can serve artipie slices</description>
+  <description>A Vert.x server for Pantera slices</description>
   <url>https://github.com/auto1-oss/pantera/tree/master/vertx-server</url>
   <inceptionYear>2020</inceptionYear>
   <properties>
