@@ -1,0 +1,7 @@
+repo:
+  type: pypi-proxy
+  storage:
+    type: fs
+    path: /var/pantera/data
+  remotes:
+    - url: https://pypi.org/simple/

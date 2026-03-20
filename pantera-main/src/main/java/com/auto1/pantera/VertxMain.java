@@ -862,14 +862,14 @@ public final class VertxMain {
             // Add repo_name cardinality control filter (default max 50 distinct repos)
             registry.config().meterFilter(
                 new RepoNameMeterFilter(
-                    ConfigDefaults.getInt("ARTIPIE_METRICS_MAX_REPOS", 50)
+                    ConfigDefaults.getInt("PANTERA_METRICS_MAX_REPOS", 50)
                 )
             );
 
             // Configure registry to publish histogram buckets for all Timer metrics
-            // Opt-in via ARTIPIE_METRICS_PERCENTILES_HISTOGRAM env var (default: false)
+            // Opt-in via PANTERA_METRICS_PERCENTILES_HISTOGRAM env var (default: false)
             if (Boolean.parseBoolean(
-                ConfigDefaults.get("ARTIPIE_METRICS_PERCENTILES_HISTOGRAM", "false")
+                ConfigDefaults.get("PANTERA_METRICS_PERCENTILES_HISTOGRAM", "false")
             )) {
                 registry.config().meterFilter(
                     new MeterFilter() {

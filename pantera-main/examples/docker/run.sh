@@ -14,6 +14,6 @@ img="localhost:8080/my-docker/myfirstimage"
 docker image tag ubuntu $img
 docker push $img
 
-# Pull the pushed image from artipie.
+# Pull the pushed image from pantera.
 docker image rm $img
 docker pull $img

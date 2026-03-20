@@ -1,0 +1,9 @@
+repo:
+  type: rpm
+  storage:
+    type: fs
+    path: /var/pantera/data
+  settings:
+    digest: sha256
+    naming-policy: sha256
+    filelists: true

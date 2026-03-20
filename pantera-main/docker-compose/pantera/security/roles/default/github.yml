@@ -1,0 +1,22 @@
+#
+# The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+# https://github.com/pantera/pantera/blob/master/LICENSE.txt
+#
+
+permissions:
+  adapter_basic_permissions:
+    "*":
+      - read
+  docker_repository_permissions:
+    "*":
+      "*":
+        - pull
+  docker_registry_permissions:
+    "*":
+      - base
+  api_repository_permissions:
+    - read
+  api_role_permissions:
+    - read
+  api_user_permissions:
+    - read

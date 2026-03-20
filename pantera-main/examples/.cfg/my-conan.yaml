@@ -4,4 +4,4 @@ repo:
   port: 9300
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

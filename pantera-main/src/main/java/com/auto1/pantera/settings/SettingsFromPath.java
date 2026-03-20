@@ -57,7 +57,7 @@ public final class SettingsFromPath {
      */
     public Settings find(final QuartzService quartz,
         final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
-        boolean initialize = Boolean.parseBoolean(System.getenv("ARTIPIE_INIT"));
+        boolean initialize = Boolean.parseBoolean(System.getenv("PANTERA_INIT"));
         if (!Files.exists(this.path)) {
             new JavaResource("example/artipie.yaml").copy(this.path);
             initialize = true;

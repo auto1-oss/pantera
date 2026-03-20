@@ -52,7 +52,7 @@ CMD [ "sh", "-c", "\
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.security=ALL-UNNAMED \
   -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \
-  com.artipie.VertxMain \
+  com.auto1.pantera.VertxMain \
   --config-file=/etc/pantera/pantera.yml \
   --port=8080 \
   --api-port=8086" ]

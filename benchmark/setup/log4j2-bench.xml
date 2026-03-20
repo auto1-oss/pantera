@@ -9,6 +9,6 @@
     <Root level="WARN">
       <AppenderRef ref="Console"/>
     </Root>
-    <Logger name="com.artipie" level="WARN"/>
+    <Logger name="com.auto1.pantera" level="WARN"/>
   </Loggers>
 </Configuration>

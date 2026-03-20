@@ -45,4 +45,4 @@ COPY src/test/resources/ssl/keystore.jks /var/pantera/keystore.jks
 VOLUME /var/pantera /etc/pantera
 WORKDIR /var/pantera
 EXPOSE 8080 8086 8091
-CMD [ "sh", "-c", "java $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.artipie.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086" ]
+CMD [ "sh", "-c", "java $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.auto1.pantera.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086" ]

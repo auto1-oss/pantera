@@ -57,7 +57,7 @@ public final class GroupSlice implements Slice {
      * Resolved drain permits from env/system property/default.
      */
     private static final int DRAIN_LIMIT =
-        ConfigDefaults.getInt("ARTIPIE_GROUP_DRAIN_PERMITS", 20);
+        ConfigDefaults.getInt("PANTERA_GROUP_DRAIN_PERMITS", 20);
 
     /**
      * Semaphore limiting concurrent response body drains to prevent memory pressure.

@@ -2,4 +2,4 @@ repo:
   type: file
   storage:
     type: fs
-    path: /var/artipie/data/bin
+    path: /var/pantera/data/bin

@@ -133,16 +133,16 @@ build_images() {
     if ! docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0" >/dev/null 2>&1; then
         echo "Building v1.22.0 image from current branch..."
         cd "$project_root"
-        mvn -pl artipie-main -am package -DskipTests -q 2>/dev/null || {
+        mvn -pl pantera-main -am package -DskipTests -q 2>/dev/null || {
             echo "WARNING: Maven build failed. Please build manually."
             return 1
         }
         local jar_file
-        jar_file=$(ls artipie-main/target/artipie-main-*.jar 2>/dev/null | grep -v sources | head -1)
+        jar_file=$(ls pantera-main/target/pantera-main-*.jar 2>/dev/null | grep -v sources | head -1)
         if [[ -n "$jar_file" ]]; then
             local jar_name
             jar_name=$(basename "$jar_file")
-            cd artipie-main
+            cd pantera-main
             docker build --build-arg "JAR_FILE=${jar_name}" -t 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0 .
             cd "$project_root"
         fi

@@ -34,10 +34,10 @@ public final class RequestDeduplicator implements AutoCloseable {
 
     /**
      * Maximum age of an in-flight entry before it's considered zombie (5 minutes).
-     * Configurable via ARTIPIE_DEDUP_MAX_AGE_MS environment variable.
+     * Configurable via PANTERA_DEDUP_MAX_AGE_MS environment variable.
      */
     private static final long MAX_AGE_MS =
-        ConfigDefaults.getLong("ARTIPIE_DEDUP_MAX_AGE_MS", 300_000L);
+        ConfigDefaults.getLong("PANTERA_DEDUP_MAX_AGE_MS", 300_000L);
 
     /**
      * Maps cache key to the in-flight fetch entry (future + creation time).

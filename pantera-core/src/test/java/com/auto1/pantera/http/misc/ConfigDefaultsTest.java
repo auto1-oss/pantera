@@ -18,7 +18,7 @@ final class ConfigDefaultsTest {
     @Test
     void returnsDefaultWhenNotSet() {
         assertThat(
-            ConfigDefaults.get("ARTIPIE_TEST_NONEXISTENT_XYZ_123", "fallback"),
+            ConfigDefaults.get("PANTERA_TEST_NONEXISTENT_XYZ_123", "fallback"),
             equalTo("fallback")
         );
     }
@@ -26,7 +26,7 @@ final class ConfigDefaultsTest {
     @Test
     void returnsDefaultIntWhenNotSet() {
         assertThat(
-            ConfigDefaults.getInt("ARTIPIE_TEST_NONEXISTENT_INT_456", 42),
+            ConfigDefaults.getInt("PANTERA_TEST_NONEXISTENT_INT_456", 42),
             equalTo(42)
         );
     }
@@ -35,7 +35,7 @@ final class ConfigDefaultsTest {
     void returnsDefaultOnInvalidInt() {
         // System env won't have this, so it falls through to default
         assertThat(
-            ConfigDefaults.getInt("ARTIPIE_TEST_NONEXISTENT_789", 100),
+            ConfigDefaults.getInt("PANTERA_TEST_NONEXISTENT_789", 100),
             equalTo(100)
         );
     }
@@ -43,7 +43,7 @@ final class ConfigDefaultsTest {
     @Test
     void returnsDefaultLongWhenNotSet() {
         assertThat(
-            ConfigDefaults.getLong("ARTIPIE_TEST_NONEXISTENT_LONG", 120000L),
+            ConfigDefaults.getLong("PANTERA_TEST_NONEXISTENT_LONG", 120000L),
             equalTo(120000L)
         );
     }

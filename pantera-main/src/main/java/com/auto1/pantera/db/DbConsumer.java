@@ -34,13 +34,13 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * Default buffer time in seconds.
      */
     private static final int DEFAULT_BUFFER_TIME_SECONDS =
-        ConfigDefaults.getInt("ARTIPIE_DB_BUFFER_SECONDS", 2);
+        ConfigDefaults.getInt("PANTERA_DB_BUFFER_SECONDS", 2);
 
     /**
      * Default buffer size (max events per batch).
      */
     private static final int DEFAULT_BUFFER_SIZE =
-        ConfigDefaults.getInt("ARTIPIE_DB_BATCH_SIZE", 200);
+        ConfigDefaults.getInt("PANTERA_DB_BATCH_SIZE", 200);
 
     /**
      * Publish subject

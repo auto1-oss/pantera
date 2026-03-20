@@ -1,7 +1,0 @@
-repo:
-  type: pypi-proxy
-  storage:
-    type: fs
-    path: /var/artipie/data
-  remotes:
-    - url: https://pypi.org/simple/

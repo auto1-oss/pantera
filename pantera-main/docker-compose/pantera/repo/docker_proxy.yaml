@@ -1,0 +1,10 @@
+repo:
+  type: docker-proxy
+  storage:
+    type: fs
+    path: /var/pantera/data
+  remotes:
+    - url: https://docker.elastic.co
+    - url: https://registry-1.docker.io
+    - url: https://gcr.io
+    - url: https://k8s.gcr.io

@@ -73,7 +73,7 @@ public final class VertxSliceServer implements Closeable {
      * Default body buffer threshold in bytes (1 MB).
      * Request bodies smaller than this value are buffered in memory for simpler error handling.
      * Request bodies equal to or larger than this value are streamed from disk to avoid OOM.
-     * Can be overridden via {@code ARTIPIE_BODY_BUFFER_THRESHOLD} environment variable
+     * Can be overridden via {@code PANTERA_BODY_BUFFER_THRESHOLD} environment variable
      * or {@code artipie.body.buffer.threshold} system property.
      */
     public static final long DEFAULT_BODY_BUFFER_THRESHOLD = 1_048_576L;
@@ -81,7 +81,7 @@ public final class VertxSliceServer implements Closeable {
     /**
      * Environment variable name for overriding the body buffer threshold.
      */
-    private static final String ENV_BODY_BUFFER_THRESHOLD = "ARTIPIE_BODY_BUFFER_THRESHOLD";
+    private static final String ENV_BODY_BUFFER_THRESHOLD = "PANTERA_BODY_BUFFER_THRESHOLD";
 
     /**
      * HTTP/2 forbidden headers per RFC 7540 Section 8.1.2.

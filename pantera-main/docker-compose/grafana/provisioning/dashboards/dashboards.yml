@@ -4,9 +4,9 @@
 apiVersion: 1
 
 providers:
-  - name: 'Artipie Dashboards'
+  - name: 'Pantera Dashboards'
     orgId: 1
-    folder: 'Artipie'
+    folder: 'Pantera'
     type: file
     disableDeletion: false
     updateIntervalSeconds: 10

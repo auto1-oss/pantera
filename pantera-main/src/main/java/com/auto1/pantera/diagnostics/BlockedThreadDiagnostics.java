@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>Total: &lt;0.1% CPU overhead, never blocks Vert.x event loops</li>
  * </ul>
  * 
- * <p>Disable with environment variable: ARTIPIE_DIAGNOSTICS_DISABLED=true</p>
+ * <p>Disable with environment variable: PANTERA_DIAGNOSTICS_DISABLED=true</p>
  *
  * @since 1.20.10
  */
@@ -39,7 +39,7 @@ public final class BlockedThreadDiagnostics {
     /**
      * Environment variable to disable diagnostics.
      */
-    private static final String DISABLE_ENV = "ARTIPIE_DIAGNOSTICS_DISABLED";
+    private static final String DISABLE_ENV = "PANTERA_DIAGNOSTICS_DISABLED";
 
     /**
      * Singleton instance.

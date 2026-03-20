@@ -2,7 +2,7 @@ repo:
   type: deb
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data
   settings:
     Components: main
     Architectures: amd64

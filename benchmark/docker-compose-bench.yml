@@ -86,7 +86,7 @@ services:
       - ELASTIC_APM_ENABLED=false
       - JVM_ARGS=-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/var/artipie/cache/tmp
     volumes:
-      - ./setup/artipie-old.yml:/etc/artipie/artipie.yml
+      - ./setup/pantera-old.yml:/etc/artipie/pantera.yml
       - ./setup/repos-old:/var/artipie/repo
       - ./setup/security:/var/artipie/security
       - ./setup/log4j2-bench.xml:/etc/artipie/log4j2.xml
@@ -123,7 +123,7 @@ services:
       - ELASTIC_APM_ENABLED=false
       - JVM_ARGS=-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/var/artipie/cache/tmp
     volumes:
-      - ./setup/artipie-new.yml:/etc/artipie/artipie.yml
+      - ./setup/pantera-new.yml:/etc/artipie/pantera.yml
       - ./setup/repos-new:/var/artipie/repo
       - ./setup/security:/var/artipie/security
       - ./setup/log4j2-bench.xml:/etc/artipie/log4j2.xml

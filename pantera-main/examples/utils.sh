@@ -53,8 +53,8 @@ function start_artipie {
   stop_artipie
   docker run --rm --detach --name artipie \
     -v "${basedir}/../artipie.yml:/etc/artipie/artipie.yml" \
-    -v "${basedir}/cfg:/var/artipie/cfg" \
-    -v "${basedir}/data:/var/artipie/data" \
+    -v "${basedir}/cfg:/var/pantera/cfg" \
+    -v "${basedir}/data:/var/pantera/data" \
     -p "${port}:8080" "$image"
   log_debug "artipie started"
   # stop artipie docker container on script exit

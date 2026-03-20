@@ -1,6 +1,6 @@
 repo:
   type: nuget
-  url: http://artipie.artipie:8080/my-nuget
+  url: http://pantera.pantera:8080/my-nuget
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data

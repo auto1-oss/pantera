@@ -70,7 +70,7 @@ public final class InMemoryPackageIndex implements PackageIndex {
         this.twoTier = (valkey != null);
         this.l2 = this.twoTier ? valkey.async() : null;
         this.ttl = Duration.ofHours(
-            ConfigDefaults.getLong("ARTIPIE_NPM_INDEX_TTL_HOURS", 24L)
+            ConfigDefaults.getLong("PANTERA_NPM_INDEX_TTL_HOURS", 24L)
         );
         
         // L1: Hot data cache

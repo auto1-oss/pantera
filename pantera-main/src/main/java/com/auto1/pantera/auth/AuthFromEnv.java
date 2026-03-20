@@ -19,12 +19,12 @@ public final class AuthFromEnv implements Authentication {
     /**
      * Environment name for user.
      */
-    public static final String ENV_NAME = "ARTIPIE_USER_NAME";
+    public static final String ENV_NAME = "PANTERA_USER_NAME";
 
     /**
      * Environment name for password.
      */
-    private static final String ENV_PASS = "ARTIPIE_USER_PASS";
+    private static final String ENV_PASS = "PANTERA_USER_PASS";
 
     /**
      * Environment variables.

@@ -42,7 +42,7 @@ public final class DockerProxyCooldownInspector implements CooldownInspector,
 
     public DockerProxyCooldownInspector() {
         final long expiryHours = ConfigDefaults.getLong(
-            "ARTIPIE_DOCKER_CACHE_EXPIRY_HOURS", 24L
+            "PANTERA_DOCKER_CACHE_EXPIRY_HOURS", 24L
         );
         this.releases = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
             .maximumSize(10_000)

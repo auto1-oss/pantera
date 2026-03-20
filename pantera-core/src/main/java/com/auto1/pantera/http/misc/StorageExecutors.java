@@ -19,9 +19,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>Pool sizing (configurable via environment variables):
  * <ul>
- *   <li>READ: ARTIPIE_IO_READ_THREADS, default 4x CPUs</li>
- *   <li>WRITE: ARTIPIE_IO_WRITE_THREADS, default 2x CPUs</li>
- *   <li>LIST: ARTIPIE_IO_LIST_THREADS, default 1x CPUs</li>
+ *   <li>READ: PANTERA_IO_READ_THREADS, default 4x CPUs</li>
+ *   <li>WRITE: PANTERA_IO_WRITE_THREADS, default 2x CPUs</li>
+ *   <li>LIST: PANTERA_IO_LIST_THREADS, default 1x CPUs</li>
  * </ul>
  *
  * @since 1.20.13
@@ -33,7 +33,7 @@ public final class StorageExecutors {
      */
     public static final ExecutorService READ = Executors.newFixedThreadPool(
         ConfigDefaults.getInt(
-            "ARTIPIE_IO_READ_THREADS",
+            "PANTERA_IO_READ_THREADS",
             Runtime.getRuntime().availableProcessors() * 4
         ),
         namedThreadFactory("artipie-io-read-%d")
@@ -44,7 +44,7 @@ public final class StorageExecutors {
      */
     public static final ExecutorService WRITE = Executors.newFixedThreadPool(
         ConfigDefaults.getInt(
-            "ARTIPIE_IO_WRITE_THREADS",
+            "PANTERA_IO_WRITE_THREADS",
             Runtime.getRuntime().availableProcessors() * 2
         ),
         namedThreadFactory("artipie-io-write-%d")
@@ -55,7 +55,7 @@ public final class StorageExecutors {
      */
     public static final ExecutorService LIST = Executors.newFixedThreadPool(
         ConfigDefaults.getInt(
-            "ARTIPIE_IO_LIST_THREADS",
+            "PANTERA_IO_LIST_THREADS",
             Runtime.getRuntime().availableProcessors()
         ),
         namedThreadFactory("artipie-io-list-%d")

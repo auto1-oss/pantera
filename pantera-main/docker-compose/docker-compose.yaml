@@ -7,7 +7,7 @@ services:
         condition: service_started
       valkey:
         condition: service_healthy
-    image: pantera:${ARTIPIE_VERSION}
+    image: pantera:${PANTERA_VERSION}
     # PERFORMANCE: Increased from 2 CPUs to 4 for better parallel request handling
     # NPM install with 2300+ packages requires significant parallelism
     cpus: 4
@@ -25,9 +25,9 @@ services:
     container_name: pantera
     restart: unless-stopped
     environment:
-      - ARTIPIE_USER_NAME=${ARTIPIE_USER_NAME}
-      - ARTIPIE_USER_PASS=${ARTIPIE_USER_PASS}
-      - ARTIPIE_CONFIG=${ARTIPIE_CONFIG}
+      - PANTERA_USER_NAME=${PANTERA_USER_NAME}
+      - PANTERA_USER_PASS=${PANTERA_USER_PASS}
+      - PANTERA_CONFIG=${PANTERA_CONFIG}
       - HOME=/home/
       - AWS_CONFIG_FILE=${AWS_CONFIG_FILE}
       - AWS_SHARED_CREDENTIALS_FILE=${AWS_SHARED_CREDENTIALS_FILE}
@@ -35,7 +35,7 @@ services:
       - AWS_PROFILE=${AWS_PROFILE}
       - AWS_REGION=${AWS_REGION}
       # Version (change this when bumping version)
-      - ARTIPIE_VERSION=${ARTIPIE_VERSION}
+      - PANTERA_VERSION=${PANTERA_VERSION}
       # Log4j2 configuration file location
       - LOG4J_CONFIGURATION_FILE=/etc/pantera/log4j2.xml
       - ELASTIC_APM_ENABLED=${ELASTIC_APM_ENABLED}
@@ -188,7 +188,7 @@ services:
 
   pantera-ui:
     build:
-      context: ../../artipie-ui
+      context: ../../pantera-ui
       dockerfile: Dockerfile
     container_name: pantera-ui
     restart: unless-stopped

@@ -275,9 +275,9 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // - Lower value (256): more direct allocations, more GC pressure
         // - Higher value (1024): better reuse, but larger O(n) scan if eviction needed
         // - 1024 is sweet spot for 1000 req/s workloads
-        final int maxBucketSize = ConfigDefaults.getInt("ARTIPIE_JETTY_BUCKET_SIZE", settings.jettyBucketSize());
-        final long maxDirectMemory = ConfigDefaults.getLong("ARTIPIE_JETTY_DIRECT_MEMORY", settings.jettyDirectMemory());
-        final long maxHeapMemory = ConfigDefaults.getLong("ARTIPIE_JETTY_HEAP_MEMORY", settings.jettyHeapMemory());
+        final int maxBucketSize = ConfigDefaults.getInt("PANTERA_JETTY_BUCKET_SIZE", settings.jettyBucketSize());
+        final long maxDirectMemory = ConfigDefaults.getLong("PANTERA_JETTY_DIRECT_MEMORY", settings.jettyDirectMemory());
+        final long maxHeapMemory = ConfigDefaults.getLong("PANTERA_JETTY_HEAP_MEMORY", settings.jettyHeapMemory());
         final ArrayByteBufferPool bufferPool = new ArrayByteBufferPool(
             -1,           // minCapacity: use default (0)
             -1,           // factor: use default (1024) - bucket size increment

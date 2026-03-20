@@ -109,7 +109,7 @@ public final class ArtifactDbFactory {
      * @since 1.19.2
      */
     static final int DEFAULT_POOL_MAX_SIZE =
-        ConfigDefaults.getInt("ARTIPIE_DB_POOL_MAX", 50);
+        ConfigDefaults.getInt("PANTERA_DB_POOL_MAX", 50);
 
     /**
      * Default connection pool minimum idle.
@@ -118,7 +118,7 @@ public final class ArtifactDbFactory {
      * @since 1.19.2
      */
     static final int DEFAULT_POOL_MIN_IDLE =
-        ConfigDefaults.getInt("ARTIPIE_DB_POOL_MIN", 10);
+        ConfigDefaults.getInt("PANTERA_DB_POOL_MIN", 10);
 
     /**
      * Default buffer time in seconds.
@@ -204,13 +204,13 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaximumPoolSize(poolMaxSize);
         hikariConfig.setMinimumIdle(poolMinIdle);
         hikariConfig.setConnectionTimeout(
-            ConfigDefaults.getLong("ARTIPIE_DB_CONNECTION_TIMEOUT_MS", 5000L)
+            ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 5000L)
         );
         hikariConfig.setIdleTimeout(
-            ConfigDefaults.getLong("ARTIPIE_DB_IDLE_TIMEOUT_MS", 600_000L)
+            ConfigDefaults.getLong("PANTERA_DB_IDLE_TIMEOUT_MS", 600_000L)
         );
         hikariConfig.setMaxLifetime(
-            ConfigDefaults.getLong("ARTIPIE_DB_MAX_LIFETIME_MS", 1_800_000L)
+            ConfigDefaults.getLong("PANTERA_DB_MAX_LIFETIME_MS", 1_800_000L)
         );
         hikariConfig.setPoolName("PanteraDB-Pool");
 
@@ -218,7 +218,7 @@ public final class ArtifactDbFactory {
         // Logs a warning if a connection is not returned to the pool within 300 seconds
         // Increased to reduce false positives during large batch processing (200 events/batch)
         hikariConfig.setLeakDetectionThreshold(
-            ConfigDefaults.getLong("ARTIPIE_DB_LEAK_DETECTION_MS", 300000)
+            ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 300000)
         );
 
         // Enable metrics and logging for connection pool monitoring

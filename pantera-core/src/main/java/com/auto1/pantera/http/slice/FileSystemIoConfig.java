@@ -15,7 +15,7 @@ import com.auto1.pantera.http.log.EcsLogger;
  * <p>Thread pool sizing can be configured via:
  * <ul>
  *   <li>System property: {@code artipie.filesystem.io.threads}</li>
- *   <li>Environment variable: {@code ARTIPIE_FILESYSTEM_IO_THREADS}</li>
+ *   <li>Environment variable: {@code PANTERA_FILESYSTEM_IO_THREADS}</li>
  *   <li>Default: {@code Math.max(8, Runtime.getRuntime().availableProcessors() * 2)}</li>
  * </ul>
  * 
@@ -46,7 +46,7 @@ public final class FileSystemIoConfig {
     /**
      * Environment variable name for thread pool size.
      */
-    private static final String ENV_THREADS = "ARTIPIE_FILESYSTEM_IO_THREADS";
+    private static final String ENV_THREADS = "PANTERA_FILESYSTEM_IO_THREADS";
 
     /**
      * Minimum thread pool size (safety floor).
