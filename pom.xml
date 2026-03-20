@@ -28,7 +28,7 @@ SOFTWARE.
   <artifactId>pantera</artifactId>
   <version>1.22.0</version>
   <packaging>pom</packaging>
-  <name>artipie</name>
+  <name>pantera</name>
   <modules>
     <module>build-tools</module>
     <module>pantera-core</module>
@@ -59,20 +59,20 @@ SOFTWARE.
     <module>pantera-backfill</module>
   </modules>
   <description>Binary Artifact Management Tool</description>
-  <url>https://github.com/artipie/artipie</url>
+  <url>https://github.com/auto1-oss/pantera</url>
   <inceptionYear>2020</inceptionYear>
   <licenses>
     <license>
-      <name>MIT</name>
-      <url>https://github.com/artipie/artipie/blob/master/LICENSE.txt</url>
+      <name>GPL-3.0</name>
+      <url>https://github.com/auto1-oss/pantera/blob/master/LICENSE.txt</url>
     </license>
   </licenses>
   <issueManagement>
     <system>GitHub</system>
-    <url>https://github.com/artipie/artipie/issues</url>
+    <url>https://github.com/auto1-oss/pantera/issues</url>
   </issueManagement>
   <scm>
-    <url>https://github.com/artipie/artipie</url>
+    <url>https://github.com/auto1-oss/pantera</url>
   </scm>
   <properties>
     <docker.image.name>pantera</docker.image.name>
@@ -101,8 +101,8 @@ SOFTWARE.
       <id>github.com/dgarus</id>
       <name>Denis Garus</name>
       <email>g4s8.public@gmail.com</email>
-      <organization>Artipie</organization>
-      <organizationUrl>https://www.artipie.com</organizationUrl>
+      <organization>Auto1</organization>
+      <organizationUrl>https://github.com/auto1-oss</organizationUrl>
       <roles>
         <role>maintainer</role>
       </roles>
@@ -373,7 +373,7 @@ SOFTWARE.
                 <exclude>**/scripts/**</exclude>
                 <exclude>**/benchmark/**</exclude>
                 <exclude>**/.superpowers/**</exclude>
-                <exclude>**/artipie-ui/**</exclude>
+                <exclude>**/pantera-ui/**</exclude>
               </excludes>
             </licenseSet>
           </licenseSets>

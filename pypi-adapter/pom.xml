@@ -2,7 +2,7 @@
 <!--
 The MIT License (MIT)
 
-Copyright (c) 2020-2023 Artipie
+Copyright (c) 2020-2023 Pantera
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,7 @@ SOFTWARE.
   <artifactId>pypi-adapter</artifactId>
   <version>1.22.0</version>
   <name>pypi-adapter</name>
-  <url>https://github.com/artipie/pypi-adapter</url>
+  <url>https://github.com/auto1-oss/pantera/tree/master/pypi-adapter</url>
   <properties>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
   </properties>

@@ -13,7 +13,7 @@
     <packaging>pom</packaging>
     <name>asto</name>
     <description>A simple Java storage</description>
-    <url>https://github.com/artipie/asto</url>
+    <url>https://github.com/auto1-oss/pantera/tree/master/asto</url>
     <inceptionYear>2019</inceptionYear>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
