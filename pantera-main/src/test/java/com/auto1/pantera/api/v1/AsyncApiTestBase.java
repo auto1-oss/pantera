@@ -65,8 +65,8 @@ public class AsyncApiTestBase {
      */
     static final String TEST_TOKEN =
         "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9"
-        + ".eyJzdWIiOiJhcnRpcGllIiwiY29udGV4dCI6InRlc3QiLCJpYXQiOjE2ODIwODgxNTh9"
-        + ".QjQPLQ0tQFbiRIWpE-GUtUFXvUXvXP4p7va_DOBHjTM";
+        + ".eyJzdWIiOiJwYW50ZXJhIiwiY29udGV4dCI6InRlc3QiLCJpYXQiOjE2ODIwODgxNTh9"
+        + ".wWJgLLe4B_zjmhzKGstCFyHX-C2tE6ucu3WC4G5lEdk";
 
     /**
      * Server port.
