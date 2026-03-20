@@ -1,7 +1,7 @@
 meta:
   storage:
     type: fs
-    path: /var/artipie/repo
+    path: /var/pantera/repo
 
   credentials:
     - type: env
@@ -11,14 +11,14 @@ meta:
     eviction_millis: 180000
     storage:
       type: fs
-      path: /var/artipie/security
+      path: /var/pantera/security
 
   artifacts_database:
     postgres_host: "postgres"
     postgres_port: 5432
     postgres_database: artifacts_old
-    postgres_user: artipie
-    postgres_password: artipie
+    postgres_user: pantera
+    postgres_password: pantera
     pool_max_size: 20
     pool_min_idle: 5
 

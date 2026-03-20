@@ -35,13 +35,13 @@ if [[ -n "$DEBUG" ]]; then
   log_debug "debug enabled"
 fi
 
-function start_artipie {
+function start_pantera {
   local image="$1"
   if [[ -z "$image" ]]; then
-    image=$ARTIPIE_IMAGE
+    image=$PANTERA_IMAGE
   fi
   if [[ -z "$image" ]]; then
-    image="artipie/artipie:1.0-SNAPSHOT"
+    image="pantera/pantera:1.0-SNAPSHOT"
   fi
   local port="$2"
   if [[ -z "$port" ]]; then
@@ -50,23 +50,23 @@ function start_artipie {
   log_debug "using image: '${image}'"
   log_debug "using port:  '${port}'"
   [[ -z "$image" || -z "$port" ]] && die "invalid image or port params"
-  stop_artipie
-  docker run --rm --detach --name artipie \
-    -v "${basedir}/../artipie.yml:/etc/artipie/artipie.yml" \
+  stop_pantera
+  docker run --rm --detach --name pantera \
+    -v "${basedir}/../pantera.yml:/etc/pantera/pantera.yml" \
     -v "${basedir}/cfg:/var/pantera/cfg" \
     -v "${basedir}/data:/var/pantera/data" \
     -p "${port}:8080" "$image"
-  log_debug "artipie started"
-  # stop artipie docker container on script exit
-  if [[ -z "$ARTIPIE_NOSTOP" ]]; then
-    trap stop_artipie EXIT
+  log_debug "pantera started"
+  # stop pantera docker container on script exit
+  if [[ -z "$PANTERA_NOSTOP" ]]; then
+    trap stop_pantera EXIT
   fi
 }
 
-function stop_artipie {
-  local container=$(docker ps --filter name=artipie -q 2> /dev/null)
+function stop_pantera {
+  local container=$(docker ps --filter name=pantera -q 2> /dev/null)
   if [[ -n "$container" ]]; then
-    log_debug "stopping artipie container ${container}"
+    log_debug "stopping pantera container ${container}"
     docker stop "$container" || echo "failed to stop"
   fi
 }

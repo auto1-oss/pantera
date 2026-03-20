@@ -1,2 +1,2 @@
 channels:
-  - http://artipie:8081/my-conda-port
+  - http://pantera:8081/my-conda-port

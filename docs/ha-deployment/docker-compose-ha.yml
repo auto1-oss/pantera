@@ -1,23 +1,23 @@
-# Artipie HA Deployment - Docker Compose
+# Pantera HA Deployment - Docker Compose
 #
-# This compose file runs multiple Artipie instances behind an nginx load
+# This compose file runs multiple Pantera instances behind an nginx load
 # balancer, with shared PostgreSQL, Valkey, and S3-compatible storage.
 #
 # Prerequisites:
-#   - Copy nginx-ha.conf and artipie-ha.yml into the same directory
+#   - Copy nginx-ha.conf and pantera-ha.yml into the same directory
 #   - Create .env file with required secrets (see env.example below)
 #
 # Usage:
 #   docker compose -f docker-compose-ha.yml up -d
 #
 # Scaling:
-#   To add more Artipie instances, duplicate the artipie-2 service block
+#   To add more Pantera instances, duplicate the pantera-2 service block
 #   and add the new server to nginx-ha.conf upstream block, then:
 #   docker compose -f docker-compose-ha.yml up -d --force-recreate nginx
 #
 # env.example:
-#   ARTIPIE_VERSION=latest
-#   POSTGRES_USER=artipie
+#   PANTERA_VERSION=latest
+#   POSTGRES_USER=pantera
 #   POSTGRES_PASSWORD=<generate-strong-password>
 #   MINIO_ROOT_USER=minioadmin
 #   MINIO_ROOT_PASSWORD=<generate-strong-password>
@@ -32,14 +32,14 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-artipie}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-artipie}
+      POSTGRES_USER: ${POSTGRES_USER:-pantera}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pantera}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - artipie-ha
+      - pantera-ha
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artipie}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pantera}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,7 +58,7 @@ services:
       - --appendonly
       - "no"
     networks:
-      - artipie-ha
+      - pantera-ha
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -79,7 +79,7 @@ services:
     volumes:
       - s3data:/data
     networks:
-      - artipie-ha
+      - pantera-ha
     ports:
       - "9001:9001"  # MinIO console (optional, for debugging)
 
@@ -87,8 +87,8 @@ services:
   # All instances share the same configuration, database, cache, and storage.
   # They are stateless and can be scaled horizontally.
 
-  artipie-1:
-    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+  pantera-1:
+    image: auto1/pantera:${PANTERA_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -105,17 +105,17 @@ services:
         soft: 65536
         hard: 65536
     environment:
-      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
-      - POSTGRES_USER=${POSTGRES_USER:-artipie}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - PANTERA_CONFIG=/etc/pantera/pantera.yml
+      - POSTGRES_USER=${POSTGRES_USER:-pantera}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
     volumes:
-      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+      - ./pantera-ha.yml:/etc/pantera/pantera.yml:ro
     networks:
-      - artipie-ha
+      - pantera-ha
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
       interval: 15s
@@ -123,8 +123,8 @@ services:
       retries: 3
       start_period: 30s
 
-  artipie-2:
-    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+  pantera-2:
+    image: auto1/pantera:${PANTERA_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -141,17 +141,17 @@ services:
         soft: 65536
         hard: 65536
     environment:
-      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
-      - POSTGRES_USER=${POSTGRES_USER:-artipie}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - PANTERA_CONFIG=/etc/pantera/pantera.yml
+      - POSTGRES_USER=${POSTGRES_USER:-pantera}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
     volumes:
-      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+      - ./pantera-ha.yml:/etc/pantera/pantera.yml:ro
     networks:
-      - artipie-ha
+      - pantera-ha
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
       interval: 15s
@@ -159,8 +159,8 @@ services:
       retries: 3
       start_period: 30s
 
-  artipie-3:
-    image: artipie/artipie:${ARTIPIE_VERSION:-latest}
+  pantera-3:
+    image: auto1/pantera:${PANTERA_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -177,17 +177,17 @@ services:
         soft: 65536
         hard: 65536
     environment:
-      - ARTIPIE_CONFIG=/etc/artipie/artipie.yml
-      - POSTGRES_USER=${POSTGRES_USER:-artipie}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-artipie}
+      - PANTERA_CONFIG=/etc/pantera/pantera.yml
+      - POSTGRES_USER=${POSTGRES_USER:-pantera}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
     volumes:
-      - ./artipie-ha.yml:/etc/artipie/artipie.yml:ro
+      - ./pantera-ha.yml:/etc/pantera/pantera.yml:ro
     networks:
-      - artipie-ha
+      - pantera-ha
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/.health"]
       interval: 15s
@@ -206,14 +206,14 @@ services:
     volumes:
       - ./nginx-ha.conf:/etc/nginx/conf.d/default.conf:ro
       # Uncomment to enable TLS:
-      # - ./ssl/artipie.crt:/etc/nginx/ssl/artipie.crt:ro
-      # - ./ssl/artipie.key:/etc/nginx/ssl/artipie.key:ro
+      # - ./ssl/pantera.crt:/etc/nginx/ssl/pantera.crt:ro
+      # - ./ssl/pantera.key:/etc/nginx/ssl/pantera.key:ro
     depends_on:
-      artipie-1: { condition: service_healthy }
-      artipie-2: { condition: service_healthy }
-      artipie-3: { condition: service_healthy }
+      pantera-1: { condition: service_healthy }
+      pantera-2: { condition: service_healthy }
+      pantera-3: { condition: service_healthy }
     networks:
-      - artipie-ha
+      - pantera-ha
 
   # ---------- Monitoring (Optional) ----------
 
@@ -230,14 +230,14 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=30d'
     depends_on:
-      - artipie-1
-      - artipie-2
-      - artipie-3
+      - pantera-1
+      - pantera-2
+      - pantera-3
     networks:
-      - artipie-ha
+      - pantera-ha
 
 networks:
-  artipie-ha:
+  pantera-ha:
     driver: bridge
 
 volumes:

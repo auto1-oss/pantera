@@ -1,6 +1,6 @@
 repo:
   type: conan
-  url: http://artipie:9300/my-conan
+  url: http://pantera:9300/my-conan
   port: 9300
   storage:
     type: fs

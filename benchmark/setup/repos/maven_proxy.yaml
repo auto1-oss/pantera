@@ -2,6 +2,6 @@ repo:
   type: maven-proxy
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data
   remotes:
     - url: https://repo1.maven.org/maven2

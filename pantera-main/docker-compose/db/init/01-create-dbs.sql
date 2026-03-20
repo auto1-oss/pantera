@@ -1,3 +1,3 @@
 -- Databases
-CREATE DATABASE keycloak OWNER artipie;
-CREATE DATABASE artifacts OWNER artipie;
+CREATE DATABASE keycloak OWNER pantera;
+CREATE DATABASE artifacts OWNER pantera;

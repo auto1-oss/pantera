@@ -2,14 +2,14 @@
   "repositories": [
     {
       "type": "composer",
-      "url": "http://artipie.artipie:8080/my-php"
+      "url": "http://pantera.pantera:8080/my-php"
     },
     {
       "packagist": false
     }
   ],
   "require": {
-    "artipie/sample_composer_package": "1.0"
+    "pantera/sample_composer_package": "1.0"
   },
   "config": {
     "secure-http": false

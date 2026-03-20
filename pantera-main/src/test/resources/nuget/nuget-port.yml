@@ -2,7 +2,7 @@
 repo:
   type: nuget
   port: 8081
-  url: http://artipie:8081/my-nuget-port
+  url: http://pantera:8081/my-nuget-port
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

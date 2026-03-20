@@ -37,7 +37,7 @@ SOFTWARE.
     <repository>
       <id>my-maven</id>
       <name>Maven</name>
-      <url>http://artipie:8080/my-maven/</url>
+      <url>http://pantera:8080/my-maven/</url>
     </repository>
   </distributionManagement>
   <build>

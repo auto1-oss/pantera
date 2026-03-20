@@ -1,8 +1,8 @@
 meta:
   storage:
     type: fs
-    path: /var/artipie/repo
-  base_url: http://artipie:8080/
+    path: /var/pantera/repo
+  base_url: http://pantera:8080/
   http_client:
     connection_timeout: 20000
     idle_timeout: 25
@@ -10,7 +10,7 @@ meta:
     follow_redirects: true
     http3: true
     jks:
-      path: /var/artipie/keystore.jks
+      path: /var/pantera/keystore.jks
       password: secret
     proxies:
       - url: https://proxy1.com
@@ -22,4 +22,4 @@ meta:
     - type: local
       storage:
         type: fs
-        path: /var/artipie/security
+        path: /var/pantera/security

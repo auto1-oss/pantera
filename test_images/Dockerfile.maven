@@ -4,11 +4,11 @@ ENV DEBIAN_FRONTEND noninteractive
 RUN apt update -y -o APT::Update::Error-Mode=any && apt dist-upgrade -y
 RUN apt install -y libxml2-utils # for xmllint
 
-# install artpie test dependencies to maven cache
-COPY artipie /opt/artipie
-RUN find /opt/artipie -name "*.jar" -type f|xargs -n1 sh -c \
+# install pantera test dependencies to maven cache
+COPY pantera /opt/pantera
+RUN find /opt/pantera -name "*.jar" -type f|xargs -n1 sh -c \
    'mvn install:install-file -Dfile="$0" -DpomFile="${0%.jar}.pom"'
-RUN ls -lah $HOME/.m2/repository/com/artipie
+RUN ls -lah $HOME/.m2/repository/com/auto1/pantera
 
 # prefetch all dependencies
 COPY projects /opt/projects
@@ -31,10 +31,10 @@ RUN rm -fv /opt/mvn.classlist /opt/*.xml
 ENV MAVEN_OPTS="-XX:SharedArchiveFile=/opt/mvn-s.jsa -XX:+TieredCompilation -XX:TieredStopAtLevel=1"
 WORKDIR "/w"
 
-# ensure that artipie test deps were in cache but remove before finishing
-RUN ls -lah $HOME/.m2/repository/com/artipie
-RUN rm -rf  $HOME/.m2/repository/com/artipie
+# ensure that pantera test deps were in cache but remove before finishing
+RUN ls -lah $HOME/.m2/repository/com/auto1/pantera
+RUN rm -rf  $HOME/.m2/repository/com/auto1/pantera
 
-RUN rm -rf /opt/artipie /opt/projects /opt/target /opt/fetchPomDeps.sh
+RUN rm -rf /opt/pantera /opt/projects /opt/target /opt/fetchPomDeps.sh
 RUN apt purge -y libxml2-utils && apt -y autoremove -y --purge && apt clean -y && rm -rf /var/cache/apt/archives /var/lib/apt/lists
 RUN du -hs /root/.m2

@@ -15,6 +15,6 @@ repo:
       priority: 200
   storage:
     type: fs
-    path: /var/artipie/maven
+    path: /var/pantera/maven
   settings:
     custom-property: custom-value

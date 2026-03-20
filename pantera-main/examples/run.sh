@@ -5,12 +5,12 @@ echo "running in $PWD"
 workdir=$PWD
 
 # environment variables:
-#  - ARTIPIE_NOSTOP - don't stop docker containers
+#  - PANTERA_NOSTOP - don't stop docker containers
 #       don't remove docker network on finish
 #  - DEBUG - show debug messages
 #  - CI - enable CI mode (debug and `set -x`)
-#  - ARTIPIE_IMAGE - docker image name for artipie
-#       (default artipie/artipie-tests:1.0-SNAPSHOT)
+#  - PANTERA_IMAGE - docker image name for pantera
+#       (default pantera/pantera-tests:1.0-SNAPSHOT)
 
 # print error message and exist with error code
 function die {
@@ -19,7 +19,7 @@ function die {
 }
 
 # set pidfile to prevent parallel runs
-pidfile=/tmp/test-artipie.pid
+pidfile=/tmp/test-pantera.pid
 if [[ -f $pidfile ]]; then
   pid=$(cat $pidfile)
   set +e
@@ -51,15 +51,15 @@ if [[ -n "$DEBUG" ]]; then
   log_debug "debug enabled"
 fi
 
-# start artipie docker image. image name and port are optional
+# start pantera docker image. image name and port are optional
 # parameters. register callback to stop image on exist.
-function start_artipie {
+function start_pantera {
   local image="$1"
   if [[ -z "$image" ]]; then
-    image=$ARTIPIE_IMAGE
+    image=$PANTERA_IMAGE
   fi
   if [[ -z "$image" ]]; then
-    image="artipie/artipie-tests:1.0-SNAPSHOT"
+    image="pantera/pantera-tests:1.0-SNAPSHOT"
   fi
   local port="$2"
   if [[ -z "$port" ]]; then
@@ -68,69 +68,69 @@ function start_artipie {
   log_debug "using image: '${image}'"
   log_debug "using port:  '${port}'"
   [[ -z "$image" || -z "$port" ]] && die "invalid image or port params"
-  stop_artipie
-  docker run --rm --detach --name artipie \
-    -v "$PWD/artipie.yml:/etc/artipie/artipie.yml" \
+  stop_pantera
+  docker run --rm --detach --name pantera \
+    -v "$PWD/pantera.yml:/etc/pantera/pantera.yml" \
     -v "$PWD/.cfg:/var/pantera/cfg" \
     -e PANTERA_USER_NAME=alice \
     -e PANTERA_USER_PASS=qwerty123 \
-    --mount source=artipie-data,destination=/var/pantera/data \
+    --mount source=pantera-data,destination=/var/pantera/data \
     --user 2020:2021 \
-    --net=artipie \
+    --net=pantera \
     -p "${port}:8080" "$image"
-  log_debug "artipie started"
-  # stop artipie docker container on script exit
-  if [[ -z "$ARTIPIE_NOSTOP" ]]; then
-    trap stop_artipie EXIT
+  log_debug "pantera started"
+  # stop pantera docker container on script exit
+  if [[ -z "$PANTERA_NOSTOP" ]]; then
+    trap stop_pantera EXIT
   fi
 }
 
-function stop_artipie {
-  local container=$(docker ps --filter name=artipie -q 2> /dev/null)
+function stop_pantera {
+  local container=$(docker ps --filter name=pantera -q 2> /dev/null)
   if [[ -n "$container" ]]; then
-    log_debug "stopping artipie container ${container}"
+    log_debug "stopping pantera container ${container}"
     docker stop "$container" || echo "failed to stop"
   fi
 }
 
-# create docker network named `artipie` for containers communication
-# register callback to remove it on script exit if no ARTIPIE_NOSTOP
+# create docker network named `pantera` for containers communication
+# register callback to remove it on script exit if no PANTERA_NOSTOP
 # environment is set
 function create_network {
   rm_network
-  log_debug "creating artipie network"
-  docker network create artipie
-  if [[ -z "$ARTIPIE_NOSTOP" ]]; then
+  log_debug "creating pantera network"
+  docker network create pantera
+  if [[ -z "$PANTERA_NOSTOP" ]]; then
     trap rm_network EXIT
   fi
 }
 
-# remove `artipie` network if exist
+# remove `pantera` network if exist
 function rm_network {
-  local net=$(docker network ls -q --filter name=artipie)
+  local net=$(docker network ls -q --filter name=pantera)
   if [[ -n "${net}" ]]; then
-    log_debug "removing artipie network"
+    log_debug "removing pantera network"
     docker network rm $net
   fi
 }
 
 function create_volume {
   rm_volume
-  log_debug "creating volume $(docker volume create artipie-data)"
+  log_debug "creating volume $(docker volume create pantera-data)"
   log_debug "fill out volume data"
-  docker run --rm --name=artipie-volume-maker \
+  docker run --rm --name=pantera-volume-maker \
     -v "$PWD/.data:/data-src" \
-    --mount source=artipie-data,destination=/data-dst \
+    --mount source=pantera-data,destination=/data-dst \
     alpine:3.13 \
-    /bin/sh -c 'addgroup -S -g 2020 artipie && adduser -S -g 2020 -u 2021 artipie && cp -r /data-src/* /data-dst && chown -R 2020:2021 /data-dst'
-  if [[ -z "$ARTIPIE_NOSTOP" ]]; then
+    /bin/sh -c 'addgroup -S -g 2020 pantera && adduser -S -g 2020 -u 2021 pantera && cp -r /data-src/* /data-dst && chown -R 2020:2021 /data-dst'
+  if [[ -z "$PANTERA_NOSTOP" ]]; then
     trap rm_volume EXIT
   fi
 }
 
-# remove artipie data volume if exist
+# remove pantera data volume if exist
 function rm_volume {
-  local img=$(docker volume ls -q --filter name=artipie-data)
+  local img=$(docker volume ls -q --filter name=pantera-data)
   if [[ -n "${img}" ]]; then
     log_debug "removing volume "
     docker volume rm ${img}
@@ -144,7 +144,7 @@ function run_test {
   pushd "./${name}"
   docker build -t "test/${name}" .
   docker run --name="smoke-${name}" --rm \
-    --net=artipie \
+    --net=pantera \
     -v /var/run/docker.sock:/var/run/docker.sock \
     "test/${name}" | tee -a "$workdir/out.log"
   if [[ "${PIPESTATUS[0]}" == "0" ]]; then
@@ -157,12 +157,12 @@ function run_test {
 
 create_network
 create_volume
-start_artipie
+start_pantera
 
-sleep 3 #sometimes artipie container needs extra time to load
+sleep 3 #sometimes pantera container needs extra time to load
 
 if [[ -z "$1" ]]; then
-#TODO: hexpm is removed from the list due to the issue: https://github.com/artipie/artipie/issues/1464
+#TODO: hexpm is removed from the list due to the issue: https://github.com/pantera/pantera/issues/1464
   declare -a tests=(binary debian docker go helm maven npm nuget php rpm conda pypi conan)
 else
   declare -a tests=("$@")
@@ -183,10 +183,10 @@ r=0
 grep "FAILED" "$workdir/results.txt" > /dev/null || r="$?"
 if [ "$r" -eq 0 ] ; then
   rm -fv "$pidfile"
-  echo "Artipie container logs:"
-  container=$(docker ps --filter name=artipie -q 2> /dev/null)
+  echo "Pantera container logs:"
+  container=$(docker ps --filter name=pantera -q 2> /dev/null)
   if [[ -n "$container" ]] ; then
-    docker logs "$container" || echo "failed to log artipie"
+    docker logs "$container" || echo "failed to log pantera"
   fi
   die "One or more tests failed"
 else

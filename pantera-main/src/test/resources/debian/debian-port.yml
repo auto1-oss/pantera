@@ -4,7 +4,7 @@ repo:
   port: 8081
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/
   settings:
     Components: main
     Architectures: amd64

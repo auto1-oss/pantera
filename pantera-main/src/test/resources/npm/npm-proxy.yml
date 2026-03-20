@@ -4,7 +4,7 @@ repo:
   path: my-npm-proxy
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/
   settings:
     remote:
-      url: http://artipie:8080/my-npm
+      url: http://pantera:8080/my-npm

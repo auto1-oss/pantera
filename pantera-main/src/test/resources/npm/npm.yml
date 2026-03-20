@@ -1,7 +1,7 @@
 ---
 repo:
   type: npm
-  url: http://artipie:8080/my-npm
+  url: http://pantera:8080/my-npm
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

@@ -1,2 +1,2 @@
 channels:
-  - http://artipie:8080/my-conda
+  - http://pantera:8080/my-conda

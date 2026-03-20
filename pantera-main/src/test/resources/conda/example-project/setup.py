@@ -8,7 +8,7 @@ setuptools.setup(
     description="An example poi package",
     long_description="A small example package for the integration test of Artipie",
     long_description_content_type="text/markdown",
-    url="https://github.com/artipie/conda-adapter",
+    url="https://github.com/pantera/conda-adapter",
     packages=setuptools.find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3.7",

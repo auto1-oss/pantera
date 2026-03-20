@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ##
-## Artipie Benchmark Tool
+## Pantera Benchmark Tool
 ## Compares v1.20.12 vs v1.22.0 across Maven, Docker, and NPM workloads
 ## using real client tools (mvn, docker, npm).
 ##
@@ -43,8 +43,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-export ARTIPIE_USER_NAME="${ARTIPIE_USER_NAME:-artipie}"
-export ARTIPIE_USER_PASS="${ARTIPIE_USER_PASS:-artipie}"
+export PANTERA_USER_NAME="${PANTERA_USER_NAME:-pantera}"
+export PANTERA_USER_PASS="${PANTERA_USER_PASS:-pantera}"
 
 # Default concurrency and iteration settings
 export CONCURRENCY_LEVELS="${CONCURRENCY_LEVELS:-1 5 10 20}"
@@ -110,11 +110,11 @@ build_images() {
     local project_root
     project_root="$(dirname "$SCRIPT_DIR")"
 
-    if docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.20.12" >/dev/null 2>&1 && \
-       docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0" >/dev/null 2>&1; then
+    if docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.20.12" >/dev/null 2>&1 && \
+       docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0" >/dev/null 2>&1; then
         echo "Both Docker images already exist."
-        echo "  167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.20.12"
-        echo "  167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0"
+        echo "  167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.20.12"
+        echo "  167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0"
         return 0
     fi
 
@@ -122,15 +122,15 @@ build_images() {
     echo "IMPORTANT: Docker images need to be built from source."
     echo ""
     echo "If you have pre-built images, tag them as:"
-    echo "  docker tag <your-old-image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.20.12"
-    echo "  docker tag <your-new-image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0"
+    echo "  docker tag <your-old-image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.20.12"
+    echo "  docker tag <your-new-image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0"
     echo ""
     echo "Or set environment variables:"
-    echo "  export ARTIPIE_OLD_IMAGE=your-registry/artipie:1.20.12"
-    echo "  export ARTIPIE_NEW_IMAGE=your-registry/artipie:1.22.0"
+    echo "  export PANTERA_OLD_IMAGE=your-registry/pantera:1.20.12"
+    echo "  export PANTERA_NEW_IMAGE=your-registry/pantera:1.22.0"
     echo ""
 
-    if ! docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0" >/dev/null 2>&1; then
+    if ! docker image inspect "167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0" >/dev/null 2>&1; then
         echo "Building v1.22.0 image from current branch..."
         cd "$project_root"
         mvn -pl pantera-main -am package -DskipTests -q 2>/dev/null || {
@@ -143,7 +143,7 @@ build_images() {
             local jar_name
             jar_name=$(basename "$jar_file")
             cd pantera-main
-            docker build --build-arg "JAR_FILE=${jar_name}" -t 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.22.0 .
+            docker build --build-arg "JAR_FILE=${jar_name}" -t 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0 .
             cd "$project_root"
         fi
     fi
@@ -151,7 +151,7 @@ build_images() {
     echo ""
     echo "NOTE: Building v1.20.12 requires checking out that tag."
     echo "If not available, tag an existing image:"
-    echo "  docker tag <image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/artipie:1.20.12"
+    echo "  docker tag <image> 167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.20.12"
 }
 
 # ============================================================
@@ -180,7 +180,7 @@ start_infra() {
             if [[ $i -eq 60 ]]; then
                 echo " TIMEOUT"
                 echo "Logs for failed instance:"
-                docker compose -f docker-compose-bench.yml logs "$([ "$api_port" = "9082" ] && echo artipie-old || echo artipie-new)" | tail -30
+                docker compose -f docker-compose-bench.yml logs "$([ "$api_port" = "9082" ] && echo pantera-old || echo pantera-new)" | tail -30
                 exit 1
             fi
             sleep 2
@@ -191,7 +191,7 @@ start_infra() {
     # JVM warmup: hit each instance a few times
     echo "  JVM warmup..."
     local auth
-    auth=$(echo -n "${ARTIPIE_USER_NAME}:${ARTIPIE_USER_PASS}" | base64)
+    auth=$(echo -n "${PANTERA_USER_NAME}:${PANTERA_USER_PASS}" | base64)
     for port in 9081 9091; do
         for i in $(seq 1 10); do
             curl -sf "http://localhost:${port}/maven/" \
@@ -217,7 +217,7 @@ teardown() {
 # ============================================================
 main() {
     echo ""
-    echo "  Artipie Benchmark Tool (real-client mode)"
+    echo "  Pantera Benchmark Tool (real-client mode)"
     echo "  v1.20.12 vs v1.22.0"
     echo "  Scenarios: ${SCENARIOS}"
     echo "  Concurrency: ${CONCURRENCY_LEVELS}"

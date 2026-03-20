@@ -2,9 +2,9 @@ repo:
   type: file-proxy
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data
   remotes:
-    - url: http://artipie:8080/my-bin
+    - url: http://pantera:8080/my-bin
       username: alice
       password: 123
 

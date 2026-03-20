@@ -24,12 +24,12 @@ SOFTWARE.
 -->
 <configuration>
   <packageSources>
-    <add key="artipie-nuget-test" value="http://artipie.artipie:8080/my-nuget/index.json"/>
+    <add key="pantera-nuget-test" value="http://pantera.pantera:8080/my-nuget/index.json"/>
   </packageSources>
   <packageSourceCredentials>
-    <artipie-nuget-test>
-      <add key="Username" value="artipie"/>
-      <add key="ClearTextPassword" value="artipie"/>
-    </artipie-nuget-test>
+    <pantera-nuget-test>
+      <add key="Username" value="pantera"/>
+      <add key="ClearTextPassword" value="pantera"/>
+    </pantera-nuget-test>
   </packageSourceCredentials>
 </configuration>

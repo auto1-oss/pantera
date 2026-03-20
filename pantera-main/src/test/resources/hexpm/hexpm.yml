@@ -3,4 +3,4 @@ repo:
   type: hexpm
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

@@ -2,7 +2,7 @@
 set -x
 set -e
 
-# Build and upload python project to artipie.
+# Build and upload python project to pantera.
 cd sample-project
 python3 -m pip install --user --upgrade setuptools wheel
 python3 setup.py sdist bdist_wheel

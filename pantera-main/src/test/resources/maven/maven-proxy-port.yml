@@ -4,6 +4,6 @@ repo:
   port: 8081
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/
   remotes:
     - url: https://repo.maven.apache.org/maven2

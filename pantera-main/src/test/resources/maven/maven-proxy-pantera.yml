@@ -3,8 +3,8 @@ repo:
   type: maven-proxy
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data
   remotes:
-    - url: http://artipie:8080/my-maven
+    - url: http://pantera:8080/my-maven
       username: alice
       password: 123

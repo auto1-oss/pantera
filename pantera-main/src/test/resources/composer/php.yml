@@ -2,5 +2,5 @@ repo:
   type: php
   storage:
     type: fs
-    path: /var/artipie/data
-  url: http://artipie:8080/php/
+    path: /var/pantera/data
+  url: http://pantera:8080/php/

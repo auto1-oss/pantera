@@ -1,5 +1,5 @@
 type: plain
-pass: artipie
+pass: pantera
 enabled: true
 roles:
   - admin

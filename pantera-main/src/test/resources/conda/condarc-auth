@@ -1,2 +1,2 @@
 channels:
-  - http://alice:123@artipie:8080/my-conda
+  - http://alice:123@pantera:8080/my-conda

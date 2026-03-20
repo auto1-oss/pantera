@@ -16,7 +16,7 @@ RUN conda clean -ay
 WORKDIR "/w"
 
 RUN mv -fv /w/condarc /root/.condarc
-RUN anaconda config --set url http://artipie:8080/my-conda/ -s
+RUN anaconda config --set url http://pantera:8080/my-conda/ -s
 RUN conda config --set anaconda_upload yes
 
 RUN rm -rf /w/minio-bin-20231120.txz

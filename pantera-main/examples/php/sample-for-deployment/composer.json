@@ -1,5 +1,5 @@
 {
-  "name": "artipie/sample_composer_package",
+  "name": "pantera/sample_composer_package",
   "version": "1.0",
   "description": "Sample package that is installable via composer",
   "type": "concrete5-package",

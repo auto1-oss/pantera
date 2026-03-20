@@ -3,4 +3,4 @@ repo:
   url: http://localhost:8080/npm
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data

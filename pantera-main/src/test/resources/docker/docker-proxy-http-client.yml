@@ -5,7 +5,7 @@ repo:
     - url: mcr.microsoft.com
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/
   http_client:
     connection_timeout: 25000
     idle_timeout: 500
@@ -13,7 +13,7 @@ repo:
     follow_redirects: true
     http3: true
     jks:
-      path: /var/artipie/keystore.jks
+      path: /var/pantera/keystore.jks
       password: secret
     proxies:
       - url: http://proxy2.com

@@ -17,8 +17,8 @@ source "${SCRIPT_DIR}/common.sh"
 
 OLD_PORT="${OLD_PORT:-9081}"
 NEW_PORT="${NEW_PORT:-9091}"
-ARTIPIE_USER="${ARTIPIE_USER_NAME:-artipie}"
-ARTIPIE_PASS="${ARTIPIE_USER_PASS:-artipie}"
+PANTERA_USER="${PANTERA_USER_NAME:-pantera}"
+PANTERA_PASS="${PANTERA_USER_PASS:-pantera}"
 
 CONCURRENCY_LEVELS="${DOCKER_CONCURRENCY_LEVELS:-1 5 10}"
 ITERATIONS="${DOCKER_ITERATIONS:-5}"
@@ -43,8 +43,8 @@ CONC_IMAGE_COUNT=20
 
 docker_login() {
     local port="$1"
-    echo "$ARTIPIE_PASS" | docker login "localhost:${port}" \
-        -u "$ARTIPIE_USER" --password-stdin 2>/dev/null || true
+    echo "$PANTERA_PASS" | docker login "localhost:${port}" \
+        -u "$PANTERA_USER" --password-stdin 2>/dev/null || true
 }
 
 # Get the size of a Docker image in bytes

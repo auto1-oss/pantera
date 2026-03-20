@@ -28,7 +28,7 @@ SOFTWARE.
   <artifactId>sample-consumer</artifactId>
   <version>1.0</version>
   <packaging>jar</packaging>
-  <name>A sample project which consumes sample-for-deployment from artipie</name>
+  <name>A sample project which consumes sample-for-deployment from pantera</name>
   <dependencies>
       <dependency>
           <groupId>co.elastic.clients</groupId>
@@ -38,7 +38,7 @@ SOFTWARE.
   </dependencies>
   <repositories>
     <repository>
-      <id>artipie</id>
+      <id>pantera</id>
       <url>http://localhost:8081/maven_proxy</url>
     </repository>
   </repositories>

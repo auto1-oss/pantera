@@ -25,9 +25,9 @@ SOFTWARE.
 <settings>
     <mirrors>
         <mirror>
-            <id>artipie-proxy</id>
+            <id>pantera-proxy</id>
             <name>Local proxy of central repo</name>
-            <url>http://artipie:8080/my-maven-proxy/</url>
+            <url>http://pantera:8080/my-maven-proxy/</url>
             <mirrorOf>*</mirrorOf>
         </mirror>
     </mirrors>

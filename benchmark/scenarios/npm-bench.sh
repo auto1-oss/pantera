@@ -17,8 +17,8 @@ source "${SCRIPT_DIR}/common.sh"
 
 OLD_PORT="${OLD_PORT:-9081}"
 NEW_PORT="${NEW_PORT:-9091}"
-ARTIPIE_USER="${ARTIPIE_USER_NAME:-artipie}"
-ARTIPIE_PASS="${ARTIPIE_USER_PASS:-artipie}"
+PANTERA_USER="${PANTERA_USER_NAME:-pantera}"
+PANTERA_PASS="${PANTERA_USER_PASS:-pantera}"
 
 # Higher concurrency to push 50-200 req/s through the group
 CONCURRENCY_LEVELS="${CONCURRENCY_LEVELS:-1 10 20 50 100 200}"
@@ -31,7 +31,7 @@ csv_header "$npm_results"
 TIMING_BASE=$(mktemp -d)
 trap 'rm -rf "$TIMING_BASE"' EXIT
 
-AUTH_TOKEN=$(echo -n "${ARTIPIE_USER}:${ARTIPIE_PASS}" | base64)
+AUTH_TOKEN=$(echo -n "${PANTERA_USER}:${PANTERA_PASS}" | base64)
 
 # ============================================================
 # Helpers

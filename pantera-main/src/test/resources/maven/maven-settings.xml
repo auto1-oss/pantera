@@ -25,16 +25,16 @@ SOFTWARE.
 <settings>
   <profiles>
     <profile>
-      <id>artipie</id>
+      <id>pantera</id>
       <repositories>
         <repository>
           <id>my-maven</id>
-          <url>http://artipie:8080/my-maven/</url>
+          <url>http://pantera:8080/my-maven/</url>
         </repository>
       </repositories>
     </profile>
   </profiles>
   <activeProfiles>
-    <activeProfile>artipie</activeProfile>
+    <activeProfile>pantera</activeProfile>
   </activeProfiles>
 </settings>

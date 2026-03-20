@@ -25,16 +25,16 @@ SOFTWARE.
 <settings>
   <profiles>
     <profile>
-      <id>artipie</id>
+      <id>pantera</id>
       <repositories>
         <repository>
           <id>my-maven-port</id>
-          <url>http://artipie:8081/my-maven-port/</url>
+          <url>http://pantera:8081/my-maven-port/</url>
         </repository>
       </repositories>
     </profile>
   </profiles>
   <activeProfiles>
-    <activeProfile>artipie</activeProfile>
+    <activeProfile>pantera</activeProfile>
   </activeProfiles>
 </settings>

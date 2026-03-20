@@ -15,7 +15,7 @@ RUN conan profile new --detect default
 RUN conan profile update settings.compiler.libcxx=libstdc++11 default
 RUN conan remote add conancenter https://center.conan.io False --force
 RUN conan remote add conan-center https://conan.bintray.com False --force
-RUN conan remote add conan-test http://artipie.artipie:9300 False
+RUN conan remote add conan-test http://pantera.pantera:9300 False
 RUN conan remote disable conan-center
 
 COPY ./run.sh /root/

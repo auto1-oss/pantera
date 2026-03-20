@@ -6,11 +6,11 @@ set -x
 # Pull an image from docker hub.
 docker pull ubuntu
 
-# Login to artipie.
+# Login to pantera.
 docker login --username alice --password qwerty123 http://localhost:8080
 
 img="localhost:8080/my-docker/myfirstimage"
-# Push the pulled image to artipie.
+# Push the pulled image to pantera.
 docker image tag ubuntu $img
 docker push $img
 

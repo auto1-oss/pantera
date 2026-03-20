@@ -3,5 +3,5 @@ repo:
   port: 8081
   storage:
     type: fs
-    path: /var/artipie/data
-  url: http://artipie:8081/php-port/
+    path: /var/pantera/data
+  url: http://pantera:8081/php-port/

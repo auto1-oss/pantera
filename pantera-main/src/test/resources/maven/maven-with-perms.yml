@@ -3,4 +3,4 @@ repo:
   type: maven
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

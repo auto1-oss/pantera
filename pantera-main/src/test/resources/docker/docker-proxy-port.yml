@@ -6,4 +6,4 @@ repo:
     - url: mcr.microsoft.com
   storage:
     type: fs
-    path: /var/artipie/data/
+    path: /var/pantera/data/

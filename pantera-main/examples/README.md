@@ -1,6 +1,6 @@
 # Examples
 
-This directory contains configuration examples of artipie usages per each supported language and 
+This directory contains configuration examples of Pantera usages per each supported language and 
 package type, these configurations are used in smoke tests.
 
 Repository types with links to full description in wiki:

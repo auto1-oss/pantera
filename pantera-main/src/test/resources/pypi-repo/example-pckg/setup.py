@@ -4,14 +4,14 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="artipietestpkg", 
+    name="panteratestpkg", 
     version="0.0.3",
     author="Artipie User",
-    author_email="example@artipie.com",
+    author_email="example@pantera.com",
     description="An example package for the integration test of Artipie",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/artipie/artipie",
+    url="https://github.com/pantera/pantera",
     packages=setuptools.find_packages(),
     classifiers=[
         "Programming Language :: Python :: 2.7",

@@ -36,7 +36,7 @@ defmodule Kv.MixProject do
   defp package() do
     [
       licenses: ["MIT"],
-      links: %{"GitHub" => "https://github.com/artipie/hexpm-adapter"}
+      links: %{"GitHub" => "https://github.com/Sentinel-One/artipie"}
     ]
   end
 

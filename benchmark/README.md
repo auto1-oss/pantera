@@ -21,8 +21,8 @@ Docker daemon must allow insecure registries for localhost:
 
 ```bash
 # 1. Ensure Docker images exist (tag your builds):
-docker tag <your-old-image> auto1-artipie:1.20.12
-docker tag <your-new-image> auto1-artipie:1.22.0
+docker tag <your-old-image> auto1-pantera:1.20.12
+docker tag <your-new-image> auto1-pantera:1.22.0
 
 # 2. Run full benchmark
 ./bench.sh
@@ -47,10 +47,10 @@ Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ARTIPIE_OLD_IMAGE` | `auto1-artipie:1.20.12` | Docker image for v1.20.12 |
-| `ARTIPIE_NEW_IMAGE` | `auto1-artipie:1.22.0` | Docker image for v1.22.0 |
-| `ARTIPIE_USER_NAME` | `artipie` | Auth username |
-| `ARTIPIE_USER_PASS` | `artipie` | Auth password |
+| `PANTERA_OLD_IMAGE` | `auto1-pantera:1.20.12` | Docker image for v1.20.12 |
+| `PANTERA_NEW_IMAGE` | `auto1-pantera:1.22.0` | Docker image for v1.22.0 |
+| `PANTERA_USER_NAME` | `pantera` | Auth username |
+| `PANTERA_USER_PASS` | `pantera` | Auth password |
 | `CONCURRENCY_LEVELS` | `1 5 10 20` | Concurrency levels for Maven/NPM |
 | `DOCKER_CONCURRENCY_LEVELS` | `1 5 10` | Concurrency levels for Docker |
 | `MAVEN_ITERATIONS` | `10` | Iterations per Maven test |
@@ -89,8 +89,8 @@ benchmark/
 ├── bench.sh                     # Main orchestrator
 ├── docker-compose-bench.yml     # Two Artipie instances + infra
 ├── setup/
-│   ├── artipie-old.yml          # Config for v1.20.12
-│   ├── artipie-new.yml          # Config for v1.22.0
+│   ├── pantera-old.yml          # Config for v1.20.12
+│   ├── pantera-new.yml          # Config for v1.22.0
 │   ├── settings-old.xml         # Maven settings for v1.20.12
 │   ├── settings-new.xml         # Maven settings for v1.22.0
 │   ├── repos/                   # Repository configs (shared)

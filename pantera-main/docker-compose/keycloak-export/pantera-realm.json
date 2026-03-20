@@ -1,6 +1,6 @@
 {
-  "id": "artipie",
-  "realm": "artipie",
+  "id": "pantera",
+  "realm": "pantera",
   "enabled": true,
   "verifyEmail": false,
   "loginWithEmailAllowed": true,
@@ -9,7 +9,7 @@
   "sslRequired": "none",
   "clients": [
     {
-      "clientId": "artipie",
+      "clientId": "pantera",
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "T4BphdGe7z8X5ycSe4aVjhDGdExx2yuJ",
@@ -32,7 +32,7 @@
           "protocolMapper": "oidc-audience-mapper",
           "consentRequired": false,
           "config": {
-            "included.client.audience": "artipie",
+            "included.client.audience": "pantera",
             "id.token.claim": "false",
             "access.token.claim": "true"
           }
@@ -57,7 +57,7 @@
         }
       ],
       "clientRoles": {
-        "artipie": [
+        "pantera": [
           "admin"
         ]
       }
@@ -65,7 +65,7 @@
   ],
   "roles": {
     "client": {
-      "artipie": [
+      "pantera": [
         {
           "name": "admin"
         },

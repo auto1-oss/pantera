@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/artipie/artipie.git"
+    "url": "git+https://github.com/Sentinel-One/artipie.git"
   },
   "keywords": [
     "sample",
@@ -18,7 +18,7 @@
   "author": "Pavel Drankou",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/artipie/artipie/issues"
+    "url": "https://github.com/Sentinel-One/artipie/issues"
   },
-  "homepage": "https://github.com/artipie/artipie#readme"
+  "homepage": "https://github.com/Sentinel-One/artipie#readme"
 }

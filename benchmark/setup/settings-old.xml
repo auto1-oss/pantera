@@ -1,9 +1,9 @@
 <settings>
   <servers>
     <server>
-      <id>artipie</id>
-      <username>artipie</username>
-      <password>artipie</password>
+      <id>pantera</id>
+      <username>pantera</username>
+      <password>pantera</password>
     </server>
   </servers>
   <profiles>
@@ -11,7 +11,7 @@
       <id>bench</id>
       <repositories>
         <repository>
-          <id>artipie</id>
+          <id>pantera</id>
           <url>http://localhost:9081/maven</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>false</enabled></snapshots>
@@ -22,7 +22,7 @@
       <id>bench-group</id>
       <repositories>
         <repository>
-          <id>artipie</id>
+          <id>pantera</id>
           <url>http://localhost:9081/maven_group</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>false</enabled></snapshots>

@@ -3,8 +3,8 @@ repo:
   type: pypi-proxy
   storage:
     type: fs
-    path: /var/artipie/data
+    path: /var/pantera/data
   remotes:
-    - url: http://artipie:8080/my-pypi
+    - url: http://pantera:8080/my-pypi
       username: alice
       password: 123

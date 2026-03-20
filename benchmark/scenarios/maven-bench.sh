@@ -22,7 +22,7 @@ SETTINGS_OLD="${SETUP_DIR}/settings-old.xml"
 SETTINGS_NEW="${SETUP_DIR}/settings-new.xml"
 
 # Higher concurrency — each mvn JVM makes 6-10 HTTP requests through group fan-out,
-# so c=50 generates ~300-500 concurrent HTTP requests to Artipie
+# so c=50 generates ~300-500 concurrent HTTP requests to Pantera
 CONCURRENCY_LEVELS="${CONCURRENCY_LEVELS:-1 5 10 20 50}"
 ITERATIONS="${MAVEN_ITERATIONS:-10}"
 
@@ -47,7 +47,7 @@ mvn_deploy() {
         -Dversion="$ver" \
         -Dpackaging=jar \
         -Dfile="$jar" \
-        -DrepositoryId=artipie \
+        -DrepositoryId=pantera \
         -Durl="http://localhost:${port}/maven" \
         -DgeneratePom=true
 }
