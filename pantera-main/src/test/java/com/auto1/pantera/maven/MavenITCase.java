@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -39,7 +39,7 @@ public final class MavenITCase {
             .withRepoConfig("maven/maven.yml", "my-maven")
             .withRepoConfig("maven/maven-port.yml", "my-maven-port")
             .withExposedPorts(8081),
-        () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
             .withWorkingDirectory("/w")
             .withClasspathResourceMapping(
                 "maven/maven-settings.xml", "/w/settings.xml", BindMode.READ_ONLY
@@ -58,14 +58,14 @@ public final class MavenITCase {
     })
     void downloadsArtifact(final String type, final String vers, final String stn,
         final String repo) throws Exception {
-        final String meta = String.format("com/artipie/%s/maven-metadata.xml", type);
+        final String meta = String.format("com/pantera/%s/maven-metadata.xml", type);
         this.containers.putResourceToPantera(
-            meta, String.format("/var/artipie/data/%s/%s", repo, meta)
+            meta, String.format("/var/pantera/data/%s/%s", repo, meta)
         );
-        final String base = String.format("com/artipie/%s/%s", type, vers);
+        final String base = String.format("com/pantera/%s/%s", type, vers);
         MavenITCase.getResourceFiles(base).stream().map(r -> String.join("/", base, r)).forEach(
             item -> this.containers.putResourceToPantera(
-                item, String.format("/var/artipie/data/%s/%s", repo, item)
+                item, String.format("/var/pantera/data/%s/%s", repo, item)
             )
         );
         this.containers.assertExec(

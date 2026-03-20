@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db;
 
@@ -35,7 +35,7 @@ public final class DeadLetterWriter {
 
     /**
      * Constructor.
-     * @param baseDir Base directory (e.g., /var/artipie/.dead-letter/)
+     * @param baseDir Base directory (e.g., /var/pantera/.dead-letter/)
      */
     public DeadLetterWriter(final Path baseDir) {
         this.baseDir = baseDir;

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.composer;
 
@@ -95,7 +95,7 @@ final class AstoRepositoryAddArchiveTest {
     }
 
     private void saveZipArchive() {
-        new AstoRepository(this.storage, Optional.of("http://artipie:8080/"))
+        new AstoRepository(this.storage, Optional.of("http://pantera:8080/"))
             .addArchive(
                 new Archive.Zip(this.name),
                 this.archive

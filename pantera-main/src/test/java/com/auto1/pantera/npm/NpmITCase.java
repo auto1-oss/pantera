@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm;
 
@@ -59,14 +59,14 @@ final class NpmITCase {
     void npmInstall(final String port, final String repo) throws Exception {
         this.containers.putBinaryToPantera(
             new TestResource(String.format("npm/storage/%s/meta.json", NpmITCase.PROJ)).asBytes(),
-            String.format("/var/artipie/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
+            String.format("/var/pantera/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
         );
         this.containers.putBinaryToPantera(
             new TestResource(
                 String.format("npm/storage/%s/-/%s-1.0.1.tgz", NpmITCase.PROJ, NpmITCase.PROJ)
             ).asBytes(),
             String.format(
-                "/var/artipie/data/%s/%s/-/%s-1.0.1.tgz", repo, NpmITCase.PROJ, NpmITCase.PROJ
+                "/var/pantera/data/%s/%s/-/%s-1.0.1.tgz", repo, NpmITCase.PROJ, NpmITCase.PROJ
             )
         );
         this.containers.assertExec(
@@ -112,7 +112,7 @@ final class NpmITCase {
             "npm", "publish", NpmITCase.PROJ, "--registry", this.repoUrl(port, repo)
         );
         final byte[] content = this.containers.getPanteraContent(
-            String.format("/var/artipie/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
+            String.format("/var/pantera/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
         );
         MatcherAssert.assertThat(
             "Meta json is incorrect",
@@ -124,12 +124,12 @@ final class NpmITCase {
         );
         this.containers.assertPanteraContent(
             "Tarball should be added to storage",
-            String.format("/var/artipie/data/%s/%s", repo, tgz),
+            String.format("/var/pantera/data/%s/%s", repo, tgz),
             new IsAnything<>()
         );
     }
 
     private String repoUrl(final String port, final String repo) {
-        return String.format("http://artipie:%s/%s", port, repo);
+        return String.format("http://pantera:%s/%s", port, repo);
     }
 }

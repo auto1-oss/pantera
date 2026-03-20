@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.composer;
 
@@ -51,8 +51,8 @@ final class PhpComposerITCase {
 
     @ParameterizedTest
     @CsvSource({
-        "http://artipie:8080/php,composer.json",
-        "http://artipie:8081/php-port,composer-port.json"
+        "http://pantera:8080/php,composer.json",
+        "http://pantera:8081/php-port,composer-port.json"
     })
     void canUploadAndInstall(final String url, final String stn) throws IOException {
         this.containers.assertExec(

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -86,7 +86,7 @@ public final class MavenITCase {
             ),
             new StringContainsInOrder(
                 new ListOf<>(
-                    String.format("Downloaded from my-repo: http://host.testcontainers.internal:%d/com/artipie/helloworld/0.1/helloworld-0.1.jar (11 B", this.port),
+                    String.format("Downloaded from my-repo: http://host.testcontainers.internal:%d/ pantera/helloworld/0.1/helloworld-0.1.jar (11 B", this.port),
                     "BUILD SUCCESS"
                 )
             )
@@ -161,7 +161,7 @@ public final class MavenITCase {
         MatcherAssert.assertThat(
             "Maven metadata xml is not correct",
             new XMLDocument(
-                this.storage.value(new Key.From("com/artipie/helloworld/maven-metadata.xml"))
+                this.storage.value(new Key.From("com/pantera/helloworld/maven-metadata.xml"))
                     .join().asString()
             ),
             new AllOf<>(
@@ -199,7 +199,7 @@ public final class MavenITCase {
         MatcherAssert.assertThat(
             "Maven metadata xml is not correct",
             new XMLDocument(
-                this.storage.value(new Key.From("com/artipie/helloworld/maven-metadata.xml"))
+                this.storage.value(new Key.From("com/pantera/helloworld/maven-metadata.xml"))
                     .join().asString()
             ),
             new AllOf<>(
@@ -236,7 +236,7 @@ public final class MavenITCase {
         );
         this.port = this.server.start();
         Testcontainers.exposeHostPorts(this.port);
-        this.cntn = new GenericContainer<>("artipie/maven-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/maven-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/home/")
             .withFileSystemBind(this.tmp.toString(), "/home");
@@ -268,7 +268,7 @@ public final class MavenITCase {
                 "   </servers>",
                 "    <profiles>",
                 "        <profile>",
-                "            <id>artipie</id>",
+                "            <id>pantera</id>",
                 "            <repositories>",
                 "                <repository>",
                 "                    <id>my-repo</id>",
@@ -278,7 +278,7 @@ public final class MavenITCase {
                 "        </profile>",
                 "    </profiles>",
                 "    <activeProfiles>",
-                "        <activeProfile>artipie</activeProfile>",
+                "        <activeProfile>pantera</activeProfile>",
                 "    </activeProfiles>",
                 "</settings>"
             )
@@ -286,8 +286,8 @@ public final class MavenITCase {
     }
 
     private void addHellowordToPantera() {
-        new TestResource("com/artipie/helloworld")
-            .addFilesTo(this.storage, new Key.From("com", "artipie", "helloworld"));
+        new TestResource("com/pantera/helloworld")
+            .addFilesTo(this.storage, new Key.From("com", "pantera", "helloworld"));
     }
 
     private Pair<Policy<?>, Authentication> auth(final boolean anonymous) {
@@ -329,12 +329,12 @@ public final class MavenITCase {
     private void verifyArtifactsAdded(final String version) {
         MatcherAssert.assertThat(
             String.format("Artifacts with %s version were not added to storage", version),
-            this.storage.list(new Key.From("com/artipie/helloworld"))
+            this.storage.list(new Key.From("com/pantera/helloworld"))
                 .join().stream().map(Key::string).collect(Collectors.toList()),
             Matchers.hasItems(
-                "com/artipie/helloworld/maven-metadata.xml",
-                String.format("com/artipie/helloworld/%s/helloworld-%s.pom", version, version),
-                String.format("com/artipie/helloworld/%s/helloworld-%s.jar", version, version)
+                "com/pantera/helloworld/maven-metadata.xml",
+                String.format("com/pantera/helloworld/%s/helloworld-%s.pom", version, version),
+                String.format("com/pantera/helloworld/%s/helloworld-%s.jar", version, version)
             )
         );
     }
@@ -342,7 +342,7 @@ public final class MavenITCase {
     private void verifySnapshotAdded(final String version) {
         MatcherAssert.assertThat(
             String.format("Artifacts with %s version were not added to storage", version),
-            this.storage.list(new Key.From("com/artipie/helloworld", version))
+            this.storage.list(new Key.From("com/pantera/helloworld", version))
                 .join().stream().map(Key::string).collect(Collectors.toList()),
             Matchers.allOf(
                 Matchers.hasItem(new StringContains(".jar")),

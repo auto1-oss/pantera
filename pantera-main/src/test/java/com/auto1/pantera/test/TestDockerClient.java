@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.test;
 
@@ -36,7 +36,7 @@ public class TestDockerClient {
     /**
      * Built from {@link src/test/resources/docker/Dockerfile}.
      */
-    protected static final DockerImageName DOCKER_CLIENT = DockerImageName.parse("artipie/docker-tests:1.0");
+    protected static final DockerImageName DOCKER_CLIENT = DockerImageName.parse("pantera/docker-tests:1.0");
 
     private final int port;
     private final GenericContainer<?> client;

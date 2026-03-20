@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.manifest;
 
@@ -121,7 +121,7 @@ class ManifestTest {
 
     @Test
     void shouldReadLayerUrls() throws Exception {
-        final String url = "https://artipie.com/";
+        final String url = "https://pantera.com/";
         final Manifest manifest = new Manifest(
             new Digest.Sha256("123"),
             Json.createObjectBuilder().add(

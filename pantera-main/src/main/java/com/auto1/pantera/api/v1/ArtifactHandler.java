@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -412,25 +412,25 @@ public final class ArtifactHandler {
                 );
             }
             instructions.add(
-                String.format("curl -O <artipie-url>/%s/%s", repoName, path)
+                String.format("curl -O <pantera-url>/%s/%s", repoName, path)
             );
         } else if (repoType.startsWith("npm")) {
             final String pkg = npmPackageName(path);
             instructions.add(
                 String.format(
-                    "npm install %s --registry <artipie-url>/%s", pkg, repoName
+                    "npm install %s --registry <pantera-url>/%s", pkg, repoName
                 )
             );
         } else if (repoType.startsWith("docker")) {
             final String image = dockerImageName(path);
             if (image != null) {
                 instructions.add(
-                    String.format("docker pull <artipie-host>/%s", image)
+                    String.format("docker pull <pantera-host>/%s", image)
                 );
             } else {
                 instructions.add(
                     String.format(
-                        "docker pull <artipie-host>/%s/<image>:<tag>", repoName
+                        "docker pull <pantera-host>/%s/<image>:<tag>", repoName
                     )
                 );
             }
@@ -438,7 +438,7 @@ public final class ArtifactHandler {
             final String pkg = pypiPackageName(path);
             instructions.add(
                 String.format(
-                    "pip install --index-url <artipie-url>/%s/simple %s",
+                    "pip install --index-url <pantera-url>/%s/simple %s",
                     repoName, pkg
                 )
             );
@@ -446,7 +446,7 @@ public final class ArtifactHandler {
             final String chart = helmChartName(path);
             instructions.add(
                 String.format(
-                    "helm repo add %s <artipie-url>/%s", repoName, repoName
+                    "helm repo add %s <pantera-url>/%s", repoName, repoName
                 )
             );
             instructions.add(
@@ -455,23 +455,23 @@ public final class ArtifactHandler {
         } else if (repoType.startsWith("go")) {
             instructions.add(
                 String.format(
-                    "GOPROXY=<artipie-url>/%s go get %s", repoName, path
+                    "GOPROXY=<pantera-url>/%s go get %s", repoName, path
                 )
             );
         } else if (repoType.startsWith("nuget")) {
             final String pkg = nugetPackageName(path);
             instructions.add(
                 String.format(
-                    "dotnet add package %s --source <artipie-url>/%s/index.json",
+                    "dotnet add package %s --source <pantera-url>/%s/index.json",
                     pkg, repoName
                 )
             );
         } else {
             instructions.add(
-                String.format("curl -O <artipie-url>/%s/%s", repoName, path)
+                String.format("curl -O <pantera-url>/%s/%s", repoName, path)
             );
             instructions.add(
-                String.format("wget <artipie-url>/%s/%s", repoName, path)
+                String.format("wget <pantera-url>/%s/%s", repoName, path)
             );
         }
         return instructions;

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.http;
 
@@ -65,9 +65,9 @@ final class MavenProxySliceAuthIT {
     @BeforeEach
     void setUp() throws Exception {
         final Storage storage = new InMemoryStorage();
-        new TestResource("com/artipie/helloworld").addFilesTo(
+        new TestResource("com/pantera/helloworld").addFilesTo(
             storage,
-            new Key.From("com", "artipie", "helloworld")
+            new Key.From("com", "pantera", "helloworld")
         );
         this.server = new VertxSliceServer(
             MavenProxySliceAuthIT.VERTX,
@@ -105,7 +105,7 @@ final class MavenProxySliceAuthIT {
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
-                new RequestLine(RqMethod.GET, "/com/artipie/helloworld/0.1/helloworld-0.1.pom")
+                new RequestLine(RqMethod.GET, "/com/pantera/helloworld/0.1/helloworld-0.1.pom")
             )
         );
     }
@@ -120,7 +120,7 @@ final class MavenProxySliceAuthIT {
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NOT_FOUND),
-                new RequestLine(RqMethod.GET, "/com/artipie/helloworld/0.1/helloworld-0.1.pom")
+                new RequestLine(RqMethod.GET, "/com/pantera/helloworld/0.1/helloworld-0.1.pom")
             )
         );
     }

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm.proxy.http;
 
@@ -68,7 +68,7 @@ final class SecurityAuditProxySlice implements Slice {
                     || name.equals("pantera_login")
                     || name.startsWith("x-real")      // x-real-ip, etc.
                     || name.startsWith("x-forwarded") // x-forwarded-for, x-forwarded-proto
-                    || name.startsWith("x-fullpath")  // internal artipie header
+                    || name.startsWith("x-fullpath")  // internal pantera header
                     || name.startsWith("x-original")  // x-original-path
                     || name.equals("connection")
                     || name.equals("transfer-encoding") // Will set our own

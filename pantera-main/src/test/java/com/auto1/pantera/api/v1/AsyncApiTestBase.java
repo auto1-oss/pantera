@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -54,7 +54,7 @@ public class AsyncApiTestBase {
     static final String HOST = "localhost";
 
     /**
-     * Hardcoded JWT token for test user "artipie" with context "test".
+     * Hardcoded JWT token for test user "pantera" with context "test".
      * Issued with HS256, secret "some secret", no expiry.
      */
     static final String TEST_TOKEN =
@@ -74,7 +74,7 @@ public class AsyncApiTestBase {
         final PanteraSecurity security = new PanteraSecurity() {
             @Override
             public Authentication authentication() {
-                return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
+                return (name, pswd) -> Optional.of(new AuthUser("pantera", "test"));
             }
 
             @Override

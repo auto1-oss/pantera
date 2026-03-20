@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -96,7 +96,7 @@ public class RestApiServerBase {
     private BlockingStorage asto;
 
     /**
-     * Test artipie`s caches.
+     * Test pantera`s caches.
      */
     private PanteraCaches caches;
 
@@ -108,7 +108,7 @@ public class RestApiServerBase {
         return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
-                return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
+                return (name, pswd) -> Optional.of(new AuthUser("pantera", "test"));
             }
 
             @Override

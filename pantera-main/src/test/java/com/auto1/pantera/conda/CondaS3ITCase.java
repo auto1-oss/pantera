@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda;
 
@@ -55,7 +55,7 @@ public final class CondaS3ITCase {
         () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conda/conda-s3.yml", "my-conda"),
-        () -> new TestDeployment.ClientContainer("artipie/conda-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/conda-tests:1.0")
             .withNetworkAliases("minic")
             .withExposedPorts(CondaS3ITCase.S3_PORT)
             .waitingFor(
@@ -109,7 +109,7 @@ public final class CondaS3ITCase {
                 Matchers.allOf(
                     new StringContains(
                         String.format(
-                            "Using Anaconda API: http://artipie:%d/%s/",
+                            "Using Anaconda API: http://pantera:%d/%s/",
                             CondaS3ITCase.PORT,
                             CondaS3ITCase.REPO
                         )
@@ -123,7 +123,7 @@ public final class CondaS3ITCase {
         this.containers.assertExec(
             "repodata.json must be absent in file storage since file storage must be unused",
             new ContainerResultMatcher(new IsEqual<>(2)),
-            "ls", "/var/artipie/data/my-conda/%s/repodata.json".formatted(pkgarch)
+            "ls", "/var/pantera/data/my-conda/%s/repodata.json".formatted(pkgarch)
         );
         this.containers.assertExec(
             "repodata.json must exist in S3 storage after test",
@@ -166,7 +166,7 @@ public final class CondaS3ITCase {
                 Matchers.allOf(
                     new StringContains(
                         String.format(
-                            "Using Anaconda API: http://artipie:%d/%s/",
+                            "Using Anaconda API: http://pantera:%d/%s/",
                             CondaS3ITCase.PORT,
                             CondaS3ITCase.REPO
                         )
@@ -184,7 +184,7 @@ public final class CondaS3ITCase {
                 Matchers.allOf(
                     new StringContains(
                         String.format(
-                            "Using Anaconda API: http://artipie:%d/%s/",
+                            "Using Anaconda API: http://pantera:%d/%s/",
                             CondaS3ITCase.PORT,
                             CondaS3ITCase.REPO
                         )
@@ -241,7 +241,7 @@ public final class CondaS3ITCase {
                 Matchers.allOf(
                     new StringContains(
                         String.format(
-                            "Using Anaconda API: http://artipie:%d/%s/",
+                            "Using Anaconda API: http://pantera:%d/%s/",
                             CondaS3ITCase.PORT,
                             CondaS3ITCase.REPO
                         )
@@ -259,7 +259,7 @@ public final class CondaS3ITCase {
                 Matchers.allOf(
                     new StringContains(
                         String.format(
-                            "Using Anaconda API: http://artipie:%d/%s/",
+                            "Using Anaconda API: http://pantera:%d/%s/",
                             CondaS3ITCase.PORT,
                             CondaS3ITCase.REPO
                         )

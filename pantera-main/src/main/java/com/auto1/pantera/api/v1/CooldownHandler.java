@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -64,7 +64,7 @@ public final class CooldownHandler {
     private final CrudRepoSettings crs;
 
     /**
-     * Cooldown settings from artipie.yml.
+     * Cooldown settings from pantera.yml.
      */
     private final CooldownSettings csettings;
 
@@ -247,7 +247,7 @@ public final class CooldownHandler {
 
     /**
      * GET /api/v1/cooldown/overview — list repositories that have cooldown enabled,
-     * based on CooldownSettings (artipie.yml config), not just repo type.
+     * based on CooldownSettings (pantera.yml config), not just repo type.
      * @param ctx Routing context
      */
     private void overview(final RoutingContext ctx) {

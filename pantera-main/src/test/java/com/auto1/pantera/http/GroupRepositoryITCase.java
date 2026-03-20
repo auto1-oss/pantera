@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http;
 
@@ -50,9 +50,9 @@ final class GroupRepositoryITCase {
     void fetchesCorrectContentFromGroupedFilesProxy() throws Exception {
         MatcherAssert.assertThat(
             new GroupSlice(
-                this.proxy("/artipie/none-2/"),
-                this.proxy("/artipie/tests/"),
-                this.proxy("/artipie/none-1/")
+                this.proxy("/pantera/none-2/"),
+                this.proxy("/pantera/tests/"),
+                this.proxy("/pantera/none-1/")
             ),
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.OK),
@@ -66,7 +66,7 @@ final class GroupRepositoryITCase {
     private Slice proxy(final String path) throws URISyntaxException {
         return new FileProxySlice(
             this.clients,
-            new URIBuilder(URI.create("https://central.artipie.com"))
+            new URIBuilder(URI.create("https://central.pantera.com"))
                 .setPath(path)
                 .build()
         );

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.backfill;
 
@@ -23,7 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Reads the {@code .artipie-meta.json} sidecar file stored by
+ * Reads the {@code .pantera-meta.json} sidecar file stored by
  * {@code CachedArtifactMetadataStore} alongside cached proxy artifacts
  * (Maven, PyPI).
  *
@@ -67,7 +67,7 @@ final class PanteraMetaSidecar {
 
     /**
      * Read the release date (epoch millis) from the
-     * {@code .artipie-meta.json} sidecar alongside the given artifact.
+     * {@code .pantera-meta.json} sidecar alongside the given artifact.
      *
      * <p>Returns empty if the sidecar is absent, the {@code headers}
      * array is missing, no {@code Last-Modified} entry is present, or
@@ -128,7 +128,7 @@ final class PanteraMetaSidecar {
             }
         } catch (final IOException | JsonException ex) {
             LOG.debug(
-                "Cannot read artipie-meta sidecar {}: {}",
+                "Cannot read pantera-meta sidecar {}: {}",
                 sidecar, ex.getMessage()
             );
         }

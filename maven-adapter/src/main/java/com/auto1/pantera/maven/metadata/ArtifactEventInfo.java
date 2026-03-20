@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.metadata;
 
@@ -46,7 +46,7 @@ public final class ArtifactEventInfo {
 
     /**
      * Replaces standard separator of key parts '/' with dot. Expected key is artifact
-     * location without version, for example: 'com/artipie/asto'.
+     * location without version, for example: 'com/pantera/asto'.
      * @param key Artifact location in storage, version not included
      * @return Formatted artifact name
      */
@@ -56,7 +56,7 @@ public final class ArtifactEventInfo {
 
     /**
      * Replaces standard separator of key parts '/' with dot. Expected key is artifact
-     * location without version, for example: 'com/artipie/asto'.
+     * location without version, for example: 'com/pantera/asto'.
      * @param key Artifact location in storage, version not included
      * @return Formatted artifact name
      */

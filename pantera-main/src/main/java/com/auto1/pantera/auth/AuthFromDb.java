@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -18,7 +18,7 @@ import org.apache.commons.codec.digest.DigestUtils;
  * Database-backed authentication.
  * Authenticates users by querying the {@code users} table for username
  * and comparing the password against the stored {@code password_hash}.
- * Supports plain-text comparison (artipie provider) and SHA-256 hashing.
+ * Supports plain-text comparison (pantera provider) and SHA-256 hashing.
  *
  * @since 1.21
  */
@@ -63,7 +63,7 @@ public final class AuthFromDb implements Authentication {
                 if (hash == null || hash.isEmpty()) {
                     return Optional.empty();
                 }
-                // Only authenticate artipie-managed users (not SSO)
+                // Only authenticate pantera-managed users (not SSO)
                 if (!AuthFromDb.ARTIPIE.equals(provider)) {
                     return Optional.empty();
                 }

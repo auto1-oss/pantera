@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi;
 
@@ -20,13 +20,13 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 /**
  * Test to pypi proxy.
  * @since 0.12
- * @todo #1500:30min Build and publish artipie/artipie-tests Docker image
- *  This test requires artipie/artipie-tests:1.0-SNAPSHOT image which is not available.
+ * @todo #1500:30min Build and publish pantera/pantera-tests Docker image
+ *  This test requires pantera/pantera-tests:1.0-SNAPSHOT image which is not available.
  *  Need to create Dockerfile and publish to Docker Hub or use local build.
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")
 @EnabledOnOs({OS.LINUX, OS.MAC})
-@Disabled("Requires artipie/artipie-tests:1.0-SNAPSHOT Docker image")
+@Disabled("Requires pantera/pantera-tests:1.0-SNAPSHOT Docker image")
 public final class PypiProxyITCase {
 
     /**
@@ -36,18 +36,18 @@ public final class PypiProxyITCase {
     final TestDeployment containers = new TestDeployment(
         Map.ofEntries(
             new MapEntry<>(
-                "artipie",
+                "pantera",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("pypi-proxy/pypi.yml", "my-pypi")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
-                "artipie-proxy",
+                "pantera-proxy",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("pypi-proxy/pypi-proxy.yml", "my-pypi-proxy")
             )
         ),
-        () -> new TestDeployment.ClientContainer("artipie/pypi-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/pypi-tests:1.0")
             .withWorkingDirectory("/w")
     );
 
@@ -55,8 +55,8 @@ public final class PypiProxyITCase {
     void installFromProxy() throws Exception {
         final byte[] data = new TestResource("pypi-repo/alarmtime-0.1.5.tar.gz").asBytes();
         this.containers.putBinaryToPantera(
-            "artipie", data,
-            "/var/artipie/data/my-pypi/alarmtime/alarmtime-0.1.5.tar.gz"
+            "pantera", data,
+            "/var/pantera/data/my-pypi/alarmtime/alarmtime-0.1.5.tar.gz"
         );
         this.containers.assertExec(
             "Package was not installed",
@@ -64,12 +64,12 @@ public final class PypiProxyITCase {
                 new IsEqual<>(0),
                 Matchers.containsString("Successfully installed alarmtime-0.1.5")
             ),
-            "pip", "install", "--no-deps", "--trusted-host", "artipie-proxy",
-            "--index-url", "http://alice:123@artipie-proxy:8080/my-pypi-proxy/", "alarmtime"
+            "pip", "install", "--no-deps", "--trusted-host", "pantera-proxy",
+            "--index-url", "http://alice:123@pantera-proxy:8080/my-pypi-proxy/", "alarmtime"
         );
         this.containers.assertPanteraContent(
-            "artipie-proxy",
-            "/var/artipie/data/my-pypi-proxy/alarmtime/alarmtime-0.1.5.tar.gz",
+            "pantera-proxy",
+            "/var/pantera/data/my-pypi-proxy/alarmtime/alarmtime-0.1.5.tar.gz",
             new IsEqual<>(data)
         );
     }

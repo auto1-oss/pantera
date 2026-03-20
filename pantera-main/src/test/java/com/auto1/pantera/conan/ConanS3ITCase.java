@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conan;
 
@@ -91,7 +91,7 @@ public final class ConanS3ITCase {
     @BeforeEach
     void init() throws IOException, InterruptedException {
         this.client.execInContainer(
-            "conan remote add conan-test http://artipie:9301 False --force".split(" ")
+            "conan remote add conan-test http://pantera:9301 False --force".split(" ")
         );
         this.containers.assertExec(
             "Failed to start Minio", new ContainerResultMatcher(),
@@ -132,7 +132,7 @@ public final class ConanS3ITCase {
         );
         this.containers.assertExec(
             "Conan remote add failed", new ContainerResultMatcher(),
-            "conan remote add -f conan-test http://artipie:9300 False".split(" ")
+            "conan remote add -f conan-test http://pantera:9300 False".split(" ")
         );
         this.containers.assertExec(
             "Conan install must fail", new ContainerResultMatcher(
@@ -267,7 +267,7 @@ public final class ConanS3ITCase {
      */
     @SuppressWarnings("PMD.LineLengthCheck")
     private static TestDeployment.ClientContainer prepareClientContainer() {
-        return new TestDeployment.ClientContainer("artipie/conan-tests:1.0")
+        return new TestDeployment.ClientContainer("pantera/conan-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withAccessToHost(true)
             .withWorkingDirectory("/w")

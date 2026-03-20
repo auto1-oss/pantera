@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -44,7 +44,7 @@ public final class PrefixesRest {
     private final Storage storage;
 
     /**
-     * Path to artipie.yml file.
+     * Path to pantera.yml file.
      */
     private final Path configPath;
 
@@ -53,7 +53,7 @@ public final class PrefixesRest {
      *
      * @param prefixes Prefixes configuration
      * @param storage Configuration storage
-     * @param configPath Path to artipie.yml
+     * @param configPath Path to pantera.yml
      */
     public PrefixesRest(
         final PrefixesConfig prefixes,
@@ -154,7 +154,7 @@ public final class PrefixesRest {
     }
 
     /**
-     * PUT /api/admin/prefixes - Update prefixes in artipie.yml and trigger reload.
+     * PUT /api/admin/prefixes - Update prefixes in pantera.yml and trigger reload.
      *
      * @param ctx Routing context
      */
@@ -182,12 +182,12 @@ public final class PrefixesRest {
                 }
             }
 
-            // Update artipie.yml
+            // Update pantera.yml
             this.updateConfigFile(newPrefixes)
                 .thenAccept(updated -> {
                     if (updated) {
                         EcsLogger.info("com.auto1.pantera.api")
-                            .message("Updated global_prefixes in artipie.yml: " + newPrefixes.toString())
+                            .message("Updated global_prefixes in pantera.yml: " + newPrefixes.toString())
                             .eventCategory("api")
                             .eventAction("prefixes_update")
                             .eventOutcome("success")
@@ -250,7 +250,7 @@ public final class PrefixesRest {
     }
 
     /**
-     * Update artipie.yml with new prefixes.
+     * Update pantera.yml with new prefixes.
      *
      * @param newPrefixes New list of prefixes
      * @return CompletableFuture indicating success
@@ -266,7 +266,7 @@ public final class PrefixesRest {
                 // Build new meta section with updated prefixes
                 YamlMapping currentMeta = current.yamlMapping("meta");
                 if (currentMeta == null) {
-                    throw new IllegalStateException("No meta section in artipie.yml");
+                    throw new IllegalStateException("No meta section in pantera.yml");
                 }
 
                 // Build prefixes sequence

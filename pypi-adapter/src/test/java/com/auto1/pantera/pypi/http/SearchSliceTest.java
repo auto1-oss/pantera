@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi.http;
 
@@ -63,11 +63,11 @@ class SearchSliceTest {
 
     @ParameterizedTest
     @CsvSource({
-        "artipie-sample-0.2.tar.gz,artipie-sample",
-        "artipie-sample-2.1.tar.Z,artipie-sample",
-        "artipie-sample-2.1.tar.bz2,artipie-sample",
-        "artipie_sample-2.1-py3.7.egg,artipie-sample",
-        "artipie_sample-0.2-py3-none-any.whl,artipie-sample",
+        "pantera-sample-0.2.tar.gz,pantera-sample",
+        "pantera-sample-2.1.tar.Z,pantera-sample",
+        "pantera-sample-2.1.tar.bz2,pantera-sample",
+        "pantera_sample-2.1-py3.7.egg,pantera-sample",
+        "pantera_sample-0.2-py3-none-any.whl,pantera-sample",
         "alarmtime-0.1.5.tar.gz,alarmtime",
         "ABtests-0.0.2.1-py2.py3-none-any.whl,abtests"
     })

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -21,7 +21,7 @@ class AuthFromStorageFactoryTest {
     void initsWhenStorageForAuthIsSet() throws IOException {
         MatcherAssert.assertThat(
             new AuthFromStorageFactory().getAuthentication(
-                Yaml.createYamlInput(this.artipieEnvCreds()).readYamlMapping()
+                Yaml.createYamlInput(this.panteraEnvCreds()).readYamlMapping()
             ),
             new IsInstanceOf(AuthFromStorage.class)
         );
@@ -31,32 +31,32 @@ class AuthFromStorageFactoryTest {
     void initsWhenPolicyIsSet() throws IOException {
         MatcherAssert.assertThat(
             new AuthFromStorageFactory().getAuthentication(
-                Yaml.createYamlInput(this.artipieGithubCredsAndPolicy()).readYamlMapping()
+                Yaml.createYamlInput(this.panteraGithubCredsAndPolicy()).readYamlMapping()
             ),
             new IsInstanceOf(AuthFromStorage.class)
         );
     }
 
-    private String artipieEnvCreds() {
+    private String panteraEnvCreds() {
         return String.join(
             "\n",
             "credentials:",
             "  - type: env",
-            "  - type: artipie",
+            "  - type: local",
             "    storage:",
             "      type: fs",
             "      path: any"
         );
     }
 
-    private String artipieGithubCredsAndPolicy() {
+    private String panteraGithubCredsAndPolicy() {
         return String.join(
             "\n",
             "credentials:",
             "  - type: github",
-            "  - type: artipie",
+            "  - type: local",
             "policy:",
-            "  type: artipie",
+            "  type: local",
             "  storage:",
             "    type: fs",
             "    path: /any/path"

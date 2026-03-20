@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -18,7 +18,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Obtain artipie settings by path.
+ * Obtain pantera settings by path.
  * @since 0.22
  */
 public final class SettingsFromPath {
@@ -59,7 +59,7 @@ public final class SettingsFromPath {
         final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
         boolean initialize = Boolean.parseBoolean(System.getenv("PANTERA_INIT"));
         if (!Files.exists(this.path)) {
-            new JavaResource("example/artipie.yaml").copy(this.path);
+            new JavaResource("example/pantera.yaml").copy(this.path);
             initialize = true;
         }
         final Settings settings = new YamlSettings(
@@ -67,7 +67,7 @@ public final class SettingsFromPath {
             this.path.getParent(), quartz, dataSource
         );
         final BlockingStorage bsto = new BlockingStorage(settings.configStorage());
-        final Key init = new Key.From(".artipie", "initialized");
+        final Key init = new Key.From(".pantera", "initialized");
         if (initialize && !bsto.exists(init)) {
             SettingsFromPath.copyResources(
                 Arrays.asList(
@@ -81,7 +81,7 @@ public final class SettingsFromPath {
                 SettingsFromPath.copyResources(
                     Arrays.asList(
                         "roles/reader.yml", "roles/default/github.yml", "roles/api-admin.yaml",
-                        "users/artipie.yaml"
+                        "users/pantera.yaml"
                     ), "security", policy
                 );
             }
@@ -92,7 +92,7 @@ public final class SettingsFromPath {
                     "", "", "\t+===============================================================+",
                     "\t\t\t\t\tHello!",
                     "\t\tPantera configuration was not found, created default.",
-                    "\t\t\tDefault username/password: `artipie`/`artipie`. ",
+                    "\t\t\tDefault username/password: `pantera`/`pantera`. ",
                     "\t-===============================================================-", ""
                 ))
                 .eventCategory("configuration")

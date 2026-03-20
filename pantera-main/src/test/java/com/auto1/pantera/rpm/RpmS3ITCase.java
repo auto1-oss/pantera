@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.rpm;
 
@@ -41,7 +41,7 @@ public final class RpmS3ITCase {
         () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("rpm/my-rpm-s3.yml", "my-rpm")
             .withExposedPorts(8080),
-        () -> new TestDeployment.ClientContainer("artipie/rpm-tests-fedora:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/rpm-tests-fedora:1.0")
         .withWorkingDirectory("/w")
         .withNetworkAliases("minioc")
         .withExposedPorts(9000)
@@ -84,7 +84,7 @@ public final class RpmS3ITCase {
             String.join(
                 "\n", "[example]",
                 "name=Example Repository",
-                String.format("baseurl=http://artipie:%s/%s", port, repo),
+                String.format("baseurl=http://pantera:%s/%s", port, repo),
                 "enabled=1",
                 "gpgcheck=0"
             ).getBytes(),
@@ -93,7 +93,7 @@ public final class RpmS3ITCase {
         this.containers.assertExec(
             "Failed to upload rpm package",
             new ContainerResultMatcher(),
-            "timeout 30s curl http://artipie:%s/%s/time-1.7-45.el7.x86_64.rpm --upload-file /w/time-1.7-45.el7.x86_64.rpm"
+            "timeout 30s curl http://pantera:%s/%s/time-1.7-45.el7.x86_64.rpm --upload-file /w/time-1.7-45.el7.x86_64.rpm"
                 .formatted(port, repo).split(" ")
         );
         Thread.sleep(2000);

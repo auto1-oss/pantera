@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db;
 
@@ -26,7 +26,7 @@ public final class MetadataDockerITCase {
      */
     @RegisterExtension
     final TestDeployment deployment = new TestDeployment(
-        () -> new TestDeployment.PanteraContainer().withConfig("artipie-db.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera-db.yaml")
             .withRepoConfig("docker/registry.yml", "registry")
             .withRepoConfig("docker/docker-proxy-port.yml", "my-docker-proxy")
             .withUser("security/users/alice.yaml", "alice")
@@ -43,9 +43,9 @@ public final class MetadataDockerITCase {
 
     @Test
     void pushAndPull(final @TempDir Path temp) throws Exception {
-        final String alpine = "artipie:8080/registry/alpine:3.11";
-        final String debian = "artipie:8080/registry/debian:stable-slim";
-        new TestDeployment.DockerTest(this.deployment, "artipie:8080")
+        final String alpine = "pantera:8080/registry/alpine:3.11";
+        final String debian = "pantera:8080/registry/debian:stable-slim";
+        new TestDeployment.DockerTest(this.deployment, "pantera:8080")
             .loginAsAlice()
             .pull("alpine:3.11")
             .tag("alpine:3.11", alpine)
@@ -67,12 +67,12 @@ public final class MetadataDockerITCase {
     void shouldPullFromProxy(final @TempDir Path temp) throws Exception {
         final Image image = new Image.ForOs();
         final String img = new Image.From(
-            "artipie:8081",
+            "pantera:8081",
             String.format("my-docker-proxy/%s", image.name()),
             image.digest(),
             image.layer()
         ).remoteByDigest();
-        new TestDeployment.DockerTest(this.deployment, "artipie:8081")
+        new TestDeployment.DockerTest(this.deployment, "pantera:8081")
             .loginAsAlice()
             .pull(img)
             .assertExec();

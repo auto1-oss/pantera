@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -32,24 +32,24 @@ final class MavenMultiProxyIT {
     final TestDeployment containers = new TestDeployment(
         new MapOf<>(
             new MapEntry<>(
-                "artipie",
+                "pantera",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven-multi-proxy.yml", "my-maven")
                     .withRepoConfig("maven/maven-multi-proxy-port.yml", "my-maven-port")
                     .withExposedPorts(8081)
             ),
             new MapEntry<>(
-                "artipie-empty",
+                "pantera-empty",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven.yml", "empty-maven")
             ),
             new MapEntry<>(
-                "artipie-origin",
+                "pantera-origin",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven.yml", "origin-maven")
             )
         ),
-        () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
             .withWorkingDirectory("/w")
     );
 
@@ -61,15 +61,15 @@ final class MavenMultiProxyIT {
     void shouldGetDependency(final String settings) throws Exception {
         this.containers.putClasspathResourceToClient(settings, "/w/settings.xml");
         this.containers.putResourceToPantera(
-            "artipie-origin",
-            "com/artipie/helloworld/maven-metadata.xml",
-            "/var/artipie/data/origin-maven/com/artipie/helloworld/maven-metadata.xml"
+            "pantera-origin",
+            "com/pantera/helloworld/maven-metadata.xml",
+            "/var/pantera/data/origin-maven/com/pantera/helloworld/maven-metadata.xml"
         );
-        MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
-            .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
+        MavenITCase.getResourceFiles("com/pantera/helloworld/0.1")
+            .stream().map(item -> String.join("/", "com/pantera/helloworld/0.1", item))
             .forEach(
                 item -> this.containers.putResourceToPantera(
-                    "artipie-origin", item, String.join("/", "/var/artipie/data/origin-maven", item)
+                    "pantera-origin", item, String.join("/", "/var/pantera/data/origin-maven", item)
                 )
             );
         this.containers.assertExec(

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.http;
 
@@ -115,11 +115,11 @@ final class MavenProxySliceITCase {
 
     @Test
     void downloadsJarFromCache() throws Exception {
-        new TestResource("com/artipie/helloworld")
-            .addFilesTo(this.storage, new Key.From("com", "artipie", "helloworld"));
+        new TestResource("com/pantera/helloworld")
+            .addFilesTo(this.storage, new Key.From("com", "pantera", "helloworld"));
         final HttpURLConnection con = (HttpURLConnection) URI.create(
             String.format(
-                "http://localhost:%s/com/artipie/helloworld/0.1/helloworld-0.1.jar", this.port
+                "http://localhost:%s/com/pantera/helloworld/0.1/helloworld-0.1.jar", this.port
             )
         ).toURL().openConnection();
         con.setRequestMethod("GET");

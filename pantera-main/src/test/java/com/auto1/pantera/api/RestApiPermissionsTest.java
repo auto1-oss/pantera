@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -38,7 +38,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
     /**
      * Name of the user.
      */
-    private static final String NAME = "artipie";
+    private static final String NAME = "pantera";
 
     /**
      * User password.
@@ -84,7 +84,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
                             "storage",
                             new JsonObject()
                                 .put("type", "fs")
-                                .put("path", "/var/artipie/rpm")
+                                .put("path", "/var/pantera/rpm")
                         )
                 )
             ),
@@ -95,7 +95,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
                 "/api/v1/repository/my-go/storages/local",
                 new JsonObject()
                     .put("type", "fs")
-                    .put("path", "/var/artipie/repo-storage")
+                    .put("path", "/var/pantera/repo-storage")
             ),
             new TestRequest(HttpMethod.DELETE, "/api/v1/repository/docker/storages/s3sto"),
             new TestRequest(
@@ -103,7 +103,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
                 "/api/v1/storages/def",
                 new JsonObject()
                     .put("type", "fs")
-                    .put("path", "/var/artipie/common-storage")
+                    .put("path", "/var/pantera/common-storage")
             ),
             new TestRequest(HttpMethod.DELETE, "/api/v1/storages/local-dir")
         ), RestApiPermissionsTest.GET_DATA.stream()
@@ -128,7 +128,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
     @Test
     void returnsOkIfUserHasPermissions(final Vertx vertx, final VertxTestContext ctx)
         throws Exception {
-        final AtomicReference<String> token = this.getToken(vertx, ctx, "artipie", "whatever");
+        final AtomicReference<String> token = this.getToken(vertx, ctx, "pantera", "whatever");
         for (final TestRequest item : RestApiPermissionsTest.GET_DATA) {
             this.requestAndAssert(
                 vertx, ctx, item, Optional.of(token.get()),
@@ -264,7 +264,7 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
                 final BlockingStorage blsto =
                     new BlockingStorage(RestApiPermissionsTest.super.ssto);
                 blsto.save(
-                    new Key.From("users/artipie.yaml"),
+                    new Key.From("users/pantera.yaml"),
                     String.join(
                         "\n",
                         "permissions:",

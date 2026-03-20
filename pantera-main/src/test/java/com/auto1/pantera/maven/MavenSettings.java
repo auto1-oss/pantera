@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -31,7 +31,7 @@ public final class MavenSettings {
                 "<settings>",
                 "    <profiles>",
                 "        <profile>",
-                "            <id>artipie</id>",
+                "            <id>pantera</id>",
                 "            <repositories>",
                 "                <repository>",
                 "                    <id>my-maven</id>",
@@ -41,7 +41,7 @@ public final class MavenSettings {
                 "        </profile>",
                 "    </profiles>",
                 "    <activeProfiles>",
-                "        <activeProfile>artipie</activeProfile>",
+                "        <activeProfile>pantera</activeProfile>",
                 "    </activeProfiles>",
                 "</settings>"
             )

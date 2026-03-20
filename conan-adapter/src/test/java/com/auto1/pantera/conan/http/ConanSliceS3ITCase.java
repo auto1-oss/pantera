@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conan.http;
 
@@ -512,7 +512,7 @@ class ConanSliceS3ITCase {
         );
         final int port = this.server.start();
         Testcontainers.exposeHostPorts(port);
-        this.cntn = new GenericContainer<>("artipie/conan-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/conan-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withReuse(true)
             .withAccessToHost(true);

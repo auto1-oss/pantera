@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -147,7 +147,7 @@ class YamlSettingsTest {
     @Test
     void initializesPanteraAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.artipieCreds()).readYamlMapping(), this.temp,
+            Yaml.createYamlInput(this.panteraCreds()).readYamlMapping(), this.temp,
             new QuartzService()
         );
         MatcherAssert.assertThat(
@@ -169,7 +169,7 @@ class YamlSettingsTest {
     @Test
     void initializesPanteraAuthAndPolicy() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.artipieCredsWithPolicy()).readYamlMapping(), this.temp,
+            Yaml.createYamlInput(this.panteraCredsWithPolicy()).readYamlMapping(), this.temp,
             new QuartzService()
         );
         MatcherAssert.assertThat(
@@ -191,7 +191,7 @@ class YamlSettingsTest {
     @Test
     void initializesAllAuths() throws IOException {
         final YamlSettings authz = new YamlSettings(
-            Yaml.createYamlInput(this.artipieGithubKeycloakEnvCreds()).readYamlMapping(), this.temp,
+            Yaml.createYamlInput(this.panteraGithubKeycloakEnvCreds()).readYamlMapping(), this.temp,
             new QuartzService()
         );
         MatcherAssert.assertThat(
@@ -218,7 +218,7 @@ class YamlSettingsTest {
     @Test
     void initializesAllAuthsAndPolicy() throws IOException {
         final YamlSettings settings = new YamlSettings(
-            Yaml.createYamlInput(this.artipieGithubKeycloakEnvCredsAndPolicy()).readYamlMapping(),
+            Yaml.createYamlInput(this.panteraGithubKeycloakEnvCredsAndPolicy()).readYamlMapping(),
             this.temp, new QuartzService()
         );
         MatcherAssert.assertThat(
@@ -273,33 +273,33 @@ class YamlSettingsTest {
         );
     }
 
-    private String artipieCreds() {
+    private String panteraCreds() {
         return String.join(
             "\n",
             "meta:",
             "  credentials:",
-            "    - type: artipie",
+            "    - type: local",
             "      storage:",
             "        type: fs",
             "        path: any"
         );
     }
 
-    private String artipieCredsWithPolicy() {
+    private String panteraCredsWithPolicy() {
         return String.join(
             "\n",
             "meta:",
             "  credentials:",
-            "    - type: artipie",
+            "    - type: local",
             "  policy:",
-            "    type: artipie",
+            "    type: local",
             "    storage:",
             "      type: fs",
             "      path: /any/path"
         );
     }
 
-    private String artipieGithubKeycloakEnvCreds() {
+    private String panteraGithubKeycloakEnvCreds() {
         return String.join(
             "\n",
             "meta:",
@@ -311,14 +311,14 @@ class YamlSettingsTest {
             "      realm: any",
             "      client-id: any",
             "      client-password: abc123",
-            "    - type: artipie",
+            "    - type: local",
             "      storage:",
             "        type: fs",
             "        path: any"
         );
     }
 
-    private String artipieGithubKeycloakEnvCredsAndPolicy() {
+    private String panteraGithubKeycloakEnvCredsAndPolicy() {
         return String.join(
             "\n",
             "meta:",
@@ -330,9 +330,9 @@ class YamlSettingsTest {
             "      realm: any",
             "      client-id: any",
             "      client-password: abc123",
-            "    - type: artipie",
+            "    - type: local",
             "  policy:",
-            "    type: artipie",
+            "    type: local",
             "    storage:",
             "      type: fs",
             "      path: /any/path"

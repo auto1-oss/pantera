@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.slice;
 
@@ -14,7 +14,7 @@ import com.auto1.pantera.http.log.EcsLogger;
  * 
  * <p>Thread pool sizing can be configured via:
  * <ul>
- *   <li>System property: {@code artipie.filesystem.io.threads}</li>
+ *   <li>System property: {@code pantera.filesystem.io.threads}</li>
  *   <li>Environment variable: {@code PANTERA_FILESYSTEM_IO_THREADS}</li>
  *   <li>Default: {@code Math.max(8, Runtime.getRuntime().availableProcessors() * 2)}</li>
  * </ul>

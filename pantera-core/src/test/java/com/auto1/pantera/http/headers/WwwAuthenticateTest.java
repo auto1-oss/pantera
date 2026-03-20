@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.headers;
 
@@ -31,7 +31,7 @@ public final class WwwAuthenticateTest {
 
     @Test
     void shouldHaveExpectedValue() {
-        final String value = "Basic realm=\"http://artipie.com\"";
+        final String value = "Basic realm=\"http://pantera.com\"";
         MatcherAssert.assertThat(
             new WwwAuthenticate(value).getValue(),
             new IsEqual<>(value)
@@ -40,7 +40,7 @@ public final class WwwAuthenticateTest {
 
     @Test
     void shouldExtractValueFromHeaders() {
-        final String value = "Basic realm=\"http://artipie.com/my-repo\"";
+        final String value = "Basic realm=\"http://pantera.com/my-repo\"";
         final WwwAuthenticate header = new WwwAuthenticate(
             Headers.from(
                 new Header("Content-Length", "11"),
@@ -75,8 +75,8 @@ public final class WwwAuthenticateTest {
             IllegalStateException.class,
             () -> new WwwAuthenticate(
                 Headers.from(
-                    new WwwAuthenticate("Basic realm=\"https://artipie.com\""),
-                    new WwwAuthenticate("Bearer realm=\"https://artipie.com/token\"")
+                    new WwwAuthenticate("Basic realm=\"https://pantera.com\""),
+                    new WwwAuthenticate("Bearer realm=\"https://pantera.com/token\"")
                 )
             ).getValue()
         );

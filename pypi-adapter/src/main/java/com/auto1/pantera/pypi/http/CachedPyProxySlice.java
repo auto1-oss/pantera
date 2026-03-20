@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi.http;
 
@@ -143,7 +143,7 @@ public final class CachedPyProxySlice implements Slice {
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
         // Use unified NegativeCacheConfig for consistent settings across all adapters
-        // TTL, maxSize, and Valkey settings come from global config (caches.negative in artipie.yml)
+        // TTL, maxSize, and Valkey settings come from global config (caches.negative in pantera.yml)
         this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
     }

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.headers;
 
@@ -18,14 +18,14 @@ public final class LocationTest {
     @Test
     void shouldHaveExpectedName() {
         MatcherAssert.assertThat(
-            new Location("http://artipie.com/").getKey(),
+            new Location("http://pantera.com/").getKey(),
             new IsEqual<>("Location")
         );
     }
 
     @Test
     void shouldHaveExpectedValue() {
-        final String value = "http://artipie.com/something";
+        final String value = "http://pantera.com/something";
         MatcherAssert.assertThat(
             new Location(value).getValue(),
             new IsEqual<>(value)
@@ -34,7 +34,7 @@ public final class LocationTest {
 
     @Test
     void shouldExtractValueFromHeaders() {
-        final String value = "http://artipie.com/resource";
+        final String value = "http://pantera.com/resource";
         final Location header = new Location(
             Headers.from(
                 new Header("Content-Length", "11"),
@@ -69,8 +69,8 @@ public final class LocationTest {
             IllegalStateException.class,
             () -> new Location(
                 Headers.from(
-                    new Location("http://artipie.com/1"),
-                    new Location("http://artipie.com/2")
+                    new Location("http://pantera.com/1"),
+                    new Location("http://pantera.com/2")
                 )
             ).getValue()
         );

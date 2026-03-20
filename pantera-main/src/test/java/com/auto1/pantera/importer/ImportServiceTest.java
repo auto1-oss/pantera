@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.importer;
 
@@ -54,12 +54,12 @@ final class ImportServiceTest {
 
     @Test
     void importsArtifactWithComputedDigest() throws Exception {
-        final byte[] content = "hello-artipie".getBytes(StandardCharsets.UTF_8);
+        final byte[] content = "hello-pantera".getBytes(StandardCharsets.UTF_8);
         final String sha256 = digestHex("SHA-256", content);
         final Headers headers = new Headers()
             .add(ImportHeaders.REPO_TYPE, "file")
             .add(ImportHeaders.IDEMPOTENCY_KEY, "id-1")
-            .add(ImportHeaders.ARTIFACT_NAME, "hello-artipie.txt")
+            .add(ImportHeaders.ARTIFACT_NAME, "hello-pantera.txt")
             .add(ImportHeaders.ARTIFACT_VERSION, "1.0.0")
             .add(ImportHeaders.ARTIFACT_OWNER, "qa")
             .add(ImportHeaders.CHECKSUM_POLICY, ChecksumPolicy.COMPUTE.name())

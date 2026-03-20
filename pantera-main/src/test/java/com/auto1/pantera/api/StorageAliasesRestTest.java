@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -134,7 +134,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
                             "storages:",
                             "  default:",
                             "    type: fs",
-                            "    path: /var/artipie/repo/data",
+                            "    path: /var/pantera/repo/data",
                             "  \"redis-sto\":",
                             "    type: redis",
                             "    config: some",
@@ -180,7 +180,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
                             "storages:",
                             "  default:",
                             "    type: fs",
-                            "    path: /var/artipie/repo/data"
+                            "    path: /var/pantera/repo/data"
                         )
                     )
                 );
@@ -228,7 +228,7 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
             "storages:",
             "  default:",
             "    type: fs",
-            "    path: /var/artipie/repo/data",
+            "    path: /var/pantera/repo/data",
             "  redis-sto:",
             "    type: redis",
             "    config: some"
@@ -236,6 +236,6 @@ public final class StorageAliasesRestTest extends RestApiServerBase {
     }
 
     private String jsonAliases() {
-        return "[{\"alias\":\"default\",\"storage\":{\"type\":\"fs\",\"path\":\"/var/artipie/repo/data\"}},{\"alias\":\"redis-sto\",\"storage\":{\"type\":\"redis\",\"config\":\"some\"}}]";
+        return "[{\"alias\":\"default\",\"storage\":{\"type\":\"fs\",\"path\":\"/var/pantera/repo/data\"}},{\"alias\":\"redis-sto\",\"storage\":{\"type\":\"redis\",\"config\":\"some\"}}]";
     }
 }

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.cluster;
 
@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * Broadcasts events to all connected Pantera instances for HA clustering.
  * <p>
  * Events are published as strings on Valkey channels with the naming
- * convention {@code artipie:events:{topic}}. Each instance subscribes
+ * convention {@code pantera:events:{topic}}. Each instance subscribes
  * to channels of interest and dispatches received messages to all
  * registered handlers for that topic.
  * <p>

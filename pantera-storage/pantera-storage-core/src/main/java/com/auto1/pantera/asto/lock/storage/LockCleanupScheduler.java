@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.asto.lock.storage;
 
@@ -18,7 +18,7 @@ import java.util.logging.Logger;
 /**
  * Scheduled cleanup of expired lock proposals from storage.
  * <p>
- * Periodically scans the {@code .artipie-locks/} prefix in storage, reads each
+ * Periodically scans the {@code .pantera-locks/} prefix in storage, reads each
  * proposal value, and deletes proposals whose expiration timestamp has passed.
  * Proposals with no expiration (empty content) are left untouched.
  * </p>
@@ -123,7 +123,7 @@ public final class LockCleanupScheduler implements AutoCloseable {
     }
 
     /**
-     * Perform the actual cleanup: list all keys under {@code .artipie-locks/},
+     * Perform the actual cleanup: list all keys under {@code .pantera-locks/},
      * read each value, and delete any whose expiration timestamp is in the past.
      *
      * @return Completion of cleanup.

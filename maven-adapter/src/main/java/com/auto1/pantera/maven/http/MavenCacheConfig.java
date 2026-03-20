@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.http;
 
@@ -11,7 +11,7 @@ import java.time.Duration;
  * Maven cache configuration for metadata caching.
  * Negative cache settings are managed globally via NegativeCacheConfig.
  * 
- * <p>Configuration in artipie.yml:
+ * <p>Configuration in pantera.yml:
  * <pre>
  * # Global negative cache settings (applies to all adapters)
  * caches:

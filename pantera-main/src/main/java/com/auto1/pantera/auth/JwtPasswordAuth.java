@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * Usage in Maven settings.xml:
  * <pre>
  * &lt;server&gt;
- *   &lt;id&gt;artipie&lt;/id&gt;
+ *   &lt;id&gt;pantera&lt;/id&gt;
  *   &lt;username&gt;user@example.com&lt;/username&gt;
  *   &lt;password&gt;eyJhbGciOiJIUzI1NiIs...&lt;/password&gt;
  * &lt;/server&gt;

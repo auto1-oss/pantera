@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera;
 
@@ -26,13 +26,13 @@ final class VertxMainITCase {
     final TestDeployment deployment = new TestDeployment(
         Map.ofEntries(
             new MapEntry<>(
-                "artipie-config-key-present",
+                "pantera-config-key-present",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
-                    .withConfig("artipie-repo-config-key.yaml")
+                    .withConfig("pantera-repo-config-key.yaml")
                     .withRepoConfig("binary/bin.yml", "my_configs/my-file")
             ),
             new MapEntry<>(
-                "artipie-invalid-repo-config",
+                "pantera-invalid-repo-config",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("invalid_repo.yaml", "my-file")
             )
@@ -53,9 +53,9 @@ final class VertxMainITCase {
     @Test
     void startsWhenNotValidRepoConfigsArePresent() throws IOException {
         this.deployment.putBinaryToPantera(
-            "artipie-invalid-repo-config",
+            "pantera-invalid-repo-config",
             "Hello world".getBytes(),
-            "/var/artipie/data/my-file/item.txt"
+            "/var/pantera/data/my-file/item.txt"
         );
         this.deployment.assertExec(
             "Pantera started and responding 200",
@@ -64,16 +64,16 @@ final class VertxMainITCase {
                 new StringContains("HTTP/1.1 404 Not Found")
             ),
             "curl", "-i", "-X", "GET",
-            "http://artipie-invalid-repo-config:8080/my-file/item.txt"
+            "http://pantera-invalid-repo-config:8080/my-file/item.txt"
         );
     }
 
     @Test
     void worksWhenRepoConfigsKeyIsPresent() throws IOException {
         this.deployment.putBinaryToPantera(
-            "artipie-config-key-present",
+            "pantera-config-key-present",
             "Hello world".getBytes(),
-            "/var/artipie/data/my-file/item.txt"
+            "/var/pantera/data/my-file/item.txt"
         );
         this.deployment.assertExec(
             "Pantera isn't started or not responding 200",
@@ -82,7 +82,7 @@ final class VertxMainITCase {
                 new StringContains("HTTP/1.1 200 OK")
             ),
             "curl", "-i", "-X", "GET",
-            "http://artipie-config-key-present:8080/my-file/item.txt"
+            "http://pantera-config-key-present:8080/my-file/item.txt"
         );
     }
 

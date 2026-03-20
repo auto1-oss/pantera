@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm;
 
@@ -36,7 +36,7 @@ final class Npm9AuthITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> new TestDeployment.PanteraContainer().withConfig("artipie_with_policy.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera_with_policy.yaml")
             .withRepoConfig("npm/npm-auth.yml", "my-npm")
             .withUser("security/users/alice.yaml", "alice"),
         () -> new TestDeployment.ClientContainer("node:19-alpine")
@@ -54,7 +54,7 @@ final class Npm9AuthITCase {
                 new StringContains("+ @hello/simple-npm-project@1.0.1")
             ),
             "npm", "publish", "@hello/simple-npm-project/",
-            "--registry", "http://artipie:8080/my-npm"
+            "--registry", "http://pantera:8080/my-npm"
         );
         this.containers.assertExec(
             "Package was not installed",
@@ -62,7 +62,7 @@ final class Npm9AuthITCase {
                 new IsEqual<>(0),
                 new StringContains("added 1 package")
             ),
-            "npm", "install", Npm9AuthITCase.PROJ, "--registry", "http://artipie:8080/my-npm"
+            "npm", "install", Npm9AuthITCase.PROJ, "--registry", "http://pantera:8080/my-npm"
         );
         this.containers.assertExec(
             "Package was installed",
@@ -76,7 +76,7 @@ final class Npm9AuthITCase {
     @Test
     void failsToPublishAndInstallWithInvalidToken() throws IOException {
         this.containers.putBinaryToClient(
-            "//artipie:8080/:_authToken=abc123".getBytes(StandardCharsets.UTF_8),
+            "//pantera:8080/:_authToken=abc123".getBytes(StandardCharsets.UTF_8),
             "/w/.npmrc"
         );
         this.addFilesToPublish();
@@ -87,7 +87,7 @@ final class Npm9AuthITCase {
                 new StringContains("Unable to authenticate")
             ),
             "npm", "publish", "@hello/simple-npm-project/",
-            "--registry", "http://artipie:8080/my-npm"
+            "--registry", "http://pantera:8080/my-npm"
         );
         this.containers.assertExec(
             "Package was not installed",
@@ -95,7 +95,7 @@ final class Npm9AuthITCase {
                 new IsEqual<>(1),
                 new StringContains("Unable to authenticate")
             ),
-            "npm", "install", Npm9AuthITCase.PROJ, "--registry", "http://artipie:8080/my-npm"
+            "npm", "install", Npm9AuthITCase.PROJ, "--registry", "http://pantera:8080/my-npm"
         );
     }
 
@@ -115,11 +115,11 @@ final class Npm9AuthITCase {
         final Container.ExecResult res = this.containers.exec(
             "curl", "-X", "POST", "-d", "{\"name\":\"alice\",\"pass\":\"123\"}",
             "-H", "Content-type: application/json",
-            "http://artipie:8086/api/v1/oauth/token"
+            "http://pantera:8086/api/v1/oauth/token"
         );
         this.containers.putBinaryToClient(
             String.format(
-                "//artipie:8080/:_authToken=%s",
+                "//pantera:8080/:_authToken=%s",
                 Json.createReader(new StringReader(res.getStdout())).readObject().getString("token")
             ).getBytes(StandardCharsets.UTF_8),
             "/w/.npmrc"

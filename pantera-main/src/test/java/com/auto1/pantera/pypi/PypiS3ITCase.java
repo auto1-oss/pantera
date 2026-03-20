@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi;
 
@@ -44,7 +44,7 @@ final class PypiS3ITCase {
             .withUser("security/users/alice.yaml", "alice")
             .withRole("security/roles/readers.yaml", "readers")
             .withExposedPorts(8080),
-        () -> new TestDeployment.ClientContainer("artipie/pypi-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/pypi-tests:1.0")
             .withWorkingDirectory("/w")
             .withNetworkAliases("minioc")
             .withExposedPorts(9000)
@@ -72,12 +72,12 @@ final class PypiS3ITCase {
 
     @ParameterizedTest
     @CsvSource("8080,my-python,9000")
-    //"8081,my-python-port,9000" todo https://github.com/artipie/artipie/issues/1350
+    //"8081,my-python-port,9000" todo https://github.com/pantera/pantera/issues/1350
     void uploadAndinstallPythonPackage(final String port, final String repo, final String s3port) throws IOException {
         this.containers.assertExec(
-            "artipietestpkg-0.0.3.tar.gz must not exist in S3 storage after test",
+            "panteratestpkg-0.0.3.tar.gz must not exist in S3 storage after test",
             new ContainerResultMatcher(new IsEqual<>(PypiS3ITCase.CURL_NOT_FOUND)),
-            "curl -f -kv http://minioc:%s/buck1/my-python/artipietestpkg/artipietestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
+            "curl -f -kv http://minioc:%s/buck1/my-python/panteratestpkg/panteratestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
         );
         this.containers.assertExec(
             "Failed to upload",
@@ -85,14 +85,14 @@ final class PypiS3ITCase {
                 Matchers.is(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        "Uploading artipietestpkg-0.0.3.tar.gz", "100%"
+                        "Uploading panteratestpkg-0.0.3.tar.gz", "100%"
                     )
                 )
             ),
             "python3", "-m", "twine", "upload", "--repository-url",
-            String.format("http://artipie:%s/%s/", port, repo),
+            String.format("http://pantera:%s/%s/", port, repo),
             "-u", "alice", "-p", "123",
-            "/w/example-pckg/dist/artipietestpkg-0.0.3.tar.gz"
+            "/w/example-pckg/dist/panteratestpkg-0.0.3.tar.gz"
         );
         this.containers.assertExec(
             "Failed to install package",
@@ -100,43 +100,43 @@ final class PypiS3ITCase {
                 Matchers.equalTo(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        String.format("Looking in indexes: http://artipie:%s/%s", port, repo),
-                        "Collecting artipietestpkg",
+                        String.format("Looking in indexes: http://pantera:%s/%s", port, repo),
+                        "Collecting panteratestpkg",
                         String.format(
-                            "  Downloading http://artipie:%s/%s/artipietestpkg/%s",
-                            port, repo, "artipietestpkg-0.0.3.tar.gz"
+                            "  Downloading http://pantera:%s/%s/panteratestpkg/%s",
+                            port, repo, "panteratestpkg-0.0.3.tar.gz"
                         ),
-                        "Building wheels for collected packages: artipietestpkg",
-                        "  Building wheel for artipietestpkg (setup.py): started",
+                        "Building wheels for collected packages: panteratestpkg",
+                        "  Building wheel for panteratestpkg (setup.py): started",
                         String.format(
-                            "  Building wheel for artipietestpkg (setup.py): %s",
+                            "  Building wheel for panteratestpkg (setup.py): %s",
                             "finished with status 'done'"
                         ),
-                        "Successfully built artipietestpkg",
-                        "Installing collected packages: artipietestpkg",
-                        "Successfully installed artipietestpkg-0.0.3"
+                        "Successfully built panteratestpkg",
+                        "Installing collected packages: panteratestpkg",
+                        "Successfully installed panteratestpkg-0.0.3"
                     )
                 )
             ),
-            "python", "-m", "pip", "install", "--trusted-host", "artipie", "--index-url",
-            String.format("http://artipie:%s/%s", port, repo),
-            "artipietestpkg"
+            "python", "-m", "pip", "install", "--trusted-host", "pantera", "--index-url",
+            String.format("http://pantera:%s/%s", port, repo),
+            "panteratestpkg"
         );
         this.containers.assertExec(
-            "artipietestpkg-0.0.3.tar.gz must exist in S3 storage after test",
+            "panteratestpkg-0.0.3.tar.gz must exist in S3 storage after test",
             new ContainerResultMatcher(new IsEqual<>(0)),
-            "curl -f -kv http://minioc:%s/buck1/my-python/artipietestpkg/artipietestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
+            "curl -f -kv http://minioc:%s/buck1/my-python/panteratestpkg/panteratestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
         );
     }
 
     @ParameterizedTest
     @CsvSource("8080,my-python,9000")
-    //"8081,my-python-port,9000" todo https://github.com/artipie/artipie/issues/1350
+    //"8081,my-python-port,9000" todo https://github.com/pantera/pantera/issues/1350
     void canUpload(final String port, final String repo, final String s3port) throws Exception {
         this.containers.assertExec(
-            "artipietestpkg-0.0.3.tar.gz must not exist in S3 storage after test",
+            "panteratestpkg-0.0.3.tar.gz must not exist in S3 storage after test",
             new ContainerResultMatcher(new IsEqual<>(PypiS3ITCase.CURL_NOT_FOUND)),
-            "curl -f -kv http://minioc:%s/buck1/my-python/artipietestpkg/artipietestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
+            "curl -f -kv http://minioc:%s/buck1/my-python/panteratestpkg/panteratestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
         );
         this.containers.assertExec(
             "Failed to upload",
@@ -144,19 +144,19 @@ final class PypiS3ITCase {
                 Matchers.is(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        "Uploading artipietestpkg-0.0.3.tar.gz", "100%"
+                        "Uploading panteratestpkg-0.0.3.tar.gz", "100%"
                     )
                 )
             ),
             "python3", "-m", "twine", "upload", "--repository-url",
-            String.format("http://artipie:%s/%s/", port, repo),
+            String.format("http://pantera:%s/%s/", port, repo),
             "-u", "alice", "-p", "123",
-            "/w/example-pckg/dist/artipietestpkg-0.0.3.tar.gz"
+            "/w/example-pckg/dist/panteratestpkg-0.0.3.tar.gz"
         );
         this.containers.assertExec(
-            "artipietestpkg-0.0.3.tar.gz must exist in S3 storage after test",
+            "panteratestpkg-0.0.3.tar.gz must exist in S3 storage after test",
             new ContainerResultMatcher(new IsEqual<>(0)),
-            "curl -f -kv http://minioc:%s/buck1/my-python/artipietestpkg/artipietestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
+            "curl -f -kv http://minioc:%s/buck1/my-python/panteratestpkg/panteratestpkg-0.0.3.tar.gz".formatted(s3port, repo).split(" ")
         );
     }
 }

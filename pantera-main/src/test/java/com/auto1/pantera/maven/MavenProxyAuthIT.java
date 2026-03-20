@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -33,18 +33,18 @@ final class MavenProxyAuthIT {
     final TestDeployment containers = new TestDeployment(
         Map.ofEntries(
             new MapEntry<>(
-                "artipie",
-                () -> new TestDeployment.PanteraContainer().withConfig("artipie_with_policy.yaml")
+                "pantera",
+                () -> new TestDeployment.PanteraContainer().withConfig("pantera_with_policy.yaml")
                     .withRepoConfig("maven/maven-with-perms.yml", "my-maven")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
-                "artipie-proxy",
+                "pantera-proxy",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
-                    .withRepoConfig("maven/maven-proxy-artipie.yml", "my-maven-proxy")
+                    .withRepoConfig("maven/maven-proxy-pantera.yml", "my-maven-proxy")
             )
         ),
-        () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
             .withWorkingDirectory("/w")
             .withClasspathResourceMapping(
                 "maven/maven-settings-proxy.xml", "/w/settings.xml", BindMode.READ_ONLY
@@ -54,15 +54,15 @@ final class MavenProxyAuthIT {
     @Test
     void shouldGetDependency() throws Exception {
         this.containers.putResourceToPantera(
-            "artipie",
-            "com/artipie/helloworld/maven-metadata.xml",
-            "/var/artipie/data/my-maven/com/artipie/helloworld/maven-metadata.xml"
+            "pantera",
+            "com/pantera/helloworld/maven-metadata.xml",
+            "/var/pantera/data/my-maven/com/pantera/helloworld/maven-metadata.xml"
         );
-        MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
-            .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
+        MavenITCase.getResourceFiles("com/pantera/helloworld/0.1")
+            .stream().map(item -> String.join("/", "com/pantera/helloworld/0.1", item))
             .forEach(
                 item -> this.containers.putResourceToPantera(
-                    item, String.join("/", "/var/artipie/data/my-maven", item)
+                    item, String.join("/", "/var/pantera/data/my-maven", item)
                 )
             );
         this.containers.assertExec(
@@ -75,11 +75,11 @@ final class MavenProxyAuthIT {
             "dependency:get", "-Dartifact=com.auto1.pantera:helloworld:0.1:jar"
         );
         this.containers.assertPanteraContent(
-            "artipie-proxy",
+            "pantera-proxy",
             "Artifact was not cached in proxy",
-            "/var/artipie/data/my-maven-proxy/com/artipie/helloworld/0.1/helloworld-0.1.jar",
+            "/var/pantera/data/my-maven-proxy/com/pantera/helloworld/0.1/helloworld-0.1.jar",
             new IsEqual<>(
-                new TestResource("com/artipie/helloworld/0.1/helloworld-0.1.jar").asBytes()
+                new TestResource("com/pantera/helloworld/0.1/helloworld-0.1.jar").asBytes()
             )
         );
     }

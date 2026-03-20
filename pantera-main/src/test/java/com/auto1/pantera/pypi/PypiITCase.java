@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi;
 
@@ -37,18 +37,18 @@ final class PypiITCase {
             .withRole("security/roles/readers.yaml", "readers")
             .withExposedPorts(8081),
 
-        () -> new TestDeployment.ClientContainer("artipie/pypi-tests:1.0")
-            .withWorkingDirectory("/var/artipie")
+        () -> new TestDeployment.ClientContainer("pantera/pypi-tests:1.0")
+            .withWorkingDirectory("/var/pantera")
     );
 
     @ParameterizedTest
     @CsvSource("8080,my-python")
-    //"8081,my-python-port" todo https://github.com/artipie/artipie/issues/1350
+    //"8081,my-python-port" todo https://github.com/pantera/pantera/issues/1350
     void installPythonPackage(final String port, final String repo) throws IOException {
-        final String meta = "pypi-repo/example-pckg/dist/artipietestpkg-0.0.3.tar.gz";
+        final String meta = "pypi-repo/example-pckg/dist/panteratestpkg-0.0.3.tar.gz";
         this.containers.putResourceToPantera(
             meta,
-            String.format("/var/artipie/data/%s/artipietestpkg/artipietestpkg-0.0.3.tar.gz", repo)
+            String.format("/var/pantera/data/%s/panteratestpkg/panteratestpkg-0.0.3.tar.gz", repo)
         );
         this.containers.assertExec(
             "Failed to install package",
@@ -56,33 +56,33 @@ final class PypiITCase {
                 Matchers.equalTo(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        String.format("Looking in indexes: http://artipie:%s/%s", port, repo),
-                        "Collecting artipietestpkg",
+                        String.format("Looking in indexes: http://pantera:%s/%s", port, repo),
+                        "Collecting panteratestpkg",
                         String.format(
-                            "  Downloading http://artipie:%s/%s/artipietestpkg/%s",
-                            port, repo, "artipietestpkg-0.0.3.tar.gz"
+                            "  Downloading http://pantera:%s/%s/panteratestpkg/%s",
+                            port, repo, "panteratestpkg-0.0.3.tar.gz"
                         ),
-                        "Building wheels for collected packages: artipietestpkg",
-                        "  Building wheel for artipietestpkg (setup.py): started",
+                        "Building wheels for collected packages: panteratestpkg",
+                        "  Building wheel for panteratestpkg (setup.py): started",
                         String.format(
-                            "  Building wheel for artipietestpkg (setup.py): %s",
+                            "  Building wheel for panteratestpkg (setup.py): %s",
                             "finished with status 'done'"
                         ),
-                        "Successfully built artipietestpkg",
-                        "Installing collected packages: artipietestpkg",
-                        "Successfully installed artipietestpkg-0.0.3"
+                        "Successfully built panteratestpkg",
+                        "Installing collected packages: panteratestpkg",
+                        "Successfully installed panteratestpkg-0.0.3"
                     )
                 )
             ),
-            "python", "-m", "pip", "install", "--trusted-host", "artipie", "--index-url",
-            String.format("http://artipie:%s/%s", port, repo),
-            "artipietestpkg"
+            "python", "-m", "pip", "install", "--trusted-host", "pantera", "--index-url",
+            String.format("http://pantera:%s/%s", port, repo),
+            "panteratestpkg"
         );
     }
 
     @ParameterizedTest
     @CsvSource("8080,my-python")
-    //"8081,my-python-port" todo https://github.com/artipie/artipie/issues/1350
+    //"8081,my-python-port" todo https://github.com/pantera/pantera/issues/1350
     void canUpload(final String port, final String repo) throws Exception {
         this.containers.assertExec(
             "Failed to upload",
@@ -90,18 +90,18 @@ final class PypiITCase {
                 Matchers.is(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        "Uploading artipietestpkg-0.0.3.tar.gz", "100%"
+                        "Uploading panteratestpkg-0.0.3.tar.gz", "100%"
                     )
                 )
             ),
             "python3", "-m", "twine", "upload", "--repository-url",
-            String.format("http://artipie:%s/%s/", port, repo),
+            String.format("http://pantera:%s/%s/", port, repo),
             "-u", "alice", "-p", "123",
-            "/w/example-pckg/dist/artipietestpkg-0.0.3.tar.gz"
+            "/w/example-pckg/dist/panteratestpkg-0.0.3.tar.gz"
         );
         this.containers.assertPanteraContent(
             "Bad content after upload",
-            String.format("/var/artipie/data/%s/artipietestpkg/artipietestpkg-0.0.3.tar.gz", repo),
+            String.format("/var/pantera/data/%s/panteratestpkg/panteratestpkg-0.0.3.tar.gz", repo),
             Matchers.not("123".getBytes())
         );
     }

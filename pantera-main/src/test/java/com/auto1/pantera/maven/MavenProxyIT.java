@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven;
 
@@ -33,7 +33,7 @@ final class MavenProxyIT {
             .withRepoConfig("maven/maven-proxy.yml", "my-maven")
             .withRepoConfig("maven/maven-proxy-port.yml", "my-maven-port")
             .withExposedPorts(8081),
-        () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
             .withWorkingDirectory("/w")
     );
 
@@ -54,7 +54,7 @@ final class MavenProxyIT {
         );
         this.containers.assertPanteraContent(
             "Artifact wasn't saved in cache",
-            String.format("/var/artipie/data/%s/args4j/args4j/2.32/args4j-2.32.jar", repo),
+            String.format("/var/pantera/data/%s/args4j/args4j/2.32/args4j-2.32.jar", repo),
             new IsAnything<>()
         );
     }

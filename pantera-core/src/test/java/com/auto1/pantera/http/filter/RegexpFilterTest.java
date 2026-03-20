@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.filter;
 
@@ -20,7 +20,7 @@ class RegexpFilterTest {
     /**
      * Request path.
      */
-    private static final String PATH = "/mvnrepo/com/artipie/inner/0.1/inner-0.1.pom";
+    private static final String PATH = "/mvnrepo/com/pantera/inner/0.1/inner-0.1.pom";
 
     @Test
     void checkInstanceTypeReturnedByLoader() {
@@ -61,7 +61,7 @@ class RegexpFilterTest {
             Yaml.createYamlMappingBuilder()
                 .add(
                     "filter",
-                    ".*/com/artipie/.*"
+                    ".*/com/pantera/.*"
                 ).build()
         );
         MatcherAssert.assertThat(
@@ -80,7 +80,7 @@ class RegexpFilterTest {
             Yaml.createYamlMappingBuilder()
                 .add(
                     "filter",
-                    ".*/com/artipie/.*\\.pom"
+                    ".*/com/pantera/.*\\.pom"
                 ).build()
         );
         MatcherAssert.assertThat(
@@ -106,7 +106,7 @@ class RegexpFilterTest {
             Yaml.createYamlMappingBuilder()
                 .add(
                     "filter",
-                    ".*/com/artipie/.*\\.pom"
+                    ".*/com/pantera/.*\\.pom"
                 )
                 .add(
                     "case_insensitive",
@@ -136,7 +136,7 @@ class RegexpFilterTest {
             Yaml.createYamlMappingBuilder()
                 .add(
                     "filter",
-                    ".*/com/artipie/.*\\.pom\\?([^&]+)&(user=M[^&]+).*"
+                    ".*/com/pantera/.*\\.pom\\?([^&]+)&(user=M[^&]+).*"
                 )
                 .add(
                     "full_uri",

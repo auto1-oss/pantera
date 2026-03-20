@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Factory for auth from artipie storage.
+ * Factory for auth from pantera storage.
  * @since 0.30
  */
 @PanteraAuthFactory("local")
@@ -30,7 +30,7 @@ public final class AuthFromStorageFactory implements AuthFactory {
             asto -> new AuthFromStorage(new BlockingStorage(asto))
         ).orElseThrow(
             () -> new PanteraException(
-                "Failed to create artipie auth, storage is not configured"
+                "Failed to create local auth, storage is not configured"
             )
         );
         final List<String> domains = parseUserDomains(yaml, "local");

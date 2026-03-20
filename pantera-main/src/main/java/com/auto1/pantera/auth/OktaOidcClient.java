@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -67,7 +67,7 @@ public final class OktaOidcClient {
         this.issuer = Objects.requireNonNull(issuer);
         this.clientId = Objects.requireNonNull(clientId);
         this.clientSecret = Objects.requireNonNull(clientSecret);
-        this.redirectUri = redirectUri != null ? redirectUri : "https://artipie.local/okta/callback";
+        this.redirectUri = redirectUri != null ? redirectUri : "https://pantera.local/okta/callback";
         this.scope = scope != null ? scope : "openid profile groups";
         this.groupsClaim = groupsClaim != null ? groupsClaim : "groups";
         final URI issuerUri = URI.create(issuer);

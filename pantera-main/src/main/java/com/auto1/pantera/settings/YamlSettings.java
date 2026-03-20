@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -109,7 +109,7 @@ public final class YamlSettings implements Settings {
     private final HttpClientSettings httpClientSettings;
 
     /**
-     * A set of caches for artipie settings.
+     * A set of caches for pantera settings.
      */
     private final PanteraCaches acach;
 
@@ -164,7 +164,7 @@ public final class YamlSettings implements Settings {
     private final ArtifactIndex artifactIndex;
 
     /**
-     * Path to artipie.yaml config file.
+     * Path to pantera.yaml config file.
      */
     private final Path configFilePath;
 
@@ -223,7 +223,7 @@ public final class YamlSettings implements Settings {
     @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path,
         final QuartzService quartz, final Optional<DataSource> shared) {
-        // Config file can be artipie.yaml or artipie.yml
+        // Config file can be pantera.yaml or pantera.yml
         this.configFilePath = YamlSettings.findConfigFile(path);
         this.meta = content.yamlMapping("meta");
         if (this.meta == null) {
@@ -816,7 +816,7 @@ public final class YamlSettings implements Settings {
 
     /**
      * Read global_prefixes from meta section.
-     * @param meta Meta section of artipie.yml
+     * @param meta Meta section of pantera.yml
      * @return List of prefixes
      */
     private static List<String> readPrefixes(final YamlMapping meta) {
@@ -856,7 +856,7 @@ public final class YamlSettings implements Settings {
         /**
          * Read policy storage from config yaml. Normally policy storage should be configured
          * in `policy` yaml section, but, if policy is absent, storage should be specified in
-         * credentials sections for `artipie` credentials type.
+         * credentials sections for `pantera` credentials type.
          * @return Storage if present
          */
         public Optional<Storage> parse() {
@@ -895,7 +895,7 @@ public final class YamlSettings implements Settings {
     }
 
     /**
-     * Find the actual config file (artipie.yaml or artipie.yml).
+     * Find the actual config file (pantera.yaml or pantera.yml).
      * @param dir Directory containing the config file
      * @return Path to the config file
      */

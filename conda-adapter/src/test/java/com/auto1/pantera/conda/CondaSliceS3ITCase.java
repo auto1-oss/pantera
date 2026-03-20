@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda;
 
@@ -127,7 +127,7 @@ public final class CondaSliceS3ITCase {
         final Queue<ArtifactEvent> events = new ConcurrentLinkedDeque<>();
         final String url = String.format("http://host.testcontainers.internal:%d", this.port);
         Testcontainers.exposeHostPorts(this.port);
-        this.cntn = new GenericContainer<>("artipie/conda-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/conda-tests:1.0")
         .withExposedPorts(CondaSliceS3ITCase.S3_PORT)
         .waitingFor(CondaSliceS3ITCase.DONT_WAIT_PORT)
         .withCommand("tail", "-f", "/dev/null")

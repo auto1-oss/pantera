@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -164,7 +164,7 @@ public final class SettingsRest extends BaseRest {
             }
             // Update in-memory configuration
             this.settings.prefixes().update(prefixes);
-            // Persist to artipie.yaml file using the persistence service
+            // Persist to pantera.yaml file using the persistence service
             new PrefixesPersistence(this.settings.configPath()).save(prefixes);
             context.response()
                 .setStatusCode(HttpStatus.OK_200)

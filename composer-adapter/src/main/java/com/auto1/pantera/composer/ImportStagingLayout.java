@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.composer;
 
@@ -48,7 +48,7 @@ public final class ImportStagingLayout {
     private final Storage storage;
 
     /**
-     * Repository base URL (e.g., "http://artipie.local/php-api").
+     * Repository base URL (e.g., "http://pantera.local/php-api").
      */
     private final Optional<String> baseUrl;
 
@@ -84,7 +84,7 @@ public final class ImportStagingLayout {
         return pack.name().thenCompose(packageName -> {
             final String versionStr = version.get();
             
-            // Create per-version file: .artipie-import/composer/vendor/package/version.json
+            // Create per-version file: .pantera-import/composer/vendor/package/version.json
             final Key versionKey = this.versionStagingKey(packageName.string(), versionStr);
             
             return pack.json().thenCompose(packageJson -> {

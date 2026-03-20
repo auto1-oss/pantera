@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera;
 
@@ -71,7 +71,7 @@ class HttpClientSettingsTest {
 
     @Test
     void shouldInitFromMetaYaml() throws Exception {
-        final Path path = new TestResource("artipie_http_client.yaml").asPath();
+        final Path path = new TestResource("pantera_http_client.yaml").asPath();
         final HttpClientSettings stn = new YamlSettings(
             Yaml.createYamlInput(path.toFile()).readYamlMapping(),
             path.getParent(), new QuartzService()
@@ -81,7 +81,7 @@ class HttpClientSettingsTest {
         Assertions.assertTrue(stn.trustAll());
         Assertions.assertTrue(stn.followRedirects());
         Assertions.assertTrue(stn.http3());
-        Assertions.assertEquals("/var/artipie/keystore.jks", stn.jksPath());
+        Assertions.assertEquals("/var/pantera/keystore.jks", stn.jksPath());
         Assertions.assertEquals("secret", stn.jksPwd());
         Assertions.assertEquals(stn.proxies().size(), 2);
         final ProxySettings proxy = stn.proxies().get(0);
@@ -108,7 +108,7 @@ class HttpClientSettingsTest {
         Assertions.assertTrue(stn.trustAll());
         Assertions.assertTrue(stn.followRedirects());
         Assertions.assertTrue(stn.http3());
-        Assertions.assertEquals("/var/artipie/keystore.jks", stn.jksPath());
+        Assertions.assertEquals("/var/pantera/keystore.jks", stn.jksPath());
         Assertions.assertEquals("secret", stn.jksPwd());
         Assertions.assertEquals(stn.proxies().size(), 2);
         final ProxySettings proxy = stn.proxies().get(1);

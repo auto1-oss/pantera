@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.cooldown.metrics;
 
@@ -21,29 +21,29 @@ import java.util.function.Supplier;
  * Metrics for cooldown functionality.
  * Provides comprehensive observability for cooldown operations.
  *
- * <p>Metric naming convention: {@code artipie.cooldown.*}</p>
+ * <p>Metric naming convention: {@code pantera.cooldown.*}</p>
  *
  * <p>Metrics emitted:</p>
  * <ul>
  *   <li><b>Counters:</b></li>
  *   <ul>
- *     <li>{@code artipie.cooldown.versions.blocked} - versions blocked count</li>
- *     <li>{@code artipie.cooldown.versions.allowed} - versions allowed count</li>
- *     <li>{@code artipie.cooldown.cache.hits} - cache hits (L1/L2)</li>
- *     <li>{@code artipie.cooldown.cache.misses} - cache misses</li>
- *     <li>{@code artipie.cooldown.all_blocked} - all versions blocked events</li>
- *     <li>{@code artipie.cooldown.invalidations} - cache invalidations</li>
+ *     <li>{@code pantera.cooldown.versions.blocked} - versions blocked count</li>
+ *     <li>{@code pantera.cooldown.versions.allowed} - versions allowed count</li>
+ *     <li>{@code pantera.cooldown.cache.hits} - cache hits (L1/L2)</li>
+ *     <li>{@code pantera.cooldown.cache.misses} - cache misses</li>
+ *     <li>{@code pantera.cooldown.all_blocked} - all versions blocked events</li>
+ *     <li>{@code pantera.cooldown.invalidations} - cache invalidations</li>
  *   </ul>
  *   <li><b>Gauges:</b></li>
  *   <ul>
- *     <li>{@code artipie.cooldown.cache.size} - current cache size</li>
- *     <li>{@code artipie.cooldown.active_blocks} - active blocks count</li>
+ *     <li>{@code pantera.cooldown.cache.size} - current cache size</li>
+ *     <li>{@code pantera.cooldown.active_blocks} - active blocks count</li>
  *   </ul>
  *   <li><b>Timers:</b></li>
  *   <ul>
- *     <li>{@code artipie.cooldown.metadata.filter.duration} - metadata filtering duration</li>
- *     <li>{@code artipie.cooldown.evaluate.duration} - per-version evaluation duration</li>
- *     <li>{@code artipie.cooldown.cache.load.duration} - cache load duration</li>
+ *     <li>{@code pantera.cooldown.metadata.filter.duration} - metadata filtering duration</li>
+ *     <li>{@code pantera.cooldown.evaluate.duration} - per-version evaluation duration</li>
+ *     <li>{@code pantera.cooldown.cache.load.duration} - cache load duration</li>
  *   </ul>
  * </ul>
  *

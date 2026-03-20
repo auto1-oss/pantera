@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -136,7 +136,7 @@ public final class DebianAuthSliceITCase {
                 final PermissionCollection res;
                 if (DebianAuthSliceITCase.USER.equals(user.name())) {
                     final AdapterBasicPermission perm =
-                        new AdapterBasicPermission("artipie", Action.NONE);
+                        new AdapterBasicPermission("pantera", Action.NONE);
                     res = perm.newPermissionCollection();
                     res.add(perm);
                 } else {
@@ -189,7 +189,7 @@ public final class DebianAuthSliceITCase {
                         DebianAuthSliceITCase.USER, DebianAuthSliceITCase.PSWD
                     ),
                     new Config.FromYaml(
-                        "artipie",
+                        "pantera",
                         Yaml.createYamlMappingBuilder()
                             .add("Components", "main")
                             .add("Architectures", "amd64")
@@ -206,11 +206,11 @@ public final class DebianAuthSliceITCase {
         Files.write(
             setting,
             String.format(
-                "deb [trusted=yes] http://%s@host.testcontainers.internal:%d/ artipie main",
+                "deb [trusted=yes] http://%s@host.testcontainers.internal:%d/ pantera main",
                 DebianAuthSliceITCase.AUTH, this.port
             ).getBytes()
         );
-        this.cntn = new GenericContainer<>("artipie/deb-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/deb-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/home/")
             .withFileSystemBind(this.tmp.toString(), "/home");

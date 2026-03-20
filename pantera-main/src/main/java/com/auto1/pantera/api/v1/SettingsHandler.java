@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -31,7 +31,7 @@ import org.eclipse.jetty.http.HttpStatus;
 
 /**
  * Settings handler for /api/v1/settings/* endpoints.
- * Exposes all artipie.yml configuration sections with resolved environment variables.
+ * Exposes all pantera.yml configuration sections with resolved environment variables.
  * @since 1.21
  * @checkstyle ClassDataAbstractionCouplingCheck (500 lines)
  * @checkstyle ExecutableStatementCountCheck (500 lines)

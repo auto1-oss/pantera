@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.scheduling;
 
@@ -157,14 +157,14 @@ public final class MetadataEventQueues {
                             data.put("storage_key", stoKey);
                             data.put("events_key", evtKey);
                             if (type == ProxyRepoType.NPM_PROXY) {
-                                data.put(MetadataEventQueues.HOST, artipieHost(config));
+                                data.put(MetadataEventQueues.HOST, panteraHost(config));
                             }
                         } else {
                             data.put("packages", res);
                             data.put("storage", config.storage());
                             data.put("events", this.queue);
                             if (type == ProxyRepoType.NPM_PROXY) {
-                                data.put(MetadataEventQueues.HOST, artipieHost(config));
+                                data.put(MetadataEventQueues.HOST, panteraHost(config));
                             }
                         }
                         final int threads = Math.max(1, settingsIntValue(config, "threads_count"));
@@ -239,7 +239,7 @@ public final class MetadataEventQueues {
      * @param config Repository config
      * @return The host
      */
-    private static String artipieHost(final RepoConfig config) {
+    private static String panteraHost(final RepoConfig config) {
         return config.settings()
             .flatMap(yaml -> Optional.ofNullable(yaml.string(MetadataEventQueues.HOST)))
             .orElse("unknown");

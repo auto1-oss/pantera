@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm.http.auth;
 
@@ -50,7 +50,7 @@ class NpmrcAuthSliceTest {
     @Test
     void returnsUnauthorizedWithoutAuth() throws Exception {
         final NpmrcAuthSlice slice = new NpmrcAuthSlice(
-            new URL("https://artipie.example.com/npm_repo"),
+            new URL("https://pantera.example.com/npm_repo"),
             (user, pass) -> Optional.empty(),
             MOCK_TOKENS,
             MOCK_TOKENS.auth()
@@ -74,7 +74,7 @@ class NpmrcAuthSliceTest {
         final String password = "testpass";
         
         final NpmrcAuthSlice slice = new NpmrcAuthSlice(
-            new URL("https://artipie.example.com/npm_repo"),
+            new URL("https://pantera.example.com/npm_repo"),
             (user, pass) -> user.equals(username) && pass.equals(password)
                 ? Optional.of(new AuthUser(username, "test"))
                 : Optional.empty(),
@@ -105,31 +105,31 @@ class NpmrcAuthSliceTest {
         MatcherAssert.assertThat(
             "Should contain registry URL",
             body,
-            Matchers.containsString("registry=https://artipie.example.com/npm_repo")
+            Matchers.containsString("registry=https://pantera.example.com/npm_repo")
         );
 
         MatcherAssert.assertThat(
             "Should contain auth token",
             body,
-            Matchers.containsString("//artipie.example.com/:_authToken=")
+            Matchers.containsString("//pantera.example.com/:_authToken=")
         );
 
         MatcherAssert.assertThat(
             "Should contain username",
             body,
-            Matchers.containsString("//artipie.example.com/:username=testuser")
+            Matchers.containsString("//pantera.example.com/:username=testuser")
         );
 
         MatcherAssert.assertThat(
             "Should contain email",
             body,
-            Matchers.containsString("//artipie.example.com/:email=testuser@pantera.local")
+            Matchers.containsString("//pantera.example.com/:email=testuser@pantera.local")
         );
 
         MatcherAssert.assertThat(
             "Should contain always-auth",
             body,
-            Matchers.containsString("//artipie.example.com/:always-auth=true")
+            Matchers.containsString("//pantera.example.com/:always-auth=true")
         );
     }
 
@@ -139,7 +139,7 @@ class NpmrcAuthSliceTest {
         final String password = "testpass";
         
         final NpmrcAuthSlice slice = new NpmrcAuthSlice(
-            new URL("https://artipie.example.com/npm_repo"),
+            new URL("https://pantera.example.com/npm_repo"),
             (user, pass) -> user.equals(username) && pass.equals(password)
                 ? Optional.of(new AuthUser(username, "test"))
                 : Optional.empty(),
@@ -170,13 +170,13 @@ class NpmrcAuthSliceTest {
         MatcherAssert.assertThat(
             "Should contain scoped registry",
             body,
-            Matchers.containsString("@mycompany:registry=https://artipie.example.com/npm_repo")
+            Matchers.containsString("@mycompany:registry=https://pantera.example.com/npm_repo")
         );
 
         MatcherAssert.assertThat(
             "Should contain auth token",
             body,
-            Matchers.containsString("//artipie.example.com/:_authToken=")
+            Matchers.containsString("//pantera.example.com/:_authToken=")
         );
     }
 }

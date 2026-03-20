@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.http.manifest;
 
@@ -65,7 +65,7 @@ final class HeadManifestSliceMdcTest {
         assertEquals(
             "alice",
             capturedMdc.get(),
-            "MDC user.name must equal the artipie_login header value on the docker-layer thread"
+            "MDC user.name must equal the pantera_login header value on the docker-layer thread"
         );
     }
 
@@ -89,7 +89,7 @@ final class HeadManifestSliceMdcTest {
         assertEquals(
             ArtifactEvent.DEF_OWNER,
             capturedMdc.get(),
-            "MDC user.name must be UNKNOWN when no artipie_login header is present"
+            "MDC user.name must be UNKNOWN when no pantera_login header is present"
         );
     }
 

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.http;
 
@@ -141,8 +141,8 @@ final class CachedProxySliceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-        "/com/artipie/asto/1.5/asto-1.5.jar",
-        "/com/artipie/asto/1.0-SNAPSHOT/asto-1.0-20200520.121003-4.jar",
+        "/com/pantera/asto/1.5/asto-1.5.jar",
+        "/com/pantera/asto/1.0-SNAPSHOT/asto-1.0-20200520.121003-4.jar",
         "/org/apache/commons/3.6/commons-3.6.pom",
         "/org/test/test-app/0.95/test-app-3.6.war"
     })
@@ -170,8 +170,8 @@ final class CachedProxySliceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-        "/com/artipie/asto/1.5/asto-1.5-sources.jar",
-        "/com/artipie/asto/1.0-SNAPSHOT/asto-1.0-20200520.121003-4.jar.sha1",
+        "/com/pantera/asto/1.5/asto-1.5-sources.jar",
+        "/com/pantera/asto/1.0-SNAPSHOT/asto-1.0-20200520.121003-4.jar.sha1",
         "/org/apache/commons/3.6/commons-3.6-javadoc.pom",
         "/org/test/test-app/maven-metadata.xml"
     })

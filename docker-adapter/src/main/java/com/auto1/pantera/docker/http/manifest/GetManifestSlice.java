@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.http.manifest;
 
@@ -32,7 +32,7 @@ public class GetManifestSlice extends DockerActionSlice {
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
         // Capture the authenticated login before crossing the async boundary.
-        // AuthzSlice adds artipie_login to headers; body.asBytesFuture() may complete
+        // AuthzSlice adds pantera_login to headers; body.asBytesFuture() may complete
         // on a different thread (Vert.x event loop) where MDC.user.name is not set.
         // Re-setting MDC inside the thenCompose ensures CacheManifests.get() sees
         // the correct owner when it calls MDC.get("user.name").

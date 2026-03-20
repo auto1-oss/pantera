@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.cache;
 
@@ -217,7 +217,7 @@ final class CacheManifestsTest {
      * pre-auth headers), CacheManifests must ignore it and use MDC user.name instead.
      *
      * Root cause: DockerProxyCooldownSlice resolves user from original request headers
-     * which do not contain artipie_login for Bearer token auth, so it stores UNKNOWN.
+     * which do not contain pantera_login for Bearer token auth, so it stores UNKNOWN.
      * Without the fix, UNKNOWN (non-null) was used directly as effectiveOwner.
      *
      * @since 1.20.13
@@ -237,7 +237,7 @@ final class CacheManifestsTest {
         final ManifestReference ref = ManifestReference.fromTag("latest");
         final Queue<ArtifactEvent> events = new ConcurrentLinkedQueue<>();
         // Pre-register UNKNOWN in inspector — simulates DockerProxyCooldownSlice behaviour
-        // for Bearer-token users where pre-auth headers have no artipie_login.
+        // for Bearer-token users where pre-auth headers have no pantera_login.
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
         inspector.register(
             "library/haproxy", "latest", Optional.empty(),

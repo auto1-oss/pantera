@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.filter;
 
@@ -20,7 +20,7 @@ class FiltersTest {
     /**
      * Request path.
      */
-    private static final String PATH = "/mvnrepo/com/artipie/inner/0.1/inner-0.1.pom";
+    private static final String PATH = "/mvnrepo/com/pantera/inner/0.1/inner-0.1.pom";
 
     @Test
     void emptyFilterLists() {
@@ -46,7 +46,7 @@ class FiltersTest {
                 "include:",
                 "  glob:",
                 "    - filter: **/com/acme/**",
-                "    - filter: **/com/artipie/**",
+                "    - filter: **/com/pantera/**",
                 "exclude:",
                 "  glob:",
                 "    - filter: **/org/log4j/**"
@@ -66,7 +66,7 @@ class FiltersTest {
                 "include:",
                 "  glob:",
                 "    - filter: **/com/acme/**",
-                "    - filter: **/com/artipie/**",
+                "    - filter: **/com/pantera/**",
                 "  regexp:",
                 "    - filter: .*/com/github/.*\\.pom",
                 "    - filter: .*/pool/main/.*\\.deb",
@@ -94,7 +94,7 @@ class FiltersTest {
                 "    - filter: **/*",
                 "exclude:",
                 "  glob:",
-                "    - filter: **/com/artipie/**"
+                "    - filter: **/com/pantera/**"
             )
         );
         MatcherAssert.assertThat(
@@ -114,7 +114,7 @@ class FiltersTest {
                 "exclude:",
                 "  glob:",
                 "    - filter: **/com/acme/**",
-                "    - filter: **/com/artipie/**",
+                "    - filter: **/com/pantera/**",
                 "  regexp:",
                 "    - filter: .*/com/github/.*\\.pom",
                 "    - filter: .*/pool/main/.*\\.deb"

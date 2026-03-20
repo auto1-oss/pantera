@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.cache;
 
@@ -309,7 +309,7 @@ public final class CacheManifests implements Manifests {
                     final long created = System.currentTimeMillis();
                     // Get owner: 1. From inspector cache (skip UNKNOWN), 2. From request thread, 3. Default
                     // Inspector may store UNKNOWN when DockerProxyCooldownSlice resolves the user
-                    // from pre-auth headers (Bearer token users have no artipie_login there).
+                    // from pre-auth headers (Bearer token users have no pantera_login there).
                     // Filter out UNKNOWN so we fall through to requestOwner from MDC.
                     String effectiveOwner = this.inspector
                         .flatMap(inspector -> inspector.ownerFor(this.rname, ref.digest()))

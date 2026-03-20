@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.helm.http;
 
@@ -48,7 +48,7 @@ final class DownloadIndexSliceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"http://central.artipie.com/", "http://central.artipie.com"})
+    @ValueSource(strings = {"http://central.pantera.com/", "http://central.pantera.com"})
     void returnsOkAndUpdateEntriesUrlsForBaseWithOrWithoutTrailingSlash(final String base) {
         new TestResource("index.yaml").saveTo(this.storage);
 

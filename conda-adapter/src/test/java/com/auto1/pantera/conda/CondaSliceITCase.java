@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda;
 
@@ -108,7 +108,7 @@ public final class CondaSliceITCase {
         Files.write(
             this.tmp.resolve(".condarc"), String.format("channels:\n  - %s", url).getBytes()
         );
-        this.cntn = new GenericContainer<>("artipie/conda-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/conda-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/w/adapter/example-project")
             .withFileSystemBind(this.tmp.toString(), "/home");
@@ -116,7 +116,7 @@ public final class CondaSliceITCase {
     }
 
     @Test
-    @Disabled("https://github.com/artipie/artipie/issues/1336")
+    @Disabled("https://github.com/pantera/pantera/issues/1336")
     void anacondaCanLogin() throws Exception {
         this.exec(
             "anaconda", "config", "--set", "url",

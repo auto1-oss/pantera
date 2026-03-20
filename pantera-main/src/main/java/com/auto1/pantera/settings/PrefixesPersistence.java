@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -17,7 +17,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 
 /**
- * Service for persisting global prefixes configuration to artipie.yaml file.
+ * Service for persisting global prefixes configuration to pantera.yaml file.
  * Handles reading, updating, and writing the YAML configuration atomically.
  *
  * @since 1.0
@@ -25,21 +25,21 @@ import java.util.List;
 public final class PrefixesPersistence {
 
     /**
-     * Path to artipie.yaml file.
+     * Path to pantera.yaml file.
      */
     private final Path configPath;
 
     /**
      * Constructor.
      *
-     * @param configPath Path to artipie.yaml file
+     * @param configPath Path to pantera.yaml file
      */
     public PrefixesPersistence(final Path configPath) {
         this.configPath = configPath;
     }
 
     /**
-     * Save prefixes to artipie.yaml file.
+     * Save prefixes to pantera.yaml file.
      * Reads the current file, updates only the global_prefixes section,
      * and writes it back atomically.
      *
@@ -56,7 +56,7 @@ public final class PrefixesPersistence {
             final YamlMapping meta = currentYaml.yamlMapping("meta");
             if (meta == null) {
                 throw new IllegalStateException(
-                    "No 'meta' section found in artipie.yaml"
+                    "No 'meta' section found in pantera.yaml"
                 );
             }
 

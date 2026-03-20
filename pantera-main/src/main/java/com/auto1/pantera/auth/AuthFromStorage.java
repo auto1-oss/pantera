@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -37,7 +37,7 @@ import org.apache.commons.codec.digest.DigestUtils;
  *   roles:
  *     - java-dev
  *   permissions:
- *     artipie_basic_permission:
+ *     pantera_basic_permission:
  *       rpm-repo:
  *         - read
  * }</pre>

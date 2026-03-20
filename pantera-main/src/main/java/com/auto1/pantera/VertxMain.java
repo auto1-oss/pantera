@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 
 package com.auto1.pantera;
@@ -147,7 +147,7 @@ public final class VertxMain {
             sharedDs = Optional.of(ds);
             DbManager.migrate(ds);
             // Resolve repos and security dirs from YAML config, not relative to config file.
-            // artipie.yml may be mounted at /etc/artipie/ while data lives at /var/artipie/.
+            // pantera.yml may be mounted at /etc/pantera/ while data lives at /var/pantera/.
             final Path configDir = this.config.toAbsolutePath().getParent();
             final com.amihaiemil.eoyaml.YamlMapping storageYaml = meta.yamlMapping("storage");
             final Path reposDir = storageYaml != null && storageYaml.string("path") != null
@@ -823,7 +823,7 @@ public final class VertxMain {
                 .setJvmMetricsEnabled(true)
                 // Add labels for HTTP metrics (method, status code)
                 // NOTE: HTTP_PATH label removed to avoid high cardinality
-                // Repository-level metrics use artipie_http_requests_total with repo_name label instead
+                // Repository-level metrics use pantera_http_requests_total with repo_name label instead
                 .addLabels(io.vertx.micrometer.Label.HTTP_METHOD)
                 .addLabels(io.vertx.micrometer.Label.HTTP_CODE)
                 // Add labels for pool metrics (pool type, pool name)

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db.dao;
 
@@ -57,7 +57,7 @@ class StorageAliasDaoTest {
     @Test
     void putsAndListsGlobalAlias() {
         final JsonObject config = Json.createObjectBuilder()
-            .add("type", "fs").add("path", "/var/artipie/data").build();
+            .add("type", "fs").add("path", "/var/pantera/data").build();
         this.dao.put("default", null, config);
         final List<JsonObject> globals = this.dao.listGlobal();
         assertEquals(1, globals.size());

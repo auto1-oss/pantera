@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.scheduling;
 
@@ -26,9 +26,9 @@ import org.quartz.JobExecutionException;
  * Pantera creates temp files in several places:
  * <ul>
  *   <li>{@code DiskCacheStorage} - UUID-named files in {@code .tmp/} subdirectory</li>
- *   <li>{@code StreamThroughCache} - files with prefix {@code artipie-stc-} and
+ *   <li>{@code StreamThroughCache} - files with prefix {@code pantera-stc-} and
  *       suffix {@code .tmp}</li>
- *   <li>Other operations that may leave {@code artipie-*} prefixed files in the
+ *   <li>Other operations that may leave {@code pantera-*} prefixed files in the
  *       system temp directory</li>
  * </ul>
  * <p>
@@ -207,9 +207,9 @@ public final class TempFileCleanupJob implements Job {
      * <p>
      * Patterns matched:
      * <ul>
-     *   <li>Files ending with {@code .tmp} (e.g., {@code artipie-stc-*.tmp})</li>
-     *   <li>Files with names starting with {@code artipie-cache-}</li>
-     *   <li>Files with names starting with {@code artipie-stc-}</li>
+     *   <li>Files ending with {@code .tmp} (e.g., {@code pantera-stc-*.tmp})</li>
+     *   <li>Files with names starting with {@code pantera-cache-}</li>
+     *   <li>Files with names starting with {@code pantera-stc-}</li>
      *   <li>Files inside a directory named {@code .tmp} (DiskCacheStorage pattern)</li>
      *   <li>Files containing {@code .part-} in the name (failed partial writes)</li>
      * </ul>

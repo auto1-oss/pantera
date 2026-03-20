@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 
 package com.auto1.pantera.docker.asto;
@@ -169,7 +169,7 @@ final class AstoManifestsTest {
                     .add(
                         Json.createObjectBuilder()
                             .add("digest", "sha256:123")
-                            .add("urls", Json.createArrayBuilder().add("https://artipie.com/"))
+                            .add("urls", Json.createArrayBuilder().add("https://pantera.com/"))
                     )
             )
             .build().toString().getBytes();

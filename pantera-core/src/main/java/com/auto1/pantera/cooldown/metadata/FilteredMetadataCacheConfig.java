@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.cooldown.metadata;
 
@@ -10,7 +10,7 @@ import java.time.Duration;
 /**
  * Configuration for FilteredMetadataCache (cooldown metadata caching).
  * 
- * <p>Example YAML configuration in artipie.yaml:
+ * <p>Example YAML configuration in pantera.yaml:
  * <pre>
  * meta:
  *   caches:
@@ -208,7 +208,7 @@ public final class FilteredMetadataCacheConfig {
     /**
      * Initialize global instance from YAML.
      * Should be called once at startup.
-     * @param caches The caches YAML mapping from artipie.yaml
+     * @param caches The caches YAML mapping from pantera.yaml
      */
     public static void initialize(final YamlMapping caches) {
         if (instance == null) {

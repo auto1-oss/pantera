@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -26,7 +26,7 @@ public final class StorageAliasHandlerTest extends AsyncApiTestBase {
      */
     private static final JsonObject ALIAS_BODY = new JsonObject()
         .put("type", "fs")
-        .put("path", "/var/artipie/data");
+        .put("path", "/var/pantera/data");
 
     @Test
     void listGlobalAliasesReturnsArray(final Vertx vertx, final VertxTestContext ctx)

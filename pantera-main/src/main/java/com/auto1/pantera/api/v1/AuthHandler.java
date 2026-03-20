@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -409,11 +409,11 @@ public final class AuthHandler {
                 //
                 // group-roles in YAML can be either:
                 //   a) An array of single-key mappings:
-                //        - artipie_readers: reader
-                //        - artipie_admins: admin
+                //        - pantera_readers: reader
+                //        - pantera_admins: admin
                 //   b) A nested object (legacy):
-                //        artipie_readers: reader
-                //        artipie_admins: admin
+                //        pantera_readers: reader
+                //        pantera_admins: admin
                 final List<String> roles = new ArrayList<>();
                 final java.util.Map<String, String> groupRolesMap = new java.util.HashMap<>();
                 if (config.containsKey("group-roles")) {

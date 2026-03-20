@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.auth;
 
@@ -20,10 +20,10 @@ import io.vertx.ext.auth.jwt.JWTAuthOptions;
  * <p>
  * This factory creates a {@link JwtPasswordAuth} instance that validates
  * JWT tokens used as passwords in Basic Authentication. The JWT secret
- * is read from the artipie.yml configuration.
+ * is read from the pantera.yml configuration.
  * </p>
  * <p>
- * Configuration in artipie.yml:
+ * Configuration in pantera.yml:
  * <pre>
  * meta:
  *   jwt:

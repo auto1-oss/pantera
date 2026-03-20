@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.composer;
 
@@ -30,8 +30,8 @@ import java.util.stream.Collectors;
  * 
  * <p>After bulk import completes, this consolidates per-version files from:</p>
  * <pre>
- * .artipie-import/composer/vendor/package/1.0.0.json
- * .artipie-import/composer/vendor/package/1.0.1.json
+ * .pantera-import/composer/vendor/package/1.0.0.json
+ * .pantera-import/composer/vendor/package/1.0.1.json
  * </pre>
  * 
  * <p>Into final Satis layout:</p>

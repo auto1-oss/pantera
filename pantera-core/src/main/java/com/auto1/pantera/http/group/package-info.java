@@ -1,11 +1,11 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 
 /**
  * Group repositories HTTP API.
- * See <a href="https://github.com/artipie/http/issues/169">artipie/http#169</a>
+ * See <a href="https://github.com/pantera/http/issues/169">pantera/http#169</a>
  * ticket for more details.
  * @since 0.11
  */

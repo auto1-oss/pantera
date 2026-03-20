@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda;
 
@@ -34,7 +34,7 @@ public final class CondaAuthITCase {
         () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conda/conda-auth.yml", "my-conda"),
-        () -> new TestDeployment.ClientContainer("artipie/conda-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/conda-tests:1.0")
     );
 
     @Test
@@ -44,7 +44,7 @@ public final class CondaAuthITCase {
         this.containers.assertExec(
             "Failed to set anaconda upload url",
             new ContainerResultMatcher(),
-            "anaconda", "config", "--set", "url", "http://artipie:8080/my-conda/", "-s"
+            "anaconda", "config", "--set", "url", "http://pantera:8080/my-conda/", "-s"
         );
         this.containers.assertExec(
             "Failed to set anaconda upload flag",
@@ -61,7 +61,7 @@ public final class CondaAuthITCase {
             new ContainerResultMatcher(
                 new IsEqual<>(0),
                 Matchers.allOf(
-                    new StringContains("Using Anaconda API: http://artipie:8080/my-conda/"),
+                    new StringContains("Using Anaconda API: http://pantera:8080/my-conda/"),
                     new StringContains("Uploading file \"alice/example-package/0.0.1/linux-64/example-package-0.0.1-0.tar.bz2\""),
                     new StringContains("Upload complete")
                 )
@@ -69,13 +69,13 @@ public final class CondaAuthITCase {
             "conda", "build", "--output-folder", "/w/conda-out/", "/w/example-project/conda/"
         );
         this.containers.assertPanteraContent(
-            "Package was not uploaded to artipie",
-            "/var/artipie/data/my-conda/linux-64/example-package-0.0.1-0.tar.bz2",
+            "Package was not uploaded to pantera",
+            "/var/pantera/data/my-conda/linux-64/example-package-0.0.1-0.tar.bz2",
             new IsNot<>(new IsNull<>())
         );
         this.containers.assertPanteraContent(
-            "Package was not uploaded to artipie",
-            "/var/artipie/data/my-conda/linux-64/repodata.json",
+            "Package was not uploaded to pantera",
+            "/var/pantera/data/my-conda/linux-64/repodata.json",
             new IsNot<>(new IsNull<>())
         );
     }
@@ -86,18 +86,18 @@ public final class CondaAuthITCase {
         this.moveCondarc();
         this.containers.putBinaryToPantera(
             new TestResource("conda/packages.json").asBytes(),
-            "/var/artipie/data/my-conda/linux-64/repodata.json"
+            "/var/pantera/data/my-conda/linux-64/repodata.json"
         );
         this.containers.putBinaryToPantera(
             new TestResource("conda/snappy-1.1.3-0.tar.bz2").asBytes(),
-            "/var/artipie/data/my-conda/linux-64/snappy-1.1.3-0.tar.bz2"
+            "/var/pantera/data/my-conda/linux-64/snappy-1.1.3-0.tar.bz2"
         );
         this.containers.assertExec(
             "Package snappy-1.1.3-0 was not installed successfully",
             new ContainerResultMatcher(
                 new IsEqual<>(0),
                 Matchers.allOf(
-                    new StringContains("http://artipie:8080/my-conda"),
+                    new StringContains("http://pantera:8080/my-conda"),
                     new StringContains("linux-64::snappy-1.1.3-0")
                 )
             ),

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.nuget;
 
@@ -73,7 +73,7 @@ final class NugetITCase {
                 new StringContains("Your package was pushed.")
             ),
             "dotnet", "nuget", "push", pckgname, "-s",
-            String.format("http://artipie:%s/%s/index.json", port, repo)
+            String.format("http://pantera:%s/%s/index.json", port, repo)
         );
         this.containers.assertExec(
             "New project was not created",
@@ -93,7 +93,7 @@ final class NugetITCase {
             ),
             "dotnet", "add", "TestProj", "package", "newtonsoft.json",
             "--version", "12.0.3", "-s",
-            String.format("http://artipie:%s/%s/index.json", port, repo)
+            String.format("http://pantera:%s/%s/index.json", port, repo)
         );
     }
 

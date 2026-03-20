@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -37,9 +37,9 @@ public final class DebianGpgITCase {
         () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("debian/debian-gpg.yml", "my-debian")
             .withClasspathResourceMapping(
-                "debian/secret-keys.gpg", "/var/artipie/repo/secret-keys.gpg", BindMode.READ_ONLY
+                "debian/secret-keys.gpg", "/var/pantera/repo/secret-keys.gpg", BindMode.READ_ONLY
             ),
-        () -> new TestDeployment.ClientContainer("artipie/deb-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/deb-tests:1.0")
             .withWorkingDirectory("/w")
             .withClasspathResourceMapping(
                 "debian/aglfn_1.7-3_amd64.deb", "/w/aglfn_1.7-3_amd64.deb", BindMode.READ_ONLY
@@ -57,7 +57,7 @@ public final class DebianGpgITCase {
             "apt-key", "add", "/w/public-key.asc"
         );
         this.containers.putBinaryToClient(
-            "deb http://artipie:8080/my-debian my-debian main".getBytes(),
+            "deb http://pantera:8080/my-debian my-debian main".getBytes(),
             "/etc/apt/sources.list"
         );
     }
@@ -67,7 +67,7 @@ public final class DebianGpgITCase {
         this.containers.assertExec(
             "Failed to upload deb package",
             new ContainerResultMatcher(),
-            "curl", "http://artipie:8080/my-debian/main/aglfn_1.7-3_amd64.deb",
+            "curl", "http://pantera:8080/my-debian/main/aglfn_1.7-3_amd64.deb",
             "--upload-file", "/w/aglfn_1.7-3_amd64.deb"
         );
         this.containers.assertExec(
@@ -77,10 +77,10 @@ public final class DebianGpgITCase {
                 new AllOf<String>(
                     new ListOf<Matcher<? super String>>(
                         new StringContains(
-                            "Get:1 http://artipie:8080/my-debian my-debian InRelease"
+                            "Get:1 http://pantera:8080/my-debian my-debian InRelease"
                         ),
                         new StringContains(
-                            "Get:2 http://artipie:8080/my-debian my-debian/main amd64 Packages"
+                            "Get:2 http://pantera:8080/my-debian my-debian/main amd64 Packages"
                         ),
                         new IsNot<>(new StringContains("Get:3"))
                     )

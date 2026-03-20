@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.maven.http;
 
@@ -50,14 +50,14 @@ class UploadSliceTest {
             this.ums,
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.CREATED),
-                new RequestLine(RqMethod.PUT, "/com/artipie/asto/0.1/asto-0.1.jar"),
+                new RequestLine(RqMethod.PUT, "/com/pantera/asto/0.1/asto-0.1.jar"),
                 Headers.from(new ContentLength(data.length)),
                 new Content.From(data)
             )
         );
         MatcherAssert.assertThat(
             "Uploaded data were not saved to storage",
-            this.asto.value(new Key.From("com/artipie/asto/0.1/asto-0.1.jar")).join(),
+            this.asto.value(new Key.From("com/pantera/asto/0.1/asto-0.1.jar")).join(),
             new ContentIs(data)
         );
     }

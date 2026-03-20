@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker;
 
@@ -110,16 +110,16 @@ class DockerProxyTest {
                 "      cache:",
                 "        storage:",
                 "          type: fs",
-                "          path: /var/artipie/data/cache",
+                "          path: /var/pantera/data/cache",
                 "    - url: another-registry.org:54321",
                 "    - url: mcr.microsoft.com",
                 "      cache:",
                 "        storage: ",
                 "          type: fs",
-                "          path: /var/artipie/data/local/cache",
+                "          path: /var/pantera/data/local/cache",
                 "  storage:",
                 "    type: fs",
-                "    path: /var/artipie/data/local"
+                "    path: /var/pantera/data/local"
             )
         );
     }

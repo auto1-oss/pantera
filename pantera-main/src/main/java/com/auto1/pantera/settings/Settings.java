@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -134,7 +134,7 @@ public interface Settings extends AutoCloseable {
     PrefixesConfig prefixes();
 
     /**
-     * Path to the artipie.yaml configuration file.
+     * Path to the pantera.yaml configuration file.
      * @return Path to config file
      */
     java.nio.file.Path configPath();

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db;
 
@@ -36,10 +36,10 @@ public final class MetadataMavenITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> new TestDeployment.PanteraContainer().withConfig("artipie-db.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera-db.yaml")
             .withRepoConfig("maven/maven.yml", "my-maven")
             .withRepoConfig("maven/maven-proxy.yml", "my-maven-proxy"),
-        () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
             .withWorkingDirectory("/w")
     );
 

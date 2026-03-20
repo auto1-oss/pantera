@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda.http;
 
@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
 
 /**
  * Main conda entry point. Note, that {@link com.auto1.pantera.http.slice.TrimPathSlice} is not
- * applied for conda-adapter in artipie, which means all the paths includes repository name
+ * applied for conda-adapter in Pantera, which means all the paths includes repository name
  * when the adapter is used in Pantera ecosystem. The reason is that anaconda performs
  * various requests, for example:
  * /{reponame}/release/{username}/snappy/1.1.3

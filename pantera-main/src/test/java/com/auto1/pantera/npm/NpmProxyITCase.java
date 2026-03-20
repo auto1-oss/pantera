@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm;
 
@@ -43,12 +43,12 @@ final class NpmProxyITCase {
     final TestDeployment containers = new TestDeployment(
         Map.ofEntries(
             new MapEntry<>(
-                "artipie",
+                "pantera",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("npm/npm.yml", "my-npm")
             ),
             new MapEntry<>(
-                "artipie-proxy",
+                "pantera-proxy",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("npm/npm-proxy.yml", "my-npm-proxy")
                     .withRepoConfig("npm/npm-proxy-port.yml", "my-npm-proxy-port")
@@ -66,19 +66,19 @@ final class NpmProxyITCase {
     })
     void installFromProxy(final String port, final String repo) throws Exception {
         this.containers.putBinaryToPantera(
-            "artipie",
+            "pantera",
             new TestResource(
                 String.format("npm/storage/%s/meta.json", NpmProxyITCase.PROJ)
             ).asBytes(),
-            String.format("/var/artipie/data/my-npm/%s/meta.json", NpmProxyITCase.PROJ)
+            String.format("/var/pantera/data/my-npm/%s/meta.json", NpmProxyITCase.PROJ)
         );
         final byte[] tgz = new TestResource(
             String.format("npm/storage/%s/-/%s-1.0.1.tgz", NpmProxyITCase.PROJ, NpmProxyITCase.PROJ)
         ).asBytes();
         this.containers.putBinaryToPantera(
-            "artipie", tgz,
+            "pantera", tgz,
             String.format(
-                "/var/artipie/data/my-npm/%s/-/%s-1.0.1.tgz",
+                "/var/pantera/data/my-npm/%s/-/%s-1.0.1.tgz",
                 NpmProxyITCase.PROJ, NpmProxyITCase.PROJ
             )
         );
@@ -91,13 +91,13 @@ final class NpmProxyITCase {
                 )
             ),
             "npm", "install", NpmProxyITCase.PROJ, "--registry",
-            String.format("http://artipie-proxy:%s/%s", port, repo)
+            String.format("http://pantera-proxy:%s/%s", port, repo)
         );
         this.containers.assertPanteraContent(
-            "artipie-proxy",
+            "pantera-proxy",
             "Package was not cached in proxy",
             String.format(
-                "/var/artipie/data/%s/%s/-/%s-1.0.1.tgz",
+                "/var/pantera/data/%s/%s/-/%s-1.0.1.tgz",
                 repo, NpmProxyITCase.PROJ, NpmProxyITCase.PROJ
             ),
             new IsEqual<>(tgz)

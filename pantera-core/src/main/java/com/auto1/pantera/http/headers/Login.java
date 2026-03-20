@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.headers;
 
@@ -39,7 +39,7 @@ public final class Login extends Header {
     }
 
     private static String resolve(final Headers headers) {
-        // 1. Try artipie_login header (set by AuthzSlice after successful auth)
+        // 1. Try pantera_login header (set by AuthzSlice after successful auth)
         return headers.find(AuthzSlice.LOGIN_HDR)
             .stream()
             .findFirst()

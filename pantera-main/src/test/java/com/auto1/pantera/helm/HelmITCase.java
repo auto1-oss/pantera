@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.helm;
 
@@ -42,7 +42,7 @@ final class HelmITCase {
             .withRepoConfig("helm/my-helm.yml", "my-helm")
             .withRepoConfig("helm/my-helm-port.yml", "my-helm-port")
             .withExposedPorts(8081),
-        () -> new TestDeployment.ClientContainer("artipie/helm-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/helm-tests:1.0")
             .withWorkingDirectory("/w")
             .withCreateContainerCmdModifier(
                 cmd -> cmd.withEntrypoint("/bin/sh")
@@ -55,7 +55,7 @@ final class HelmITCase {
     );
 
     @ParameterizedTest
-    @ValueSource(strings = {"http://artipie:8080/my-helm", "http://artipie:8081/my-helm-port"})
+    @ValueSource(strings = {"http://pantera:8080/my-helm", "http://pantera:8081/my-helm-port"})
     void uploadChartAndCreateIndexYaml(final String url) throws Exception {
         this.containers.assertExec(
             "Failed to upload helm archive",

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -54,7 +54,7 @@ public final class DebianS3ITCase {
         () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("debian/debian-s3.yml", "my-debian")
             .withExposedPorts(DebianS3ITCase.SRV_PORT),
-        () -> new TestDeployment.ClientContainer("artipie/deb-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/deb-tests:1.0")
         .withWorkingDirectory("/w")
         .withNetworkAliases("minioc")
         .withExposedPorts(DebianS3ITCase.S3_PORT)
@@ -101,7 +101,7 @@ public final class DebianS3ITCase {
             "Failed to upload deb package",
             new ContainerResultMatcher(),
             "timeout", "30s", "curl", "-i", "-X", "PUT", "--data-binary", "@/w/aglfn_1.7-3_amd64.deb",
-            String.format("http://artipie:%s/%s/main/aglfn_1.7-3_amd64.deb",
+            String.format("http://pantera:%s/%s/main/aglfn_1.7-3_amd64.deb",
                 DebianS3ITCase.SRV_PORT, DebianS3ITCase.REPO
             )
         );
@@ -120,7 +120,7 @@ public final class DebianS3ITCase {
         this.containers.assertExec(
             "deb from repo must be downloadable",
             new ContainerResultMatcher(new IsEqual<>(0)),
-            "timeout 30s curl -f -k http://artipie:%s/%s/main/aglfn_1.7-3_amd64.deb -o /home/aglfn_repo.deb"
+            "timeout 30s curl -f -k http://pantera:%s/%s/main/aglfn_1.7-3_amd64.deb -o /home/aglfn_repo.deb"
                 .formatted(DebianS3ITCase.SRV_PORT, DebianS3ITCase.REPO).split(" ")
         );
         this.containers.assertExec(
@@ -147,7 +147,7 @@ public final class DebianS3ITCase {
         );
         this.containers.putBinaryToClient(
             String.format(
-                "deb [trusted=yes] http://artipie:%s/%s %s main",
+                "deb [trusted=yes] http://pantera:%s/%s %s main",
                 DebianS3ITCase.SRV_PORT, DebianS3ITCase.REPO, DebianS3ITCase.REPO
             ).getBytes(),
             "/etc/apt/sources.list"
@@ -155,7 +155,7 @@ public final class DebianS3ITCase {
         this.containers.assertExec(
             "Failed to upload deb package",
             new ContainerResultMatcher(),
-            "timeout", "30s", "curl", String.format("http://artipie:%s/%s/main/aglfn_1.7-3_amd64.deb",
+            "timeout", "30s", "curl", String.format("http://pantera:%s/%s/main/aglfn_1.7-3_amd64.deb",
                 DebianS3ITCase.SRV_PORT, DebianS3ITCase.REPO),
             "--upload-file", "/w/aglfn_1.7-3_amd64.deb"
         );

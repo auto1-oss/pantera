@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.cooldown;
 
@@ -34,7 +34,7 @@ public final class YamlCooldownSettings {
     /**
      * Read settings from meta section.
      *
-     * @param meta Meta section of artipie.yml
+     * @param meta Meta section of pantera.yml
      * @return Cooldown settings (defaults when absent)
      */
     public static CooldownSettings fromMeta(final YamlMapping meta) {

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.asto.metrics;
 
@@ -82,7 +82,7 @@ public final class StorageMetricsCollector {
 
     /**
      * Interface for metrics recording implementation.
-     * Implement this interface in artipie-core to bridge to OtelMetrics.
+     * Implement this interface in pantera-core to bridge to OtelMetrics.
      */
     public interface MetricsRecorder {
         /**

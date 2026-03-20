@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Service to watch artipie.yml for changes and hot reload global_prefixes.
+ * Service to watch pantera.yml for changes and hot reload global_prefixes.
  * Implements 500ms debounce to avoid excessive reloads.
  *
  * @since 1.0
@@ -40,7 +40,7 @@ public final class ConfigWatchService implements AutoCloseable {
     private static final long DEBOUNCE_MS = 500L;
 
     /**
-     * Path to artipie.yml config file.
+     * Path to pantera.yml config file.
      */
     private final Path configPath;
 
@@ -77,7 +77,7 @@ public final class ConfigWatchService implements AutoCloseable {
     /**
      * Constructor.
      *
-     * @param configPath Path to artipie.yml
+     * @param configPath Path to pantera.yml
      * @param prefixesConfig Prefixes configuration to update
      * @throws IOException If watch service cannot be created
      */

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.vertx;
 
@@ -74,7 +74,7 @@ public final class VertxSliceServer implements Closeable {
      * Request bodies smaller than this value are buffered in memory for simpler error handling.
      * Request bodies equal to or larger than this value are streamed from disk to avoid OOM.
      * Can be overridden via {@code PANTERA_BODY_BUFFER_THRESHOLD} environment variable
-     * or {@code artipie.body.buffer.threshold} system property.
+     * or {@code pantera.body.buffer.threshold} system property.
      */
     public static final long DEFAULT_BODY_BUFFER_THRESHOLD = 1_048_576L;
 

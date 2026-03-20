@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
  * @todo #51:30min Let's create a class in test scope to held/obtain information about test .deb
  *  packages, the class should provide package name, bytes, be able to put the package into provided
  *  storage and return meta info (like methods in this class do). We something similar in
- *  rpm-adapter, check https://github.com/artipie/artipie/blob/master/src/test/java/com/artipie/rpm/TestRpm.java
+ *  rpm-adapter, check https://github.com/pantera/pantera/blob/master/src/test/java/com/pantera/rpm/TestRpm.java
  */
 class DebianTest {
 

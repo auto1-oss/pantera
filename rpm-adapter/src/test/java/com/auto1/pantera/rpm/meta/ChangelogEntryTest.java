@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.rpm.meta;
 
@@ -20,9 +20,9 @@ class ChangelogEntryTest {
     void shouldParseAuthor() {
         MatcherAssert.assertThat(
             new ChangelogEntry(
-                "* Wed May 12 2020 John Doe <johndoe@artipie.org> - 0.1-2\n- Second artipie package"
+                "* Wed May 12 2020 John Doe <johndoe@pantera.local> - 0.1-2\n- Second pantera package"
             ).author(),
-            new IsEqual<>("John Doe <johndoe@artipie.org>")
+            new IsEqual<>("John Doe <johndoe@pantera.local>")
         );
     }
 
@@ -32,7 +32,7 @@ class ChangelogEntryTest {
         final int unixtime = 1589328000;
         MatcherAssert.assertThat(
             new ChangelogEntry(
-                "* Wed May 13 2020 John Doe <johndoe@artipie.org> - 0.1-2\n- Second artipie package"
+                "* Wed May 13 2020 John Doe <johndoe@pantera.local> - 0.1-2\n- Second pantera package"
             ).date(),
             new IsEqual<>(unixtime)
         );
@@ -41,7 +41,7 @@ class ChangelogEntryTest {
     @Test
     void shouldFailParseBadDate() {
         final ChangelogEntry entry = new ChangelogEntry(
-            "* Abc March 41 20 John Doe <johndoe@artipie.org> - 0.1-2\n- Second artipie package"
+            "* Abc March 41 20 John Doe <johndoe@pantera.local> - 0.1-2\n- Second pantera package"
         );
         Assertions.assertThrows(IllegalStateException.class, entry::date);
     }
@@ -50,9 +50,9 @@ class ChangelogEntryTest {
     void shouldParseContent() {
         MatcherAssert.assertThat(
             new ChangelogEntry(
-                "* Wed May 14 2020 John Doe <johndoe@artipie.org> - 0.1-2\n- Second artipie package"
+                "* Wed May 14 2020 John Doe <johndoe@pantera.local> - 0.1-2\n- Second pantera package"
             ).content(),
-            new IsEqual<>("- 0.1-2\n- Second artipie package")
+            new IsEqual<>("- 0.1-2\n- Second pantera package")
         );
     }
 }

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.pypi;
 
@@ -80,12 +80,12 @@ class PyProxyPackageProcessorTest {
 
     @Test
     void checkPackagesAndAddsToQueue() throws SchedulerException {
-        final Key zip = new Key.From("artipie-sample-0.2.zip");
-        final Key tar = new Key.From("artipie-sample-0.2.tar");
-        final Key whl = new Key.From("artipie_sample-0.2-py3-none-any.whl");
-        new TestResource("pypi_repo/artipie-sample-0.2.zip").saveTo(this.asto, zip);
-        new TestResource("pypi_repo/artipie-sample-0.2.tar").saveTo(this.asto, tar);
-        new TestResource("pypi_repo/artipie_sample-0.2-py3-none-any.whl").saveTo(this.asto, whl);
+        final Key zip = new Key.From("pantera-sample-0.2.zip");
+        final Key tar = new Key.From("pantera-sample-0.2.tar");
+        final Key whl = new Key.From("pantera_sample-0.2-py3-none-any.whl");
+        new TestResource("pypi_repo/pantera-sample-0.2.zip").saveTo(this.asto, zip);
+        new TestResource("pypi_repo/pantera-sample-0.2.tar").saveTo(this.asto, tar);
+        new TestResource("pypi_repo/pantera_sample-0.2-py3-none-any.whl").saveTo(this.asto, whl);
         this.packages.add(new ProxyArtifactEvent(zip, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(tar, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(whl, PyProxyPackageProcessorTest.REPO_NAME));
@@ -102,16 +102,16 @@ class PyProxyPackageProcessorTest {
             this.events.stream()
                 .map(ArtifactEvent::artifactName)
                 .collect(Collectors.toSet()),
-            Matchers.equalTo(Set.of("artipie-sample"))
+            Matchers.equalTo(Set.of("pantera-sample"))
         );
     }
 
     @Test
     void doNotAddNotValidPackage() throws SchedulerException {
-        final Key tar = new Key.From("artipie-sample-0.2.tar");
+        final Key tar = new Key.From("pantera-sample-0.2.tar");
         final Key invalid = new Key.From("invalid.zip");
         this.asto.save(invalid, Content.EMPTY).join();
-        new TestResource("pypi_repo/artipie-sample-0.2.tar").saveTo(this.asto, tar);
+        new TestResource("pypi_repo/pantera-sample-0.2.tar").saveTo(this.asto, tar);
         this.packages.add(new ProxyArtifactEvent(invalid, PyProxyPackageProcessorTest.REPO_NAME));
         this.packages.add(new ProxyArtifactEvent(tar, PyProxyPackageProcessorTest.REPO_NAME));
         this.scheduler.scheduleJob(
@@ -150,8 +150,8 @@ class PyProxyPackageProcessorTest {
         processor.setEvents(this.events);
         processor.setPackages(this.packages);
         processor.setStorage(this.asto);
-        final Key wheel = new Key.From("artipie_sample-0.2-py3-none-any.whl");
-        new TestResource("pypi_repo/artipie_sample-0.2-py3-none-any.whl").saveTo(this.asto, wheel);
+        final Key wheel = new Key.From("pantera_sample-0.2-py3-none-any.whl");
+        new TestResource("pypi_repo/pantera_sample-0.2-py3-none-any.whl").saveTo(this.asto, wheel);
         final long release = Instant.now().minusSeconds(90L).toEpochMilli();
         this.packages.add(
             new ProxyArtifactEvent(

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.rpm.http;
 
@@ -81,8 +81,8 @@ public final class RpmSliceITCase {
 
     @ParameterizedTest
     @CsvSource({
-        "artipie/rpm-tests-ubi:1.0,yum,repo-pkgs",
-        "artipie/rpm-tests-fedora:1.0,dnf,repository-packages"
+        "pantera/rpm-tests-ubi:1.0,yum,repo-pkgs",
+        "pantera/rpm-tests-fedora:1.0,dnf,repository-packages"
     })
     void canListAndInstallFromPanteraRepo(final String linux,
         final String mngr, final String rey) throws Exception {
@@ -101,8 +101,8 @@ public final class RpmSliceITCase {
 
     @ParameterizedTest
     @CsvSource({
-        "artipie/rpm-tests-ubi:1.0,yum,repo-pkgs",
-        "artipie/rpm-tests-fedora:1.0,dnf,repository-packages"
+        "pantera/rpm-tests-ubi:1.0,yum,repo-pkgs",
+        "pantera/rpm-tests-fedora:1.0,dnf,repository-packages"
     })
     void canListAndInstallFromPanteraRepoWithAuth(final String linux,
         final String mngr, final String key) throws Exception {

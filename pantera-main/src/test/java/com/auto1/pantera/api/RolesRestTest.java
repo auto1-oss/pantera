@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api;
 
@@ -43,14 +43,14 @@ final class RolesRestTest extends RestApiServerBase {
         return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
-                return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
+                return (name, pswd) -> Optional.of(new AuthUser("pantera", "test"));
             }
 
             @Override
             public Policy<?> policy() {
                 final BlockingStorage asto = new BlockingStorage(RolesRestTest.super.ssto);
                 asto.save(
-                    new Key.From("users/artipie.yaml"),
+                    new Key.From("users/pantera.yaml"),
                     String.join(
                         "\n",
                         "permissions:",

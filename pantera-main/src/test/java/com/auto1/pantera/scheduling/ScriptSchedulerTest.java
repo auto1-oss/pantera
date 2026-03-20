@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.scheduling;
 
@@ -141,8 +141,8 @@ public final class ScriptSchedulerTest {
     void runCronJobWithReposObject() throws Exception {
         final String repo = "my-repo";
         new RepoConfigYaml("maven")
-            .withPath("/artipie/test/maven")
-            .withUrl("http://test.url/artipie")
+            .withPath("/pantera/test/maven")
+            .withUrl("http://test.url/pantera")
             .saveTo(new FileStorage(this.temp), repo);
         final Key result = new Key.From(ScriptSchedulerTest.RESULTS_PATH);
         final YamlSettings settings = this.runCronScript(

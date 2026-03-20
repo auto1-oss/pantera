@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db.migration;
 
@@ -71,9 +71,9 @@ public final class YamlToDbMigrator {
     private final Path reposDir;
 
     /**
-     * Path to the artipie.yml config file.
+     * Path to the pantera.yml config file.
      */
-    private final Path artipieYml;
+    private final Path panteraYml;
 
     /**
      * Ctor.
@@ -91,14 +91,14 @@ public final class YamlToDbMigrator {
      * @param source DataSource for DB
      * @param securityDir Path to the security directory (contains roles/, users/)
      * @param reposDir Path to the repos directory
-     * @param artipieYml Path to artipie.yml (null to skip settings migration)
+     * @param panteraYml Path to pantera.yml (null to skip settings migration)
      */
     public YamlToDbMigrator(final DataSource source, final Path securityDir,
-        final Path reposDir, final Path artipieYml) {
+        final Path reposDir, final Path panteraYml) {
         this.source = source;
         this.securityDir = securityDir;
         this.reposDir = reposDir;
-        this.artipieYml = artipieYml;
+        this.panteraYml = panteraYml;
     }
 
     /**
@@ -269,20 +269,20 @@ public final class YamlToDbMigrator {
     }
 
     /**
-     * Migrate artipie.yml meta section to settings + auth_providers tables.
+     * Migrate pantera.yml meta section to settings + auth_providers tables.
      * Imports ALL configuration sections: simple keys, jwt, cooldown,
      * http_client, http_server, metrics, caches, global_prefixes,
      * storage aliases, and auth providers.
      */
     @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.NPathComplexity"})
     private void migratePanteraYml() {
-        if (this.artipieYml == null || !Files.isRegularFile(this.artipieYml)) {
-            LOG.info("No artipie.yml path provided or file not found, skipping settings migration");
+        if (this.panteraYml == null || !Files.isRegularFile(this.panteraYml)) {
+            LOG.info("No pantera.yml path provided or file not found, skipping settings migration");
             return;
         }
         try {
             final YamlMapping yaml = Yaml.createYamlInput(
-                Files.readString(this.artipieYml)
+                Files.readString(this.panteraYml)
             ).readYamlMapping();
             final YamlMapping meta = yaml.yamlMapping("meta");
             if (meta == null) {
@@ -360,9 +360,9 @@ public final class YamlToDbMigrator {
                 }
                 LOG.info("Migrated {} auth providers", priority - 1);
             }
-            LOG.info("Migrated artipie.yml settings (all sections)");
+            LOG.info("Migrated pantera.yml settings (all sections)");
         } catch (final Exception ex) {
-            LOG.error("Failed to migrate artipie.yml: {}", this.artipieYml, ex);
+            LOG.error("Failed to migrate pantera.yml: {}", this.panteraYml, ex);
         }
     }
 

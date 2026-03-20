@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.hexpm;
 
@@ -64,32 +64,32 @@ public class HexpmITCase {
             new ContainerResultMatcher(ContainerResultMatcher.SUCCESS),
             "curl", "-X", "POST",
             "--data-binary", String.format("@./artifact/%s", HexpmITCase.TAR),
-            "http://artipie:8080/my-hexpm/publish?replace=false"
+            "http://pantera:8080/my-hexpm/publish?replace=false"
         );
         this.containers.assertPanteraContent(
             "Package was not added to storage",
-            String.format("/var/artipie/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE),
+            String.format("/var/pantera/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE),
             new IsEqual<>(
                 new TestResource(String.format("hexpm/%s", HexpmITCase.PACKAGE)).asBytes()
             )
         );
         this.containers.assertPanteraContent(
             "Artifact was not added to storage",
-            String.format("/var/artipie/data/my-hexpm/tarballs/%s", HexpmITCase.TAR),
+            String.format("/var/pantera/data/my-hexpm/tarballs/%s", HexpmITCase.TAR),
             new IsEqual<>(new TestResource(String.format("hexpm/%s", HexpmITCase.TAR)).asBytes())
         );
     }
 
     @Test
-    @Disabled("https://github.com/artipie/artipie/issues/1464")
+    @Disabled("https://github.com/pantera/pantera/issues/1464")
     void downloadArtifact() throws Exception {
         this.containers.putResourceToPantera(
             String.format("hexpm/%s", HexpmITCase.PACKAGE),
-            String.format("/var/artipie/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE)
+            String.format("/var/pantera/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE)
         );
         this.containers.putResourceToPantera(
             String.format("hexpm/%s", HexpmITCase.TAR),
-            String.format("/var/artipie/data/my-hexpm/tarballs/%s", HexpmITCase.TAR)
+            String.format("/var/pantera/data/my-hexpm/tarballs/%s", HexpmITCase.TAR)
         );
         this.addHexAndRepoToContainer();
         this.containers.assertExec(
@@ -111,7 +111,7 @@ public class HexpmITCase {
     private void addHexAndRepoToContainer() throws IOException {
         this.containers.clientExec("mix", "local.hex", "--force");
         this.containers.clientExec(
-            "mix", "hex.repo", "add", "my_repo", "http://artipie:8080/my-hexpm"
+            "mix", "hex.repo", "add", "my_repo", "http://pantera:8080/my-hexpm"
         );
     }
 

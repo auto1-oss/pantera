@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.file;
 
@@ -24,13 +24,13 @@ public final class RolesITCase {
      */
     @RegisterExtension
     final TestDeployment deployment = new TestDeployment(
-        () -> new TestDeployment.PanteraContainer().withConfig("artipie_with_policy.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera_with_policy.yaml")
             .withRepoConfig("binary/bin.yml", "bin")
             .withUser("security/users/bob.yaml", "bob")
             .withUser("security/users/john.yaml", "john")
             .withRole("security/roles/admin.yaml", "admin")
             .withRole("security/roles/readers.yaml", "readers"),
-        () -> new TestDeployment.ClientContainer("artipie/file-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/file-tests:1.0")
             .withWorkingDirectory("/w")
     );
 
@@ -38,21 +38,21 @@ public final class RolesITCase {
     void readersAndAdminsCanDownload() throws Exception {
         final byte[] target = new byte[]{0, 1, 2, 3};
         this.deployment.putBinaryToPantera(
-            target, "/var/artipie/data/bin/target"
+            target, "/var/pantera/data/bin/target"
         );
         this.deployment.assertExec(
             "Bob failed to download artifact",
             new ContainerResultMatcher(
                 ContainerResultMatcher.SUCCESS, new StringContains("200")
             ),
-            "curl", "-v", "-X", "GET", "--user", "bob:qwerty", "http://artipie:8080/bin/target"
+            "curl", "-v", "-X", "GET", "--user", "bob:qwerty", "http://pantera:8080/bin/target"
         );
         this.deployment.assertExec(
             "John failed to download artifact",
             new ContainerResultMatcher(
                 ContainerResultMatcher.SUCCESS, new StringContains("200")
             ),
-            "curl", "-v", "-X", "GET", "--user", "john:xyz", "http://artipie:8080/bin/target"
+            "curl", "-v", "-X", "GET", "--user", "john:xyz", "http://pantera:8080/bin/target"
         );
     }
 
@@ -64,7 +64,7 @@ public final class RolesITCase {
                 ContainerResultMatcher.SUCCESS, new StringContains("403 Forbidden")
             ),
             "curl", "-v", "-X", "PUT", "--user", "bob:qwerty", "--data-binary", "123",
-            "http://artipie:8080/bin/target"
+            "http://pantera:8080/bin/target"
         );
     }
 
@@ -76,7 +76,7 @@ public final class RolesITCase {
                 ContainerResultMatcher.SUCCESS, new StringContains("201")
             ),
             "curl", "-v", "-X", "PUT", "--user", "john:xyz", "--data-binary", "123",
-            "http://artipie:8080/bin/target"
+            "http://pantera:8080/bin/target"
         );
     }
 }

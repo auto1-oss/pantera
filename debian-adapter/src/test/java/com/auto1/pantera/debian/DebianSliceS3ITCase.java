@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -134,7 +134,7 @@ public final class DebianSliceS3ITCase {
                     Policy.FREE,
                     (username, password) -> Optional.empty(),
                     new Config.FromYaml(
-                        "artipie",
+                        "pantera",
                         Yaml.createYamlMappingBuilder()
                             .add("Components", "main")
                             .add("Architectures", "amd64")
@@ -150,10 +150,10 @@ public final class DebianSliceS3ITCase {
         Files.write(
             setting,
             String.format(
-                "deb [trusted=yes] http://host.testcontainers.internal:%d/ artipie main", this.port
+                "deb [trusted=yes] http://host.testcontainers.internal:%d/ pantera main", this.port
             ).getBytes()
         );
-        this.cntn = new GenericContainer<>("artipie/deb-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/deb-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/home/")
             .withFileSystemBind(this.tmp.toString(), "/home");
@@ -191,8 +191,8 @@ public final class DebianSliceS3ITCase {
             "Release file is used on update the world",
             this.exec("apt-get", "update"),
             Matchers.allOf(
-                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:2 http://host.testcontainers.internal:\\d+ artipie Release[\\S\\s]*")),
-                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:4 http://host.testcontainers.internal:\\d+ artipie/main amd64 Packages \\[1351 B][\\S\\s]*")),
+                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:2 http://host.testcontainers.internal:%d/ pantera Release[\\S\\s]*")),
+                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:4 http://host.testcontainers.internal:\\d+ pantera/main amd64 Packages \\[1351 B][\\S\\s]*")),
                 new IsNot<>(new StringContains("Get:5"))
             )
         );
@@ -200,7 +200,7 @@ public final class DebianSliceS3ITCase {
             "Package was downloaded and unpacked",
             this.exec("apt-get", "install", "-y", "aglfn"),
             Matchers.allOf(
-                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:1 http://host.testcontainers.internal:\\d+ artipie/main amd64 aglfn amd64 1.7-3 \\[29.9 kB][\\S\\s]*")),
+                new MatchesPattern(Pattern.compile("[\\S\\s]*Get:1 http://host.testcontainers.internal:\\d+ pantera/main amd64 aglfn amd64 1.7-3 \\[29.9 kB][\\S\\s]*")),
                 new IsNot<>(new StringContains("Get:2")),
                 new StringContainsInOrder(new ListOf<>("Unpacking aglfn", "Setting up aglfn"))
             )
@@ -241,7 +241,7 @@ public final class DebianSliceS3ITCase {
     private void copyPackage(final String pkg) {
         new TestResource(pkg).saveTo(this.storage, new Key.From("main", pkg));
         new TestResource("Packages.gz")
-            .saveTo(this.storage, new Key.From("dists/artipie/main/binary-amd64/Packages.gz"));
+            .saveTo(this.storage, new Key.From("dists/pantera/main/binary-amd64/Packages.gz"));
     }
 
     private String exec(final String... command) throws Exception {

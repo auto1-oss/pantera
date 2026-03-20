@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.debian;
 
@@ -33,7 +33,7 @@ public final class DebianITCase {
             .withRepoConfig("debian/debian.yml", "my-debian")
             .withRepoConfig("debian/debian-port.yml", "my-debian-port")
             .withExposedPorts(8081),
-        () -> new TestDeployment.ClientContainer("artipie/deb-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/deb-tests:1.0")
             .withWorkingDirectory("/w")
             .withClasspathResourceMapping(
                 "debian/aglfn_1.7-3_amd64.deb", "/w/aglfn_1.7-3_amd64.deb", BindMode.READ_ONLY
@@ -48,14 +48,14 @@ public final class DebianITCase {
     void pushAndInstallWorks(final String port, final String repo) throws Exception {
         this.containers.putBinaryToClient(
             String.format(
-                "deb [trusted=yes] http://artipie:%s/%s %s main", port, repo, repo
+                "deb [trusted=yes] http://pantera:%s/%s %s main", port, repo, repo
             ).getBytes(),
             "/etc/apt/sources.list"
         );
         this.containers.assertExec(
             "Failed to upload deb package",
             new ContainerResultMatcher(),
-            "curl", String.format("http://artipie:%s/%s/main/aglfn_1.7-3_amd64.deb", port, repo),
+            "curl", String.format("http://pantera:%s/%s/main/aglfn_1.7-3_amd64.deb", port, repo),
             "--upload-file", "/w/aglfn_1.7-3_amd64.deb"
         );
         this.containers.assertExec(

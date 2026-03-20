@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.helm.http;
 
@@ -37,7 +37,7 @@ public final class HelmSlice extends Slice.Wrap {
      * Ctor.
      *
      * @param storage The storage.
-     * @param base The base path the slice is expected to be accessed from. Example: https://central.artipie.com/helm
+     * @param base The base path the slice is expected to be accessed from. Example: https://central.pantera.com/helm
      * @param policy Access policy.
      * @param auth Authentication.
      * @param name Repository name
@@ -58,7 +58,7 @@ public final class HelmSlice extends Slice.Wrap {
      * Ctor with combined authentication support.
      *
      * @param storage The storage.
-     * @param base The base path the slice is expected to be accessed from. Example: https://central.artipie.com/helm
+     * @param base The base path the slice is expected to be accessed from. Example: https://central.pantera.com/helm
      * @param policy Access policy.
      * @param basicAuth Basic authentication.
      * @param tokenAuth Token authentication.

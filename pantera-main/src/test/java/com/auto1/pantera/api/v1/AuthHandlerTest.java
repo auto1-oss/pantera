@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.api.v1;
 
@@ -23,7 +23,7 @@ class AuthHandlerTest extends AsyncApiTestBase {
     void tokenEndpointReturnsJwt(final Vertx vertx,
         final VertxTestContext ctx) throws Exception {
         final JsonObject body = new JsonObject()
-            .put("name", "artipie")
+            .put("name", "pantera")
             .put("pass", "secret");
         request(vertx, ctx, HttpMethod.POST, "/api/v1/auth/token", body, null,
             res -> {
@@ -52,7 +52,7 @@ class AuthHandlerTest extends AsyncApiTestBase {
             res -> {
                 assertThat(res.statusCode(), is(200));
                 final JsonObject json = res.bodyAsJsonObject();
-                assertThat(json.getString("name"), is("artipie"));
+                assertThat(json.getString("name"), is("pantera"));
             });
     }
 

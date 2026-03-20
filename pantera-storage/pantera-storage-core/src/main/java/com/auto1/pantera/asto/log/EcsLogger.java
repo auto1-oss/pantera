@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.asto.log;
 
@@ -14,7 +14,7 @@ import java.util.Map;
 /**
  * ECS-compliant logger for ASTO module.
  * Provides structured logging with Elastic Common Schema field mapping.
- * This is a simplified version for the asto module that doesn't depend on artipie-core.
+ * This is a simplified version for the asto module that doesn't depend on pantera-core.
  *
  * @since 1.19.1
  */

@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.npm.http.auth;
 
@@ -17,7 +17,7 @@ import javax.json.Json;
 
 /**
  * NPM whoami slice that extracts username from validated JWT.
- * Requires authentication via CombinedAuthzSliceWrap which sets artipie_login header
+ * Requires authentication via CombinedAuthzSliceWrap which sets pantera_login header
  * after successful JWT validation.
  *
  * @since 1.2

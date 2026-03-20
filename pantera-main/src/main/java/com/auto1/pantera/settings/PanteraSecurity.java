@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -35,8 +35,8 @@ public interface PanteraSecurity {
     Policy<?> policy();
 
     /**
-     * Policy storage if `artipie` policy is used or empty.
-     * @return Storage for `artipie` policy
+     * Policy storage if `pantera` policy is used or empty.
+     * @return Storage for `pantera` policy
      */
     Optional<Storage> policyStorage();
 
@@ -68,7 +68,7 @@ public interface PanteraSecurity {
         private final Authentication auth;
 
         /**
-         * Policy storage if `artipie` policy is used or empty.
+         * Policy storage if `pantera` policy is used or empty.
          */
         private final Optional<Storage> asto;
 

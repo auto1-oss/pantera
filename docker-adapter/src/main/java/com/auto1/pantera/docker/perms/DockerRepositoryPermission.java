@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.docker.perms;
 
@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Docker permissions implementation. Docker permission has three defining parameters:
- * <li>name (artipie repository name)</li>
+ * <li>name (pantera repository name)</li>
  * <li>resource name (or image name, on the adapter side it's obtained from the request line)</li>
  * <li>the set of action, see {@link DockerActions}</li>
  */

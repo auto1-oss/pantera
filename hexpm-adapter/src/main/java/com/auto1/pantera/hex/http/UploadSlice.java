@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 
 package com.auto1.pantera.hex.http;
@@ -152,7 +152,7 @@ public final class UploadSlice implements Slice {
                         if (throwable == null) {
                             result = ResponseBuilder.created()
                                 .headers(new HexContentType(headers).fill())
-                                // todo https://github.com/artipie/artipie/issues/1435
+                                // todo https://github.com/pantera/pantera/issues/1435
                                 .header(new ContentLength(0))
                                 .build();
                             this.events.ifPresent(

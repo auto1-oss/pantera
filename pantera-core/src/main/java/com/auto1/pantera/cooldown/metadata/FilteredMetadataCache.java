@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.cooldown.metadata;
 
@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Cache key format: {@code metadata:{repoType}:{repoName}:{packageName}}</p>
  * 
- * <p>Configuration via YAML (artipie.yaml):</p>
+ * <p>Configuration via YAML (pantera.yaml):</p>
  * <pre>
  * meta:
  *   caches:

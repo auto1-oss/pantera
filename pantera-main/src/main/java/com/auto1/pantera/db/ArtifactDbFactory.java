@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db;
 
@@ -21,14 +21,14 @@ import javax.sql.DataSource;
  * Factory accepts Pantera yaml settings file and creates database source and database structure.
  * If settings are absent in config yaml, default PostgreSQL connection parameters are used.
  * <p/>
- * Artifacts db settings section in artipie yaml:
+ * Artifacts db settings section in pantera yaml:
  * <pre>{@code
  * artifacts_database:
  *   postgres_host: localhost # required, PostgreSQL host
  *   postgres_port: 5432 # optional, PostgreSQL port, default 5432
- *   postgres_database: artipie # required, PostgreSQL database name
- *   postgres_user: artipie # required, PostgreSQL username
- *   postgres_password: artipie # required, PostgreSQL password
+ *   postgres_database: pantera # required, PostgreSQL database name
+ *   postgres_user: pantera # required, PostgreSQL username
+ *   postgres_password: pantera # required, PostgreSQL password
  *   pool_max_size: 20 # optional, connection pool max size, default 20
  *   pool_min_idle: 5 # optional, connection pool min idle, default 5
  *   buffer_time_seconds: 2 # optional, buffer time in seconds, default 2

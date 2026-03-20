@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.composer.http.proxy;
 
@@ -164,7 +164,7 @@ final class ComposerProxySliceIT {
 
     @Test
     void installsPackageFromLocal() throws Exception {
-        final String name = "artipie/d8687716-47c1-4de6-a378-0557428fcce7";
+        final String name = "pantera/d8687716-47c1-4de6-a378-0557428fcce7";
         final String vers = "1.1.2";
         this.sourceserver = new SourceServer(ComposerProxySliceIT.VERTX, this.sourceport);
         new ComposerSimple(this.url, name, vers)
@@ -195,7 +195,7 @@ final class ComposerProxySliceIT {
 
     @Test
     void failsToInstallWhenPackageAbsent() throws Exception {
-        final String name = "artipie/d8687716-47c1-4de6-a378-0557428fcce7";
+        final String name = "pantera/d8687716-47c1-4de6-a378-0557428fcce7";
         final String vers = "1.1.2";
         new ComposerSimple(this.url, name, vers)
             .writeTo(this.tmp.resolve("composer.json"));

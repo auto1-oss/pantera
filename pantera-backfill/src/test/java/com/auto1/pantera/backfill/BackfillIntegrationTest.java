@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.backfill;
 
@@ -373,9 +373,9 @@ final class BackfillIntegrationTest {
      * <p>Requires the following environment variables:</p>
      * <ul>
      *   <li>{@code BACKFILL_IT_DB_URL} - JDBC URL, e.g.
-     *       {@code jdbc:postgresql://localhost:5432/artipie}</li>
-     *   <li>{@code BACKFILL_IT_DB_USER} - (optional, default: artipie)</li>
-     *   <li>{@code BACKFILL_IT_DB_PASSWORD} - (optional, default: artipie)</li>
+     *       {@code jdbc:postgresql://localhost:5432/pantera}</li>
+     *   <li>{@code BACKFILL_IT_DB_USER} - (optional, default: pantera)</li>
+     *   <li>{@code BACKFILL_IT_DB_PASSWORD} - (optional, default: pantera)</li>
      * </ul>
      *
      * @param tmp Temporary directory created by JUnit

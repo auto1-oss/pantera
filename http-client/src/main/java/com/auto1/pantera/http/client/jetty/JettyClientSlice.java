@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.client.jetty;
 
@@ -235,7 +235,7 @@ final class JettyClientSlice implements Slice {
     }
 
     /**
-     * Builds jetty basic request from artipie request line and headers.
+     * Builds jetty basic request from Pantera request line and headers.
      * @param headers Headers
      * @param req Pantera request line
      * @return Jetty request

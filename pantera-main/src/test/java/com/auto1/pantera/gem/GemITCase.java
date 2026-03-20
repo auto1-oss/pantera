@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.gem;
 
@@ -60,7 +60,7 @@ final class GemITCase {
                 new IsEqual<>(0),
                 new StringContainsInOrder(
                     new ListOf<>(
-                        String.format("POST http://artipie:%s/%s/api/v1/gems", port, repo),
+                        String.format("POST http://pantera:%s/%s/api/v1/gems", port, repo),
                         "201 Created"
                     )
                 )
@@ -70,11 +70,11 @@ final class GemITCase {
                 new String(Base64.getEncoder().encode("alice:123".getBytes(StandardCharsets.UTF_8)))
             ),
             "gem", "push", "-v", "/w/rails-6.0.2.2.gem", "--host",
-            String.format("http://artipie:%s/%s", port, repo)
+            String.format("http://pantera:%s/%s", port, repo)
         );
         this.containers.assertPanteraContent(
             "Package was not added to storage",
-            String.format("/var/artipie/data/%s/gems/%s", repo, GemITCase.RAILS),
+            String.format("/var/pantera/data/%s/gems/%s", repo, GemITCase.RAILS),
             new IsEqual<>(new TestResource(String.format("gem/%s", GemITCase.RAILS)).asBytes())
         );
         this.containers.assertExec(
@@ -89,7 +89,7 @@ final class GemITCase {
                 new StringContainsInOrder(
                     new ListOf<>(
                         String.format(
-                            "GET http://artipie:%s/%s/quick/Marshal.4.8/%sspec.rz",
+                            "GET http://pantera:%s/%s/quick/Marshal.4.8/%sspec.rz",
                             port, repo, GemITCase.RAILS
                         ),
                         "200 OK",
@@ -99,7 +99,7 @@ final class GemITCase {
                 )
             ),
             "gem", "install", GemITCase.RAILS,
-            "--source", String.format("http://artipie:%s/%s", port, repo),
+            "--source", String.format("http://pantera:%s/%s", port, repo),
             "--ignore-dependencies", "-V"
         );
     }

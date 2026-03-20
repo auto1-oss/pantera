@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.importer;
 
@@ -767,7 +767,7 @@ public final class ImportService {
     /**
      * Check if shards merge mode is enabled for this repository.
      * Reads repo setting `metadata_merge_mode` and returns true if set to `shards`.
-     * Falls back to system property `artipie.metadata.merge.mode`.
+     * Falls back to system property `pantera.metadata.merge.mode`.
      *
      * @param config Repo configuration
      * @return True when shard merge mode is enabled

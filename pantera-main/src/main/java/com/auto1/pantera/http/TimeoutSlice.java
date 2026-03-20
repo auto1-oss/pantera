@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http;
 
@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
  * Slice decorator that adds timeout to requests.
  * Prevents hanging requests by timing out after specified duration.
  * 
- * <p>Timeout is configured in artipie.yml under meta.http_client.proxy_timeout
+ * <p>Timeout is configured in pantera.yml under meta.http_client.proxy_timeout
  * (default: 120 seconds)</p>
  *
  * @since 1.0

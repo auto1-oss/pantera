@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.db;
 
@@ -243,7 +243,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     try {
                         final DeadLetterWriter dlWriter = new DeadLetterWriter(
                             Path.of(System.getProperty(
-                                "pantera.home", "/var/artipie"
+                                "pantera.home", "/var/pantera"
                             )).resolve(".dead-letter")
                         );
                         dlWriter.write(sortedEvents, ex, failures);

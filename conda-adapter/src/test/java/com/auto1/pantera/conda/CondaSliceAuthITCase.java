@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.conda;
 
@@ -136,7 +136,7 @@ public final class CondaSliceAuthITCase {
             this.tmp.resolve(CondaSliceAuthITCase.ANONIM),
             String.format("channels:\n  - %s", url).getBytes()
         );
-        this.cntn = new GenericContainer<>("artipie/conda-tests:1.0")
+        this.cntn = new GenericContainer<>("pantera/conda-tests:1.0")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/home/")
             .withFileSystemBind(this.tmp.toString(), "/home");
@@ -144,7 +144,7 @@ public final class CondaSliceAuthITCase {
     }
 
     @Test
-    @Disabled("https://github.com/artipie/artipie/issues/1336")
+    @Disabled("https://github.com/pantera/pantera/issues/1336")
     void canUploadAndInstall() throws Exception {
         this.moveCondarc(CondaSliceAuthITCase.ANONIM);
         this.exec(

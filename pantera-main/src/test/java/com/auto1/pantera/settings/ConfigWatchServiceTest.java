@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.settings;
 
@@ -116,7 +116,7 @@ class ConfigWatchServiceTest {
         final YamlMappingBuilder meta = Yaml.createYamlMappingBuilder()
             .add("storage", Yaml.createYamlMappingBuilder()
                 .add("type", "fs")
-                .add("path", "/tmp/artipie")
+                .add("path", "/tmp/pantera")
                 .build()
             );
         
@@ -149,7 +149,7 @@ class ConfigWatchServiceTest {
         YamlMappingBuilder meta = Yaml.createYamlMappingBuilder()
             .add("storage", Yaml.createYamlMappingBuilder()
                 .add("type", "fs")
-                .add("path", "/tmp/artipie")
+                .add("path", "/tmp/pantera")
                 .build()
             );
         

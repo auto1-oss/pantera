@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.client;
 
@@ -24,7 +24,7 @@ final class UriClientSliceTest {
 
     @ParameterizedTest
     @CsvSource({
-        "https://artipie.com,true,artipie.com,",
+        "https://pantera.com,true,pantera.com,",
         "http://github.com,false,github.com,",
         "https://github.io:54321,true,github.io,54321",
         "http://localhost:8080,false,localhost,8080"

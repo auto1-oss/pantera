@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.file;
 
@@ -35,13 +35,13 @@ final class FileProxyAuthIT {
     final TestDeployment containers = new TestDeployment(
         Map.ofEntries(
             new MapEntry<>(
-                "artipie",
+                "pantera",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("binary/bin.yml", "my-bin")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
-                "artipie-proxy",
+                "pantera-proxy",
                 () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("binary/bin-proxy.yml", "my-bin-proxy")
                     .withRepoConfig("binary/bin-proxy-cache.yml", "my-bin-proxy-cache")
@@ -49,7 +49,7 @@ final class FileProxyAuthIT {
                     .withExposedPorts(8081)
             )
         ),
-        () -> new TestDeployment.ClientContainer("artipie/file-tests:1.0")
+        () -> new TestDeployment.ClientContainer("pantera/file-tests:1.0")
             .withWorkingDirectory("/w")
     );
 
@@ -58,15 +58,15 @@ final class FileProxyAuthIT {
     void shouldGetFileFromOrigin(final String repo) throws Exception {
         final byte[] data = "Hello world!".getBytes();
         this.containers.putBinaryToPantera(
-            "artipie", data,
-            "/var/artipie/data/my-bin/foo/bar.txt"
+            "pantera", data,
+            "/var/pantera/data/my-bin/foo/bar.txt"
         );
         this.containers.assertExec(
             "File was not downloaded",
             new ContainerResultMatcher(
                 new IsEqual<>(0), new StringContains("HTTP/1.1 200 OK")
             ),
-            "curl", "-i", "-X", "GET", String.format("http://artipie-proxy:%s/foo/bar.txt", repo)
+            "curl", "-i", "-X", "GET", String.format("http://pantera-proxy:%s/foo/bar.txt", repo)
         );
     }
 
@@ -74,19 +74,19 @@ final class FileProxyAuthIT {
     void cachesDataWhenCacheIsSet() throws IOException {
         final byte[] data = "Hello world!".getBytes();
         this.containers.putBinaryToPantera(
-            "artipie", data,
-            "/var/artipie/data/my-bin/foo/bar.txt"
+            "pantera", data,
+            "/var/pantera/data/my-bin/foo/bar.txt"
         );
         this.containers.assertExec(
             "File was not downloaded",
             new ContainerResultMatcher(
                 new IsEqual<>(0), new StringContains("HTTP/1.1 200 OK")
             ),
-            "curl", "-i", "-X", "GET", "http://artipie-proxy:8080/my-bin-proxy-cache/foo/bar.txt"
+            "curl", "-i", "-X", "GET", "http://pantera-proxy:8080/my-bin-proxy-cache/foo/bar.txt"
         );
         this.containers.assertPanteraContent(
-            "artipie-proxy", "Proxy cached data",
-            "/var/artipie/data/my-bin-proxy-cache/foo/bar.txt",
+            "pantera-proxy", "Proxy cached data",
+            "/var/pantera/data/my-bin-proxy-cache/foo/bar.txt",
             new IsEqual<>(data)
         );
     }

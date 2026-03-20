@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.group;
 
@@ -412,7 +412,7 @@ public final class MavenGroupSlice implements Slice {
 
     /**
      * Merge metadata using MetadataMerger from maven-adapter via reflection.
-     * This allows artipie-main to call maven-adapter without circular dependency.
+     * This allows pantera-main to call maven-adapter without circular dependency.
      */
     private CompletableFuture<byte[]> mergeUsingReflection(final List<byte[]> metadataList) {
         try {

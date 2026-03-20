@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 
 package com.auto1.pantera.hex.http;
@@ -37,7 +37,7 @@ class UserSliceTest {
             this.userslice,
             new SliceHasResponse(
                 new RsHasStatus(RsStatus.NO_CONTENT),
-                new RequestLine(RqMethod.GET, "/users/artipie")
+                new RequestLine(RqMethod.GET, "/users/pantera")
             )
         );
     }

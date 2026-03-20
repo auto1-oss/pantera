@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.rpm.files;
 
@@ -125,7 +125,7 @@ public final class TestBundle {
             try {
                 return URI.create(
                     String.format(
-                        "https://artipie.s3.amazonaws.com/rpm-test/%s.tar.gz", this.filename()
+                        "https://pantera.s3.amazonaws.com/rpm-test/%s.tar.gz", this.filename()
                     )
                 ).toURL();
             } catch (final MalformedURLException ex) {

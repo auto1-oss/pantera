@@ -1,6 +1,6 @@
 /*
- * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
- * https://github.com/artipie/artipie/blob/master/LICENSE.txt
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
  */
 package com.auto1.pantera.http.client.auth;
 
@@ -68,7 +68,7 @@ class GenericAuthenticatorTest {
                     "bob",
                     "12345"
                 ).authenticate(
-                    Headers.from(new WwwAuthenticate("Bearer realm=\"https://artipie.com\""))
+                    Headers.from(new WwwAuthenticate("Bearer realm=\"https://pantera.com\""))
                 ).toCompletableFuture().join().spliterator(),
                 false
             ).map(Map.Entry::getKey).collect(Collectors.toList()),
