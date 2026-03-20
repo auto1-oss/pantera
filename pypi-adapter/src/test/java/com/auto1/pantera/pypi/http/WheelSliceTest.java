@@ -63,8 +63,8 @@ class WheelSliceTest {
     @Test
     void savesContentAndReturnsOk() throws IOException {
         final String boundary = "simple boundary";
-        final String filename = "artipie-sample-0.2.tar";
-        final byte[] body = new TestResource("pypi_repo/artipie-sample-0.2.tar").asBytes();
+        final String filename = "pantera-sample-0.2.tar";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-0.2.tar").asBytes();
         MatcherAssert.assertThat(
             "Returns CREATED status",
             new WheelSlice(this.asto, Optional.of(this.queue), "test"),
@@ -137,8 +137,8 @@ class WheelSliceTest {
     @Test
     void returnsBadRequestIfFileNameIsInvalid() throws IOException {
         final String boundary = RandomStringUtils.random(10);
-        final String filename = "artipie-sample-2020.tar.bz2";
-        final byte[] body = new TestResource("pypi_repo/artipie-sample-2.1.tar.bz2").asBytes();
+        final String filename = "pantera-sample-2020.tar.bz2";
+        final byte[] body = new TestResource("pypi_repo/pantera-sample-2.1.tar.bz2").asBytes();
         MatcherAssert.assertThat(
             "Returns BAD_REQUEST status",
             new WheelSlice(this.asto, Optional.of(this.queue), "test"),

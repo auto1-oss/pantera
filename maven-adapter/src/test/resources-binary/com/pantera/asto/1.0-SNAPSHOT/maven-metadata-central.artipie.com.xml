@@ -23,7 +23,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
 <metadata modelVersion="1.1.0">
-  <groupId>com.artipie</groupId>
+  <groupId>com.pantera</groupId>
   <artifactId>asto</artifactId>
   <version>1.0-SNAPSHOT</version>
   <versioning>

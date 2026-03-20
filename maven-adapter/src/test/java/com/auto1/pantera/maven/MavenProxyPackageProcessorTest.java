@@ -81,7 +81,7 @@ class MavenProxyPackageProcessorTest {
 
     @Test
     void processesPackage() throws SchedulerException {
-        final String pkg = "com/artipie/asto/0.15";
+        final String pkg = "com/pantera/asto/0.15";
         final Key key = new Key.From(pkg);
         new TestResource(pkg).addFilesTo(this.asto, key);
         this.packages.add(new ProxyArtifactEvent(key, MavenProxyPackageProcessorTest.RNAME));
@@ -100,20 +100,20 @@ class MavenProxyPackageProcessorTest {
             "Same items were removed from packages queue", this.packages.isEmpty()
         );
         final ArtifactEvent event = this.events.poll();
-        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.artipie.asto"));
+        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.pantera.asto"));
         MatcherAssert.assertThat(event.artifactVersion(), new IsEqual<String>("0.15"));
     }
 
     @Test
     @Disabled("https://github.com/pantera/pantera/issues/1349")
     void processesSeveralPackagesAndPacakgeWithError() throws SchedulerException {
-        final String first = "com/artipie/asto/0.20.1";
+        final String first = "com/pantera/asto/0.20.1";
         final Key firstk = new Key.From(first);
         new TestResource(first).addFilesTo(this.asto, firstk);
-        final String second = "com/artipie/helloworld/0.1";
+        final String second = "com/pantera/helloworld/0.1";
         final Key secondk = new Key.From(second);
         new TestResource(second).addFilesTo(this.asto, secondk);
-        final String snapshot = "com/artipie/asto/1.0-SNAPSHOT";
+        final String snapshot = "com/pantera/asto/1.0-SNAPSHOT";
         final Key snapshotk = new Key.From(snapshot);
         new TestResource(snapshot).addFilesTo(this.asto, snapshotk);
         this.scheduler.scheduleJob(

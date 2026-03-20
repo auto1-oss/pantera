@@ -167,7 +167,7 @@ public final class MavenITCase {
         MatcherAssert.assertThat(
             "Maven metadata xml is not correct",
             new XMLDocument(
-                this.storage.value(new Key.From("com/artipie/helloworld/maven-metadata.xml"))
+                this.storage.value(new Key.From("com/pantera/helloworld/maven-metadata.xml"))
                     .join().asString()
             ),
             new AllOf<>(
@@ -205,7 +205,7 @@ public final class MavenITCase {
         MatcherAssert.assertThat(
             "Maven metadata xml is not correct",
             new XMLDocument(
-                this.storage.value(new Key.From("com/artipie/helloworld/maven-metadata.xml"))
+                this.storage.value(new Key.From("com/pantera/helloworld/maven-metadata.xml"))
                     .join().asString()
             ),
             new AllOf<>(
@@ -292,7 +292,7 @@ public final class MavenITCase {
     }
 
     private void addHellowordToPantera() {
-        new TestResource("com/artipie/helloworld")
+        new TestResource("com/pantera/helloworld")
             .addFilesTo(this.storage, new Key.From("com", "pantera", "helloworld"));
     }
 
@@ -335,12 +335,12 @@ public final class MavenITCase {
     private void verifyArtifactsAdded(final String version) {
         MatcherAssert.assertThat(
             String.format("Artifacts with %s version were not added to storage", version),
-            this.storage.list(new Key.From("com/artipie/helloworld"))
+            this.storage.list(new Key.From("com/pantera/helloworld"))
                 .join().stream().map(Key::string).collect(Collectors.toList()),
             Matchers.hasItems(
-                "com/artipie/helloworld/maven-metadata.xml",
-                String.format("com/artipie/helloworld/%s/helloworld-%s.pom", version, version),
-                String.format("com/artipie/helloworld/%s/helloworld-%s.jar", version, version)
+                "com/pantera/helloworld/maven-metadata.xml",
+                String.format("com/pantera/helloworld/%s/helloworld-%s.pom", version, version),
+                String.format("com/pantera/helloworld/%s/helloworld-%s.jar", version, version)
             )
         );
     }
@@ -348,7 +348,7 @@ public final class MavenITCase {
     private void verifySnapshotAdded(final String version) {
         MatcherAssert.assertThat(
             String.format("Artifacts with %s version were not added to storage", version),
-            this.storage.list(new Key.From("com/artipie/helloworld", version))
+            this.storage.list(new Key.From("com/pantera/helloworld", version))
                 .join().stream().map(Key::string).collect(Collectors.toList()),
             Matchers.allOf(
                 Matchers.hasItem(new StringContains(".jar")),

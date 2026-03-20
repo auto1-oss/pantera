@@ -1,5 +1,5 @@
 Metadata-Version: 2.1
-Name: artipietestpkg
+Name: panteratestpkg
 Version: 0.0.3
 Summary: A small example package for the integration test of Artipie
 Home-page: https://github.com/artemlazarev/pypi-adapter

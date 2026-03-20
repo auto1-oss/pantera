@@ -69,11 +69,11 @@ class SearchSliceTest {
 
     @ParameterizedTest
     @CsvSource({
-        "artipie-sample-0.2.tar.gz,artipie-sample",
-        "artipie-sample-2.1.tar.Z,artipie-sample",
-        "artipie-sample-2.1.tar.bz2,artipie-sample",
-        "artipie_sample-2.1-py3.7.egg,artipie-sample",
-        "artipie_sample-0.2-py3-none-any.whl,artipie-sample",
+        "pantera-sample-0.2.tar.gz,artipie-sample",
+        "pantera-sample-2.1.tar.Z,artipie-sample",
+        "pantera-sample-2.1.tar.bz2,artipie-sample",
+        "pantera_sample-2.1-py3.7.egg,artipie-sample",
+        "pantera_sample-0.2-py3-none-any.whl,artipie-sample",
         "alarmtime-0.1.5.tar.gz,alarmtime",
         "ABtests-0.0.2.1-py2.py3-none-any.whl,abtests"
     })

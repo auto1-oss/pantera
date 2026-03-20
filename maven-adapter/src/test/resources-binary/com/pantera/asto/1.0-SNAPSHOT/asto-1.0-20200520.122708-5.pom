@@ -28,7 +28,7 @@ SOFTWARE.
     <vertx.version>3.9.0</vertx.version>
   </properties>
   <parent>
-    <groupId>com.artipie</groupId>
+    <groupId>com.pantera</groupId>
     <artifactId>ppom</artifactId>
     <version>0.3.3</version>
   </parent>
