@@ -5,9 +5,9 @@ meta:
   credentials:
     - type: env
     - type: github
-    - type: artipie
+    - type: local
   policy:
-    type: artipie
+    type: local
     storage:
       type: fs
       path: /var/artipie/security

@@ -48,7 +48,7 @@ public final class AuthFromStorage implements Authentication {
     /**
      * Auth type name.
      */
-    private static final String ARTIPIE = "artipie";
+    private static final String ARTIPIE = "local";
 
     /**
      * The storage to obtain users files from.

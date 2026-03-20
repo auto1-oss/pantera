@@ -70,14 +70,14 @@ public class MetaBuilder {
                 Yaml.createYamlSequenceBuilder()
                         .add(
                                 Yaml.createYamlMappingBuilder()
-                                        .add("type", "artipie")
+                                        .add("type", "local")
                                         .build()
                         )
                         .build()
         );
         meta = meta.add("policy",
                 Yaml.createYamlMappingBuilder()
-                        .add("type", "artipie")
+                        .add("type", "local")
                         .add("storage", TestVertxMainBuilder.fileStorageCfg(this.security))
                         .build());
         String data = Yaml.createYamlMappingBuilder()

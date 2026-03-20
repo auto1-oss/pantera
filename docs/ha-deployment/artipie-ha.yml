@@ -41,10 +41,10 @@ meta:
 
   credentials:
     - type: env
-    - type: artipie
+    - type: local
 
   policy:
-    type: artipie
+    type: local
     eviction_millis: 180000
     storage:
       type: s3

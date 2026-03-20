@@ -206,13 +206,13 @@ public final class YamlToDbMigrator {
                         }
                     }
                     // Preserve the original auth type from YAML.
-                    // "plain" and "sha256" are password formats → map to "artipie".
+                    // "plain" and "sha256" are password formats → map to "local".
                     // Actual provider names (okta, keycloak) are preserved.
                     if (credType != null
                         && !"plain".equals(credType) && !"sha256".equals(credType)) {
                         builder.add("type", credType);
                     } else {
-                        builder.add("type", "artipie");
+                        builder.add("type", "local");
                     }
                     if (yaml.string("email") != null) {
                         builder.add("email", yaml.string("email"));

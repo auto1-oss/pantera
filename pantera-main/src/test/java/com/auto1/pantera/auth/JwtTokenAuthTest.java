@@ -40,7 +40,7 @@ class JwtTokenAuthTest {
     @Test
     void returnsUser() {
         final String name = "Alice";
-        final String cntx = "artipie";
+        final String cntx = "local";
         MatcherAssert.assertThat(
             new JwtTokenAuth(this.provider).user(
                 this.provider.generateToken(new JsonObject().put("sub", name).put("context", cntx))

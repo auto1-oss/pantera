@@ -57,10 +57,10 @@ class AuthProviderDaoTest {
     void putsAndListsProvider() {
         final JsonObject config = Json.createObjectBuilder()
             .add("realm", "artipie").build();
-        this.dao.put("artipie", 1, config);
+        this.dao.put("local", 1, config);
         final List<JsonObject> all = this.dao.list();
         assertEquals(1, all.size());
-        assertEquals("artipie", all.get(0).getString("type"));
+        assertEquals("local", all.get(0).getString("type"));
         assertEquals(1, all.get(0).getInt("priority"));
     }
 
@@ -79,7 +79,7 @@ class AuthProviderDaoTest {
 
     @Test
     void listsEnabledOnly() {
-        this.dao.put("artipie", 1, Json.createObjectBuilder().build());
+        this.dao.put("local", 1, Json.createObjectBuilder().build());
         this.dao.put("keycloak", 2, Json.createObjectBuilder().build());
         // Disable keycloak
         final int kcId = this.dao.list().stream()
@@ -88,7 +88,7 @@ class AuthProviderDaoTest {
         this.dao.disable(kcId);
         final List<JsonObject> enabled = this.dao.listEnabled();
         assertEquals(1, enabled.size());
-        assertEquals("artipie", enabled.get(0).getString("type"));
+        assertEquals("local", enabled.get(0).getString("type"));
     }
 
     @Test
@@ -113,9 +113,9 @@ class AuthProviderDaoTest {
     @Test
     void listsOrderedByPriority() {
         this.dao.put("keycloak", 2, Json.createObjectBuilder().build());
-        this.dao.put("artipie", 1, Json.createObjectBuilder().build());
+        this.dao.put("local", 1, Json.createObjectBuilder().build());
         final List<JsonObject> all = this.dao.list();
-        assertEquals("artipie", all.get(0).getString("type"));
+        assertEquals("local", all.get(0).getString("type"));
         assertEquals("keycloak", all.get(1).getString("type"));
     }
 }

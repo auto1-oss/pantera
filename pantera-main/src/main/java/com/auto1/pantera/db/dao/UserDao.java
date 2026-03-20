@@ -101,12 +101,12 @@ public final class UserDao implements CrudUsers {
                 }
                 final String email = info.containsKey("email")
                     ? info.getString("email") : null;
-                // Map password format types (plain, sha256) to "artipie" provider.
+                // Map password format types (plain, sha256) to "local" provider.
                 // Only actual provider names (keycloak, okta) are stored literally.
                 final String rawType = info.containsKey("type")
-                    ? info.getString("type") : "artipie";
+                    ? info.getString("type") : "local";
                 final String provider = "plain".equals(rawType) || "sha256".equals(rawType)
-                    ? "artipie" : rawType;
+                    ? "local" : rawType;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, uname);
                     ps.setString(2, pass);

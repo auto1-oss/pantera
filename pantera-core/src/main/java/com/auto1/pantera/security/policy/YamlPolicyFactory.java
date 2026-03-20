@@ -18,7 +18,7 @@ import java.io.UncheckedIOException;
  * Configuration format is the following:
  *<pre>{@code
  * policy:
- *   type: artipie
+ *   type: local
  *   eviction_millis: 60000 # not required, default 3 min
  *   storage:
  *     type: fs
@@ -38,7 +38,7 @@ import java.io.UncheckedIOException;
  *}</pre>
  * @since 1.2
  */
-@PanteraPolicyFactory("artipie")
+@PanteraPolicyFactory("local")
 public final class YamlPolicyFactory implements PolicyFactory {
 
     @Override

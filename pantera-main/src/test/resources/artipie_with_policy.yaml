@@ -4,9 +4,9 @@ meta:
     path: /var/artipie/repo
   base_url: http://artipie:8080/
   credentials:
-    - type: artipie
+    - type: local
   policy:
-    type: artipie
+    type: local
     storage:
       type: fs
       path: /var/artipie/security

@@ -16,7 +16,7 @@ const password = ref('')
 const errorMsg = ref('')
 const ssoLoading = ref<string | null>(null)
 
-const directGrantTypes = new Set(['artipie', 'keycloak'])
+const directGrantTypes = new Set(['local', 'keycloak'])
 const ssoProviders = computed(() =>
   auth.providers.filter(p => !directGrantTypes.has(p.type))
 )

@@ -19,7 +19,7 @@ meta:
         password: user_password
       - url: http://proxy2.com
   credentials:
-    - type: artipie
+    - type: local
       storage:
         type: fs
         path: /var/artipie/security

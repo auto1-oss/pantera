@@ -326,7 +326,7 @@ public final class UsersRest extends BaseRest {
                 perms.implies(ApiSearchPermission.READ));
         final io.vertx.core.json.JsonObject result = new io.vertx.core.json.JsonObject()
             .put("name", sub)
-            .put("context", ctx != null ? ctx : "artipie")
+            .put("context", ctx != null ? ctx : "local")
             .put("permissions", permissions);
         final Optional<JsonObject> userInfo = this.users.get(sub);
         if (userInfo.isPresent()) {

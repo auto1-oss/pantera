@@ -7,7 +7,7 @@ meta:
     - type: env
 
   policy:
-    type: artipie
+    type: local
     eviction_millis: 180000
     storage:
       type: fs

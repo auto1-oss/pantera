@@ -149,18 +149,18 @@ public final class AuthHandler {
      */
     private void providersEndpoint(final RoutingContext ctx) {
         final JsonArray providers = new JsonArray();
-        // Always include artipie (username/password) provider
+        // Always include local (username/password) provider
         providers.add(
             new JsonObject()
-                .put("type", "artipie")
+                .put("type", "local")
                 .put("enabled", true)
         );
         // Add SSO providers from the database
         if (this.providerDao != null) {
             for (final javax.json.JsonObject prov : this.providerDao.list()) {
                 final String type = prov.getString("type", "");
-                // Skip artipie and jwt-password — they're not SSO providers
-                if (!"artipie".equals(type) && !"jwt-password".equals(type)) {
+                // Skip local and jwt-password — they're not SSO providers
+                if (!"local".equals(type) && !"jwt-password".equals(type)) {
                     providers.add(
                         new JsonObject()
                             .put("type", type)
@@ -581,7 +581,7 @@ public final class AuthHandler {
             : DEFAULT_EXPIRY_DAYS;
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String context = ctx.user().principal().getString(
-            AuthTokenRest.CONTEXT, "artipie"
+            AuthTokenRest.CONTEXT, "local"
         );
         final AuthUser authUser = new AuthUser(sub, context);
         final int expirySecs = expiryDays > 0 ? expiryDays * 86400 : 0;
@@ -680,7 +680,7 @@ public final class AuthHandler {
                 perms.implies(new AdapterBasicPermission("*", "delete")));
         final JsonObject result = new JsonObject()
             .put("name", sub)
-            .put("context", context != null ? context : "artipie")
+            .put("context", context != null ? context : "local")
             .put("permissions", permissions);
         if (this.users != null) {
             final Optional<javax.json.JsonObject> userInfo = this.users.get(sub);

@@ -10,7 +10,7 @@ meta:
       secretAccessKey: minioadmin
   base_url: http://artipie:8080/
   credentials:
-    - type: artipie
+    - type: local
       storage:
         type: fs
         path: /var/artipie/security

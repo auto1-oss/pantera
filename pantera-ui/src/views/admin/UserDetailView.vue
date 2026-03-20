@@ -105,7 +105,7 @@ async function toggleEnabled() {
         <template #content>
           <div class="space-y-3 text-sm">
             <div><strong>Email:</strong> {{ user.email || '—' }}</div>
-            <div><strong>Auth Provider:</strong> {{ user.auth_provider || 'artipie' }}</div>
+            <div><strong>Auth Provider:</strong> {{ user.auth_provider || 'local' }}</div>
           </div>
           <div class="flex gap-2 mt-6">
             <Button label="Change Password" icon="pi pi-key" severity="secondary" @click="pwdVisible = true" />

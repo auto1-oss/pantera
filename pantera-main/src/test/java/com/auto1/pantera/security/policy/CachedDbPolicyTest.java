@@ -80,7 +80,7 @@ class CachedDbPolicyTest {
         createUser("alice", true);
         assignRole("alice", "reader");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("alice", "artipie")
+            new AuthUser("alice", "local")
         );
         assertTrue(
             perms.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
@@ -104,7 +104,7 @@ class CachedDbPolicyTest {
         createUser("bob", true);
         assignRole("bob", "reader");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("bob", "artipie")
+            new AuthUser("bob", "local")
         );
         assertFalse(
             perms.implies(new ApiRepositoryPermission(
@@ -124,7 +124,7 @@ class CachedDbPolicyTest {
         createUser("disabled_user", false);
         assignRole("disabled_user", "admin");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("disabled_user", "artipie")
+            new AuthUser("disabled_user", "local")
         );
         assertFalse(
             perms.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
@@ -143,7 +143,7 @@ class CachedDbPolicyTest {
         createUser("charlie", true);
         assignRole("charlie", "suspended");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("charlie", "artipie")
+            new AuthUser("charlie", "local")
         );
         assertFalse(
             perms.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
@@ -162,7 +162,7 @@ class CachedDbPolicyTest {
         createUser("dave", true);
         assignRole("dave", "go_reader");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("dave", "artipie")
+            new AuthUser("dave", "local")
         );
         assertTrue(
             perms.implies(new AdapterBasicPermission("go", "read")),
@@ -185,7 +185,7 @@ class CachedDbPolicyTest {
         assignRole("eve", "mutable");
         // Load into cache
         assertTrue(
-            this.policy.getPermissions(new AuthUser("eve", "artipie"))
+            this.policy.getPermissions(new AuthUser("eve", "local"))
                 .implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ))
         );
         // Remove role permissions in DB
@@ -201,7 +201,7 @@ class CachedDbPolicyTest {
         this.policy.invalidate("eve");
         // Should reflect new state
         assertFalse(
-            this.policy.getPermissions(new AuthUser("eve", "artipie"))
+            this.policy.getPermissions(new AuthUser("eve", "local"))
                 .implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
             "After invalidation, removed permissions should no longer be granted"
         );
@@ -210,7 +210,7 @@ class CachedDbPolicyTest {
     @Test
     void handlesUserNotInDb() {
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("unknown_user", "artipie")
+            new AuthUser("unknown_user", "local")
         );
         assertFalse(
             perms.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),
@@ -235,7 +235,7 @@ class CachedDbPolicyTest {
         assignRole("frank", "searcher");
         assignRole("frank", "go_dev");
         final UserPermissions perms = this.policy.getPermissions(
-            new AuthUser("frank", "artipie")
+            new AuthUser("frank", "local")
         );
         assertTrue(
             perms.implies(new ApiSearchPermission(ApiSearchPermission.SearchAction.READ)),

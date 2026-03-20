@@ -27,7 +27,7 @@ public final class AuthFromDb implements Authentication {
     /**
      * Auth context name.
      */
-    private static final String ARTIPIE = "artipie";
+    private static final String ARTIPIE = "local";
 
     /**
      * SQL query to fetch password hash and provider for an enabled user.

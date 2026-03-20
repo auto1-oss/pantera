@@ -21,7 +21,7 @@ import java.util.List;
  * Factory for auth from artipie storage.
  * @since 0.30
  */
-@PanteraAuthFactory("artipie")
+@PanteraAuthFactory("local")
 public final class AuthFromStorageFactory implements AuthFactory {
 
     @Override
@@ -33,11 +33,11 @@ public final class AuthFromStorageFactory implements AuthFactory {
                 "Failed to create artipie auth, storage is not configured"
             )
         );
-        final List<String> domains = parseUserDomains(yaml, "artipie");
+        final List<String> domains = parseUserDomains(yaml, "local");
         if (domains.isEmpty()) {
             return auth;
         }
-        return new DomainFilteredAuth(auth, domains, "artipie");
+        return new DomainFilteredAuth(auth, domains, "local");
     }
 
     /**

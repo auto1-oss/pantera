@@ -91,7 +91,7 @@ public final class YamlSettings implements Settings {
     /**
      * Pantera policy and creds type name.
      */
-    private static final String ARTIPIE = "artipie";
+    private static final String ARTIPIE = "local";
 
     /**
      * YAML node name for `ssl` yaml section.
@@ -726,8 +726,8 @@ public final class YamlSettings implements Settings {
             final AuthLoader loader = new AuthLoader();
             for (final YamlNode node : creds.values()) {
                 final String type = node.asMapping().string(YamlSettings.NODE_TYPE);
-                // Skip "artipie" file-based auth when DB is primary
-                if (dataSource != null && "artipie".equals(type)) {
+                // Skip "local" file-based auth when DB is primary
+                if (dataSource != null && "local".equals(type)) {
                     continue;
                 }
                 try {
