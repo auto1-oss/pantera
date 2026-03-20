@@ -4,11 +4,11 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.artipie</groupId>
-        <artifactId>artipie</artifactId>
+        <groupId>com.auto1.pantera</groupId>
+        <artifactId>pantera</artifactId>
         <version>1.22.0</version>
     </parent>
-    <artifactId>asto</artifactId>
+    <artifactId>pantera-storage</artifactId>
     <version>1.22.0</version>
     <packaging>pom</packaging>
     <name>asto</name>
@@ -20,9 +20,9 @@
         <header.license>${project.basedir}/../LICENSE.header</header.license>
     </properties>
     <modules>
-        <module>asto-core</module>
-        <module>asto-s3</module>
-        <module>asto-vertx-file</module>
+        <module>pantera-storage-core</module>
+        <module>pantera-storage-s3</module>
+        <module>pantera-storage-vertx-file</module>
     </modules>
     <dependencies>
         <!-- tests -->

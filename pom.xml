@@ -24,15 +24,15 @@ SOFTWARE.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.artipie</groupId>
-  <artifactId>artipie</artifactId>
+  <groupId>com.auto1.pantera</groupId>
+  <artifactId>pantera</artifactId>
   <version>1.22.0</version>
   <packaging>pom</packaging>
   <name>artipie</name>
   <modules>
     <module>build-tools</module>
-    <module>artipie-core</module>
-    <module>artipie-main</module>
+    <module>pantera-core</module>
+    <module>pantera-main</module>
     <module>pypi-adapter</module>
     <module>maven-adapter</module>
 
@@ -55,8 +55,8 @@ SOFTWARE.
     <module>rpm-adapter/benchmarks</module>
     <module>vertx-server</module>
     <module>http-client</module>
-    <module>asto</module>
-    <module>artipie-backfill</module>
+    <module>pantera-storage</module>
+    <module>pantera-backfill</module>
   </modules>
   <description>Binary Artifact Management Tool</description>
   <url>https://github.com/artipie/artipie</url>
@@ -75,7 +75,7 @@ SOFTWARE.
     <url>https://github.com/artipie/artipie</url>
   </scm>
   <properties>
-    <docker.image.name>auto1-artipie</docker.image.name>
+    <docker.image.name>pantera</docker.image.name>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>21</maven.compiler.release>
@@ -363,7 +363,7 @@ SOFTWARE.
                 <exclude>LICENSE.header</exclude>
                 <exclude>.Dockerignore</exclude>
                 <exclude>.testcontainers.properties</exclude>
-                <exclude>**/com/artipie/hex/proto/generated/*</exclude>
+                <exclude>**/com/auto1/pantera/hex/proto/generated/*</exclude>
                 <exclude>**/src/test/resources/**</exclude>
                 <exclude>**/src/test/resources-binary/**</exclude>
                 <exclude>**/src/main/resources/**</exclude>
@@ -414,7 +414,7 @@ SOFTWARE.
         </executions>
         <dependencies>
           <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>build-tools</artifactId>
             <version>${project.version}</version>
           </dependency>

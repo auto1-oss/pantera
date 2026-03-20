@@ -24,8 +24,8 @@ SOFTWARE.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <parent>
-    <groupId>com.artipie</groupId>
-    <artifactId>artipie</artifactId>
+    <groupId>com.auto1.pantera</groupId>
+    <artifactId>pantera</artifactId>
     <version>1.22.0</version>
     <relativePath>/../../pom.xml</relativePath>
   </parent>
@@ -39,7 +39,7 @@ SOFTWARE.
   </properties>
   <dependencies>
     <dependency>
-      <groupId>com.artipie</groupId>
+      <groupId>com.auto1.pantera</groupId>
       <artifactId>conda-adapter</artifactId>
       <version>1.22.0</version>
     </dependency>

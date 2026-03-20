@@ -24,12 +24,12 @@ SOFTWARE.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>artipie</artifactId>
-        <groupId>com.artipie</groupId>
+        <artifactId>pantera</artifactId>
+        <groupId>com.auto1.pantera</groupId>
         <version>1.22.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
-    <artifactId>artipie-main</artifactId>
+    <artifactId>pantera-main</artifactId>
     <packaging>jar</packaging>
     <properties>
         <docker.image.name>pantera</docker.image.name>
@@ -39,14 +39,14 @@ SOFTWARE.
     </properties>
     <dependencies>
         <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>artipie-core</artifactId>
+            <groupId>com.auto1.pantera</groupId>
+            <artifactId>pantera-core</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>asto-core</artifactId>
+            <groupId>com.auto1.pantera</groupId>
+            <artifactId>pantera-storage-core</artifactId>
             <version>1.22.0</version>
             <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
             <exclusions>
@@ -57,13 +57,13 @@ SOFTWARE.
             </exclusions>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>asto-s3</artifactId>
+            <groupId>com.auto1.pantera</groupId>
+            <artifactId>pantera-storage-s3</artifactId>
             <version>1.22.0</version>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
-            <artifactId>asto-vertx-file</artifactId>
+            <groupId>com.auto1.pantera</groupId>
+            <artifactId>pantera-storage-vertx-file</artifactId>
             <version>1.22.0</version>
         </dependency>
         <!-- RxJava3: previously a transitive dependency via asto-redis/redisson,
@@ -93,13 +93,13 @@ SOFTWARE.
             </exclusions>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>vertx-server</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>http-client</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
@@ -253,25 +253,25 @@ SOFTWARE.
         </dependency>
         <!--        adapters      -->
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>files-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>npm-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>hexpm-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>maven-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
@@ -284,67 +284,67 @@ SOFTWARE.
         </dependency>
         <!-- gradle-adapter removed: gradle types now alias to maven -->
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>rpm-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>gem-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>composer-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>go-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>nuget-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>pypi-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>helm-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>docker-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>debian-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>conda-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>com.artipie</groupId>
+            <groupId>com.auto1.pantera</groupId>
             <artifactId>conan-adapter</artifactId>
             <version>1.22.0</version>
             <scope>compile</scope>
@@ -409,14 +409,14 @@ SOFTWARE.
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
                 <includes>
-                    <include>artipie.properties</include>
+                    <include>pantera.properties</include>
                 </includes>
             </resource>
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>false</filtering>
                 <excludes>
-                    <exclude>artipie.properties</exclude>
+                    <exclude>pantera.properties</exclude>
                 </excludes>
             </resource>
         </resources>
@@ -461,7 +461,7 @@ SOFTWARE.
                         <configuration>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.artipie.VertxMain</mainClass>
+                                    <mainClass>com.auto1.pantera.VertxMain</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
@@ -543,7 +543,7 @@ SOFTWARE.
                         <configuration>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.artipie.VertxMain</mainClass>
+                                    <mainClass>com.auto1.pantera.VertxMain</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
@@ -625,7 +625,7 @@ SOFTWARE.
                         <configuration>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.artipie.VertxMain</mainClass>
+                                    <mainClass>com.auto1.pantera.VertxMain</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
@@ -706,7 +706,7 @@ SOFTWARE.
                                 <configuration>
                                     <archive>
                                         <manifest>
-                                            <mainClass>com.artipie.VertxMain</mainClass>
+                                            <mainClass>com.auto1.pantera.VertxMain</mainClass>
                                         </manifest>
                                     </archive>
                                     <descriptorRefs>

@@ -24,19 +24,19 @@ SOFTWARE.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <parent>
-    <artifactId>asto</artifactId>
-    <groupId>com.artipie</groupId>
+    <artifactId>pantera-storage</artifactId>
+    <groupId>com.auto1.pantera</groupId>
     <version>1.22.0</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
-  <artifactId>asto-s3</artifactId>
+  <artifactId>pantera-storage-s3</artifactId>
   <properties>
     <header.license>${project.basedir}/../../LICENSE.header</header.license>
   </properties>
   <dependencies>
     <dependency>
-      <groupId>com.artipie</groupId>
-      <artifactId>asto-core</artifactId>
+      <groupId>com.auto1.pantera</groupId>
+      <artifactId>pantera-storage-core</artifactId>
       <version>1.22.0</version>
       <scope>compile</scope>
     </dependency>

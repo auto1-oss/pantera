@@ -4,12 +4,12 @@
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.artipie</groupId>
-    <artifactId>artipie</artifactId>
+    <groupId>com.auto1.pantera</groupId>
+    <artifactId>pantera</artifactId>
     <version>1.22.0</version>
   </parent>
 
-  <artifactId>artipie-core</artifactId>
+  <artifactId>pantera-core</artifactId>
   <version>1.22.0</version>
   <packaging>jar</packaging>
   <properties>
@@ -17,8 +17,8 @@
   </properties>
   <dependencies>
     <dependency>
-      <groupId>com.artipie</groupId>
-      <artifactId>asto-core</artifactId>
+      <groupId>com.auto1.pantera</groupId>
+      <artifactId>pantera-storage-core</artifactId>
       <version>1.22.0</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->

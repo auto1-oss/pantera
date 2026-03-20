@@ -24,8 +24,8 @@ SOFTWARE.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <parent>
-    <artifactId>artipie</artifactId>
-    <groupId>com.artipie</groupId>
+    <artifactId>pantera</artifactId>
+    <groupId>com.auto1.pantera</groupId>
     <version>1.22.0</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
@@ -48,14 +48,14 @@ SOFTWARE.
       <version>0.22.2</version>
     </dependency>
     <dependency>
-      <groupId>com.artipie</groupId>
+      <groupId>com.auto1.pantera</groupId>
       <artifactId>http-client</artifactId>
       <version>1.22.0</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
-      <groupId>com.artipie</groupId>
-      <artifactId>asto-core</artifactId>
+      <groupId>com.auto1.pantera</groupId>
+      <artifactId>pantera-storage-core</artifactId>
       <version>1.22.0</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
@@ -74,14 +74,14 @@ SOFTWARE.
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>com.artipie</groupId>
+      <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
       <version>1.22.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>com.artipie</groupId>
-      <artifactId>asto-s3</artifactId>
+      <groupId>com.auto1.pantera</groupId>
+      <artifactId>pantera-storage-s3</artifactId>
       <version>1.22.0</version>
       <scope>test</scope>
     </dependency>
