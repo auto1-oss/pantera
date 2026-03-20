@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search - Option B: Inline Search + Side Filters + Table Results</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: #111827; color: #e5e7eb; -webkit-font-smoothing: antialiased; }
+
+  .layout { margin-left: 240px; margin-top: 56px; padding: 28px 32px; }
+
+  .header { height: 56px; background: #111827; border-bottom: 1px solid #1f2937; position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; padding: 0 20px; }
+  .header .brand { display: flex; align-items: center; gap: 10px; margin-left: 48px; }
+  .header .mark { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #f97316, #f59e0b); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: white; }
+  .header .name { font-size: 16px; font-weight: 700; color: white; }
+  .sidebar { width: 240px; position: fixed; top: 56px; left: 0; bottom: 0; background: #111827; border-right: 1px solid #1f2937; padding: 16px 12px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 13px; color: #6b7280; cursor: pointer; margin-bottom: 2px; }
+  .nav-item.active { background: rgba(249,115,22,0.1); color: #f97316; font-weight: 600; }
+  .nav-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #374151; padding: 16px 12px 8px; }
+
+  /* Page header with inline search */
+  .page-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: white;
+    white-space: nowrap;
+  }
+  .search-input-wrap {
+    flex: 1;
+    position: relative;
+  }
+  .search-input-wrap .icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #4b5563;
+    font-size: 16px;
+  }
+  .search-input-wrap input {
+    width: 100%;
+    height: 42px;
+    padding: 0 14px 0 42px;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+    background: #0d1117;
+    color: white;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input-wrap input::placeholder { color: #374151; }
+  .search-input-wrap input:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,0.1); }
+  .results-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(249,115,22,0.1);
+    color: #f97316;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* Content: filters sidebar + results table */
+  .content-split {
+    display: flex;
+    gap: 20px;
+  }
+
+  /* Filters panel */
+  .filters-panel {
+    width: 200px;
+    flex-shrink: 0;
+  }
+  .filter-section {
+    margin-bottom: 20px;
+  }
+  .filter-section h4 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+    margin-bottom: 8px;
+  }
+  .filter-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: color 0.1s;
+  }
+  .filter-option:hover { color: #d1d5db; }
+  .filter-option.active { color: #f97316; font-weight: 500; }
+  .filter-radio {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid #374151;
+    flex-shrink: 0;
+  }
+  .filter-option.active .filter-radio {
+    border-color: #f97316;
+    background: #f97316;
+    box-shadow: inset 0 0 0 2px #111827;
+  }
+  .filter-check {
+    width: 14px; height: 14px;
+    border-radius: 4px;
+    border: 2px solid #374151;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+  }
+  .filter-option.active .filter-check {
+    border-color: #f97316;
+    background: #f97316;
+    color: white;
+  }
+  .filter-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: #4b5563;
+  }
+
+  /* Results table */
+  .results-table {
+    flex: 1;
+    min-width: 0;
+  }
+  .table-wrap {
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #111827;
+  }
+  .table-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid #1f2937;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+  }
+  .table-header .col-artifact { flex: 1; }
+  .table-header .col-repo { width: 160px; }
+  .table-header .col-version { width: 100px; }
+  .table-header .col-size { width: 80px; text-align: right; }
+  .table-header .col-action { width: 80px; text-align: center; }
+
+  .table-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.1s;
+    cursor: pointer;
+  }
+  .table-row:last-child { border-bottom: none; }
+  .table-row:hover { background: rgba(249,115,22,0.03); }
+
+  .col-artifact { flex: 1; min-width: 0; }
+  .col-artifact .art-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #e2e8f0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .col-artifact .art-path {
+    font-size: 11px;
+    color: #4b5563;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .col-repo { width: 160px; }
+  .col-repo .repo-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.05);
+    color: #9ca3af;
+  }
+  .col-repo .repo-tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .col-version { width: 100px; font-size: 12px; color: #6b7280; font-family: monospace; }
+  .col-size { width: 80px; text-align: right; font-size: 12px; color: #6b7280; }
+  .col-action { width: 80px; text-align: center; }
+  .action-btn {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #334155;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .action-btn:hover { background: rgba(255,255,255,0.04); color: white; border-color: #4b5563; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">A1</div><div class="name">Artipie</div></div>
+  </div>
+  <div class="sidebar">
+    <div class="nav-item">&#9632; Dashboard</div>
+    <div class="nav-item">&#9744; Repositories</div>
+    <div class="nav-item active">&#128269; Search</div>
+    <div class="nav-item">&#9200; Cooldown</div>
+    <div class="nav-label">Administration</div>
+    <div class="nav-item">&#128101; User Management</div>
+    <div class="nav-item">&#128737; Roles & Permissions</div>
+  </div>
+
+  <div class="layout">
+    <!-- Header with inline search -->
+    <div class="page-header">
+      <h1>Search</h1>
+      <div class="search-input-wrap">
+        <span class="icon">&#128269;</span>
+        <input type="text" placeholder="Search artifacts by name, package, or path..." value="guava">
+      </div>
+      <span class="results-badge">23 results</span>
+    </div>
+
+    <div class="content-split">
+      <!-- Filter sidebar -->
+      <div class="filters-panel">
+        <div class="filter-section">
+          <h4>Repository Type</h4>
+          <div class="filter-option active"><div class="filter-radio"></div> All Types <span class="filter-count">23</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> Maven <span class="filter-count">14</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> Docker <span class="filter-count">3</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> npm <span class="filter-count">4</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> PyPI <span class="filter-count">2</span></div>
+        </div>
+
+        <div class="filter-section">
+          <h4>Repository</h4>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> maven-central <span class="filter-count">10</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> maven-releases <span class="filter-count">4</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> npm-proxy <span class="filter-count">4</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> docker-proxy <span class="filter-count">3</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> pypi-proxy <span class="filter-count">2</span></div>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div class="results-table">
+        <div class="table-wrap">
+          <div class="table-header">
+            <div class="col-artifact">Artifact</div>
+            <div class="col-repo">Repository</div>
+            <div class="col-version">Version</div>
+            <div class="col-size">Size</div>
+            <div class="col-action"></div>
+          </div>
+
+          <div class="table-row">
+            <div class="col-artifact">
+              <div class="art-name">guava-31.1-jre.jar</div>
+              <div class="art-path">com/google/guava/guava/31.1-jre/</div>
+            </div>
+            <div class="col-repo"><span class="repo-tag"><span class="dot" style="background:#3b82f6"></span> maven-central</span></div>
+            <div class="col-version">31.1-jre</div>
+            <div class="col-size">2.8 MB</div>
+            <div class="col-action"><button class="action-btn">Browse</button></div>
+          </div>
+
+          <div class="table-row">
+            <div class="col-artifact">
+              <div class="art-name">guava-30.1.1-jre.jar</div>
+              <div class="art-path">com/google/guava/guava/30.1.1-jre/</div>
+            </div>
+            <div class="col-repo"><span class="repo-tag"><span class="dot" style="background:#3b82f6"></span> maven-central</span></div>
+            <div class="col-version">30.1.1-jre</div>
+            <div class="col-size">2.7 MB</div>
+            <div class="col-action"><button class="action-btn">Browse</button></div>
+          </div>
+
+          <div class="table-row">
+            <div class="col-artifact">
+              <div class="art-name">guava-testlib-31.1-jre.jar</div>
+              <div class="art-path">com/google/guava/guava-testlib/31.1-jre/</div>
+            </div>
+            <div class="col-repo"><span class="repo-tag"><span class="dot" style="background:#3b82f6"></span> maven-releases</span></div>
+            <div class="col-version">31.1-jre</div>
+            <div class="col-size">1.4 MB</div>
+            <div class="col-action"><button class="action-btn">Browse</button></div>
+          </div>
+
+          <div class="table-row">
+            <div class="col-artifact">
+              <div class="art-name">guava</div>
+              <div class="art-path">guava/-/guava-1.0.2.tgz</div>
+            </div>
+            <div class="col-repo"><span class="repo-tag"><span class="dot" style="background:#ef4444"></span> npm-proxy</span></div>
+            <div class="col-version">1.0.2</div>
+            <div class="col-size">12.4 KB</div>
+            <div class="col-action"><button class="action-btn">Browse</button></div>
+          </div>
+
+          <div class="table-row">
+            <div class="col-artifact">
+              <div class="art-name">guava</div>
+              <div class="art-path">guava/guava-0.5.0.tar.gz</div>
+            </div>
+            <div class="col-repo"><span class="repo-tag"><span class="dot" style="background:#10b981"></span> pypi-proxy</span></div>
+            <div class="col-version">0.5.0</div>
+            <div class="col-size">8.1 KB</div>
+            <div class="col-action"><button class="action-btn">Browse</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

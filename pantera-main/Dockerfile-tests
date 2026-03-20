@@ -1,0 +1,22 @@
+FROM openjdk:21-oracle
+ARG JAR_FILE
+
+LABEL description="Pantera Artifact Registry"
+
+RUN groupadd -r -g 2020 pantera && \
+    adduser -M -r -g pantera -u 2021 -s /sbin/nologin pantera && \
+    mkdir -p /etc/pantera /usr/lib/pantera /var/pantera && \
+    chown pantera:pantera -R /etc/pantera /usr/lib/pantera /var/pantera
+USER 2021:2020
+
+COPY target/dependency  /usr/lib/pantera/lib
+COPY target/${JAR_FILE} /usr/lib/pantera/pantera.jar
+
+# Run server for 10sec. on build-time to prepare JVM AppCDS cache data, which will be used to speed-up startup of the container
+RUN timeout 10s java -XX:ArchiveClassesAtExit=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.artipie.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086 || :
+
+VOLUME /var/pantera /etc/pantera
+WORKDIR /var/pantera
+
+EXPOSE 8080 8086
+CMD [ "sh", "-c", "java -XX:SharedArchiveFile=/usr/lib/pantera/pantera-d.jsa $JVM_ARGS --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* com.artipie.VertxMain --config-file=/etc/pantera/pantera.yml --port=8080 --api-port=8086" ]

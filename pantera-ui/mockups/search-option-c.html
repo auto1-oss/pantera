@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search - Option C: A's visuals + B's sidebar filters</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: #111827; color: #e5e7eb; -webkit-font-smoothing: antialiased; }
+
+  .layout { margin-left: 240px; margin-top: 56px; padding: 28px 32px; }
+
+  .header { height: 56px; background: #111827; border-bottom: 1px solid #1f2937; position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; padding: 0 20px; }
+  .header .brand { display: flex; align-items: center; gap: 10px; margin-left: 48px; }
+  .header .mark { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #f97316, #f59e0b); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: white; }
+  .header .name { font-size: 16px; font-weight: 700; color: white; }
+  .sidebar { width: 240px; position: fixed; top: 56px; left: 0; bottom: 0; background: #111827; border-right: 1px solid #1f2937; padding: 16px 12px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 13px; color: #6b7280; cursor: pointer; margin-bottom: 2px; }
+  .nav-item.active { background: rgba(249,115,22,0.1); color: #f97316; font-weight: 600; }
+  .nav-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #374151; padding: 16px 12px 8px; }
+
+  /* Search hero — from A */
+  .search-hero {
+    padding: 0 0 20px;
+  }
+  .search-hero h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: white;
+    margin-bottom: 16px;
+  }
+  .search-bar {
+    display: flex;
+    align-items: center;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 4px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .search-bar:focus-within {
+    border-color: #f97316;
+    box-shadow: 0 0 0 3px rgba(249,115,22,0.1);
+  }
+  .search-bar .icon {
+    padding: 0 14px;
+    color: #6b7280;
+    font-size: 18px;
+  }
+  .search-bar input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: white;
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    padding: 10px 0;
+  }
+  .search-bar input::placeholder { color: #4b5563; }
+  .search-bar .search-btn {
+    padding: 10px 20px;
+    background: #f97316;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .search-bar .search-btn:hover { background: #ea580c; }
+
+  .results-count {
+    margin-top: 12px;
+    font-size: 13px;
+    color: #6b7280;
+  }
+  .results-count strong { color: #d1d5db; font-weight: 600; }
+
+  /* Split layout — filters + results */
+  .content-split {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+  }
+
+  /* Filter sidebar — from B, styled like A */
+  .filters-panel {
+    width: 200px;
+    flex-shrink: 0;
+  }
+  .filter-section {
+    margin-bottom: 24px;
+  }
+  .filter-section h4 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #1f2937;
+  }
+  .filter-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+  .filter-option:hover { background: rgba(255,255,255,0.03); color: #d1d5db; }
+  .filter-option.active { color: #f97316; font-weight: 500; background: rgba(249,115,22,0.06); }
+  .filter-radio {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid #374151;
+    flex-shrink: 0;
+  }
+  .filter-option.active .filter-radio {
+    border-color: #f97316;
+    background: #f97316;
+    box-shadow: inset 0 0 0 2px #111827;
+  }
+  .filter-check {
+    width: 14px; height: 14px;
+    border-radius: 4px;
+    border: 2px solid #374151;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+    color: transparent;
+  }
+  .filter-option.active .filter-check {
+    border-color: #f97316;
+    background: #f97316;
+    color: white;
+  }
+  .filter-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: #4b5563;
+    font-weight: 500;
+  }
+
+  /* Result cards — from A */
+  .results { flex: 1; min-width: 0; }
+  .result-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    margin-bottom: 10px;
+    background: #111827;
+    transition: border-color 0.12s;
+    cursor: pointer;
+  }
+  .result-card:hover { border-color: #374151; }
+
+  .result-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .result-icon.maven { background: rgba(59,130,246,0.1); color: #3b82f6; }
+  .result-icon.docker { background: rgba(6,182,212,0.1); color: #06b6d4; }
+  .result-icon.npm { background: rgba(239,68,68,0.1); color: #ef4444; }
+  .result-icon.pypi { background: rgba(16,185,129,0.1); color: #10b981; }
+  .result-icon.helm { background: rgba(168,85,247,0.1); color: #a855f7; }
+
+  .result-body { flex: 1; min-width: 0; }
+  .result-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: white;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .result-path {
+    font-size: 12px;
+    color: #4b5563;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .result-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .result-tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .result-tag.repo-tag { background: rgba(249,115,22,0.1); color: #f97316; }
+  .result-tag.version-tag { background: rgba(59,130,246,0.1); color: #60a5fa; }
+  .result-tag.type-tag { background: rgba(255,255,255,0.05); color: #9ca3af; }
+  .result-detail { font-size: 12px; color: #6b7280; }
+
+  .result-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .browse-btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: transparent;
+    color: #d1d5db;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.12s;
+    white-space: nowrap;
+  }
+  .browse-btn:hover { background: rgba(255,255,255,0.04); border-color: #4b5563; color: white; }
+
+  /* Pagination */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin-top: 20px;
+  }
+  .page-btn {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    border: 1px solid #1f2937;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.1s;
+  }
+  .page-btn:hover { background: rgba(255,255,255,0.04); border-color: #374151; color: white; }
+  .page-btn.active { background: rgba(249,115,22,0.1); border-color: rgba(249,115,22,0.3); color: #f97316; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">A1</div><div class="name">Artipie</div></div>
+  </div>
+  <div class="sidebar">
+    <div class="nav-item">&#9632; Dashboard</div>
+    <div class="nav-item">&#9744; Repositories</div>
+    <div class="nav-item active">&#128269; Search</div>
+    <div class="nav-item">&#9200; Cooldown</div>
+    <div class="nav-label">Administration</div>
+    <div class="nav-item">&#128101; User Management</div>
+    <div class="nav-item">&#128737; Roles & Permissions</div>
+  </div>
+
+  <div class="layout">
+    <!-- Search hero with prominent bar -->
+    <div class="search-hero">
+      <h1>Search Artifacts</h1>
+      <div class="search-bar">
+        <span class="icon">&#128269;</span>
+        <input type="text" placeholder="Search by artifact name, package, or path..." value="guava">
+        <button class="search-btn">Search</button>
+      </div>
+      <div class="results-count">Showing <strong>23</strong> results for "guava"</div>
+    </div>
+
+    <!-- Split: filters + card results -->
+    <div class="content-split">
+      <!-- Filters -->
+      <div class="filters-panel">
+        <div class="filter-section">
+          <h4>Type</h4>
+          <div class="filter-option active"><div class="filter-radio"></div> All <span class="filter-count">23</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> Maven <span class="filter-count">14</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> Docker <span class="filter-count">3</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> npm <span class="filter-count">4</span></div>
+          <div class="filter-option"><div class="filter-radio"></div> PyPI <span class="filter-count">2</span></div>
+        </div>
+
+        <div class="filter-section">
+          <h4>Repository</h4>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> maven-central <span class="filter-count">10</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> maven-releases <span class="filter-count">4</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> npm-proxy <span class="filter-count">4</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> docker-proxy <span class="filter-count">3</span></div>
+          <div class="filter-option active"><div class="filter-check">&#10003;</div> pypi-proxy <span class="filter-count">2</span></div>
+        </div>
+      </div>
+
+      <!-- Card results -->
+      <div class="results">
+        <div class="result-card">
+          <div class="result-icon maven">&#9744;</div>
+          <div class="result-body">
+            <div class="result-name">guava-31.1-jre.jar</div>
+            <div class="result-path">com/google/guava/guava/31.1-jre/guava-31.1-jre.jar</div>
+            <div class="result-meta">
+              <span class="result-tag repo-tag">maven-central</span>
+              <span class="result-tag version-tag">v31.1-jre</span>
+              <span class="result-detail">2.8 MB</span>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="browse-btn">&#128193; Browse</button>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="result-icon maven">&#9744;</div>
+          <div class="result-body">
+            <div class="result-name">guava-30.1.1-jre.jar</div>
+            <div class="result-path">com/google/guava/guava/30.1.1-jre/guava-30.1.1-jre.jar</div>
+            <div class="result-meta">
+              <span class="result-tag repo-tag">maven-central</span>
+              <span class="result-tag version-tag">v30.1.1-jre</span>
+              <span class="result-detail">2.7 MB</span>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="browse-btn">&#128193; Browse</button>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="result-icon maven">&#9744;</div>
+          <div class="result-body">
+            <div class="result-name">guava-testlib-31.1-jre.jar</div>
+            <div class="result-path">com/google/guava/guava-testlib/31.1-jre/guava-testlib-31.1-jre.jar</div>
+            <div class="result-meta">
+              <span class="result-tag repo-tag">maven-releases</span>
+              <span class="result-tag version-tag">v31.1-jre</span>
+              <span class="result-detail">1.4 MB</span>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="browse-btn">&#128193; Browse</button>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="result-icon npm">&#9744;</div>
+          <div class="result-body">
+            <div class="result-name">guava</div>
+            <div class="result-path">guava/-/guava-1.0.2.tgz</div>
+            <div class="result-meta">
+              <span class="result-tag repo-tag">npm-proxy</span>
+              <span class="result-tag type-tag">npm</span>
+              <span class="result-tag version-tag">v1.0.2</span>
+              <span class="result-detail">12.4 KB</span>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="browse-btn">&#128193; Browse</button>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="result-icon pypi">&#9744;</div>
+          <div class="result-body">
+            <div class="result-name">guava</div>
+            <div class="result-path">guava/guava-0.5.0.tar.gz</div>
+            <div class="result-meta">
+              <span class="result-tag repo-tag">pypi-proxy</span>
+              <span class="result-tag type-tag">pypi</span>
+              <span class="result-tag version-tag">v0.5.0</span>
+              <span class="result-detail">8.1 KB</span>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="browse-btn">&#128193; Browse</button>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination">
+          <button class="page-btn active">1</button>
+          <button class="page-btn">2</button>
+          <button class="page-btn">3</button>
+          <button class="page-btn">&#8250;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

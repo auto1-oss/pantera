@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard V2 — Polished Stats + Top 5</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: #111827; color: #e5e7eb; -webkit-font-smoothing: antialiased; }
+
+  .header { height: 56px; background: #111827; border-bottom: 1px solid #1f2937; position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; padding: 0 20px; }
+  .header .brand { display: flex; align-items: center; gap: 10px; margin-left: 48px; }
+  .header .mark { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #f97316, #f59e0b); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: white; }
+  .header .name { font-size: 16px; font-weight: 700; color: white; }
+  .header .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: #9ca3af; }
+  .header .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #f97316, #f59e0b); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }
+
+  .sidebar { width: 240px; position: fixed; top: 56px; left: 0; bottom: 0; background: #111827; border-right: 1px solid #1f2937; padding: 16px 12px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 13px; color: #6b7280; cursor: pointer; margin-bottom: 2px; }
+  .nav-item.active { background: rgba(249,115,22,0.1); color: #f97316; font-weight: 600; }
+  .nav-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #374151; padding: 16px 12px 8px; }
+
+  .main { margin-left: 240px; margin-top: 56px; padding: 28px 32px; }
+
+  /* Page header */
+  .page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .page-header .greeting { font-size: 13px; color: #6b7280; }
+  .page-header h1 { font-size: 22px; font-weight: 700; color: white; margin-top: 2px; }
+  .page-header h1 span { color: #f97316; }
+  .grafana-link {
+    font-size: 13px; color: #f97316; text-decoration: none;
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(249,115,22,0.2);
+    transition: all 0.15s;
+  }
+  .grafana-link:hover { background: rgba(249,115,22,0.06); }
+
+  /* Stat cards — 4 across */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    padding: 20px;
+    border-radius: 14px;
+    border: 1px solid #1f2937;
+    background: #111827;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 14px 14px 0 0;
+  }
+  .stat-card.repos::before { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+  .stat-card.artifacts::before { background: linear-gradient(90deg, #10b981, #34d399); }
+  .stat-card.storage::before { background: linear-gradient(90deg, #a855f7, #c084fc); }
+  .stat-card.blocked::before { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+  .stat-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .stat-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .stat-card.repos .stat-icon { background: rgba(59,130,246,0.1); color: #3b82f6; }
+  .stat-card.artifacts .stat-icon { background: rgba(16,185,129,0.1); color: #10b981; }
+  .stat-card.storage .stat-icon { background: rgba(168,85,247,0.1); color: #a855f7; }
+  .stat-card.blocked .stat-icon { background: rgba(239,68,68,0.1); color: #ef4444; }
+
+  .stat-value {
+    font-size: 30px;
+    font-weight: 800;
+    color: white;
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+  .stat-sub {
+    font-size: 12px;
+    color: #4b5563;
+    margin-top: 4px;
+  }
+
+  /* Top 5 Repositories */
+  .top-repos {
+    border-radius: 14px;
+    border: 1px solid #1f2937;
+    background: #111827;
+    overflow: hidden;
+  }
+  .top-repos-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #1f2937;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .top-repos-header h3 { font-size: 14px; font-weight: 600; color: white; }
+  .top-repos-header .view-all {
+    font-size: 12px;
+    color: #f97316;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .top-repos-header .view-all:hover { text-decoration: underline; }
+
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.1s;
+  }
+  .repo-row:last-child { border-bottom: none; }
+  .repo-row:hover { background: rgba(255,255,255,0.02); }
+
+  .repo-rank {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .repo-rank.gold { background: linear-gradient(135deg, rgba(249,115,22,0.15), rgba(251,191,36,0.1)); color: #f59e0b; }
+  .repo-rank.silver { background: rgba(148,163,184,0.1); color: #94a3b8; }
+
+  .repo-info { flex: 1; min-width: 0; }
+  .repo-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e2e8f0;
+    cursor: pointer;
+  }
+  .repo-name:hover { color: #f97316; }
+  .repo-type-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 2px;
+  }
+  .repo-type-tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .repo-type-tag.maven { background: rgba(59,130,246,0.08); color: #60a5fa; }
+  .repo-type-tag.maven .dot { background: #3b82f6; }
+  .repo-type-tag.docker { background: rgba(6,182,212,0.08); color: #22d3ee; }
+  .repo-type-tag.docker .dot { background: #06b6d4; }
+  .repo-type-tag.npm { background: rgba(239,68,68,0.08); color: #f87171; }
+  .repo-type-tag.npm .dot { background: #ef4444; }
+  .repo-type-tag.pypi { background: rgba(16,185,129,0.08); color: #34d399; }
+  .repo-type-tag.pypi .dot { background: #10b981; }
+  .repo-type-tag.helm { background: rgba(168,85,247,0.08); color: #c084fc; }
+  .repo-type-tag.helm .dot { background: #a855f7; }
+
+  .repo-bar-wrap {
+    width: 120px;
+    flex-shrink: 0;
+  }
+  .repo-bar-track {
+    height: 6px;
+    background: #1f2937;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .repo-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+  .repo-count {
+    font-size: 13px;
+    font-weight: 600;
+    color: #9ca3af;
+    width: 80px;
+    text-align: right;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">A1</div><div class="name">Artipie</div></div>
+    <div class="right"><span>admin</span><div class="avatar">A</div></div>
+  </div>
+  <div class="sidebar">
+    <div class="nav-item active">&#9632; Dashboard</div>
+    <div class="nav-item">&#9744; Repositories</div>
+    <div class="nav-item">&#128269; Search</div>
+    <div class="nav-item">&#9200; Cooldown</div>
+    <div class="nav-label">Administration</div>
+    <div class="nav-item">&#128101; User Management</div>
+    <div class="nav-item">&#128737; Roles & Permissions</div>
+    <div class="nav-item">&#128451; Storage Configuration</div>
+    <div class="nav-item">&#9881; System Settings</div>
+  </div>
+
+  <div class="main">
+    <!-- Page header -->
+    <div class="page-header">
+      <div>
+        <div class="greeting">Good afternoon, admin</div>
+        <h1>Your <span>artifact registry</span> at a glance</h1>
+      </div>
+      <a href="#" class="grafana-link">&#128200; Grafana</a>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stats-grid">
+      <div class="stat-card repos">
+        <div class="stat-top">
+          <span class="stat-label">Repositories</span>
+          <div class="stat-icon">&#9744;</div>
+        </div>
+        <div class="stat-value">24</div>
+        <div class="stat-sub">Across 8 package formats</div>
+      </div>
+      <div class="stat-card artifacts">
+        <div class="stat-top">
+          <span class="stat-label">Artifacts</span>
+          <div class="stat-icon">&#128196;</div>
+        </div>
+        <div class="stat-value">12.8K</div>
+        <div class="stat-sub">Total indexed artifacts</div>
+      </div>
+      <div class="stat-card storage">
+        <div class="stat-top">
+          <span class="stat-label">Storage Used</span>
+          <div class="stat-icon">&#128451;</div>
+        </div>
+        <div class="stat-value">48.2 GB</div>
+        <div class="stat-sub">Across all repositories</div>
+      </div>
+      <div class="stat-card blocked">
+        <div class="stat-top">
+          <span class="stat-label">Blocked</span>
+          <div class="stat-icon">&#128683;</div>
+        </div>
+        <div class="stat-value">7</div>
+        <div class="stat-sub">Artifacts in cooldown</div>
+      </div>
+    </div>
+
+    <!-- Top 5 repos -->
+    <div class="top-repos">
+      <div class="top-repos-header">
+        <h3>Top Repositories</h3>
+        <span class="view-all">View all &rarr;</span>
+      </div>
+
+      <div class="repo-row">
+        <div class="repo-rank gold">1</div>
+        <div class="repo-info">
+          <div class="repo-name">maven-central</div>
+          <span class="repo-type-tag maven"><span class="dot"></span> Maven Proxy</span>
+        </div>
+        <div class="repo-bar-wrap">
+          <div class="repo-bar-track"><div class="repo-bar-fill" style="width:100%;background:linear-gradient(90deg,#3b82f6,#60a5fa)"></div></div>
+        </div>
+        <div class="repo-count">4,218</div>
+      </div>
+
+      <div class="repo-row">
+        <div class="repo-rank gold">2</div>
+        <div class="repo-info">
+          <div class="repo-name">docker-proxy</div>
+          <span class="repo-type-tag docker"><span class="dot"></span> Docker Proxy</span>
+        </div>
+        <div class="repo-bar-wrap">
+          <div class="repo-bar-track"><div class="repo-bar-fill" style="width:69%;background:linear-gradient(90deg,#06b6d4,#22d3ee)"></div></div>
+        </div>
+        <div class="repo-count">2,891</div>
+      </div>
+
+      <div class="repo-row">
+        <div class="repo-rank gold">3</div>
+        <div class="repo-info">
+          <div class="repo-name">npm-proxy</div>
+          <span class="repo-type-tag npm"><span class="dot"></span> npm Proxy</span>
+        </div>
+        <div class="repo-bar-wrap">
+          <div class="repo-bar-track"><div class="repo-bar-fill" style="width:50%;background:linear-gradient(90deg,#ef4444,#f87171)"></div></div>
+        </div>
+        <div class="repo-count">2,103</div>
+      </div>
+
+      <div class="repo-row">
+        <div class="repo-rank silver">4</div>
+        <div class="repo-info">
+          <div class="repo-name">pypi-proxy</div>
+          <span class="repo-type-tag pypi"><span class="dot"></span> PyPI Proxy</span>
+        </div>
+        <div class="repo-bar-wrap">
+          <div class="repo-bar-track"><div class="repo-bar-fill" style="width:44%;background:linear-gradient(90deg,#10b981,#34d399)"></div></div>
+        </div>
+        <div class="repo-count">1,847</div>
+      </div>
+
+      <div class="repo-row">
+        <div class="repo-rank silver">5</div>
+        <div class="repo-info">
+          <div class="repo-name">maven-releases</div>
+          <span class="repo-type-tag maven"><span class="dot"></span> Maven</span>
+        </div>
+        <div class="repo-bar-wrap">
+          <div class="repo-bar-track"><div class="repo-bar-fill" style="width:21%;background:linear-gradient(90deg,#3b82f6,#60a5fa)"></div></div>
+        </div>
+        <div class="repo-count">892</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

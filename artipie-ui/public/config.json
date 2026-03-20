@@ -1,6 +1,0 @@
-{
-  "apiBaseUrl": "http://localhost:8086/api/v1",
-  "grafanaUrl": "http://localhost:3000",
-  "appTitle": "Artipie",
-  "defaultPageSize": 20
-}
