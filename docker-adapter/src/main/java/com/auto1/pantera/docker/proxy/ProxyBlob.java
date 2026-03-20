@@ -7,7 +7,7 @@ package com.auto1.pantera.docker.proxy;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.docker.Blob;
 import com.auto1.pantera.docker.Digest;
-import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.PanteraHttpException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
@@ -84,7 +84,7 @@ public final class ProxyBlob implements Blob {
                 // CRITICAL: Consume body even on error to prevent request leak
                 return response.body().asBytesFuture().thenCompose(
                     ignored -> CompletableFuture.failedFuture(
-                        new ArtipieHttpException(response.status(), "Unexpected status: " + response.status())
+                        new PanteraHttpException(response.status(), "Unexpected status: " + response.status())
                     )
                 );
             });

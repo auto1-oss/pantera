@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.function.Consumer;
 
 /**
@@ -34,7 +34,7 @@ public final class UncheckedConsumer<T, E extends Exception> implements Consumer
         try {
             this.checked.accept(val);
         } catch (final Exception err) {
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         }
     }
 

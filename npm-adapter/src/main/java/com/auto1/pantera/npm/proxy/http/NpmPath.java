@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -44,7 +44,7 @@ public abstract class NpmPath {
                 .log();
             return path;
         } else {
-            throw new ArtipieException(
+            throw new PanteraException(
                 new IllegalArgumentException(
                     String.format(
                         "Given absolute path [%s] does not match with pattern [%s]",

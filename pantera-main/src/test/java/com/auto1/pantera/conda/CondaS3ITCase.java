@@ -52,7 +52,7 @@ public final class CondaS3ITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conda/conda-s3.yml", "my-conda"),
         () -> new TestDeployment.ClientContainer("artipie/conda-tests:1.0")
@@ -90,7 +90,7 @@ public final class CondaS3ITCase {
         "noarch_glom-22.1.0.tar.bz2,glom/22.1.0/noarch,noarch",
         "snappy-1.1.3-0.tar.bz2,snappy/1.1.3/linux-64,linux-64"
     })
-    void canSingleUploadToArtipie(final String pkgname, final String pkgpath, final String pkgarch)
+    void canSingleUploadToPantera(final String pkgname, final String pkgpath, final String pkgarch)
         throws IOException {
         this.containers.assertExec(
             "repodata.json must be absent in S3 before test",

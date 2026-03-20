@@ -57,7 +57,7 @@ public interface Config {
         private final YamlMapping yaml;
 
         /**
-         * Artipie configuration storage.
+         * Pantera configuration storage.
          */
         private final Storage storage;
 
@@ -65,7 +65,7 @@ public interface Config {
          * Ctor.
          * @param name Repository name
          * @param yaml Setting in yaml format
-         * @param storage Artipie configuration storage
+         * @param storage Pantera configuration storage
          */
         public FromYaml(final String name, final Optional<YamlMapping> yaml,
             final Storage storage) {
@@ -84,7 +84,7 @@ public interface Config {
          * Ctor.
          * @param name Repository name
          * @param yaml Setting in yaml format
-         * @param storage Artipie configuration storage
+         * @param storage Pantera configuration storage
          */
         public FromYaml(final String name, final YamlMapping yaml, final Storage storage) {
             this.name = name;

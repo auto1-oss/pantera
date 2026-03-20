@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.gem.ruby;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.gem.GemIndex;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -58,7 +58,7 @@ public final class RubyGemIndex implements GemIndex, SharedRuntime.RubyPlugin {
                 StandardCharsets.UTF_8
             );
         } catch (final IOException err) {
-            throw new ArtipieIOException("Failed to initialize gem indexer", err);
+            throw new PanteraIOException("Failed to initialize gem indexer", err);
         }
         JavaEmbedUtils.newRuntimeAdapter().eval(this.ruby, script);
     }

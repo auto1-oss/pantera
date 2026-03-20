@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.events;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.function.Consumer;
 import org.quartz.Job;
@@ -96,7 +96,7 @@ public final class EventsProcessor<T> implements Job {
                 .field("process.name", key.toString())
                 .error(error)
                 .log();
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 }

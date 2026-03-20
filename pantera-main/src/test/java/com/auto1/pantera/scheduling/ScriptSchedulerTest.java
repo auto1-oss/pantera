@@ -41,7 +41,7 @@ import org.quartz.TriggerBuilder;
 import org.quartz.impl.StdSchedulerFactory;
 
 /**
- * Test for ArtipieScheduler.
+ * Test for PanteraScheduler.
  * @since 0.30
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")

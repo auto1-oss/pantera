@@ -16,18 +16,18 @@ import javax.json.JsonObjectBuilder;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
- * REST API methods to manage Artipie settings.
+ * REST API methods to manage Pantera settings.
  * @since 0.27
  */
 public final class SettingsRest extends BaseRest {
 
     /**
-     * Artipie port.
+     * Pantera port.
      */
     private final int port;
 
     /**
-     * Artipie settings.
+     * Pantera settings.
      */
     private final Settings settings;
 
@@ -38,8 +38,8 @@ public final class SettingsRest extends BaseRest {
 
     /**
      * Ctor.
-     * @param port Artipie port
-     * @param settings Artipie settings
+     * @param port Pantera port
+     * @param settings Pantera settings
      */
     public SettingsRest(final int port, final Settings settings) {
         this(port, settings, null);
@@ -47,8 +47,8 @@ public final class SettingsRest extends BaseRest {
 
     /**
      * Ctor with repo settings for dashboard.
-     * @param port Artipie port
-     * @param settings Artipie settings
+     * @param port Pantera port
+     * @param settings Pantera settings
      * @param crs Repository settings manager
      */
     public SettingsRest(final int port, final Settings settings,
@@ -82,7 +82,7 @@ public final class SettingsRest extends BaseRest {
     private void getDashboard(final RoutingContext context) {
         final JsonObject dashboard = new JsonObject()
             .put("port", this.port)
-            .put("version", new com.auto1.pantera.misc.ArtipieProperties().version());
+            .put("version", new com.auto1.pantera.misc.PanteraProperties().version());
         this.crs.ifPresent(
             manage -> dashboard.put("repositories", manage.listAll().size())
         );
@@ -93,7 +93,7 @@ public final class SettingsRest extends BaseRest {
     }
 
     /**
-     * Send json with Artipie's port and status code OK_200.
+     * Send json with Pantera's port and status code OK_200.
      * @param context Request context
      */
     private void portRest(final RoutingContext context) {

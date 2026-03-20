@@ -28,7 +28,7 @@ public interface KeyStore {
     /**
      * Provides SSL-options for http server.
      * @param vertx Vertx.
-     * @param storage Artipie settings storage.
+     * @param storage Pantera settings storage.
      * @return HttpServer
      */
     HttpServerOptions secureOptions(Vertx vertx, Storage storage);

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.scheduling;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -37,7 +37,7 @@ public final class QuartzSchema {
 
     /**
      * Create all QRTZ_* tables and indexes if they do not already exist.
-     * @throws ArtipieException If DDL execution fails
+     * @throws PanteraException If DDL execution fails
      */
     public void create() {
         try (Connection conn = this.dataSource.getConnection();
@@ -51,7 +51,7 @@ public final class QuartzSchema {
                 .eventOutcome("success")
                 .log();
         } catch (final SQLException error) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 "Failed to create Quartz JDBC schema", error
             );
         }

@@ -12,7 +12,7 @@ import java.util.Map;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Parses one Artipie YAML repo config file into a {@link RepoEntry}.
+ * Parses one Pantera YAML repo config file into a {@link RepoEntry}.
  *
  * <p>Expected minimal YAML structure:
  * <pre>
@@ -33,7 +33,7 @@ final class RepoConfigYaml {
     }
 
     /**
-     * Parse a single {@code .yaml} Artipie repo config file.
+     * Parse a single {@code .yaml} Pantera repo config file.
      *
      * @param file Path to the {@code .yaml} file
      * @return Parsed {@link RepoEntry} with repo name (filename stem) and raw type

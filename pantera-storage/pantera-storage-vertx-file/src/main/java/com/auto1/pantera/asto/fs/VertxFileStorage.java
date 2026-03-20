@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.fs;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ListResult;
@@ -125,7 +125,7 @@ public final class VertxFileStorage implements Storage {
                             .sorted(Comparator.comparing(Key.From::string))
                             .collect(Collectors.toList());
                     } catch (final IOException iex) {
-                        throw new ArtipieIOException(iex);
+                        throw new PanteraIOException(iex);
                     }
                 } else {
                     keys = Collections.emptyList();
@@ -197,7 +197,7 @@ public final class VertxFileStorage implements Storage {
                         }
                     }
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
                 EcsLogger.debug("com.auto1.pantera.asto")
                     .message(
@@ -232,7 +232,7 @@ public final class VertxFileStorage implements Storage {
         // Validate root key is not supported
         if (Key.ROOT.string().equals(key.string())) {
             return CompletableFuture.failedFuture(
-                new ArtipieIOException("Unable to save to root")
+                new PanteraIOException("Unable to save to root")
             );
         }
 
@@ -350,7 +350,7 @@ public final class VertxFileStorage implements Storage {
         final CompletableFuture<Content> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Content>(
-                new ArtipieIOException("Unable to load from root")
+                new PanteraIOException("Unable to load from root")
             ).get();
         } else {
             res = VertxFileStorage.size(this.path(key)).thenApply(
@@ -441,7 +441,7 @@ public final class VertxFileStorage implements Storage {
                 } catch (final NoSuchFileException fex) {
                     throw new ValueNotFoundException(Key.ROOT, fex);
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
             }
         );

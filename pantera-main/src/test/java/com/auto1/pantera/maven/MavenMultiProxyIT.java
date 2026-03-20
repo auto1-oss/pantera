@@ -33,19 +33,19 @@ final class MavenMultiProxyIT {
         new MapOf<>(
             new MapEntry<>(
                 "artipie",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven-multi-proxy.yml", "my-maven")
                     .withRepoConfig("maven/maven-multi-proxy-port.yml", "my-maven-port")
                     .withExposedPorts(8081)
             ),
             new MapEntry<>(
                 "artipie-empty",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven.yml", "empty-maven")
             ),
             new MapEntry<>(
                 "artipie-origin",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven.yml", "origin-maven")
             )
         ),
@@ -60,7 +60,7 @@ final class MavenMultiProxyIT {
     })
     void shouldGetDependency(final String settings) throws Exception {
         this.containers.putClasspathResourceToClient(settings, "/w/settings.xml");
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             "artipie-origin",
             "com/artipie/helloworld/maven-metadata.xml",
             "/var/artipie/data/origin-maven/com/artipie/helloworld/maven-metadata.xml"
@@ -68,7 +68,7 @@ final class MavenMultiProxyIT {
         MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
             .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
             .forEach(
-                item -> this.containers.putResourceToArtipie(
+                item -> this.containers.putResourceToPantera(
                     "artipie-origin", item, String.join("/", "/var/artipie/data/origin-maven", item)
                 )
             );

@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 /**
- * Docker-registry Artipie adapter tests.
+ * Docker-registry Pantera adapter tests.
  * @since 0.1
  */
 package com.auto1.pantera.docker;

@@ -58,7 +58,7 @@ final class DockerScanner implements Scanner {
     /**
      * When {@code true} this is a proxy repo — image names match the
      * upstream pull path with no prefix. When {@code false} (local/hosted)
-     * the Artipie Docker push path includes the registry name in the image
+     * the Pantera Docker push path includes the registry name in the image
      * path, so we prepend {@code repoName + "/"} to match production.
      */
     private final boolean isProxy;

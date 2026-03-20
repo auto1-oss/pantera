@@ -54,7 +54,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
     private Storage asto;
 
     /**
-     * Artipie host (host only).
+     * Pantera host (host only).
      */
     private String host;
 

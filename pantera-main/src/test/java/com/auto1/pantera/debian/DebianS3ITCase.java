@@ -32,7 +32,7 @@ public final class DebianS3ITCase {
     private static final int CURL_NOT_FOUND = 22;
 
     /**
-     * Artipie server port;
+     * Pantera server port;
      */
     private static final int SRV_PORT = 8080;
 
@@ -51,7 +51,7 @@ public final class DebianS3ITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("debian/debian-s3.yml", "my-debian")
             .withExposedPorts(DebianS3ITCase.SRV_PORT),
         () -> new TestDeployment.ClientContainer("artipie/deb-tests:1.0")

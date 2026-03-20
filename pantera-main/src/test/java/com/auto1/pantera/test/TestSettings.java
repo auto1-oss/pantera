@@ -16,12 +16,12 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.LoggingContext;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.PrefixesConfig;
 import com.auto1.pantera.settings.Settings;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -46,7 +46,7 @@ public final class TestSettings implements Settings {
     /**
      * Test caches.
      */
-    private final ArtipieCaches caches;
+    private final PanteraCaches caches;
 
     /**
      * Ctor.
@@ -88,7 +88,7 @@ public final class TestSettings implements Settings {
     ) {
         this.storage = storage;
         this.meta = meta;
-        this.caches = new TestArtipieCaches();
+        this.caches = new TestPanteraCaches();
     }
 
     @Override
@@ -97,8 +97,8 @@ public final class TestSettings implements Settings {
     }
 
     @Override
-    public ArtipieSecurity authz() {
-        return new ArtipieSecurity() {
+    public PanteraSecurity authz() {
+        return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
                 return new AuthFromEnv();
@@ -138,7 +138,7 @@ public final class TestSettings implements Settings {
     }
 
     @Override
-    public ArtipieCaches caches() {
+    public PanteraCaches caches() {
         return this.caches;
     }
 

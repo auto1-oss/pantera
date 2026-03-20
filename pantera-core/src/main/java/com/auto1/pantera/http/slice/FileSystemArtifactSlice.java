@@ -82,7 +82,7 @@ public final class FileSystemArtifactSlice implements Slice {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.io.filesystem";
+    public static final String POOL_NAME = "pantera.io.filesystem";
 
     private static final ExecutorService BLOCKING_EXECUTOR = TraceContextExecutor.wrap(
         Executors.newFixedThreadPool(

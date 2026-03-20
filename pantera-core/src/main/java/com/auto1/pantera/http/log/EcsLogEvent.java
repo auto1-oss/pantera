@@ -50,7 +50,7 @@ public final class EcsLogEvent {
         fields.put("event.type", "access");
         // Add data stream fields (ECS data_stream.*)
         fields.put("data_stream.type", "logs");
-        fields.put("data_stream.dataset", "artipie.log");
+        fields.put("data_stream.dataset", "pantera.log");
     }
 
     /**

@@ -91,7 +91,7 @@ public final class CondaSliceS3ITCase {
     private String bucket;
 
     /**
-     * Artipie Storage instance for tests.
+     * Pantera Storage instance for tests.
      */
     private Storage storage;
 
@@ -175,7 +175,7 @@ public final class CondaSliceS3ITCase {
         "noarch_glom-22.1.0.tar.bz2,glom/22.1.0/noarch,noarch",
         "snappy-1.1.3-0.tar.bz2,snappy/1.1.3/linux-64,linux-64"
     })
-    void canSingleUploadToArtipie(final String pkgname, final String pkgpath, final String pkgarch)
+    void canSingleUploadToPantera(final String pkgname, final String pkgpath, final String pkgarch)
         throws Exception {
         final Key pkgKey = new Key.From("%s/%s".formatted(pkgarch, pkgname));
         final Key repodata = new Key.From("%s/repodata.json".formatted(pkgarch));

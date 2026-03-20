@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -88,7 +88,7 @@ final class HelmAstoDeleteTest {
         );
         MatcherAssert.assertThat(
             thr.getCause(),
-            new IsInstanceOf(ArtipieException.class)
+            new IsInstanceOf(PanteraException.class)
         );
         HelmAstoDeleteTest.assertTmpDirWasRemoved();
     }

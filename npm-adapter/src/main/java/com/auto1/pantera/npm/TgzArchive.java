@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import io.reactivex.Completable;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -148,10 +148,10 @@ public final class TgzArchive {
                     }
                 }
                 return json.orElseThrow(
-                    () -> new ArtipieException("'package.json' file was not found")
+                    () -> new PanteraException("'package.json' file was not found")
                 );
             } catch (final IOException exc) {
-                throw new ArtipieIOException(exc);
+                throw new PanteraIOException(exc);
             }
         }
     }

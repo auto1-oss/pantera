@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.gem.ruby;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.gem.GemDependencies;
 import com.auto1.pantera.gem.ruby.SharedRuntime.RubyPlugin;
 import java.io.IOException;
@@ -67,7 +67,7 @@ public final class RubyGemDependencies implements GemDependencies, RubyPlugin {
                 )
             );
         } catch (final IOException err) {
-            throw new ArtipieIOException("Failed to load dependencies script", err);
+            throw new PanteraIOException("Failed to load dependencies script", err);
         }
     }
 }

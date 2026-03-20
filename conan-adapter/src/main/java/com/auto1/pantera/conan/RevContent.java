@@ -35,7 +35,7 @@ public class RevContent {
 
     /**
      * Creates revisions content object for array of revisions.
-     * @return Artipie Content object with revisions data.
+     * @return Pantera Content object with revisions data.
      */
     public Content toContent() {
         return new Content.From(Json.createObjectBuilder()

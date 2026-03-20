@@ -29,7 +29,7 @@ import java.util.Optional;
 import java.util.Queue;
 
 /**
- * Artipie {@link Slice} for RPM repository HTTP API.
+ * Pantera {@link Slice} for RPM repository HTTP API.
  * @since 0.7
  */
 public final class RpmSlice extends Slice.Wrap {

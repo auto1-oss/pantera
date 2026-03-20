@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.security.policy;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.asto.misc.UncheckedFunc;
 import com.auto1.pantera.asto.misc.UncheckedSupplier;
@@ -131,7 +131,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                     .field("user.name", user.name())
                     .error(err)
                     .log();
-                throw new ArtipieException(err);
+                throw new PanteraException(err);
             }
         });
     }

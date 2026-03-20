@@ -14,10 +14,10 @@ import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.cooldown.NoopCooldownService;
 import com.auto1.pantera.nuget.RandomFreePort;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.Settings;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
-import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
+import com.auto1.pantera.test.TestPanteraCaches;
 import com.auto1.pantera.test.TestSettings;
 import com.auto1.pantera.test.TestStoragesCache;
 import io.vertx.core.Vertx;
@@ -98,14 +98,14 @@ public class RestApiServerBase {
     /**
      * Test artipie`s caches.
      */
-    private ArtipieCaches caches;
+    private PanteraCaches caches;
 
     /**
-     * Artipie authentication, this method can be overridden if necessary.
+     * Pantera authentication, this method can be overridden if necessary.
      * @return Authentication instance.
      */
-    ArtipieSecurity auth() {
-        return new ArtipieSecurity() {
+    PanteraSecurity auth() {
+        return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
                 return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
@@ -125,7 +125,7 @@ public class RestApiServerBase {
 
     /**
      * Create the SSL KeyStore.
-     * Creates instance of KeyStore based on Artipie yaml-configuration.
+     * Creates instance of KeyStore based on Pantera yaml-configuration.
      * @return KeyStore.
      * @throws IOException During yaml creation
      */
@@ -134,7 +134,7 @@ public class RestApiServerBase {
     }
 
     /**
-     * Artipie settings for tests.
+     * Pantera settings for tests.
      * @return Settings instance.
      */
     Settings settings() {
@@ -185,9 +185,9 @@ public class RestApiServerBase {
 
     /**
      * Get settings caches.
-     * @return Instance of {@link ArtipieCaches}
+     * @return Instance of {@link PanteraCaches}
      */
-    final ArtipieCaches settingsCaches() {
+    final PanteraCaches settingsCaches() {
         return this.caches;
     }
 
@@ -203,7 +203,7 @@ public class RestApiServerBase {
         this.prt = new RandomFreePort().value();
         final InMemoryStorage storage = new InMemoryStorage();
         this.asto = new BlockingStorage(storage);
-        this.caches = new TestArtipieCaches();
+        this.caches = new TestPanteraCaches();
         this.ssto = new InMemoryStorage();
         vertx.deployVerticle(
             new RestApi(

@@ -4,14 +4,14 @@
  */
 package com.auto1.pantera.asto.factory;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Exception indicating that {@link StorageFactory} cannot be found.
  *
  * @since 1.13.0
  */
-public class StorageNotFoundException extends ArtipieException {
+public class StorageNotFoundException extends PanteraException {
 
     private static final long serialVersionUID = 0L;
 

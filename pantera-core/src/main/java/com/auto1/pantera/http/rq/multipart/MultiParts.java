@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.http.rq.multipart;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.misc.ByteBufferTokenizer;
 import com.auto1.pantera.http.misc.Pipeline;
 import com.auto1.pantera.http.trace.TraceContextExecutor;
@@ -30,7 +30,7 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
     /**
      * Pool name prefix for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.http.multipart";
+    public static final String POOL_NAME = "pantera.http.multipart";
 
     /**
      * Cached thread pool for parts processing.
@@ -170,7 +170,7 @@ final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
 
     @Override
     public void onError(final Throwable err) {
-        this.pipeline.onError(new ArtipieException("Upstream failed", err));
+        this.pipeline.onError(new PanteraException("Upstream failed", err));
         this.exec.shutdown();
     }
 

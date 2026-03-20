@@ -25,7 +25,7 @@ public final class NpmTokenAuthentication implements TokenAuthentication {
     private final TokenRepository tokens;
     
     /**
-     * Fallback token authentication (for Artipie JWT tokens).
+     * Fallback token authentication (for Pantera JWT tokens).
      */
     private final TokenAuthentication fallback;
     
@@ -61,7 +61,7 @@ public final class NpmTokenAuthentication implements TokenAuthentication {
                         Optional.of(new AuthUser(optToken.get().username(), "npm"))
                     );
                 }
-                // Not an NPM token, try fallback (Artipie JWT)
+                // Not an NPM token, try fallback (Pantera JWT)
                 return this.fallback.user(token);
             })
             .exceptionally(err -> {

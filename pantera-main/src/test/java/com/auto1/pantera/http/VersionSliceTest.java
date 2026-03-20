@@ -10,7 +10,7 @@ import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
@@ -25,7 +25,7 @@ import wtf.g4s8.hamcrest.json.JsonValueIs;
 final class VersionSliceTest {
     @Test
     void returnVersionOfApplication() {
-        final ArtipieProperties proprts = new ArtipieProperties();
+        final PanteraProperties proprts = new PanteraProperties();
         MatcherAssert.assertThat(
             new VersionSlice(proprts),
             new SliceHasResponse(

@@ -45,7 +45,7 @@ final class SliceIndex implements Slice {
     private static final String SIMPLE_HTML = "simple.html";
 
     /**
-     * Artipie artifacts storage.
+     * Pantera artifacts storage.
      */
     private final Storage storage;
 

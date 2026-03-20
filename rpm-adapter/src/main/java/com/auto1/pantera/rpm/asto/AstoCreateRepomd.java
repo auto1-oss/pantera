@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.rpm.asto;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.ext.ContentAs;
@@ -82,7 +82,7 @@ public final class AstoCreateRepomd {
                                                 data.gzipSize(AstoCreateRepomd.size(gziped, type));
                                                 data.openSize(AstoCreateRepomd.size(open, type));
                                             } catch (final XMLStreamException | IOException err) {
-                                                throw new ArtipieIOException(
+                                                throw new PanteraIOException(
                                                     "Failed to update repomd.xml", err
                                                 );
                                             }
@@ -146,12 +146,12 @@ public final class AstoCreateRepomd {
      * Obtain instance of {@link XmlPackage} by temp key name.
      * @param key Temp key
      * @return Instance of {@link XmlPackage}
-     * @throws ArtipieException If not recognized
+     * @throws PanteraException If not recognized
      */
     private XmlPackage pckgType(final Key key) {
         return new XmlPackage.Stream(this.cnfg.filelists()).get()
             .filter(item -> key.string().contains(item.name())).findFirst()
-            .orElseThrow(() -> new ArtipieException("Unknown metadata file name!"));
+            .orElseThrow(() -> new PanteraException("Unknown metadata file name!"));
     }
 
     /**

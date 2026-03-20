@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.streams;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import java.io.IOException;
@@ -33,7 +33,7 @@ public final class ContentAsStream<T> {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.io.stream";
+    public static final String POOL_NAME = "pantera.io.stream";
 
     /**
      * Dedicated executor for blocking stream operations.
@@ -79,7 +79,7 @@ public final class ContentAsStream<T> {
                     final T result = action.apply(in);
                     return ros.thenApply(nothing -> result);
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             },
             BLOCKING_EXECUTOR

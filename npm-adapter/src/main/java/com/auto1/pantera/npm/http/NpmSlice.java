@@ -27,7 +27,7 @@ import com.auto1.pantera.http.slice.SliceDownload;
 import com.auto1.pantera.http.slice.StorageArtifactSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.npm.http.auth.AddUserSlice;
-import com.auto1.pantera.npm.http.auth.ArtipieAddUserSlice;
+import com.auto1.pantera.npm.http.auth.PanteraAddUserSlice;
 import com.auto1.pantera.npm.http.auth.NpmTokenAuthentication;
 import com.auto1.pantera.npm.http.auth.WhoAmISlice;
 import com.auto1.pantera.npm.http.search.SearchSlice;
@@ -411,7 +411,7 @@ public final class NpmSlice implements Slice {
                 jwtOnly && basicAuth != null
                     ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
                     : (basicAuth != null 
-                        ? new ArtipieAddUserSlice(  // Creates npm tokens
+                        ? new PanteraAddUserSlice(  // Creates npm tokens
                             basicAuth,
                             new StorageTokenRepository(storage),
                             new TokenGenerator()

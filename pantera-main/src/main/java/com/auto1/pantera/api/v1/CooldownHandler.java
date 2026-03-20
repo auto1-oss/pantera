@@ -79,7 +79,7 @@ public final class CooldownHandler {
     private final SettingsDao settingsDao;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 

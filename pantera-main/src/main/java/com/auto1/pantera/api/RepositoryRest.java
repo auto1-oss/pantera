@@ -44,7 +44,7 @@ public final class RepositoryRest extends BaseRest {
         new ApiRepositoryPermission(ApiRepositoryPermission.RepositoryAction.CREATE);
 
     /**
-     * Artipie filters cache.
+     * Pantera filters cache.
      */
     private final FiltersCache cache;
 
@@ -59,7 +59,7 @@ public final class RepositoryRest extends BaseRest {
     private final RepoData data;
 
     /**
-     * Artipie policy.
+     * Pantera policy.
      */
     private final Policy<?> policy;
 
@@ -80,10 +80,10 @@ public final class RepositoryRest extends BaseRest {
 
     /**
      * Ctor.
-     * @param cache Artipie filters cache
+     * @param cache Pantera filters cache
      * @param crs Repository settings create/read/update/delete
      * @param data Repository data management
-     * @param policy Artipie policy
+     * @param policy Pantera policy
      * @param events Artifact events queue
      */
     public RepositoryRest(

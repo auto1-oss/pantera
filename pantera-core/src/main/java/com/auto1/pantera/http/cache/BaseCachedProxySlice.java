@@ -903,7 +903,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             errorType = "unknown";
         }
         this.recordMetric(() ->
-            com.auto1.pantera.metrics.ArtipieMetrics.instance()
+            com.auto1.pantera.metrics.PanteraMetrics.instance()
                 .upstreamFailure(this.repoName, this.upstreamUrl, errorType)
         );
     }
@@ -920,7 +920,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {

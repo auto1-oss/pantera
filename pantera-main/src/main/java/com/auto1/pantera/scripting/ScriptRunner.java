@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.scripting;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.HashMap;
@@ -89,7 +89,7 @@ public final class ScriptRunner implements Job {
                 .field("process.name", key.toString())
                 .error(error)
                 .log();
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 }

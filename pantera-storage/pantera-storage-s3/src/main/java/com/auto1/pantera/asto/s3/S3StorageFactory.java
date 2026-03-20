@@ -5,7 +5,7 @@
 package com.auto1.pantera.asto.s3;
 
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.asto.factory.ArtipieStorageFactory;
+import com.auto1.pantera.asto.factory.PanteraStorageFactory;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StorageFactory;
 import java.net.URI;
@@ -38,7 +38,7 @@ import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider
  *
  * @since 0.1
  */
-@ArtipieStorageFactory("s3")
+@PanteraStorageFactory("s3")
 public final class S3StorageFactory implements StorageFactory {
     @Override
     public Storage newStorage(final Config cfg) {

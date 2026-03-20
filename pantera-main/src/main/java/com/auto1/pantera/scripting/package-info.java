@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie scripting.
+ * Pantera scripting.
  *
  * @since 0.30
  */

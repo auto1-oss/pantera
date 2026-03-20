@@ -37,12 +37,12 @@ import org.testcontainers.images.builder.Transferable;
 class ConanSliceITCase {
 
     /**
-     * Artipie conan username for basic auth.
+     * Pantera conan username for basic auth.
      */
     public static final String SRV_USERNAME = "demo_login";
 
     /**
-     * Artipie conan password for basic auth.
+     * Pantera conan password for basic auth.
      */
     public static final String SRV_PASSWORD = "demo_pass";
 
@@ -82,7 +82,7 @@ class ConanSliceITCase {
     private static ImageFromDockerfile base;
 
     /**
-     * Artipie Storage instance for tests.
+     * Pantera Storage instance for tests.
      */
     private Storage storage;
 

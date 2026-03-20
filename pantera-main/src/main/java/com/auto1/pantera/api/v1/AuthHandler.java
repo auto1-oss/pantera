@@ -252,7 +252,7 @@ public final class AuthHandler {
     }
 
     /**
-     * POST /api/v1/auth/callback — exchange OAuth code for Artipie JWT.
+     * POST /api/v1/auth/callback — exchange OAuth code for Pantera JWT.
      * @param ctx Routing context
      */
     private void callbackEndpoint(final RoutingContext ctx) {
@@ -402,7 +402,7 @@ public final class AuthHandler {
                     .field("groups.found", String.join(",", groups))
                     .field("groups.count", groups.size())
                     .log();
-                // Map Okta/IdP groups to Artipie roles using group-roles config.
+                // Map Okta/IdP groups to Pantera roles using group-roles config.
                 // Groups with an explicit mapping use the mapped role name.
                 // Groups without a mapping use the group name as the role name
                 // (auto-created in DB if it doesn't exist).
@@ -463,7 +463,7 @@ public final class AuthHandler {
                         .eventAction("sso_role_mapping")
                         .field("user.name", username)
                         .field("okta.group", grp)
-                        .field("artipie.role", mapped)
+                        .field("pantera.role", mapped)
                         .field("mapping",
                             groupRolesMap.containsKey(grp) ? "explicit" : "auto")
                         .log();
@@ -522,7 +522,7 @@ public final class AuthHandler {
                     .field("groups", String.join(",", groups))
                     .field("roles", String.join(",", roles))
                     .log();
-                // Generate Artipie JWT
+                // Generate Pantera JWT
                 final AuthUser authUser = new AuthUser(username, provider);
                 return AuthHandler.this.tokens.generate(authUser);
             },

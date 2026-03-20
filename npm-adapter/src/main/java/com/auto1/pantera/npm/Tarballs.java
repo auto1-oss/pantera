@@ -105,7 +105,7 @@ public final class Tarballs {
             // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
             try {
                 tarballPath = new TgzRelativePath(tarballPath).relative();
-            } catch (final com.auto1.pantera.ArtipieException ex) {
+            } catch (final com.auto1.pantera.PanteraException ex) {
                 // If TgzRelativePath can't parse it, use as-is
                 // This preserves backward compatibility
             }

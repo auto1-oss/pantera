@@ -5,7 +5,7 @@
 
 package com.auto1.pantera.hex.tarball;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -75,7 +75,7 @@ public class TarReader {
                 }
             }
         } catch (final IOException ioex) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 String.format("Cannot read content of '%s' from tar-archive", name),
                 ioex
             );

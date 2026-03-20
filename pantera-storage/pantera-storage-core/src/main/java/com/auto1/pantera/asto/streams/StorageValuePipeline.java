@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.streams;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.ByteArray;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
@@ -52,7 +52,7 @@ public final class StorageValuePipeline<R> {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.asto.pipeline";
+    public static final String POOL_NAME = "pantera.asto.pipeline";
 
     /**
      * Counter for worker thread naming.
@@ -103,7 +103,7 @@ public final class StorageValuePipeline<R> {
      * @param action Action to perform with storage content if exists and write back as
      *  output stream.
      * @return Completion action
-     * @throws ArtipieIOException On Error
+     * @throws PanteraIOException On Error
      */
     public CompletionStage<Void> process(
         final BiConsumer<Optional<InputStream>, OutputStream> action
@@ -127,7 +127,7 @@ public final class StorageValuePipeline<R> {
      * @param action Action to perform with storage content if exists and write back as
      *  output stream.
      * @return Completion action with the result
-     * @throws ArtipieIOException On Error
+     * @throws PanteraIOException On Error
      */
     public CompletionStage<R> processWithResult(
         final BiFunction<Optional<InputStream>, OutputStream, R> action
@@ -191,7 +191,7 @@ public final class StorageValuePipeline<R> {
                                 last = ex;
                             }
                             if (last != null) {
-                                throw new ArtipieIOException(last);
+                                throw new PanteraIOException(last);
                             }
                             return res.get();
                         });

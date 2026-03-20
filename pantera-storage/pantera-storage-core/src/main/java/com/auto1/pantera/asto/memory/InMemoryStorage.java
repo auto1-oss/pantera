@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.memory;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
@@ -161,7 +161,7 @@ public final class InMemoryStorage implements Storage {
         final CompletableFuture<Void> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Void>(
-                new ArtipieIOException("Unable to save to root")
+                new PanteraIOException("Unable to save to root")
             ).get();
         } else {
             // OPTIMIZATION: Use size hint for efficient pre-allocation
@@ -188,7 +188,7 @@ public final class InMemoryStorage implements Storage {
                 // Atomic remove operation
                 final byte[] value = this.data.remove(key);
                 if (value == null) {
-                    throw new ArtipieIOException(
+                    throw new PanteraIOException(
                         String.format("No value for source key: %s", source.string())
                     );
                 }
@@ -217,7 +217,7 @@ public final class InMemoryStorage implements Storage {
         final CompletableFuture<Content> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Content>(
-                new ArtipieIOException("Unable to load from root")
+                new PanteraIOException("Unable to load from root")
             ).get();
         } else {
             res = CompletableFuture.supplyAsync(
@@ -241,7 +241,7 @@ public final class InMemoryStorage implements Storage {
                 final String str = key.string();
                 // Atomic remove with null check
                 if (this.data.remove(str) == null) {
-                    throw new ArtipieIOException(
+                    throw new PanteraIOException(
                         String.format("Key does not exist: %s", str)
                     );
                 }

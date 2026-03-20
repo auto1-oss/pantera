@@ -19,8 +19,8 @@ public class PackageKeysTest {
     @Test
     void shouldGenerateRootKey() {
         MatcherAssert.assertThat(
-            new PackageKeys("Artipie.Module").rootKey().string(),
-            new IsEqual<>("artipie.module")
+            new PackageKeys("Pantera.Module").rootKey().string(),
+            new IsEqual<>("pantera.module")
         );
     }
 

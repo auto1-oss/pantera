@@ -36,7 +36,7 @@ public final class MetadataMavenITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> new TestDeployment.ArtipieContainer().withConfig("artipie-db.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("artipie-db.yaml")
             .withRepoConfig("maven/maven.yml", "my-maven")
             .withRepoConfig("maven/maven-proxy.yml", "my-maven-proxy"),
         () -> new TestDeployment.ClientContainer("artipie/maven-tests:1.0")

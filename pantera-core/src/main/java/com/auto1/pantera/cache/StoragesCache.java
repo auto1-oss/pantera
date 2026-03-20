@@ -5,12 +5,12 @@
 package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StoragesLoader;
 import com.auto1.pantera.asto.misc.Cleanable;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.misc.Property;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -24,7 +24,7 @@ import java.time.Duration;
 
 /**
  * Implementation of cache for storages with similar configurations
- * in Artipie settings using Caffeine.
+ * in Pantera settings using Caffeine.
  * Properly closes Storage instances when evicted from cache to prevent resource leaks.
  * 
  * <p>Configuration in _server.yaml:
@@ -49,7 +49,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
     public StoragesCache() {
         this(new CacheConfig(
             Duration.ofMillis(
-                new Property(ArtipieProperties.STORAGE_TIMEOUT).asLongOrDefault(180_000L)
+                new Property(PanteraProperties.STORAGE_TIMEOUT).asLongOrDefault(180_000L)
             ),
             1000  // Default: 1000 storage instances max
         ));
@@ -86,7 +86,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
     public Storage storage(final YamlMapping yaml) {
         final String type = yaml.string("type");
         if (Strings.isNullOrEmpty(type)) {
-            throw new ArtipieException("Storage type cannot be null or empty.");
+            throw new PanteraException("Storage type cannot be null or empty.");
         }
 
         final long startNanos = System.nanoTime();

@@ -130,7 +130,7 @@ final class CachedProxySlice implements Slice {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
-     * @param baseUrl Base URL for this Artipie instance
+     * @param baseUrl Base URL for this Pantera instance
      */
     CachedProxySlice(
         final Slice remote,
@@ -157,7 +157,7 @@ final class CachedProxySlice implements Slice {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
-     * @param baseUrl Base URL for this Artipie instance
+     * @param baseUrl Base URL for this Pantera instance
      * @param upstreamUrl Upstream URL for metrics
      */
     CachedProxySlice(
@@ -620,7 +620,7 @@ final class CachedProxySlice implements Slice {
     }
     
     /**
-     * Rewrite metadata content to proxy downloads through Artipie.
+     * Rewrite metadata content to proxy downloads through Pantera.
      * Returns byte[] directly to avoid unnecessary Content wrapping/unwrapping.
      *
      * @param original Original metadata bytes
@@ -830,7 +830,7 @@ final class CachedProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.s3;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
@@ -60,7 +60,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
     /**
      * Pool name for metrics identification.
      */
-    static final String POOL_NAME = "artipie.asto.s3.cache";
+    static final String POOL_NAME = "pantera.asto.s3.cache";
 
     /**
      * Shared executor service for all cache cleanup tasks.
@@ -123,7 +123,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         try {
             Files.createDirectories(this.nsRoot());
         } catch (final IOException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
         // Clean up orphaned files from previous runs
         this.cleanupOrphanedFiles();
@@ -291,7 +291,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         try {
             Files.createDirectories(file.getParent());
         } catch (final IOException err) {
-            return CompletableFuture.failedFuture(new ArtipieIOException(err));
+            return CompletableFuture.failedFuture(new PanteraIOException(err));
         }
         // Preload remote metadata (ETag/size) to store alongside
         final CompletableFuture<? extends Meta> remoteMeta = super.metadata(key);
@@ -301,7 +301,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
         try {
             Files.createDirectories(tmpDir);
         } catch (final IOException err) {
-            return CompletableFuture.failedFuture(new ArtipieIOException(err));
+            return CompletableFuture.failedFuture(new PanteraIOException(err));
         }
         final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
         final CompletableFuture<Content> result = new CompletableFuture<>();
@@ -318,7 +318,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                         try {
                             ch.write(buf.asReadOnlyBuffer());
                         } catch (final IOException ioe) {
-                            throw new ArtipieIOException(ioe);
+                            throw new PanteraIOException(ioe);
                         }
                     })
                     .doOnComplete(() -> {
@@ -348,7 +348,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                                 return null;
                             });
                         } catch (final IOException ioe) {
-                            throw new ArtipieIOException(ioe);
+                            throw new PanteraIOException(ioe);
                         }
                     })
                     .doOnError(th -> {
@@ -367,7 +367,7 @@ final class DiskCacheStorage extends Storage.Wrap implements AutoCloseable {
                     });
                 result.complete(new Content.From(cnt.size(), stream));
             } catch (final IOException ioe) {
-                result.completeExceptionally(new ArtipieIOException(ioe));
+                result.completeExceptionally(new PanteraIOException(ioe));
             }
         });
         return result;

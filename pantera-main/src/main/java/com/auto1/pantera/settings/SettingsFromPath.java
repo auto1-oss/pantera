@@ -40,7 +40,7 @@ public final class SettingsFromPath {
      * Searches settings by the provided path, if no settings are found,
      * example settings are used.
      * @param quartz Quartz service
-     * @return Artipie settings
+     * @return Pantera settings
      * @throws IOException On IO error
      */
     public Settings find(final QuartzService quartz) throws IOException {
@@ -51,7 +51,7 @@ public final class SettingsFromPath {
      * Searches settings by the provided path, reusing a pre-created DataSource.
      * @param quartz Quartz service
      * @param dataSource Shared DataSource to avoid duplicate connection pools
-     * @return Artipie settings
+     * @return Pantera settings
      * @throws IOException On IO error
      * @since 1.20.13
      */
@@ -91,7 +91,7 @@ public final class SettingsFromPath {
                     "\n",
                     "", "", "\t+===============================================================+",
                     "\t\t\t\t\tHello!",
-                    "\t\tArtipie configuration was not found, created default.",
+                    "\t\tPantera configuration was not found, created default.",
                     "\t\t\tDefault username/password: `artipie`/`artipie`. ",
                     "\t-===============================================================-", ""
                 ))

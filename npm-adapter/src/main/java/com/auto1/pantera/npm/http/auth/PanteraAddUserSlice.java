@@ -24,12 +24,12 @@ import javax.json.Json;
 import javax.json.JsonObject;
 
 /**
- * NPM add user slice integrated with Artipie authentication.
- * Authenticates users against Artipie (Keycloak) and generates NPM tokens.
+ * NPM add user slice integrated with Pantera authentication.
+ * Authenticates users against Pantera (Keycloak) and generates NPM tokens.
  * 
  * @since 1.1
  */
-public final class ArtipieAddUserSlice implements Slice {
+public final class PanteraAddUserSlice implements Slice {
     
     /**
      * URL pattern for user creation.
@@ -39,7 +39,7 @@ public final class ArtipieAddUserSlice implements Slice {
     );
     
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      */
     private final Authentication auth;
     
@@ -55,11 +55,11 @@ public final class ArtipieAddUserSlice implements Slice {
     
     /**
      * Constructor.
-     * @param auth Artipie authentication
+     * @param auth Pantera authentication
      * @param tokens Token repository
      * @param tokenGen Token generator
      */
-    public ArtipieAddUserSlice(
+    public PanteraAddUserSlice(
         final Authentication auth,
         final TokenRepository tokens,
         final TokenGenerator tokenGen
@@ -104,20 +104,20 @@ public final class ArtipieAddUserSlice implements Slice {
                     );
                 }
                 
-                // Authenticate against Artipie
+                // Authenticate against Pantera
                 return this.authenticateUser(username, password)
                     .thenCompose(authUser -> {
                         if (authUser == null) {
                             return CompletableFuture.completedFuture(
                                 ResponseBuilder.unauthorized()
                                     .jsonBody(Json.createObjectBuilder()
-                                        .add("error", "Invalid credentials. Use your Artipie username and password.")
+                                        .add("error", "Invalid credentials. Use your Pantera username and password.")
                                         .build())
                                     .build()
                             );
                         }
                         
-                        // Generate NPM token for Artipie user
+                        // Generate NPM token for Pantera user
                         return this.tokenGen.generate(authUser.name())
                             .thenCompose(token -> this.tokens.save(token)
                                 .thenApply(saved -> this.successResponse(authUser.name(), saved))
@@ -135,7 +135,7 @@ public final class ArtipieAddUserSlice implements Slice {
     }
     
     /**
-     * Authenticate user against Artipie.
+     * Authenticate user against Pantera.
      * @param username Username
      * @param password Password
      * @return Future with AuthUser or null if invalid

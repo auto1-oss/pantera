@@ -182,9 +182,9 @@ class YamlToDbMigratorTest {
     }
 
     @Test
-    void migratesSettingsFromArtipieYml() throws Exception {
+    void migratesSettingsFromPanteraYml() throws Exception {
         Files.writeString(
-            this.configDir.resolve("artipie.yml"),
+            this.configDir.resolve("pantera.yml"),
             String.join(
                 "\n",
                 "meta:",
@@ -200,7 +200,7 @@ class YamlToDbMigratorTest {
         Files.createDirectories(repos);
         final YamlToDbMigrator migrator = new YamlToDbMigrator(
             ds, this.configDir.resolve("security"), repos,
-            this.configDir.resolve("artipie.yml")
+            this.configDir.resolve("pantera.yml")
         );
         migrator.migrate();
         // Verify settings

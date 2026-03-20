@@ -4,15 +4,15 @@
  */
 package com.auto1.pantera.asto;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
 /**
- * Artipie input-output exception.
+ * Pantera input-output exception.
  * @since 1.0
  */
-public class ArtipieIOException extends ArtipieException {
+public class PanteraIOException extends PanteraException {
 
     private static final long serialVersionUID = 862160427262047490L;
 
@@ -20,7 +20,7 @@ public class ArtipieIOException extends ArtipieException {
      * New IO excption.
      * @param cause IO exception
      */
-    public ArtipieIOException(final IOException cause) {
+    public PanteraIOException(final IOException cause) {
         super(cause);
     }
 
@@ -29,7 +29,7 @@ public class ArtipieIOException extends ArtipieException {
      * @param msg Message
      * @param cause IO exception
      */
-    public ArtipieIOException(final String msg, final IOException cause) {
+    public PanteraIOException(final String msg, final IOException cause) {
         super(msg, cause);
     }
 
@@ -37,8 +37,8 @@ public class ArtipieIOException extends ArtipieException {
      * New IO exception.
      * @param cause Unkown exception
      */
-    public ArtipieIOException(final Throwable cause) {
-        this(ArtipieIOException.unwrap(cause));
+    public PanteraIOException(final Throwable cause) {
+        this(PanteraIOException.unwrap(cause));
     }
 
     /**
@@ -46,15 +46,15 @@ public class ArtipieIOException extends ArtipieException {
      * @param msg Exception message
      * @param cause Unkown exception
      */
-    public ArtipieIOException(final String msg, final Throwable cause) {
-        this(msg, ArtipieIOException.unwrap(cause));
+    public PanteraIOException(final String msg, final Throwable cause) {
+        this(msg, PanteraIOException.unwrap(cause));
     }
 
     /**
      * New IO exception with message.
      * @param msg Exception message
      */
-    public ArtipieIOException(final String msg) {
+    public PanteraIOException(final String msg) {
         this(new IOException(msg));
     }
 

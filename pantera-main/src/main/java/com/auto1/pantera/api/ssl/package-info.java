@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie Rest API.
+ * Pantera Rest API.
  *
  * @since 0.26
  */

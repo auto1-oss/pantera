@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 import java.util.Optional;
 
@@ -32,7 +32,7 @@ public final class Property {
      * from the file with values of the properties.
      * @param defval Default value for property
      * @return Long value of property or default value.
-     * @throws ArtipieException In case of problem with parsing value of the property
+     * @throws PanteraException In case of problem with parsing value of the property
      */
     public long asLongOrDefault(final long defval) {
         final long val;
@@ -40,12 +40,12 @@ public final class Property {
             val = Long.parseLong(
                 Optional.ofNullable(System.getProperty(this.name))
                     .orElse(
-                        new ArtipieProperties().valueBy(this.name)
+                        new PanteraProperties().valueBy(this.name)
                             .orElse(String.valueOf(defval))
                     )
             );
         } catch (final NumberFormatException exc) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 String.format("Failed to read property '%s'", this.name),
                 exc
             );

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.rpm.meta.MergedXml;
 import com.auto1.pantera.rpm.meta.MergedXmlPackage;
 import com.auto1.pantera.rpm.meta.MergedXmlPrimary;
@@ -83,7 +83,7 @@ public interface RpmMetadata {
         /**
          * Removes records from metadata by RPMs checksums.
          * @param checksums Rpms checksums  to remove by
-         * @throws ArtipieIOException On io-operation result error
+         * @throws PanteraIOException On io-operation result error
                  */
         public void perform(final Collection<String> checksums) {
             try {
@@ -115,7 +115,7 @@ public interface RpmMetadata {
                     }
                 }
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }
@@ -147,7 +147,7 @@ public interface RpmMetadata {
         /**
          * Appends records about provided RPMs.
          * @param packages Rpms to append info about, map of the path to file and location
-         * @throws ArtipieIOException On io-operation error
+         * @throws PanteraIOException On io-operation error
                  */
         @SuppressWarnings("PMD.AvoidDuplicateLiterals")
         public void perform(final Collection<Package.Meta> packages) {
@@ -159,7 +159,7 @@ public interface RpmMetadata {
                         .filter(item -> item.type == XmlPackage.PRIMARY)
                         .findFirst()
                         .orElseThrow(
-                            () -> new ArtipieIOException(
+                            () -> new PanteraIOException(
                                 String.format("Should have a file with type %s", XmlPackage.PRIMARY)
                             )
                         );
@@ -177,7 +177,7 @@ public interface RpmMetadata {
                     Files.delete(temp);
                 }
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
 
@@ -198,7 +198,7 @@ public interface RpmMetadata {
                             filelist.get().input, filelist.get().out, XmlPackage.FILELISTS, res
                         ).merge(packages, new XmlEvent.Filelists());
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                 }
             };
@@ -217,14 +217,14 @@ public interface RpmMetadata {
                     final MetadataItem other = this.items.stream()
                         .filter(item -> item.type == XmlPackage.OTHER)
                         .findFirst().orElseThrow(
-                            () -> new ArtipieIOException(
+                            () -> new PanteraIOException(
                                 String.format("Should have a file with type %s", XmlPackage.OTHER)
                             )
                         );
                     new MergedXmlPackage(other.input, other.out, XmlPackage.OTHER, res)
                         .merge(packages, new XmlEvent.Other());
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             };
         }

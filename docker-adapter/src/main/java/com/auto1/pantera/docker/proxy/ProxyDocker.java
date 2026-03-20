@@ -35,7 +35,7 @@ public final class ProxyDocker implements Docker {
     private final URI remoteUri;
 
     /**
-     * @param registryName Name of the Artipie registry
+     * @param registryName Name of the Pantera registry
      * @param remote Remote repository slice
      * @param remoteUri Remote registry URI
      */
@@ -46,7 +46,7 @@ public final class ProxyDocker implements Docker {
     }
     
     /**
-     * @param registryName Name of the Artipie registry
+     * @param registryName Name of the Pantera registry
      * @param remote Remote repository slice
      */
     public ProxyDocker(String registryName, Slice remote) {

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 import java.util.function.Consumer;
 
@@ -33,7 +33,7 @@ public final class UncheckedIOConsumer<T> implements Consumer<T> {
         try {
             this.checked.accept(val);
         } catch (final IOException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 }

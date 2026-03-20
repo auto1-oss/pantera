@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.security.policy;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.util.Arrays;
@@ -17,7 +17,7 @@ import java.util.Set;
  * @since 1.2
  */
 public final class PoliciesLoader extends
-    FactoryLoader<PolicyFactory, ArtipiePolicyFactory, Config, Policy<?>> {
+    FactoryLoader<PolicyFactory, PanteraPolicyFactory, Config, Policy<?>> {
 
     /**
      * Environment parameter to define packages to find policies factories.
@@ -30,7 +30,7 @@ public final class PoliciesLoader extends
      * @param env Environment map
      */
     public PoliciesLoader(final Map<String, String> env) {
-        super(ArtipiePolicyFactory.class, env);
+        super(PanteraPolicyFactory.class, env);
     }
 
     /**
@@ -54,7 +54,7 @@ public final class PoliciesLoader extends
     public Policy<?> newObject(final String type, final Config config) {
         final PolicyFactory factory = this.factories.get(type);
         if (factory == null) {
-            throw new ArtipieException(String.format("Policy type %s is not found", type));
+            throw new PanteraException(String.format("Policy type %s is not found", type));
         }
         return factory.getPolicy(config);
     }
@@ -62,11 +62,11 @@ public final class PoliciesLoader extends
     @Override
     public String getFactoryName(final Class<?> clazz) {
         return Arrays.stream(clazz.getAnnotations())
-            .filter(ArtipiePolicyFactory.class::isInstance)
-            .map(inst -> ((ArtipiePolicyFactory) inst).value())
+            .filter(PanteraPolicyFactory.class::isInstance)
+            .map(inst -> ((PanteraPolicyFactory) inst).value())
             .findFirst()
             .orElseThrow(
-                () -> new ArtipieException("Annotation 'ArtipiePolicyFactory' should have a not empty value")
+                () -> new PanteraException("Annotation 'PanteraPolicyFactory' should have a not empty value")
             );
     }
 }

@@ -80,7 +80,7 @@ public class ComposerProxySlice extends Slice.Wrap {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
-     * @param baseUrl Base URL for this Artipie instance (for metadata URL rewriting)
+     * @param baseUrl Base URL for this Pantera instance (for metadata URL rewriting)
      */
     public ComposerProxySlice(
         final ClientSlices clients,
@@ -110,7 +110,7 @@ public class ComposerProxySlice extends Slice.Wrap {
      * @param rtype Repository type
      * @param cooldown Cooldown service
      * @param inspector Cooldown inspector
-     * @param baseUrl Base URL for this Artipie instance (for metadata URL rewriting)
+     * @param baseUrl Base URL for this Pantera instance (for metadata URL rewriting)
      * @param upstreamUrl Upstream URL for metrics
      */
     public ComposerProxySlice(

@@ -13,7 +13,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import java.util.Optional;
 import javax.sql.DataSource;
 import java.time.Duration;
@@ -45,13 +45,13 @@ public interface Settings extends AutoCloseable {
     Storage configStorage();
 
     /**
-     * Artipie authorization.
+     * Pantera authorization.
      * @return Authentication and policy
      */
-    ArtipieSecurity authz();
+    PanteraSecurity authz();
 
     /**
-     * Artipie meta configuration.
+     * Pantera meta configuration.
      * @return Yaml mapping
      */
     YamlMapping meta();
@@ -76,10 +76,10 @@ public interface Settings extends AutoCloseable {
     MetricsContext metrics();
 
     /**
-     * Artipie caches.
+     * Pantera caches.
      * @return The caches
      */
-    ArtipieCaches caches();
+    PanteraCaches caches();
 
     /**
      * Artifact metadata events queue.

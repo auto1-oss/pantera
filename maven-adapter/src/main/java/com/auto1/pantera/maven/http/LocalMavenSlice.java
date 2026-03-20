@@ -85,7 +85,7 @@ final class LocalMavenSlice implements Slice {
                         if (exists) {
                             // Track download metric
                             this.recordMetric(() ->
-                                com.auto1.pantera.metrics.ArtipieMetrics.instance().download(this.repoName, "maven")
+                                com.auto1.pantera.metrics.PanteraMetrics.instance().download(this.repoName, "maven")
                             );
                             // Use storage-specific optimized content retrieval for 100-1000x faster downloads
                             return StorageArtifactSlice.optimizedValue(storage, artifact)
@@ -166,7 +166,7 @@ final class LocalMavenSlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {

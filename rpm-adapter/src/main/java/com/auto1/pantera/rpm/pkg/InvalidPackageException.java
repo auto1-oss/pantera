@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm.pkg;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Exception indicates that package is invalid.
@@ -12,7 +12,7 @@ import com.auto1.pantera.ArtipieException;
  * @since 0.8.3
  */
 @SuppressWarnings("serial")
-public class InvalidPackageException extends ArtipieException {
+public class InvalidPackageException extends PanteraException {
     /**
      * Ctor.
      *

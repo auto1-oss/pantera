@@ -6,7 +6,7 @@ package com.auto1.pantera.scripting;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.misc.Property;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.repo.Repositories;
@@ -16,7 +16,7 @@ import com.google.common.cache.LoadingCache;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Context class for running scripts. Holds required Artipie objects.
+ * Context class for running scripts. Holds required Pantera objects.
  * @since 0.30
  */
 public final class ScriptContext {
@@ -42,7 +42,7 @@ public final class ScriptContext {
     private final Settings settings;
 
     /**
-     * Context class for running scripts. Holds required Artipie objects.
+     * Context class for running scripts. Holds required Pantera objects.
      * @param repositories Repositories info API, available in scripts.
      * @param storage Blocking storage instance to access scripts.
      * @param settings Settings API, available in scripts.
@@ -96,7 +96,7 @@ public final class ScriptContext {
      * @return LoadingCache<> instance for scripts.
      */
     static LoadingCache<Key, Script.PrecompiledScript> createCache(final BlockingStorage storage) {
-        final long duration = new Property(ArtipieProperties.SCRIPTS_TIMEOUT)
+        final long duration = new Property(PanteraProperties.SCRIPTS_TIMEOUT)
             .asLongOrDefault(120_000L);
         return CacheBuilder.newBuilder()
             .expireAfterWrite(duration, TimeUnit.MILLISECONDS)

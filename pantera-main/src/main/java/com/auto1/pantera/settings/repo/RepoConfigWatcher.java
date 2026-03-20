@@ -200,7 +200,7 @@ class RepoConfigWatcher implements AutoCloseable {
     private static ScheduledExecutorService defaultScheduler() {
         return java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
             runnable -> {
-                final Thread thread = new Thread(runnable, "artipie.repo.watcher");
+                final Thread thread = new Thread(runnable, "pantera.repo.watcher");
                 thread.setDaemon(true);
                 return thread;
             }

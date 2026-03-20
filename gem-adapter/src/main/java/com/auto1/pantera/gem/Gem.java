@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.gem;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Copy;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -125,7 +125,7 @@ public final class Gem {
                         items -> items.stream().findFirst()
                             .map(first -> Paths.get(tmp.toString(), first.string()))
                             .map(path -> info.info(path))
-                            .orElseThrow(() -> new ArtipieIOException("gem not found"))
+                            .orElseThrow(() -> new PanteraIOException("gem not found"))
                     )
                 ).handle(removeTempDir(tmp))
         );
@@ -184,7 +184,7 @@ public final class Gem {
                     FileUtils.deleteDirectory(new File(tmpdir.toString()));
                 }
             } catch (final IOException iox) {
-                throw new ArtipieIOException(iox);
+                throw new PanteraIOException(iox);
             }
             if (err != null) {
                 throw new CompletionException(err);

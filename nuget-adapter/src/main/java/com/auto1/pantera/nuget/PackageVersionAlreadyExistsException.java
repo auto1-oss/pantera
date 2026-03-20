@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.nuget;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Exception indicates that package version cannot be added,
@@ -13,7 +13,7 @@ import com.auto1.pantera.ArtipieException;
  * @since 0.1
  */
 @SuppressWarnings("serial")
-public final class PackageVersionAlreadyExistsException extends ArtipieException {
+public final class PackageVersionAlreadyExistsException extends PanteraException {
 
     /**
      * Ctor.

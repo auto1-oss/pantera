@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.s3;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.FailedCompletionStage;
 import com.auto1.pantera.asto.Key;
@@ -274,7 +274,7 @@ public final class S3Storage implements ManagedStorage {
                 } else if (throwable.getCause() instanceof NoSuchKeyException) {
                     exists.complete(false);
                 } else {
-                    exists.completeExceptionally(new ArtipieIOException(throwable));
+                    exists.completeExceptionally(new PanteraIOException(throwable));
                 }
                 return response;
             }
@@ -514,7 +514,7 @@ public final class S3Storage implements ManagedStorage {
                     );
                 } else {
                     deleted = new FailedCompletionStage<>(
-                        new ArtipieIOException(String.format("Key does not exist: %s", key))
+                        new PanteraIOException(String.format("Key does not exist: %s", key))
                     );
                 }
                 return deleted;
@@ -627,7 +627,7 @@ public final class S3Storage implements ManagedStorage {
                             }
                         );
                         finished = CompletableFuture.failedFuture(
-                            new ArtipieIOException(throwable)
+                            new PanteraIOException(throwable)
                         );
                     }
                     return finished;

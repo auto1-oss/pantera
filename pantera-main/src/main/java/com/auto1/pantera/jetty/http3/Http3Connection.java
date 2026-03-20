@@ -24,7 +24,7 @@ import org.eclipse.jetty.util.Promise;
 
 /**
  * HTTP/3 response sender using Jetty 12.1.4 Stream API.
- * Sends Artipie Response through HTTP/3 stream.
+ * Sends Pantera Response through HTTP/3 stream.
  * @since 0.31
  */
 public final class Http3Connection {
@@ -43,8 +43,8 @@ public final class Http3Connection {
     }
 
     /**
-     * Send Artipie Response through HTTP/3 stream.
-     * @param response Artipie response to send
+     * Send Pantera Response through HTTP/3 stream.
+     * @param response Pantera response to send
      * @return CompletableFuture that completes when response is sent
      */
     public CompletableFuture<Void> send(final Response response) {

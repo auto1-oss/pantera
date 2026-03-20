@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Parses {@link CooldownSettings} from Artipie YAML configuration.
+ * Parses {@link CooldownSettings} from Pantera YAML configuration.
  */
 public final class YamlCooldownSettings {
 

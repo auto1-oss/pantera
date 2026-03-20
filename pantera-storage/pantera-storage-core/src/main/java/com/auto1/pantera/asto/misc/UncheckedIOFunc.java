@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 import java.util.function.Function;
 
@@ -34,7 +34,7 @@ public final class UncheckedIOFunc<T, R> implements Function<T, R> {
         try {
             return this.checked.apply(val);
         } catch (final IOException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 }

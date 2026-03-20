@@ -45,12 +45,12 @@ final class GemCliITCase {
     private RubyContainer container;
 
     /**
-     * Vertx instance for Artipie server.
+     * Vertx instance for Pantera server.
      */
     private Vertx vertx;
 
     /**
-     * Artipie server.
+     * Pantera server.
      */
     private VertxSliceServer server;
 

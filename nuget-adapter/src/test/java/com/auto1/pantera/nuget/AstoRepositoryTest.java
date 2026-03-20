@@ -5,7 +5,7 @@
 
 package com.auto1.pantera.nuget;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -248,7 +248,7 @@ class AstoRepositoryTest {
                     Arrays.asList(
                         new AllOf<>(
                             Arrays.asList(
-                                new IsInstanceOf(ArtipieIOException.class),
+                                new IsInstanceOf(PanteraIOException.class),
                                 new FeatureMatcher<Throwable, String>(
                                     new StringContains("Failed to acquire lock."),
                                     "an exception with message",

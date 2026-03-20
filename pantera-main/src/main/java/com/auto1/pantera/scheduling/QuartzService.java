@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.scheduling;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.util.HashSet;
 import java.util.List;
@@ -40,7 +40,7 @@ import org.quartz.utils.DBConnectionManager;
  *   <li><b>RAM mode</b> (default, no-arg constructor) -- uses in-memory RAMJobStore.
  *       Suitable for single-instance deployments.</li>
  *   <li><b>JDBC mode</b> (DataSource constructor) -- uses {@code JobStoreTX} backed by
- *       PostgreSQL. Enables Quartz clustering so multiple Artipie instances coordinate
+ *       PostgreSQL. Enables Quartz clustering so multiple Pantera instances coordinate
  *       job execution through the database and avoid duplicate scheduling.</li>
  * </ul>
  *
@@ -51,7 +51,7 @@ public final class QuartzService {
     /**
      * Scheduler instance name shared across all clustered nodes.
      */
-    private static final String SCHED_NAME = "ArtipieScheduler";
+    private static final String SCHED_NAME = "PanteraScheduler";
 
     /**
      * Quartz scheduler.
@@ -80,7 +80,7 @@ public final class QuartzService {
             this.clustered = false;
             this.addShutdownHook();
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 
@@ -88,7 +88,7 @@ public final class QuartzService {
      * Ctor for JDBC-backed clustered scheduler.
      * <p>
      * Creates the Quartz schema (QRTZ_* tables) if they do not exist,
-     * registers a {@link ArtipieQuartzConnectionProvider} wrapping the given
+     * registers a {@link PanteraQuartzConnectionProvider} wrapping the given
      * DataSource, and configures Quartz to use {@code JobStoreTX} with
      * PostgreSQL delegate and clustering enabled.
      *
@@ -101,8 +101,8 @@ public final class QuartzService {
             new QuartzSchema(dataSource).create();
             // 2. Register our ConnectionProvider with Quartz's DBConnectionManager
             DBConnectionManager.getInstance().addConnectionProvider(
-                ArtipieQuartzConnectionProvider.DS_NAME,
-                new ArtipieQuartzConnectionProvider(dataSource)
+                PanteraQuartzConnectionProvider.DS_NAME,
+                new PanteraQuartzConnectionProvider(dataSource)
             );
             // 3. Build JDBC properties for Quartz
             final Properties props = QuartzService.jdbcProperties();
@@ -124,7 +124,7 @@ public final class QuartzService {
                 .eventOutcome("success")
                 .log();
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 
@@ -289,7 +289,7 @@ public final class QuartzService {
         try {
             this.scheduler.start();
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 
@@ -301,7 +301,7 @@ public final class QuartzService {
             try {
                 this.scheduler.shutdown(true);
             } catch (final SchedulerException exc) {
-                throw new ArtipieException(exc);
+                throw new PanteraException(exc);
             }
         }
     }
@@ -367,7 +367,7 @@ public final class QuartzService {
         );
         props.setProperty(
             "org.quartz.jobStore.dataSource",
-            ArtipieQuartzConnectionProvider.DS_NAME
+            PanteraQuartzConnectionProvider.DS_NAME
         );
         props.setProperty(
             "org.quartz.jobStore.tablePrefix", "QRTZ_"

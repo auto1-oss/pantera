@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm.asto;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.streams.StorageValuePipeline;
@@ -50,7 +50,7 @@ final class AstoArchive {
                     }
                     gzos.finish();
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             }
         );

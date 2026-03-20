@@ -22,7 +22,7 @@ import org.apache.http.HttpStatus;
 public final class AuthzHandler implements Handler<RoutingContext> {
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
@@ -33,7 +33,7 @@ public final class AuthzHandler implements Handler<RoutingContext> {
 
     /**
      * Ctor.
-     * @param policy Artipie security policy
+     * @param policy Pantera security policy
      * @param perm Permission required for operation
      */
     public AuthzHandler(final Policy<?> policy, final Permission perm) {

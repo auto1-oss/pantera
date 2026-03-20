@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Slice decorator which redirects all Docker V2 API requests to Artipie format paths.
+ * Slice decorator which redirects all Docker V2 API requests to Pantera format paths.
  */
 public final class DockerRoutingSlice implements Slice {
 

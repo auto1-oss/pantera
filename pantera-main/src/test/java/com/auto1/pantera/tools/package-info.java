@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie tools for dynamic compiling and loading compiled classes.
+ * Pantera tools for dynamic compiling and loading compiled classes.
  *
  * @since 0.28
  */

@@ -34,7 +34,7 @@ public final class DebianGpgITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("debian/debian-gpg.yml", "my-debian")
             .withClasspathResourceMapping(
                 "debian/secret-keys.gpg", "/var/artipie/repo/secret-keys.gpg", BindMode.READ_ONLY

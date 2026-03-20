@@ -22,13 +22,13 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.LoggingContext;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.Settings;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.CachedUsers;
-import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.test.TestPanteraCaches;
 import com.auto1.pantera.test.TestSettings;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.AllOf;
@@ -133,8 +133,8 @@ final class DockerRoutingSliceTest {
         }
 
         @Override
-        public ArtipieSecurity authz() {
-            return new ArtipieSecurity() {
+        public PanteraSecurity authz() {
+            return new PanteraSecurity() {
 
                 @Override
                 public CachedUsers authentication() {
@@ -174,8 +174,8 @@ final class DockerRoutingSliceTest {
         }
 
         @Override
-        public ArtipieCaches caches() {
-            return new TestArtipieCaches();
+        public PanteraCaches caches() {
+            return new TestPanteraCaches();
         }
 
         @Override

@@ -7,7 +7,7 @@ package com.auto1.pantera.auth;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.DomainFilteredAuth;
@@ -20,7 +20,7 @@ import org.keycloak.authorization.client.Configuration;
  * Factory for auth from keycloak.
  * @since 0.30
  */
-@ArtipieAuthFactory("keycloak")
+@PanteraAuthFactory("keycloak")
 public final class AuthFromKeycloakFactory implements AuthFactory {
 
     @Override

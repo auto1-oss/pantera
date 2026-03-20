@@ -5,7 +5,7 @@
 
 package com.auto1.pantera.http.rq.multipart;
 
-import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.PanteraHttpException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.headers.ContentType;
 import com.auto1.pantera.http.headers.Header;
@@ -134,7 +134,7 @@ public final class RqMultipart {
      */
     private String boundary() {
         final String header = MimeType.of(this.contentType.getValue()).param("boundary").orElseThrow(
-            () -> new ArtipieHttpException(
+            () -> new PanteraHttpException(
                 RsStatus.BAD_REQUEST,
                 "Content-type boundary param missed"
             )

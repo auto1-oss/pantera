@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.factory;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.auto1.pantera.asto.log.EcsLogger;
@@ -98,7 +98,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                         final String type = this.getFactoryName(element);
                         final F existed = res.get(type);
                         if (existed != null) {
-                            throw new ArtipieException(
+                            throw new PanteraException(
                                 String.format(
                                     "Factory with type '%s' already exists [class=%s].",
                                     type, existed.getClass().getSimpleName()
@@ -115,7 +115,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                                 .log();
                         } catch (final InstantiationException | IllegalAccessException
                             | InvocationTargetException | NoSuchMethodException err) {
-                            throw new ArtipieException(err);
+                            throw new PanteraException(err);
                         }
                     }
                 )

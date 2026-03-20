@@ -11,7 +11,7 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonArray;
@@ -249,11 +249,11 @@ public final class RestApiPermissionsTest extends RestApiServerBase {
     }
 
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      * @return Authentication instance.
      */
-    ArtipieSecurity auth() {
-        return new ArtipieSecurity() {
+    PanteraSecurity auth() {
+        return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
                 return (name, pswd) -> Optional.of(new AuthUser(name, "test"));

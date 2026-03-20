@@ -31,7 +31,7 @@ class ConfigWatchServiceTest {
 
     @Test
     void reloadsPrefixesFromYaml(@TempDir final Path temp) throws Exception {
-        final Path configFile = temp.resolve("artipie.yml");
+        final Path configFile = temp.resolve("pantera.yml");
         
         // Create config with prefixes FIRST
         writeConfig(configFile, Arrays.asList("p1", "p2", "p3"));
@@ -59,7 +59,7 @@ class ConfigWatchServiceTest {
 
     @Test
     void reloadsMultipleTimes(@TempDir final Path temp) throws Exception {
-        final Path configFile = temp.resolve("artipie.yml");
+        final Path configFile = temp.resolve("pantera.yml");
         
         // Create initial config
         writeConfig(configFile, Arrays.asList("p1", "p2"));
@@ -91,7 +91,7 @@ class ConfigWatchServiceTest {
 
     @Test
     void handlesEmptyPrefixList(@TempDir final Path temp) throws Exception {
-        final Path configFile = temp.resolve("artipie.yml");
+        final Path configFile = temp.resolve("pantera.yml");
         
         // Create config with empty prefixes
         writeConfig(configFile, Arrays.asList());
@@ -110,7 +110,7 @@ class ConfigWatchServiceTest {
 
     @Test
     void handlesConfigWithoutPrefixes(@TempDir final Path temp) throws Exception {
-        final Path configFile = temp.resolve("artipie.yml");
+        final Path configFile = temp.resolve("pantera.yml");
         
         // Create config without global_prefixes
         final YamlMappingBuilder meta = Yaml.createYamlMappingBuilder()

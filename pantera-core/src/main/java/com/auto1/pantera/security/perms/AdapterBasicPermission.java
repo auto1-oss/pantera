@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Artipie basic permission. This permission takes into account repository name and
+ * Pantera basic permission. This permission takes into account repository name and
  * the set of actions. Both parameters are required, repository name is composite in the
  * case of ORG layout {user_name}/{repo_name}.
  * Supported actions are: read, write, delete. Wildcard * is also supported and means,

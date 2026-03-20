@@ -7,9 +7,9 @@ package com.auto1.pantera.auth;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.DomainFilteredAuth;
@@ -22,7 +22,7 @@ import java.util.Map;
 /**
  * Factory for auth from Okta.
  */
-@ArtipieAuthFactory("okta")
+@PanteraAuthFactory("okta")
 public final class AuthFromOktaFactory implements AuthFactory {
 
     @Override
@@ -33,12 +33,12 @@ public final class AuthFromOktaFactory implements AuthFactory {
             .findFirst().orElseThrow();
         final String issuer = resolveEnvVar(creds.string("issuer"));
         if (issuer == null || issuer.isEmpty()) {
-            throw new ArtipieException("Okta issuer is not configured");
+            throw new PanteraException("Okta issuer is not configured");
         }
         final String clientId = resolveEnvVar(creds.string("client-id"));
         final String clientSecret = resolveEnvVar(creds.string("client-secret"));
         if (clientId == null || clientSecret == null) {
-            throw new ArtipieException("Okta client-id/client-secret are not configured");
+            throw new PanteraException("Okta client-id/client-secret are not configured");
         }
         final String authnUrl = resolveEnvVar(creds.string("authn-url"));
         final String authorizeUrl = resolveEnvVar(creds.string("authorize-url"));
@@ -60,7 +60,7 @@ public final class AuthFromOktaFactory implements AuthFactory {
         final BlockingStorage asto = new YamlSettings.PolicyStorage(cfg).parse()
             .map(BlockingStorage::new)
             .orElseThrow(
-                () -> new ArtipieException(
+                () -> new PanteraException(
                     "Failed to create okta auth, policy storage is not configured"
                 )
             );

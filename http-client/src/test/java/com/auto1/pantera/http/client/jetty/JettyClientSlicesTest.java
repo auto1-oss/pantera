@@ -70,7 +70,7 @@ final class JettyClientSlicesTest {
     @Test
     void shouldProduceHttps() {
         MatcherAssert.assertThat(
-            new JettyClientSlices().http("artipie.com"),
+            new JettyClientSlices().http("pantera.com"),
             new IsInstanceOf(JettyClientSlice.class)
         );
     }
@@ -99,7 +99,7 @@ final class JettyClientSlicesTest {
         );
         try {
             client.start();
-            byte[] actual = client.http("artipie.com").response(
+            byte[] actual = client.http("pantera.com").response(
                 new RequestLine(RqMethod.GET, "/"),
                 Headers.EMPTY,
                 Content.EMPTY

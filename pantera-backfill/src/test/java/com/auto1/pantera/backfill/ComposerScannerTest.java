@@ -270,7 +270,7 @@ final class ComposerScannerTest {
     @Test
     void skipsEmptyPackagesJsonAndScansVendorDirs(@TempDir final Path temp)
         throws IOException {
-        // packages.json exists but is 0 bytes (common in Artipie proxy repos)
+        // packages.json exists but is 0 bytes (common in Pantera proxy repos)
         Files.createFile(temp.resolve("packages.json"));
         // vendor-dir layout files exist with real content
         final Path vendorDir = temp.resolve("psr");

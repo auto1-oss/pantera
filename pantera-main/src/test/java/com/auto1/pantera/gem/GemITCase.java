@@ -36,7 +36,7 @@ final class GemITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("gem/gem.yml", "my-gem")
             .withRepoConfig("gem/gem-port.yml", "my-gem-port")
             .withUser("security/users/alice.yaml", "alice")
@@ -72,7 +72,7 @@ final class GemITCase {
             "gem", "push", "-v", "/w/rails-6.0.2.2.gem", "--host",
             String.format("http://artipie:%s/%s", port, repo)
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not added to storage",
             String.format("/var/artipie/data/%s/gems/%s", repo, GemITCase.RAILS),
             new IsEqual<>(new TestResource(String.format("gem/%s", GemITCase.RAILS)).asBytes())

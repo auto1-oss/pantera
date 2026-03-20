@@ -34,7 +34,7 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Versions-directory mode (primary):</b> Walks for
  *       {@code .versions/} directories, reads version JSON files,
  *       resolves tarball sizes from sibling {@code -/} directories.
- *       Used for real Artipie NPM storage layout.</li>
+ *       Used for real Pantera NPM storage layout.</li>
  *   <li><b>Meta.json mode (fallback):</b> Walks for {@code meta.json}
  *       files, parses them to extract package name, versions, tarball
  *       sizes, and creation dates. Used for legacy/proxy layouts.</li>
@@ -52,7 +52,7 @@ final class NpmScanner implements Scanner {
 
     /**
      * Whether this is a proxy repository (used to determine path_prefix).
-     * Artipie production always stores {@code "npm"} as repo_type for both
+     * Pantera production always stores {@code "npm"} as repo_type for both
      * local and proxy NPM repositories; the proxy/local distinction is
      * captured solely through whether {@code path_prefix} is NULL or not.
      */
@@ -97,7 +97,7 @@ final class NpmScanner implements Scanner {
     }
 
     /**
-     * Scan using .versions/ directories (Artipie NPM layout).
+     * Scan using .versions/ directories (Pantera NPM layout).
      *
      * <p>Layout for unscoped packages:</p>
      * <pre>
@@ -275,7 +275,7 @@ final class NpmScanner implements Scanner {
     /**
      * Read the NPM release date from a tgz sidecar {@code .meta} file.
      *
-     * <p>Artipie NPM proxy stores metadata alongside each cached tgz as
+     * <p>Pantera NPM proxy stores metadata alongside each cached tgz as
      * {@code {path}.meta}, a JSON file containing:
      * {@code {"last-modified":"RFC_1123_DATE","content-type":"..."}}.
      * The {@code last-modified} value is the {@code Last-Modified} HTTP

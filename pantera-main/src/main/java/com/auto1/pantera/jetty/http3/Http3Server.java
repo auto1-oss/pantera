@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.jetty.http3;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
@@ -43,7 +43,7 @@ public final class Http3Server {
     private static final String HTTP_3 = "HTTP/3";
 
     /**
-     * Artipie slice.
+     * Pantera slice.
      */
     private final Slice slice;
 
@@ -65,7 +65,7 @@ public final class Http3Server {
     /**
      * Ctor.
      *
-     * @param slice Artipie slice
+     * @param slice Pantera slice
      * @param port Port to start server on
      * @param ssl SSL factory
      */
@@ -78,7 +78,7 @@ public final class Http3Server {
 
     /**
      * Starts http3 server with native QUIC support via Quiche.
-     * @throws com.auto1.pantera.ArtipieException On Error
+     * @throws com.auto1.pantera.PanteraException On Error
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void start() {
@@ -113,7 +113,7 @@ public final class Http3Server {
             this.server.start();
         // @checkstyle IllegalCatchCheck (5 lines)
         } catch (final Exception err) {
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         }
     }
 

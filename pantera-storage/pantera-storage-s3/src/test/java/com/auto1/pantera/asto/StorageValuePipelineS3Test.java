@@ -148,7 +148,7 @@ public class StorageValuePipelineS3Test {
                         IOUtils.writeLines(list, "\n", out, charset);
                         return list.size();
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                 }
             ).toCompletableFuture().join(),
@@ -177,7 +177,7 @@ public class StorageValuePipelineS3Test {
                             IOUtils.writeLines(list, "\n", out, charset);
                             return list.size();
                         } catch (final IOException err) {
-                            throw new ArtipieIOException(err);
+                            throw new PanteraIOException(err);
                         }
                     }
                 );
@@ -220,7 +220,7 @@ public class StorageValuePipelineS3Test {
                         IOUtils.write(buffer, out);
                         out.flush();
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                     return "res";
                 }

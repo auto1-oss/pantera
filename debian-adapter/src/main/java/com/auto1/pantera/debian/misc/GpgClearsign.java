@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.debian.misc;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
@@ -58,8 +58,8 @@ public final class GpgClearsign {
      * @param key Private key bytes
      * @param pass Password
      * @return File, signed with gpg
-     * @throws ArtipieIOException On IO errors
-     * @throws ArtipieException On problems with GPG
+     * @throws PanteraIOException On IO errors
+     * @throws PanteraException On problems with GPG
      */
     public byte[] signedContent(final byte[] key, final String pass) {
         try {
@@ -99,7 +99,7 @@ public final class GpgClearsign {
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         } catch (final IOException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
@@ -108,7 +108,7 @@ public final class GpgClearsign {
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 
@@ -117,8 +117,8 @@ public final class GpgClearsign {
      * @param key Private key bytes
      * @param pass Password
      * @return File, signed with gpg
-     * @throws ArtipieIOException On IO errors
-     * @throws ArtipieException On problems with GPG
+     * @throws PanteraIOException On IO errors
+     * @throws PanteraException On problems with GPG
      */
     public byte[] signature(final byte[] key, final String pass) {
         try {
@@ -149,7 +149,7 @@ public final class GpgClearsign {
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         } catch (final IOException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
@@ -158,7 +158,7 @@ public final class GpgClearsign {
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 

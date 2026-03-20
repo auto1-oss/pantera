@@ -4,7 +4,7 @@
  */
 package adapter.perms.docker;
 
-import com.auto1.pantera.security.perms.ArtipiePermissionFactory;
+import com.auto1.pantera.security.perms.PanteraPermissionFactory;
 import com.auto1.pantera.security.perms.PermissionConfig;
 import com.auto1.pantera.security.perms.PermissionFactory;
 import java.security.AllPermission;
@@ -14,7 +14,7 @@ import java.security.PermissionCollection;
  * Test permission.
  * @since 1.2
  */
-@ArtipiePermissionFactory("docker-perm")
+@PanteraPermissionFactory("docker-perm")
 public final class DockerPermsFactory implements PermissionFactory<PermissionCollection> {
     @Override
     public PermissionCollection newPermissions(final PermissionConfig config) {

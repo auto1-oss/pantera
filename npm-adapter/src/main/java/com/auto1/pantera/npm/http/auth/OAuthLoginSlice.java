@@ -25,8 +25,8 @@ import javax.json.JsonObject;
 import javax.json.JsonReader;
 
 /**
- * NPM login slice that integrates with Artipie OAuth.
- * Validates credentials via Authentication (backed by OAuth) and returns an Artipie JWT token.
+ * NPM login slice that integrates with Pantera OAuth.
+ * Validates credentials via Authentication (backed by OAuth) and returns an Pantera JWT token.
  * 
  * @since 1.2
  */
@@ -34,7 +34,7 @@ public final class OAuthLoginSlice implements Slice {
 
     /**
      * Authentication to validate credentials.
-     * In Artipie, this should be connected to the system that can return JWT tokens.
+     * In Pantera, this should be connected to the system that can return JWT tokens.
      */
     private final Authentication auth;
     
@@ -124,7 +124,7 @@ public final class OAuthLoginSlice implements Slice {
     
     /**
      * Create or reuse token for npm login response.
-     * @param user Authenticated Artipie user
+     * @param user Authenticated Pantera user
      * @param username Username provided
      * @param password Password provided
      * @param headers Request headers

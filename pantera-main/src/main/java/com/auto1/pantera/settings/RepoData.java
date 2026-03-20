@@ -9,7 +9,7 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.auto1.pantera.api.RepositoryName;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Copy;
 import com.auto1.pantera.asto.Key;
@@ -227,7 +227,7 @@ public final class RepoData {
                 try {
                     yaml = Yaml.createYamlInput(val).readYamlMapping();
                 } catch (IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
                 YamlNode node = yaml.yamlMapping("repo").value(RepoData.STORAGE);
                 final CompletionStage<Storage> res;

@@ -7,7 +7,7 @@ package com.auto1.pantera.gem.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.gem.Gem;
-import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.PanteraHttpException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
@@ -54,7 +54,7 @@ final class ApiGetSlice implements Slice {
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         final Matcher matcher = PATH_PATTERN.matcher(line.uri().toString());
         if (!matcher.find()) {
-            throw new ArtipieHttpException(
+            throw new PanteraHttpException(
                 RsStatus.BAD_REQUEST, String.format("Invalid URI: `%s`", matcher)
             );
         }

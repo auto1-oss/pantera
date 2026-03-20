@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie Rest API permissions.
+ * Pantera Rest API permissions.
  *
  * @since 0.30
  */

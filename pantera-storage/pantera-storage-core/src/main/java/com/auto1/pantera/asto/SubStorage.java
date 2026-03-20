@@ -86,7 +86,7 @@ public final class SubStorage implements Storage {
         final CompletableFuture<Void> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Void>(
-                new ArtipieIOException("Unable to save to root")
+                new PanteraIOException("Unable to save to root")
             ).get();
         } else {
             res = this.origin.save(new PrefixedKed(this.prefix, key), content);

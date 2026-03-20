@@ -5,7 +5,7 @@
 
 package com.auto1.pantera.hex.utils;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -47,7 +47,7 @@ public final class Gzip {
             baos.flush();
             return baos.toByteArray();
         } catch (final IOException ioex) {
-            throw new ArtipieException("Error when compressing gzip archive", ioex);
+            throw new PanteraException("Error when compressing gzip archive", ioex);
         }
     }
 
@@ -66,7 +66,7 @@ public final class Gzip {
             baos.writeBytes(gzipis.readAllBytes());
             return baos.toByteArray();
         } catch (final IOException ioex) {
-            throw new ArtipieException("Error when decompressing gzip archive", ioex);
+            throw new PanteraException("Error when decompressing gzip archive", ioex);
         }
     }
 }

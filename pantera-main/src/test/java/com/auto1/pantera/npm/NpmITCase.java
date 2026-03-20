@@ -43,7 +43,7 @@ final class NpmITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("npm/npm.yml", "my-npm")
             .withRepoConfig("npm/npm-port.yml", "my-npm-port")
             .withExposedPorts(8081),
@@ -57,11 +57,11 @@ final class NpmITCase {
         "8081,my-npm-port"
     })
     void npmInstall(final String port, final String repo) throws Exception {
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource(String.format("npm/storage/%s/meta.json", NpmITCase.PROJ)).asBytes(),
             String.format("/var/artipie/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
         );
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource(
                 String.format("npm/storage/%s/-/%s-1.0.1.tgz", NpmITCase.PROJ, NpmITCase.PROJ)
             ).asBytes(),
@@ -111,7 +111,7 @@ final class NpmITCase {
             ),
             "npm", "publish", NpmITCase.PROJ, "--registry", this.repoUrl(port, repo)
         );
-        final byte[] content = this.containers.getArtipieContent(
+        final byte[] content = this.containers.getPanteraContent(
             String.format("/var/artipie/data/%s/%s/meta.json", repo, NpmITCase.PROJ)
         );
         MatcherAssert.assertThat(
@@ -122,7 +122,7 @@ final class NpmITCase {
                 .getJsonObject("dist")
                 .getString("tarball").equals(String.format("/%s", tgz))
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Tarball should be added to storage",
             String.format("/var/artipie/data/%s/%s", repo, tgz),
             new IsAnything<>()

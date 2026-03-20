@@ -40,7 +40,7 @@ public class HexpmITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("hexpm/hexpm.yml", "my-hexpm")
             .withExposedPorts(8080),
         () -> new TestDeployment.ClientContainer("elixir:1.13.4")
@@ -66,14 +66,14 @@ public class HexpmITCase {
             "--data-binary", String.format("@./artifact/%s", HexpmITCase.TAR),
             "http://artipie:8080/my-hexpm/publish?replace=false"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not added to storage",
             String.format("/var/artipie/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE),
             new IsEqual<>(
                 new TestResource(String.format("hexpm/%s", HexpmITCase.PACKAGE)).asBytes()
             )
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Artifact was not added to storage",
             String.format("/var/artipie/data/my-hexpm/tarballs/%s", HexpmITCase.TAR),
             new IsEqual<>(new TestResource(String.format("hexpm/%s", HexpmITCase.TAR)).asBytes())
@@ -83,11 +83,11 @@ public class HexpmITCase {
     @Test
     @Disabled("https://github.com/artipie/artipie/issues/1464")
     void downloadArtifact() throws Exception {
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             String.format("hexpm/%s", HexpmITCase.PACKAGE),
             String.format("/var/artipie/data/my-hexpm/packages/%s", HexpmITCase.PACKAGE)
         );
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             String.format("hexpm/%s", HexpmITCase.TAR),
             String.format("/var/artipie/data/my-hexpm/tarballs/%s", HexpmITCase.TAR)
         );

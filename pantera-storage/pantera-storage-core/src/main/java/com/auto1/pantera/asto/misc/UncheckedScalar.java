@@ -4,10 +4,10 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
- * Scalar that throws {@link com.auto1.pantera.ArtipieException} on error.
+ * Scalar that throws {@link com.auto1.pantera.PanteraException} on error.
  * @param <T> Return value type
  * @param <E> Error type
  * @since 1.3
@@ -33,7 +33,7 @@ public final class UncheckedScalar<T, E extends Exception> implements Scalar<T> 
         try {
             return this.origin.value();
         } catch (final Exception ex) {
-            throw new ArtipieException(ex);
+            throw new PanteraException(ex);
         }
     }
 

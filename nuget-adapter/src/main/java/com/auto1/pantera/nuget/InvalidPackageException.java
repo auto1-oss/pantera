@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.nuget;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Exception indicates that package is invalid and so cannot be handled by repository.
@@ -12,7 +12,7 @@ import com.auto1.pantera.ArtipieException;
  * @since 0.1
  */
 @SuppressWarnings("serial")
-public final class InvalidPackageException extends ArtipieException {
+public final class InvalidPackageException extends PanteraException {
     /**
      * Ctor.
      *

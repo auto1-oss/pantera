@@ -41,7 +41,7 @@ final class BearerAuthSchemeTest {
                     Optional.of(new AuthUser("alice"))
                 );
             },
-            "realm=\"artipie.com\""
+            "realm=\"pantera.com\""
         ).authenticate(
             Headers.from(new Authorization.Bearer(token)),
             RequestLine.from("GET http://not/used HTTP/1.1")
@@ -68,7 +68,7 @@ final class BearerAuthSchemeTest {
 
     @Test
     void shouldReturnAnonymousUserWhenNoAuthorizationHeader() {
-        final String params = "realm=\"artipie.com/auth\",param1=\"123\"";
+        final String params = "realm=\"pantera.com/auth\",param1=\"123\"";
         final AuthScheme.Result result = new BearerAuthScheme(
             tkn -> CompletableFuture.completedFuture(Optional.empty()), params
         ).authenticate(
@@ -88,7 +88,7 @@ final class BearerAuthSchemeTest {
     @ParameterizedTest
     @MethodSource("badHeaders")
     void shouldNotBeAuthorizedWhenNoBearerHeader(final Headers headers) {
-        final String params = "realm=\"artipie.com/auth\",param1=\"123\"";
+        final String params = "realm=\"pantera.com/auth\",param1=\"123\"";
         final AuthScheme.Result result = new BearerAuthScheme(
             tkn -> CompletableFuture.completedFuture(Optional.empty()),
             params

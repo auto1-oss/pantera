@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.lock.storage;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
@@ -128,7 +128,7 @@ final class StorageLockTest {
         MatcherAssert.assertThat(
             "Reason for failure is IllegalStateException",
             exception.getCause(),
-            new IsInstanceOf(ArtipieIOException.class)
+            new IsInstanceOf(PanteraIOException.class)
         );
         MatcherAssert.assertThat(
             "Proposals unmodified",

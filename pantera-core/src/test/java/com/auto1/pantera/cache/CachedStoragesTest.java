@@ -6,7 +6,7 @@ package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Storage;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -38,7 +38,7 @@ final class CachedStoragesTest {
     @Test
     void failsToGetStorageWhenSectionIsAbsent() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new StoragesCache().storage(
                 Yaml.createYamlMappingBuilder().build()
             )

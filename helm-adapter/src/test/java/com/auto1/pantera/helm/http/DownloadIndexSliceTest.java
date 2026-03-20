@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -93,7 +93,7 @@ final class DownloadIndexSliceTest {
     void throwsMalformedUrlExceptionForInvalidBase() {
         final String base = "withoutschemelocalhost:8080";
         final Throwable thr = Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new DownloadIndexSlice(base, this.storage)
         );
         MatcherAssert.assertThat(

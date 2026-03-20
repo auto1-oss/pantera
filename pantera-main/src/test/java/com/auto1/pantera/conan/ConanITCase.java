@@ -59,7 +59,7 @@ public final class ConanITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conan/conan.yml", "my-conan")
             .withExposedPorts(9301),
@@ -80,7 +80,7 @@ public final class ConanITCase {
     @Test
     public void incorrectPortFailTest() throws IOException {
         for (final String file : ConanITCase.CONAN_TEST_PKG) {
-            this.containers.putResourceToArtipie(
+            this.containers.putResourceToPantera(
                 String.join("/", ConanITCase.SRV_RES_PREFIX, file),
                 String.join("/", ConanITCase.SRV_REPO_PREFIX, file)
             );
@@ -104,7 +104,7 @@ public final class ConanITCase {
     @Test
     public void incorrectPkgFailTest() throws IOException {
         for (final String file : ConanITCase.CONAN_TEST_PKG) {
-            this.containers.putResourceToArtipie(
+            this.containers.putResourceToPantera(
                 String.join("/", ConanITCase.SRV_RES_PREFIX, file),
                 String.join("/", ConanITCase.SRV_REPO_PREFIX, file)
             );
@@ -118,9 +118,9 @@ public final class ConanITCase {
     }
 
     @Test
-    public void installFromArtipie() throws IOException {
+    public void installFromPantera() throws IOException {
         for (final String file : ConanITCase.CONAN_TEST_PKG) {
-            this.containers.putResourceToArtipie(
+            this.containers.putResourceToPantera(
                 String.join("/", ConanITCase.SRV_RES_PREFIX, file),
                 String.join("/", ConanITCase.SRV_REPO_PREFIX, file)
             );
@@ -132,7 +132,7 @@ public final class ConanITCase {
     }
 
     @Test
-    public void uploadToArtipie() throws IOException {
+    public void uploadToPantera() throws IOException {
         this.containers.assertExec(
             "Conan install failed", new ContainerResultMatcher(),
             "conan install zlib/1.2.13@ -r conancenter".split(" ")

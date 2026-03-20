@@ -5,7 +5,7 @@
 package com.auto1.pantera.npm.proxy;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.PanteraHttpException;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.Slice;
@@ -201,7 +201,7 @@ public final class HttpNpmRemote implements NpmRemote {
             }
             // Consume error response body to prevent Vert.x request leak
             return response.body().asBytesFuture().thenCompose(ignored ->
-                CompletableFuture.failedFuture(new ArtipieHttpException(response.status()))
+                CompletableFuture.failedFuture(new PanteraHttpException(response.status()))
             );
         });
     }
@@ -287,8 +287,8 @@ public final class HttpNpmRemote implements NpmRemote {
         if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        if (cause instanceof ArtipieHttpException) {
-            return ((ArtipieHttpException) cause).status().code() == 304;
+        if (cause instanceof PanteraHttpException) {
+            return ((PanteraHttpException) cause).status().code() == 304;
         }
         return false;
     }
@@ -299,9 +299,9 @@ public final class HttpNpmRemote implements NpmRemote {
         if (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        // Check if it's an ArtipieHttpException with 404 status
-        if (cause instanceof ArtipieHttpException) {
-            final ArtipieHttpException httpEx = (ArtipieHttpException) cause;
+        // Check if it's an PanteraHttpException with 404 status
+        if (cause instanceof PanteraHttpException) {
+            final PanteraHttpException httpEx = (PanteraHttpException) cause;
             return httpEx.status().code() == 404;
         }
         return false;

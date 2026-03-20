@@ -72,27 +72,27 @@ public final class StorageExecutors {
      */
     public static void registerMetrics(final MeterRegistry registry) {
         Gauge.builder(
-            "artipie.pool.read.active", READ,
+            "pantera.pool.read.active", READ,
             pool -> ((ThreadPoolExecutor) pool).getActiveCount()
         ).description("Active threads in READ pool").register(registry);
         Gauge.builder(
-            "artipie.pool.write.active", WRITE,
+            "pantera.pool.write.active", WRITE,
             pool -> ((ThreadPoolExecutor) pool).getActiveCount()
         ).description("Active threads in WRITE pool").register(registry);
         Gauge.builder(
-            "artipie.pool.list.active", LIST,
+            "pantera.pool.list.active", LIST,
             pool -> ((ThreadPoolExecutor) pool).getActiveCount()
         ).description("Active threads in LIST pool").register(registry);
         Gauge.builder(
-            "artipie.pool.read.queue", READ,
+            "pantera.pool.read.queue", READ,
             pool -> ((ThreadPoolExecutor) pool).getQueue().size()
         ).description("Queue size of READ pool").register(registry);
         Gauge.builder(
-            "artipie.pool.write.queue", WRITE,
+            "pantera.pool.write.queue", WRITE,
             pool -> ((ThreadPoolExecutor) pool).getQueue().size()
         ).description("Queue size of WRITE pool").register(registry);
         Gauge.builder(
-            "artipie.pool.list.queue", LIST,
+            "pantera.pool.list.queue", LIST,
             pool -> ((ThreadPoolExecutor) pool).getQueue().size()
         ).description("Queue size of LIST pool").register(registry);
     }

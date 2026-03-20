@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.http.slice;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -81,10 +81,10 @@ final class GzipSlice implements Slice {
                 }
                 gzos.finish();
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         } catch (final IOException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
         return res;
     }

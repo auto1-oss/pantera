@@ -64,7 +64,7 @@ public final class CacheManifests implements Manifests {
     private final Optional<Queue<ArtifactEvent>> events;
 
     /**
-     * Artipie repository name.
+     * Pantera repository name.
      */
     private final String rname;
 
@@ -83,7 +83,7 @@ public final class CacheManifests implements Manifests {
      * @param origin Origin repository.
      * @param cache Cache repository.
      * @param events Artifact metadata events
-     * @param registryName Artipie repository name
+     * @param registryName Pantera repository name
      */
     public CacheManifests(String name, Repo origin, Repo cache,
         Optional<Queue<ArtifactEvent>> events, String registryName,
@@ -96,7 +96,7 @@ public final class CacheManifests implements Manifests {
      * @param origin Origin repository.
      * @param cache Cache repository.
      * @param events Artifact metadata events
-     * @param registryName Artipie repository name
+     * @param registryName Pantera repository name
      * @param inspector Cooldown inspector
      * @param upstreamUrl Upstream URL for metrics
      */
@@ -446,7 +446,7 @@ public final class CacheManifests implements Manifests {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {

@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie micrometer .
+ * Pantera micrometer .
  *
  * @since 0.1
  */

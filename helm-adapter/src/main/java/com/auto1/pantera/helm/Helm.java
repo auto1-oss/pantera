@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Copy;
 import com.auto1.pantera.asto.Key;
@@ -130,7 +130,7 @@ public interface Helm {
                                         }
                                     );
                             } catch (final IOException exc) {
-                                throw new ArtipieIOException(exc);
+                                throw new PanteraIOException(exc);
                             }
                         }
                     )
@@ -176,7 +176,7 @@ public interface Helm {
                                                     out.set(Files.createTempFile(dir.get(), prfx, "-out.yaml"));
                                                     out.get().toFile().deleteOnExit();
                                                 } catch (final IOException exc) {
-                                                    throw new ArtipieIOException(exc);
+                                                    throw new PanteraIOException(exc);
                                                 }
                                                 tmpstrg.set(new FileStorage(dir.get()));
                                                 outidx.set(
@@ -217,10 +217,10 @@ public interface Helm {
                                     return rslt;
                                 } catch (final IllegalStateException exc) {
                                     FileUtils.deleteQuietly(dir.get().toFile());
-                                    throw new ArtipieException(exc);
+                                    throw new PanteraException(exc);
                                 }
                             } else {
-                                throw new ArtipieException(
+                                throw new PanteraException(
                                     "Failed to delete packages as index does not exist"
                                 );
                             }
@@ -246,7 +246,7 @@ public interface Helm {
                         out.set(Files.createTempFile(dir.get(), prfx, "-out.yaml"));
                         out.get().toFile().deleteOnExit();
                     } catch (final IOException exc) {
-                        throw new ArtipieIOException(exc);
+                        throw new PanteraIOException(exc);
                     }
                 }
             ).thenCompose(
@@ -303,7 +303,7 @@ public interface Helm {
                         if (futures.stream().anyMatch(
                             res -> !res.toCompletableFuture().join().equals(true)
                         )) {
-                            throw new ArtipieException(
+                            throw new PanteraException(
                                 new IllegalStateException(
                                     "Some of keys for deletion are absent in storage"
                                 )
@@ -345,7 +345,7 @@ public interface Helm {
             keys.forEach(
                 key -> {
                     if (!key.string().startsWith(prefix.string())) {
-                        throw new ArtipieException(
+                        throw new PanteraException(
                             new IllegalStateException(
                                 String.format(
                                     "Key `%s` does not start with prefix `%s`",

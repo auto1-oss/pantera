@@ -4,7 +4,7 @@
  */
 
 /**
- * Tests for Artipie misc helper objects.
+ * Tests for Pantera misc helper objects.
  * @since 0.23
  */
 package com.auto1.pantera.misc;

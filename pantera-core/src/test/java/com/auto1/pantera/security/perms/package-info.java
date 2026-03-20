@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie permissions test.
+ * Pantera permissions test.
  * @since 1.2
  */
 package com.auto1.pantera.security.perms;

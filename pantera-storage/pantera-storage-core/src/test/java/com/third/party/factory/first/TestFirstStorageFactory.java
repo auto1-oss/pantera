@@ -5,7 +5,7 @@
 package com.third.party.factory.first;
 
 import com.auto1.pantera.asto.Storage;
-import com.auto1.pantera.asto.factory.ArtipieStorageFactory;
+import com.auto1.pantera.asto.factory.PanteraStorageFactory;
 import com.auto1.pantera.asto.factory.Config;
 import com.auto1.pantera.asto.factory.StorageFactory;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
@@ -15,7 +15,7 @@ import com.auto1.pantera.asto.memory.InMemoryStorage;
  *
  * @since 1.13.0
  */
-@ArtipieStorageFactory("test-first")
+@PanteraStorageFactory("test-first")
 public final class TestFirstStorageFactory implements StorageFactory {
     @Override
     public Storage newStorage(final Config cfg) {

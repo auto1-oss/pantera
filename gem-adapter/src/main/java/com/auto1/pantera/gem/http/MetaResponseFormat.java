@@ -7,7 +7,7 @@ package com.auto1.pantera.gem.http;
 import com.auto1.pantera.gem.GemMeta.MetaInfo;
 import com.auto1.pantera.gem.JsonMetaFormat;
 import com.auto1.pantera.gem.YamlMetaFormat;
-import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.PanteraHttpException;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.RsStatus;
@@ -56,7 +56,7 @@ enum MetaResponseFormat implements Function<MetaInfo, Response> {
         return switch (name) {
             case "json" -> MetaResponseFormat.JSON;
             case "yaml" -> MetaResponseFormat.YAML;
-            default -> throw new ArtipieHttpException(
+            default -> throw new PanteraHttpException(
                 RsStatus.BAD_REQUEST, String.format("unsupported format type `%s`", name)
             );
         };

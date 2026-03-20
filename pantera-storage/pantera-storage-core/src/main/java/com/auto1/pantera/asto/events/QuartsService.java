@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.events;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.Objects;
 import java.util.UUID;
@@ -55,7 +55,7 @@ public final class QuartsService {
                 }
             );
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 
@@ -114,7 +114,7 @@ public final class QuartsService {
         try {
             this.scheduler.start();
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 

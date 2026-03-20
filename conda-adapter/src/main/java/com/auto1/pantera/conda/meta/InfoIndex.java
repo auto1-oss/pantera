@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.conda.meta;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -76,7 +76,7 @@ public interface InfoIndex {
                 }
             }
             return res.orElseThrow(
-                () -> new ArtipieException(
+                () -> new PanteraException(
                     "Illegal package .tar.bz2: info/index.json file not found"
                 )
             );
@@ -136,7 +136,7 @@ public interface InfoIndex {
                 throw new IOException(ex);
             }
             return res.orElseThrow(
-                () -> new ArtipieException(
+                () -> new PanteraException(
                     "Illegal package `.conda`: info/index.json file not found"
                 )
             );

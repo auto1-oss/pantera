@@ -23,7 +23,7 @@ import org.quartz.JobExecutionException;
  * Quartz job that periodically scans a directory for stale temporary files
  * created during proxy cache operations and deletes them.
  * <p>
- * Artipie creates temp files in several places:
+ * Pantera creates temp files in several places:
  * <ul>
  *   <li>{@code DiskCacheStorage} - UUID-named files in {@code .tmp/} subdirectory</li>
  *   <li>{@code StreamThroughCache} - files with prefix {@code artipie-stc-} and
@@ -203,7 +203,7 @@ public final class TempFileCleanupJob implements Job {
     }
 
     /**
-     * Determines whether a file matches known Artipie temp file patterns.
+     * Determines whether a file matches known Pantera temp file patterns.
      * <p>
      * Patterns matched:
      * <ul>

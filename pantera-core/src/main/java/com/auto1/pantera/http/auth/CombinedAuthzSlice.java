@@ -40,7 +40,7 @@ public final class CombinedAuthzSlice implements Slice {
     /**
      * Pool name for metrics identification.
      */
-    public static final String AUTH_POOL_NAME = "artipie.auth.combined";
+    public static final String AUTH_POOL_NAME = "pantera.auth.combined";
 
     /**
      * Thread pool for blocking authentication operations.

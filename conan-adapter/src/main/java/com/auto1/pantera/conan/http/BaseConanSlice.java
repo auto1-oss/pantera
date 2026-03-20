@@ -46,7 +46,7 @@ abstract class BaseConanSlice implements Slice {
     private static final String CONTENT_TYPE = "Content-Type";
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
@@ -57,7 +57,7 @@ abstract class BaseConanSlice implements Slice {
 
     /**
      * Ctor.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      * @param pathwrap Current path wrapper instance.
      */
     BaseConanSlice(final Storage storage, final PathWrap pathwrap) {
@@ -95,7 +95,7 @@ abstract class BaseConanSlice implements Slice {
     }
 
     /**
-     * Returns current Artipie storage instance.
+     * Returns current Pantera storage instance.
      * @return Storage object instance.
      */
     protected Storage getStorage() {
@@ -124,7 +124,7 @@ abstract class BaseConanSlice implements Slice {
 
     /**
      * Processess the request and returns result data for this request.
-     * @param request Artipie request line helper object instance.
+     * @param request Pantera request line helper object instance.
      * @param hostname Current server host name string to construct and process URLs.
      * @param matcher Matched pattern matcher object for the current path wrapper.
      * @return Future object, providing request result data.

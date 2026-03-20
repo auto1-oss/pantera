@@ -23,7 +23,7 @@ import org.apache.commons.pool2.impl.GenericObjectPool;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 
 /**
- * Valkey/Redis connection pool for L2 cache across Artipie.
+ * Valkey/Redis connection pool for L2 cache across Pantera.
  * Uses Lettuce's built-in connection pooling backed by Apache Commons Pool2.
  * Thread-safe, async operations with round-robin connection selection.
  *

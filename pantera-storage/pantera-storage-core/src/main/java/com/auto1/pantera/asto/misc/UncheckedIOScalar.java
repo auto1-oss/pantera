@@ -4,12 +4,12 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 
 /**
- * Scalar that throws {@link ArtipieException} on error.
+ * Scalar that throws {@link PanteraException} on error.
  * @param <T> Return value type
  * @since 1.3
  */
@@ -34,7 +34,7 @@ public final class UncheckedIOScalar<T> implements Scalar<T> {
         try {
             return this.origin.value();
         } catch (final IOException ex) {
-            throw new ArtipieIOException(ex);
+            throw new PanteraIOException(ex);
         }
     }
 }

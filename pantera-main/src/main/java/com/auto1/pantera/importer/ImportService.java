@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.importer;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
@@ -306,7 +306,7 @@ public final class ImportService {
                     )
                 )
                 // Configurable import timeout (default: 30 minutes)
-                .orTimeout(Long.getLong("artipie.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
+                .orTimeout(Long.getLong("pantera.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.importer")
                 .message("Import failed")
@@ -619,7 +619,7 @@ public final class ImportService {
         }
         return storage.metadata(staging).thenApply(
             meta -> meta.read(Meta.OP_SIZE)
-                .orElseThrow(() -> new ArtipieException("Unable to determine uploaded size"))
+                .orElseThrow(() -> new PanteraException("Unable to determine uploaded size"))
         ).thenApply(size -> new DigestResult(size, Map.of()));
     }
 
@@ -799,7 +799,7 @@ public final class ImportService {
                 .field("error.message", ex.getMessage())
                 .log();
         }
-        final String prop = System.getProperty("artipie.metadata.merge.mode", "");
+        final String prop = System.getProperty("pantera.metadata.merge.mode", "");
         if (!prop.isBlank()) {
             final String mode = prop.trim().toLowerCase(Locale.ROOT);
             if ("legacy".equals(mode) || "direct".equals(mode) || "off".equals(mode)) {

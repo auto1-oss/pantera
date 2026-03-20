@@ -63,7 +63,7 @@ public final class TokenGenerator {
     }
     
     /**
-     * Generate token for username (Artipie integration).
+     * Generate token for username (Pantera integration).
      * @param username Username
      * @return Future with generated token
      */
@@ -72,7 +72,7 @@ public final class TokenGenerator {
     }
     
     /**
-     * Generate token for username with expiration (Artipie integration).
+     * Generate token for username with expiration (Pantera integration).
      * @param username Username
      * @param expiresAt Expiration time (null for no expiration)
      * @return Future with generated token

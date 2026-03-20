@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.beans.HasPropertyWithValue;
 import org.hamcrest.core.IsEqual;
@@ -98,7 +98,7 @@ final class RelativePathTest {
         );
         MatcherAssert.assertThat(
             Assertions.assertThrows(
-                ArtipieException.class,
+                PanteraException.class,
                 path::relative
             ),
             new HasPropertyWithValue<>(

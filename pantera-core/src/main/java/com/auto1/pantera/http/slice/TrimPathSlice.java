@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.http.slice;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
@@ -89,7 +89,7 @@ public final class TrimPathSlice implements Slice {
                     .setPath(asPath(matcher.group(1)))
                     .build();
             } catch (URISyntaxException e) {
-                throw new ArtipieException(e);
+                throw new PanteraException(e);
             }
             final String trimmedPath = respUri.getPath();
             org.slf4j.LoggerFactory.getLogger("com.auto1.pantera.http.slice.TrimPathSlice")

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.scheduling;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.goproxy.GoProxyPackageProcessor;
 
 import com.auto1.pantera.maven.MavenProxyPackageProcessor;
@@ -103,7 +103,7 @@ public final class MetadataEventQueues {
         this.keys = new ConcurrentHashMap<>();
         this.registry = registry;
         this.registry.ifPresent(
-            reg -> Gauge.builder("artipie.events.queue.size", queue, Queue::size)
+            reg -> Gauge.builder("pantera.events.queue.size", queue, Queue::size)
                 .tag("type", "events")
                 .description("Size of the artifact events queue")
                 .register(reg)
@@ -184,11 +184,11 @@ public final class MetadataEventQueues {
                                 .field("repository.name", config.name())
                                 .log();
                         } catch (final SchedulerException err) {
-                            throw new ArtipieException(err);
+                            throw new PanteraException(err);
                         }
                         this.registry.ifPresent(
                             reg -> Gauge.builder(
-                                "artipie.proxy.queue.size", res, Queue::size
+                                "pantera.proxy.queue.size", res, Queue::size
                             ).tag("repo", config.name())
                                 .description("Size of proxy artifact event queue")
                                 .register(reg)
@@ -235,7 +235,7 @@ public final class MetadataEventQueues {
     }
 
     /**
-     * Artipie server external host. Required for npm proxy adapter only.
+     * Pantera server external host. Required for npm proxy adapter only.
      * @param config Repository config
      * @return The host
      */

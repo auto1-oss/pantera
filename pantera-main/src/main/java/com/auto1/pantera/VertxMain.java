@@ -18,7 +18,7 @@ import com.auto1.pantera.http.misc.StorageExecutors;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.scheduling.ScriptScheduler;
 import com.auto1.pantera.settings.ConfigFile;
@@ -75,7 +75,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class VertxMain {
 
     /**
-     * Default port to start Artipie Rest API service.
+     * Default port to start Pantera Rest API service.
      */
     private static final String DEF_API_PORT = "8086";
 
@@ -330,7 +330,7 @@ public final class VertxMain {
             settings.httpServerRequestTimeout()
         );
         EcsLogger.info("com.auto1.pantera")
-            .message("Artipie was started on port")
+            .message("Pantera was started on port")
             .eventCategory("server")
             .eventAction("server_start")
             .eventOutcome("success")
@@ -382,7 +382,7 @@ public final class VertxMain {
                 StorageExecutors.registerMetrics(metricsRegistry);
                 settings.artifactMetadata().ifPresent(
                     evtQueues -> io.micrometer.core.instrument.Gauge.builder(
-                        "artipie.events.queue.size",
+                        "pantera.events.queue.size",
                         evtQueues.eventQueue(),
                         java.util.Queue::size
                     ).tag("type", "events")
@@ -451,7 +451,7 @@ public final class VertxMain {
 
     public void stop() {
         EcsLogger.info("com.auto1.pantera")
-            .message("Stopping Artipie and cleaning up resources")
+            .message("Stopping Pantera and cleaning up resources")
             .eventCategory("server")
             .eventAction("server_stop")
             .eventOutcome("success")
@@ -483,7 +483,7 @@ public final class VertxMain {
             try {
                 s.stop();
                 EcsLogger.info("com.auto1.pantera")
-                    .message("Artipie's server on port was stopped")
+                    .message("Pantera's server on port was stopped")
                     .eventCategory("server")
                     .eventAction("server_stop")
                     .eventOutcome("success")
@@ -604,7 +604,7 @@ public final class VertxMain {
             }
         }
         EcsLogger.info("com.auto1.pantera")
-            .message("Artipie shutdown complete")
+            .message("Pantera shutdown complete")
             .eventCategory("server")
             .eventAction("server_shutdown")
             .eventOutcome("success")
@@ -625,9 +625,9 @@ public final class VertxMain {
         final String popt = "p";
         final String fopt = "f";
         final String apiport = "ap";
-        options.addOption(popt, "port", true, "The port to start Artipie on");
-        options.addOption(fopt, "config-file", true, "The path to Artipie configuration file");
-        options.addOption(apiport, "api-port", true, "The port to start Artipie Rest API on");
+        options.addOption(popt, "port", true, "The port to start Pantera on");
+        options.addOption(fopt, "config-file", true, "The path to Pantera configuration file");
+        options.addOption(apiport, "api-port", true, "The port to start Pantera Rest API on");
         final CommandLineParser parser = new DefaultParser();
         final CommandLine cmd = parser.parse(options, args);
         if (cmd.hasOption(popt)) {
@@ -648,11 +648,11 @@ public final class VertxMain {
             throw new IllegalStateException("Storage is not configured");
         }
         EcsLogger.info("com.auto1.pantera")
-            .message("Used version of Artipie")
+            .message("Used version of Pantera")
             .eventCategory("server")
             .eventAction("server_start")
             .eventOutcome("success")
-            .field("service.version", new ArtipieProperties().version())
+            .field("service.version", new PanteraProperties().version())
             .log();
         final VertxMain app = new VertxMain(config, port);
 
@@ -669,7 +669,7 @@ public final class VertxMain {
 
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
         EcsLogger.info("com.auto1.pantera")
-            .message("Artipie started successfully. Press Ctrl+C to shutdown.")
+            .message("Pantera started successfully. Press Ctrl+C to shutdown.")
             .eventCategory("server")
             .eventAction("server_start")
             .eventOutcome("success")
@@ -681,7 +681,7 @@ public final class VertxMain {
      *
      * @param vertx Vertx instance
      * @param settings Settings.
-     * @param port Artipie service main port
+     * @param port Pantera service main port
      * @param slices Slices cache
      */
     private void startRepos(
@@ -718,7 +718,7 @@ public final class VertxMain {
                             );
                         }
                         EcsLogger.info("com.auto1.pantera")
-                            .message("Artipie repo was started on port")
+                            .message("Pantera repo was started on port")
                             .eventCategory("repository")
                             .eventAction("repo_start")
                             .eventOutcome("success")
@@ -727,7 +727,7 @@ public final class VertxMain {
                             .log();
                     },
                     () -> EcsLogger.info("com.auto1.pantera")
-                        .message("Artipie repo was started on port")
+                        .message("Pantera repo was started on port")
                         .eventCategory("repository")
                         .eventAction("repo_start")
                         .eventOutcome("success")
@@ -744,7 +744,7 @@ public final class VertxMain {
                     .field("repository.name", repo.name())
                     .error(err)
                     .log();
-            } catch (final ArtipieException err) {
+            } catch (final PanteraException err) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to start repo")
                     .eventCategory("repository")

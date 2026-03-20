@@ -7,7 +7,7 @@ package com.auto1.pantera.settings;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.api.ssl.KeyStoreFactory;
 import com.auto1.pantera.asto.Key;
@@ -36,7 +36,7 @@ import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.CachedUsers;
 import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import com.auto1.pantera.settings.cache.PublishingFiltersCache;
@@ -89,7 +89,7 @@ public final class YamlSettings implements Settings {
     private static final String NODE_STORAGE = "storage";
 
     /**
-     * Artipie policy and creds type name.
+     * Pantera policy and creds type name.
      */
     private static final String ARTIPIE = "artipie";
 
@@ -111,7 +111,7 @@ public final class YamlSettings implements Settings {
     /**
      * A set of caches for artipie settings.
      */
-    private final ArtipieCaches acach;
+    private final PanteraCaches acach;
 
     /**
      * Metrics context.
@@ -121,7 +121,7 @@ public final class YamlSettings implements Settings {
     /**
      * Authentication and policy.
      */
-    private final ArtipieSecurity security;
+    private final PanteraSecurity security;
 
     /**
      * Artifacts event queue.
@@ -249,7 +249,7 @@ public final class YamlSettings implements Settings {
         final CachedUsers auth = YamlSettings.initAuth(
             this.meta(), valkey, this.jwtSettings, this.artifactsDb.orElse(null)
         );
-        this.security = new ArtipieSecurity.FromYaml(
+        this.security = new PanteraSecurity.FromYaml(
             this.meta(), auth, new PolicyStorage(this.meta()).parse(),
             this.artifactsDb.orElse(null)
         );
@@ -266,7 +266,7 @@ public final class YamlSettings implements Settings {
                 policyCache = (Cleanable<String>) this.security.policy();
                 ps.register("policy", policyCache);
             }
-            this.acach = new ArtipieCaches.All(
+            this.acach = new PanteraCaches.All(
                 new PublishingCleanable(auth, ps, "auth"),
                 new StoragesCache(),
                 this.security.policy(),
@@ -274,7 +274,7 @@ public final class YamlSettings implements Settings {
             );
         } else {
             this.cachePubSub = null;
-            this.acach = new ArtipieCaches.All(
+            this.acach = new PanteraCaches.All(
                 auth, new StoragesCache(), this.security.policy(), new GuavaFiltersCache()
             );
         }
@@ -311,7 +311,7 @@ public final class YamlSettings implements Settings {
                 if (this.configStorageInstance == null) {
                     final YamlMapping yaml = meta().yamlMapping("storage");
                     if (yaml == null) {
-                        throw new ArtipieException("Failed to find storage configuration in \n" + this);
+                        throw new PanteraException("Failed to find storage configuration in \n" + this);
                     }
                     this.configStorageInstance = this.acach.storagesCache().storage(yaml);
                     this.trackedStorages.add(this.configStorageInstance);
@@ -322,7 +322,7 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
-    public ArtipieSecurity authz() {
+    public PanteraSecurity authz() {
         return this.security;
     }
 
@@ -350,7 +350,7 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
-    public ArtipieCaches caches() {
+    public PanteraCaches caches() {
         return this.acach;
     }
 
@@ -760,7 +760,7 @@ public final class YamlSettings implements Settings {
     /**
      * Initialize and scheduled mechanism to gather artifact events
      * (adding and removing artifacts) and create {@link MetadataEventQueues} instance.
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param quartz Quartz service
      * @param database Artifact database
      * @return Event queue to gather artifacts events
@@ -791,13 +791,13 @@ public final class YamlSettings implements Settings {
             final Queue<ArtifactEvent> res = quartz.addPeriodicEventsProcessor(interval, consumers);
             return Optional.of(new MetadataEventQueues(res, quartz));
         } catch (final SchedulerException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 
     /**
      * Initialize artifacts database.
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @return Data source if configuration is present
      */
     private static Optional<DataSource> initArtifactsDb(final YamlMapping settings) {
@@ -900,11 +900,11 @@ public final class YamlSettings implements Settings {
      * @return Path to the config file
      */
     private static Path findConfigFile(final Path dir) {
-        final Path yaml = dir.resolve("artipie.yaml");
+        final Path yaml = dir.resolve("pantera.yaml");
         if (Files.exists(yaml)) {
             return yaml;
         }
-        final Path yml = dir.resolve("artipie.yml");
+        final Path yml = dir.resolve("pantera.yml");
         if (Files.exists(yml)) {
             return yml;
         }

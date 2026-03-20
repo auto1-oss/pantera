@@ -86,7 +86,7 @@ final class HexITCase {
     @Disabled("https://github.com/artipie/artipie/issues/1464")
     void downloadDependency() throws IOException, InterruptedException {
         this.init(true);
-        this.addArtifactToArtipie();
+        this.addArtifactToPantera();
         MatcherAssert.assertThat(
             this.exec("mix", "hex.package", "fetch", "decimal", "2.0.0", "--repo=my_repo"),
             new StringContains(
@@ -100,7 +100,7 @@ final class HexITCase {
     @ValueSource(booleans = {true, false})
     void fetchDependencies(final boolean anonymous) throws IOException, InterruptedException {
         this.init(anonymous);
-        this.addArtifactToArtipie();
+        this.addArtifactToPantera();
         MatcherAssert.assertThat(
             "Get dependency for the first time",
             this.exec("mix", "deps.get"),
@@ -171,7 +171,7 @@ final class HexITCase {
         return this.cntn.execInContainer(actions).toString().replace("\n", "");
     }
 
-    private void addArtifactToArtipie() {
+    private void addArtifactToPantera() {
         new TestResource("packages")
             .addFilesTo(this.storage, new Key.From("packages"));
         new TestResource("tarballs")

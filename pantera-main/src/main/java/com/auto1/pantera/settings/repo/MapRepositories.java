@@ -268,7 +268,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
         return TraceContextExecutor.wrap(
             Executors.newSingleThreadExecutor(
                 runnable -> {
-                    final Thread thread = new Thread(runnable, "artipie.repo.loader");
+                    final Thread thread = new Thread(runnable, "pantera.repo.loader");
                     thread.setDaemon(true);
                     return thread;
                 }

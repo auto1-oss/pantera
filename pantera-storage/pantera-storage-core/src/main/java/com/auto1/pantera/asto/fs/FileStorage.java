@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.asto.fs;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ListResult;
@@ -135,7 +135,7 @@ public final class FileStorage implements Storage {
                             .log();
                         keys = Collections.emptyList();
                     } catch (final IOException iex) {
-                        throw new ArtipieIOException(iex);
+                        throw new PanteraIOException(iex);
                     }
                 } else {
                     keys = Collections.emptyList();
@@ -219,7 +219,7 @@ public final class FileStorage implements Storage {
                         }
                     }
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
 
                 EcsLogger.debug("com.auto1.pantera.asto")
@@ -240,7 +240,7 @@ public final class FileStorage implements Storage {
         // Validate root key is not supported
         if (Key.ROOT.string().equals(key.string())) {
             return new CompletableFutureSupport.Failed<Void>(
-                new ArtipieIOException("Unable to save to root")
+                new PanteraIOException("Unable to save to root")
             ).get();
         }
 
@@ -252,7 +252,7 @@ public final class FileStorage implements Storage {
                 try {
                     Files.createDirectories(tmpDir);
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
                 final Path tmp = tmpDir.resolve(UUID.randomUUID().toString());
 
@@ -262,7 +262,7 @@ public final class FileStorage implements Storage {
                     try {
                         Files.createDirectories(parent);
                     } catch (final IOException iex) {
-                        throw new ArtipieIOException(iex);
+                        throw new PanteraIOException(iex);
                     }
                 }
 
@@ -285,7 +285,7 @@ public final class FileStorage implements Storage {
                         if (throwable == null) {
                             return null;
                         } else {
-                            throw new ArtipieIOException(throwable);
+                            throw new PanteraIOException(throwable);
                         }
                     }
                 );
@@ -341,7 +341,7 @@ public final class FileStorage implements Storage {
                         Files.delete(path);
                         this.deleteEmptyParts(path.getParent());
                     } catch (final IOException iex) {
-                        throw new ArtipieIOException(iex);
+                        throw new PanteraIOException(iex);
                     }
                 } else {
                     throw new ValueNotFoundException(key);
@@ -368,7 +368,7 @@ public final class FileStorage implements Storage {
                 } catch (final NoSuchFileException fex) {
                     throw new ValueNotFoundException(key, fex);
                 } catch (final IOException iox) {
-                    throw new ArtipieIOException(iox);
+                    throw new PanteraIOException(iox);
                 }
                 return new FileMeta(attrs);
             }
@@ -381,12 +381,12 @@ public final class FileStorage implements Storage {
         final CompletableFuture<Content> res;
         if (Key.ROOT.string().equals(key.string())) {
             res = new CompletableFutureSupport.Failed<Content>(
-                new ArtipieIOException("Unable to load from root")
+                new PanteraIOException("Unable to load from root")
             ).get();
         } else {
             res = this.metadata(key).thenApply(
                 meta -> meta.read(Meta.OP_SIZE).orElseThrow(
-                    () -> new ArtipieException(
+                    () -> new PanteraException(
                         String.format("Size is not available for '%s' key", key.string())
                     )
                 )
@@ -471,7 +471,7 @@ public final class FileStorage implements Storage {
                 this.deleteEmptyParts(path.getParent());
             }
             catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }
@@ -505,7 +505,7 @@ public final class FileStorage implements Storage {
                 try {
                     Files.createDirectories(dest.getParent());
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
                 return dest;
             }
@@ -520,10 +520,10 @@ public final class FileStorage implements Storage {
                         Files.move(source, dst, StandardCopyOption.REPLACE_EXISTING);
                     } catch (final IOException retry) {
                         retry.addSuppressed(nfe);
-                        throw new ArtipieIOException(retry);
+                        throw new PanteraIOException(retry);
                     }
                 } catch (final IOException iex) {
-                    throw new ArtipieIOException(iex);
+                    throw new PanteraIOException(iex);
                 }
             }
         );
@@ -533,7 +533,7 @@ public final class FileStorage implements Storage {
      * Converts key to path.
      * <p>
      * Validates the path is in storage directory and converts it to path.
-     * Fails with {@link ArtipieIOException} if key is out of storage location.
+     * Fails with {@link PanteraIOException} if key is out of storage location.
      * </p>
      *
      * @param key Key to validate.
@@ -546,7 +546,7 @@ public final class FileStorage implements Storage {
             res.complete(path);
         } else {
             res.completeExceptionally(
-                new ArtipieIOException(
+                new PanteraIOException(
                     String.format("Entry path is out of storage: %s", key)
                 )
             );

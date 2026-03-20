@@ -67,15 +67,15 @@ class MicrometerSliceTest {
         String actual = registry.getMetersAsString();
 
         List.of(
-            Matchers.containsString("artipie.request.body.size(DISTRIBUTION_SUMMARY)[method='POST']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
-            Matchers.containsString("artipie.request.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
-            Matchers.containsString("artipie.request.counter(COUNTER)[method='POST', status='CONTINUE']; count=1.0"),
-            Matchers.containsString("artipie.request.counter(COUNTER)[method='GET', status='OK']; count=2.0"),
-            Matchers.containsString("artipie.response.body.size(DISTRIBUTION_SUMMARY)[method='POST']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
+            Matchers.containsString("pantera.request.body.size(DISTRIBUTION_SUMMARY)[method='POST']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
+            Matchers.containsString("pantera.request.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
+            Matchers.containsString("pantera.request.counter(COUNTER)[method='POST', status='CONTINUE']; count=1.0"),
+            Matchers.containsString("pantera.request.counter(COUNTER)[method='GET', status='OK']; count=2.0"),
+            Matchers.containsString("pantera.response.body.size(DISTRIBUTION_SUMMARY)[method='POST']; count=0.0, total=0.0 bytes, max=0.0 bytes"),
             // Response body size now tracked via Content-Length header: 12 + 3 = 15 bytes total, 2 responses
-            Matchers.containsString("artipie.response.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=2.0, total=15.0 bytes, max=12.0 bytes"),
-            Matchers.containsString("artipie.slice.response(TIMER)[status='OK']; count=2.0, total_time"),
-            Matchers.containsString("artipie.slice.response(TIMER)[status='CONTINUE']; count=1.0, total_time")
+            Matchers.containsString("pantera.response.body.size(DISTRIBUTION_SUMMARY)[method='GET']; count=2.0, total=15.0 bytes, max=12.0 bytes"),
+            Matchers.containsString("pantera.slice.response(TIMER)[status='OK']; count=2.0, total_time"),
+            Matchers.containsString("pantera.slice.response(TIMER)[status='CONTINUE']; count=1.0, total_time")
         ).forEach(m -> MatcherAssert.assertThat(actual, m));
     }
 

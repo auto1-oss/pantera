@@ -73,15 +73,15 @@ public final class MicrometerSlice implements Slice {
                                                 final Content body) {
         final String method = line.method().value();
         final long startTime = System.currentTimeMillis();
-        final Counter.Builder requestCounter = Counter.builder("artipie.request.counter")
+        final Counter.Builder requestCounter = Counter.builder("pantera.request.counter")
             .description("HTTP requests counter")
             .tag(MicrometerSlice.METHOD, method);
-        final DistributionSummary requestBody = DistributionSummary.builder("artipie.request.body.size")
+        final DistributionSummary requestBody = DistributionSummary.builder("pantera.request.body.size")
             .description("Request body size and chunks")
             .baseUnit(MicrometerSlice.BYTES)
             .tag(MicrometerSlice.METHOD, method)
             .register(this.registry);
-        final DistributionSummary responseBody = DistributionSummary.builder("artipie.response.body.size")
+        final DistributionSummary responseBody = DistributionSummary.builder("pantera.response.body.size")
             .baseUnit(MicrometerSlice.BYTES)
             .description("Response body size and chunks")
             .tag(MicrometerSlice.METHOD, method)
@@ -114,7 +114,7 @@ public final class MicrometerSlice implements Slice {
             }).handle(
                 (resp, err) -> {
                     CompletableFuture<Response> res;
-                    String name = "artipie.slice.response";
+                    String name = "pantera.slice.response";
                     if (err != null) {
                         name = String.format("%s.error", name);
                         timer.stop(this.registry.timer(name));

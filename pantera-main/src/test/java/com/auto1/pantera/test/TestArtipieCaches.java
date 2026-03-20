@@ -6,17 +6,17 @@ package com.auto1.pantera.test;
 
 import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.cache.StoragesCache;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.cache.FiltersCache;
 
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.commons.lang3.NotImplementedException;
 
 /**
- * Test Artipie caches.
+ * Test Pantera caches.
  * @since 0.28
  */
-public final class TestArtipieCaches implements ArtipieCaches {
+public final class TestPanteraCaches implements PanteraCaches {
 
     /**
      * Cache for configurations of storages.
@@ -42,7 +42,7 @@ public final class TestArtipieCaches implements ArtipieCaches {
     /**
      * Ctor with all fake initialized caches.
      */
-    public TestArtipieCaches() {
+    public TestPanteraCaches() {
         this.strgcache = new TestStoragesCache();
         this.cleanuser = new AtomicLong();
         this.cleanpolicy = new AtomicLong();
@@ -59,7 +59,7 @@ public final class TestArtipieCaches implements ArtipieCaches {
         return new Cleanable<>() {
             @Override
             public void invalidate(final String uname) {
-                TestArtipieCaches.this.cleanuser.incrementAndGet();
+                TestPanteraCaches.this.cleanuser.incrementAndGet();
             }
 
             @Override
@@ -74,7 +74,7 @@ public final class TestArtipieCaches implements ArtipieCaches {
         return new Cleanable<>() {
             @Override
             public void invalidate(final String uname) {
-                TestArtipieCaches.this.cleanpolicy.incrementAndGet();
+                TestPanteraCaches.this.cleanpolicy.incrementAndGet();
             }
 
             @Override

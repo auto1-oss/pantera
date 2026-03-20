@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -147,7 +147,7 @@ final class UnpublishPutSliceTest {
         );
         MatcherAssert.assertThat(
             thr.getCause(),
-            new IsInstanceOf(ArtipieException.class)
+            new IsInstanceOf(PanteraException.class)
         );
         MatcherAssert.assertThat("Events queue is empty", this.events.isEmpty());
     }

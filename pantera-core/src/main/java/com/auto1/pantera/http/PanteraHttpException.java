@@ -4,16 +4,16 @@
  */
 package com.auto1.pantera.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.google.common.collect.ImmutableMap;
 
 import java.io.Serial;
 import java.util.Map;
 
 /**
- * Base HTTP exception for Artipie endpoints.
+ * Base HTTP exception for Pantera endpoints.
  */
-public final class ArtipieHttpException extends ArtipieException {
+public final class PanteraHttpException extends PanteraException {
 
     @Serial
     private static final long serialVersionUID = -16695752893817954L;
@@ -64,8 +64,8 @@ public final class ArtipieHttpException extends ArtipieException {
      * New HTTP error exception.
      * @param status HTTP status code
      */
-    public ArtipieHttpException(final RsStatus status) {
-        this(status, ArtipieHttpException.meaning(status));
+    public PanteraHttpException(final RsStatus status) {
+        this(status, PanteraHttpException.meaning(status));
     }
 
     /**
@@ -73,8 +73,8 @@ public final class ArtipieHttpException extends ArtipieException {
      * @param status HTTP status code
      * @param cause Of the error
      */
-    public ArtipieHttpException(final RsStatus status, final Throwable cause) {
-        this(status, ArtipieHttpException.meaning(status), cause);
+    public PanteraHttpException(final RsStatus status, final Throwable cause) {
+        this(status, PanteraHttpException.meaning(status), cause);
     }
 
     /**
@@ -82,7 +82,7 @@ public final class ArtipieHttpException extends ArtipieException {
      * @param status HTTP status code
      * @param message HTTP status meaning
      */
-    public ArtipieHttpException(final RsStatus status, final String message) {
+    public PanteraHttpException(final RsStatus status, final String message) {
         super(message);
         this.code = status;
     }
@@ -93,7 +93,7 @@ public final class ArtipieHttpException extends ArtipieException {
      * @param message HTTP status meaning
      * @param cause Of the error
      */
-    public ArtipieHttpException(final RsStatus status, final String message,
+    public PanteraHttpException(final RsStatus status, final String message,
                                 final Throwable cause) {
         super(message, cause);
         this.code = status;
@@ -113,6 +113,6 @@ public final class ArtipieHttpException extends ArtipieException {
      * @return Meaning string for this code
      */
     private static String meaning(RsStatus status) {
-        return ArtipieHttpException.MEANINGS.getOrDefault(status.asString(), "Unknown");
+        return PanteraHttpException.MEANINGS.getOrDefault(status.asString(), "Unknown");
     }
 }

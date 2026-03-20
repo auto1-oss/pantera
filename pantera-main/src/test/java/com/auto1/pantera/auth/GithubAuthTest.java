@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.auth;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.auth.AuthUser;
 import java.util.Optional;
 import org.hamcrest.MatcherAssert;
@@ -55,7 +55,7 @@ final class GithubAuthTest {
     @Test
     void shouldThrownExceptionWhenAssertionErrorIsHappened() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new GithubAuth(
                 token -> {
                     throw new AssertionError("Any error");

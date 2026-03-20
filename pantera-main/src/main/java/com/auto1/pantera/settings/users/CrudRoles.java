@@ -9,13 +9,13 @@ import javax.json.JsonArray;
 import javax.json.JsonObject;
 
 /**
- * Create/Read/Update/Delete Artipie roles.
+ * Create/Read/Update/Delete Pantera roles.
  * @since 0.27
  */
 public interface CrudRoles {
     /**
      * List existing roles.
-     * @return Artipie roles
+     * @return Pantera roles
      */
     JsonArray list();
 

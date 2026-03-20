@@ -18,7 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Orchestrates a bulk backfill run over a directory of Artipie repo configs.
+ * Orchestrates a bulk backfill run over a directory of Pantera repo configs.
  *
  * <p>For each {@code *.yaml} file found (non-recursively, sorted alphabetically)
  * in the config directory, derives the repo name from the filename stem and the
@@ -47,7 +47,7 @@ final class BulkBackfillRunner {
     private static final String YAML_EXT = ".yaml";
 
     /**
-     * Directory containing {@code *.yaml} Artipie repo config files.
+     * Directory containing {@code *.yaml} Pantera repo config files.
      */
     private final Path configDir;
 

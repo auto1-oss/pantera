@@ -29,13 +29,13 @@ public class RevisionsIndexer {
     private static final String INDEX_FILE = "revisions.txt";
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
     /**
      * Initializes new instance.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      */
     public RevisionsIndexer(final Storage storage) {
         this.storage = storage;

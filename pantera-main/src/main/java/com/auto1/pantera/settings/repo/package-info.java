@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 /**
- * Artipie repositories.
+ * Pantera repositories.
  *
  * @since 0.4
  */

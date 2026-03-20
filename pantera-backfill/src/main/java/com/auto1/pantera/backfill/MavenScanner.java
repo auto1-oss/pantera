@@ -185,7 +185,7 @@ final class MavenScanner implements Scanner {
             pathPrefix = null;
         }
         final Long releaseDate =
-            ArtipieMetaSidecar.readReleaseDate(path).orElse(null);
+            PanteraMetaSidecar.readReleaseDate(path).orElse(null);
         return new ArtifactRecord(
             this.repoType, repoName, name, version,
             size, mtime, releaseDate, "system", pathPrefix

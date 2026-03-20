@@ -35,7 +35,7 @@ public final class MavenITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("maven/maven.yml", "my-maven")
             .withRepoConfig("maven/maven-port.yml", "my-maven-port")
             .withExposedPorts(8081),
@@ -59,12 +59,12 @@ public final class MavenITCase {
     void downloadsArtifact(final String type, final String vers, final String stn,
         final String repo) throws Exception {
         final String meta = String.format("com/artipie/%s/maven-metadata.xml", type);
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             meta, String.format("/var/artipie/data/%s/%s", repo, meta)
         );
         final String base = String.format("com/artipie/%s/%s", type, vers);
         MavenITCase.getResourceFiles(base).stream().map(r -> String.join("/", base, r)).forEach(
-            item -> this.containers.putResourceToArtipie(
+            item -> this.containers.putResourceToPantera(
                 item, String.format("/var/artipie/data/%s/%s", repo, item)
             )
         );

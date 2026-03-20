@@ -4,7 +4,7 @@
  */
 package  com.auto1.pantera.conan.http;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -36,7 +36,7 @@ import java.util.stream.Collectors;
  * Conan recognizes two types of packages: package binary and package recipe (sources).
  * Package recipe ("source code") could be built to multiple package binaries with different
  * configuration (conaninfo.txt).
- * Artipie-conan storage structure for now corresponds to standard conan_server.
+ * Pantera-conan storage structure for now corresponds to standard conan_server.
  */
 public final class ConansEntity {
 
@@ -110,7 +110,7 @@ public final class ConansEntity {
         /**
          * Ctor.
          *
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public DownloadBin(final Storage storage) {
             super(storage, new PathWrap.DownloadBin());
@@ -139,7 +139,7 @@ public final class ConansEntity {
                             builder.setPath(tuple._1());
                             result = Optional.of(builder.toString());
                         } catch (URISyntaxException ex) {
-                            throw new ArtipieIOException(ex);
+                            throw new PanteraIOException(ex);
                         }
                     }
                     return result;
@@ -156,7 +156,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public DownloadSrc(final Storage storage) {
             super(storage, new PathWrap.DownloadSrc());
@@ -183,7 +183,7 @@ public final class ConansEntity {
                             builder.setPath(tuple._1());
                             result = Optional.of(builder.toString());
                         } catch (URISyntaxException ex) {
-                            throw new ArtipieIOException(ex);
+                            throw new PanteraIOException(ex);
                         }
                     }
                     return result;
@@ -200,7 +200,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public GetSearchBinPkg(final Storage storage) {
             super(storage, new PathWrap.SearchBinPkg());
@@ -235,7 +235,7 @@ public final class ConansEntity {
                     try {
                         conaninfo = new Wini(new StringReader(data));
                     } catch (final IOException exception) {
-                        throw new ArtipieIOException(exception);
+                        throw new PanteraIOException(exception);
                     }
                     final JsonObjectBuilder pkgbuilder = Json.createObjectBuilder();
                     conaninfo.forEach(
@@ -261,7 +261,7 @@ public final class ConansEntity {
         /**
          * Searches Conan package files and generates json package info.
          * @param keys Storage keys for Conan package binary.
-         * @param pkgpath Conan package path in Artipie storage.
+         * @param pkgpath Conan package path in Pantera storage.
          * @return Package info as String in CompletableFuture.
          */
         private CompletableFuture<String> findPackageInfo(final Collection<Key> keys,
@@ -276,7 +276,7 @@ public final class ConansEntity {
                                     content, Json.createObjectBuilder(), pkghash
                                 );
                             } catch (final IOException exception) {
-                                throw new ArtipieIOException(exception);
+                                throw new PanteraIOException(exception);
                             }
                         }
                     )
@@ -290,7 +290,7 @@ public final class ConansEntity {
 
         /**
          * Extract package binary hash from storage key.
-         * @param key Artipie storage key instance.
+         * @param key Pantera storage key instance.
          * @param pkgpath Conan package path.
          * @return Package hash string value.
          */
@@ -311,7 +311,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public GetPkgInfo(final Storage storage) {
             super(storage, new PathWrap.PkgBinInfo());
@@ -344,7 +344,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public GetSearchSrcPkg(final Storage storage) {
             super(storage, new PathWrap.SearchSrcPkg());
@@ -390,7 +390,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public DigestForPkgSrc(final Storage storage) {
             super(storage, new PathWrap.DigestForPkgSrc());
@@ -429,7 +429,7 @@ public final class ConansEntity {
                                 builder.build()
                             );
                         } catch (URISyntaxException ex) {
-                            throw new ArtipieIOException(ex);
+                            throw new PanteraIOException(ex);
                         }
                     } else {
                         result = "";
@@ -447,7 +447,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public DigestForPkgBin(final Storage storage) {
             super(storage, new PathWrap.DigestForPkgBin());
@@ -487,7 +487,7 @@ public final class ConansEntity {
                                 builder.build()
                             );
                         } catch (URISyntaxException ex) {
-                            throw new ArtipieIOException(ex);
+                            throw new PanteraIOException(ex);
                         }
                     } else {
                         result = "";
@@ -505,7 +505,7 @@ public final class ConansEntity {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public GetSrcPkgInfo(final Storage storage) {
             super(storage, new PathWrap.PkgSrcInfo());

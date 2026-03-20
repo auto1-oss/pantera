@@ -38,7 +38,7 @@ final class HelmITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("helm/my-helm.yml", "my-helm")
             .withRepoConfig("helm/my-helm-port.yml", "my-helm-port")
             .withExposedPorts(8081),

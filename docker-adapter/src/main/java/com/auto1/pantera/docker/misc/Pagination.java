@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.docker.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.rq.RqParams;
 import org.apache.hc.core5.net.URIBuilder;
 
@@ -67,7 +67,7 @@ public record Pagination(String last, int limit) {
             }
             return builder.toString();
         } catch (URISyntaxException e) {
-            throw new ArtipieException(e);
+            throw new PanteraException(e);
         }
     }
 

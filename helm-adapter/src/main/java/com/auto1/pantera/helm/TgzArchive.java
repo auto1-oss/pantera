@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -118,7 +118,7 @@ public final class TgzArchive {
     private String file(final String name) {
         try {
             if (!this.isGzipFormat()) {
-                throw new ArtipieIOException(
+                throw new PanteraIOException(
                     new IOException("Input is not in the .gz format")
                 );
             }
@@ -135,7 +135,7 @@ public final class TgzArchive {
             }
             throw new IllegalStateException(String.format("'%s' file wasn't found", name));
         } catch (final IOException exc) {
-            throw new ArtipieIOException(exc);
+            throw new PanteraIOException(exc);
         }
     }
 

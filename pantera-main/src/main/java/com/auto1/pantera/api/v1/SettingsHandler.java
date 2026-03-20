@@ -11,7 +11,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.JwtSettings;
 import com.auto1.pantera.settings.MetricsContext;
@@ -39,12 +39,12 @@ import org.eclipse.jetty.http.HttpStatus;
 public final class SettingsHandler {
 
     /**
-     * Artipie port.
+     * Pantera port.
      */
     private final int port;
 
     /**
-     * Artipie settings.
+     * Pantera settings.
      */
     private final Settings settings;
 
@@ -64,14 +64,14 @@ public final class SettingsHandler {
     private final AuthProviderDao authProviderDao;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
-     * @param port Artipie port
-     * @param settings Artipie settings
+     * @param port Pantera port
+     * @param settings Pantera settings
      * @param manageRepo Repository settings manager
      * @param dataSource Database data source (nullable)
      * @param policy Security policy
@@ -140,7 +140,7 @@ public final class SettingsHandler {
     private JsonObject buildFullSettings() {
         final JsonObject response = new JsonObject()
             .put("port", this.port)
-            .put("version", new ArtipieProperties().version());
+            .put("version", new PanteraProperties().version());
         // Prefixes
         try {
             response.put("prefixes", new JsonArray(this.settings.prefixes().prefixes()));

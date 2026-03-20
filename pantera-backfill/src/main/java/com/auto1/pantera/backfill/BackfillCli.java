@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Single-repo:</b> {@code --type}, {@code --path}, {@code --repo-name}
  *       (original behaviour)</li>
  *   <li><b>Bulk:</b> {@code --config-dir}, {@code --storage-root} — reads all
- *       {@code *.yaml} Artipie repo configs and scans each repo automatically</li>
+ *       {@code *.yaml} Pantera repo configs and scans each repo automatically</li>
  * </ul>
  *
  * @since 1.20.13
@@ -402,7 +402,7 @@ public final class BackfillCli {
         options.addOption(
             Option.builder("C").longOpt("config-dir")
                 .hasArg().argName("DIR")
-                .desc("Directory of Artipie *.yaml repo configs — bulk mode")
+                .desc("Directory of Pantera *.yaml repo configs — bulk mode")
                 .build()
         );
         options.addOption(

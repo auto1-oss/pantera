@@ -6,7 +6,7 @@ package com.auto1.pantera.asto.factory;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -139,7 +139,7 @@ public interface Config {
                         res = node.asSequence().toString();
                         break;
                     default:
-                        throw new ArtipieException(
+                        throw new PanteraException(
                             String.format("Unknown node type [%s]", node.type())
                         );
                 }

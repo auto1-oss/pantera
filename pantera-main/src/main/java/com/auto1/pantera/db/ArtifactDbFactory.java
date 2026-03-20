@@ -5,7 +5,7 @@
 package com.auto1.pantera.db;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.zaxxer.hikari.HikariConfig;
@@ -18,7 +18,7 @@ import javax.sql.DataSource;
 /**
  * Factory to create and initialize artifacts PostgreSQL database.
  * <p/>
- * Factory accepts Artipie yaml settings file and creates database source and database structure.
+ * Factory accepts Pantera yaml settings file and creates database source and database structure.
  * If settings are absent in config yaml, default PostgreSQL connection parameters are used.
  * <p/>
  * Artifacts db settings section in artipie yaml:
@@ -155,7 +155,7 @@ public final class ArtifactDbFactory {
      * write to db.
      * If yaml settings are absent, default PostgreSQL connection parameters are used.
      * @return DataSource with connection pooling
-     * @throws ArtipieException On error
+     * @throws PanteraException On error
      */
     public DataSource initialize() {
         final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
@@ -212,7 +212,7 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaxLifetime(
             ConfigDefaults.getLong("ARTIPIE_DB_MAX_LIFETIME_MS", 1_800_000L)
         );
-        hikariConfig.setPoolName("ArtipieDB-Pool");
+        hikariConfig.setPoolName("PanteraDB-Pool");
 
         // Enable connection leak detection (300 seconds threshold)
         // Logs a warning if a connection is not returned to the pool within 300 seconds
@@ -286,7 +286,7 @@ public final class ArtifactDbFactory {
     /**
      * Create db structure to write artifacts data.
      * @param source Database source
-     * @throws ArtipieException On error
+     * @throws PanteraException On error
      */
     private static void createStructure(final DataSource source) {
         try (Connection conn = source.getConnection();
@@ -544,7 +544,7 @@ public final class ArtifactDbFactory {
                 "CREATE INDEX IF NOT EXISTS idx_import_sessions_repo_path ON import_sessions(repo_name, artifact_path)"
             );
         } catch (final SQLException error) {
-            throw new ArtipieException(error);
+            throw new PanteraException(error);
         }
     }
 }

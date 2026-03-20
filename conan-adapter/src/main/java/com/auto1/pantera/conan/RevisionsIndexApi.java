@@ -54,7 +54,7 @@ public final class RevisionsIndexApi {
     private final FullIndexer fullindexer;
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
@@ -65,7 +65,7 @@ public final class RevisionsIndexApi {
 
     /**
      * Initializes new instance.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      * @param pkgkey Package key for repository package data (full name).
      */
     public RevisionsIndexApi(final Storage storage, final Key pkgkey) {

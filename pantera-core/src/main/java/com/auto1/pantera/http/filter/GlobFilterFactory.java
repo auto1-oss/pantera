@@ -11,7 +11,7 @@ import com.amihaiemil.eoyaml.YamlMapping;
  *
  * @since 1.2
  */
-@ArtipieFilterFactory("glob")
+@PanteraFilterFactory("glob")
 public final class GlobFilterFactory implements FilterFactory {
     @Override
     public Filter newFilter(final YamlMapping yaml) {

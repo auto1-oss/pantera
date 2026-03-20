@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class HeadManifestSliceMdcTest {
 
     @Test
-    void setsMdcUserNameFromArtipieLoginHeaderBeforeCallingDockerLayer() {
+    void setsMdcUserNameFromPanteraLoginHeaderBeforeCallingDockerLayer() {
         final AtomicReference<String> capturedMdc = new AtomicReference<>("not-set");
         final byte[] content = (
             "{\"mediaType\":\"application/vnd.docker.distribution.manifest.v2+json\","

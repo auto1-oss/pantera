@@ -30,7 +30,7 @@ final class PypiITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("pypi-repo/pypi.yml", "my-python")
             .withRepoConfig("pypi-repo/pypi-port.yml", "my-python-port")
             .withUser("security/users/alice.yaml", "alice")
@@ -46,7 +46,7 @@ final class PypiITCase {
     //"8081,my-python-port" todo https://github.com/artipie/artipie/issues/1350
     void installPythonPackage(final String port, final String repo) throws IOException {
         final String meta = "pypi-repo/example-pckg/dist/artipietestpkg-0.0.3.tar.gz";
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             meta,
             String.format("/var/artipie/data/%s/artipietestpkg/artipietestpkg-0.0.3.tar.gz", repo)
         );
@@ -99,7 +99,7 @@ final class PypiITCase {
             "-u", "alice", "-p", "123",
             "/w/example-pckg/dist/artipietestpkg-0.0.3.tar.gz"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Bad content after upload",
             String.format("/var/artipie/data/%s/artipietestpkg/artipietestpkg-0.0.3.tar.gz", repo),
             Matchers.not("123".getBytes())

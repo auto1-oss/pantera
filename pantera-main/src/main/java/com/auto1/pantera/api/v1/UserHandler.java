@@ -12,8 +12,8 @@ import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.PanteraSecurity;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
@@ -54,33 +54,33 @@ public final class UserHandler {
     private final CrudUsers users;
 
     /**
-     * Artipie authenticated users cache.
+     * Pantera authenticated users cache.
      */
     private final Cleanable<String> ucache;
 
     /**
-     * Artipie policy cache.
+     * Pantera policy cache.
      */
     private final Cleanable<String> pcache;
 
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      */
     private final Authentication auth;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
      * @param users Crud users object
-     * @param caches Artipie caches
-     * @param security Artipie security
+     * @param caches Pantera caches
+     * @param security Pantera security
      */
-    public UserHandler(final CrudUsers users, final ArtipieCaches caches,
-        final ArtipieSecurity security) {
+    public UserHandler(final CrudUsers users, final PanteraCaches caches,
+        final PanteraSecurity security) {
         this.users = users;
         this.ucache = caches.usersCache();
         this.pcache = caches.policyCache();

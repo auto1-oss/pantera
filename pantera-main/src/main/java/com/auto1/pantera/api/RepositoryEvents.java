@@ -11,7 +11,7 @@ package com.auto1.pantera.api;
 public final class RepositoryEvents {
     private RepositoryEvents() { }
 
-    public static final String ADDRESS = "artipie.repos.events";
+    public static final String ADDRESS = "pantera.repos.events";
 
     public static final String UPSERT = "UPSERT";
     public static final String REMOVE = "REMOVE";

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.maven.metadata;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.maven.http.MavenSlice;
 import java.util.Collection;
@@ -26,7 +26,7 @@ public final class ArtifactEventInfo {
      */
     public Key artifactPackage(final Collection<Key> keys) {
         Key result = keys.stream().findFirst().orElseThrow(
-            () -> new ArtipieException("No artifact files found")
+            () -> new PanteraException("No artifact files found")
         );
         for (final String ext : MavenSlice.EXT) {
             final Optional<Key> artifact = keys.stream().filter(

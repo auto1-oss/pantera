@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 /**
- * Artipie http layer.
+ * Pantera http layer.
  *
  * @since 0.9
  */

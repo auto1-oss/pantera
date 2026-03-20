@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.misc;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,45 +12,45 @@ import java.util.Optional;
 import java.util.Properties;
 
 /**
- * Artipie properties.
+ * Pantera properties.
  * @since 0.21
  */
 @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
-public final class ArtipieProperties {
+public final class PanteraProperties {
     /**
-     * Key of field which contains Artipie version.
+     * Key of field which contains Pantera version.
      */
-    public static final String VERSION_KEY = "artipie.version";
+    public static final String VERSION_KEY = "pantera.version";
 
     /**
      * Expiration time for cached auth.
      */
-    public static final String AUTH_TIMEOUT = "artipie.cached.auth.timeout";
+    public static final String AUTH_TIMEOUT = "pantera.cached.auth.timeout";
 
     /**
      * Expiration time for cache of storage setting.
      */
-    public static final String STORAGE_TIMEOUT = "artipie.storage.file.cache.timeout";
+    public static final String STORAGE_TIMEOUT = "pantera.storage.file.cache.timeout";
 
     /**
      * Expiration time for cache of configuration files.
      */
-    public static final String CONFIG_TIMEOUT = "artipie.config.cache.timeout";
+    public static final String CONFIG_TIMEOUT = "pantera.config.cache.timeout";
 
     /**
      * Expiration time for cache of configuration files.
      */
-    public static final String SCRIPTS_TIMEOUT = "artipie.scripts.cache.timeout";
+    public static final String SCRIPTS_TIMEOUT = "pantera.scripts.cache.timeout";
 
     /**
      * Expiration time for cache of credential setting.
      */
-    public static final String CREDS_TIMEOUT = "artipie.credentials.file.cache.timeout";
+    public static final String CREDS_TIMEOUT = "pantera.credentials.file.cache.timeout";
 
     /**
      * Expiration time for cached filters.
      */
-    public static final String FILTERS_TIMEOUT = "artipie.cached.filters.timeout";
+    public static final String FILTERS_TIMEOUT = "pantera.cached.filters.timeout";
 
     /**
      * Name of file with properties.
@@ -65,26 +65,26 @@ public final class ArtipieProperties {
     /**
      * Ctor with default name of file with properties.
      */
-    public ArtipieProperties() {
-        this("artipie.properties");
+    public PanteraProperties() {
+        this("pantera.properties");
     }
 
     /**
      * Ctor.
      * @param filename Filename with properties
      */
-    public ArtipieProperties(final String filename) {
+    public PanteraProperties(final String filename) {
         this.filename = filename;
         this.properties = new Properties();
         this.loadProperties();
     }
 
     /**
-     * Obtains version of Artipie.
+     * Obtains version of Pantera.
      * @return Version
      */
     public String version() {
-        return this.properties.getProperty(ArtipieProperties.VERSION_KEY);
+        return this.properties.getProperty(PanteraProperties.VERSION_KEY);
     }
 
     /**
@@ -109,7 +109,7 @@ public final class ArtipieProperties {
                 this.properties.load(stream);
             }
         } catch (final IOException exc) {
-            throw new ArtipieIOException(exc);
+            throw new PanteraIOException(exc);
         }
     }
 }

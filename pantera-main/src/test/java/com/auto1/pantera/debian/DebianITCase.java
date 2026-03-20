@@ -29,7 +29,7 @@ public final class DebianITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("debian/debian.yml", "my-debian")
             .withRepoConfig("debian/debian-port.yml", "my-debian-port")
             .withExposedPorts(8081),

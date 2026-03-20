@@ -29,7 +29,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Artipie {@link Slice} for Conan repository HTTP API.
+ * Pantera {@link Slice} for Conan repository HTTP API.
  * @since 0.1
  */
 public final class ConanSlice extends Slice.Wrap {

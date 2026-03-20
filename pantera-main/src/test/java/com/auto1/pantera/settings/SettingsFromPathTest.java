@@ -22,7 +22,7 @@ class SettingsFromPathTest {
 
     @Test
     void createsSettings(final @TempDir Path temp) throws IOException {
-        final Path stng = temp.resolve("artipie.yaml");
+        final Path stng = temp.resolve("pantera.yaml");
         Files.write(
             Yaml.createYamlMappingBuilder().add(
                 "meta",

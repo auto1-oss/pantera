@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm.pkg;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -300,7 +300,7 @@ public final class HeaderTags {
          */
         public String ver() {
             return this.part("ver").orElseThrow(
-                () -> new ArtipieException(new IllegalArgumentException("Invalid version value"))
+                () -> new PanteraException(new IllegalArgumentException("Invalid version value"))
             );
         }
 
@@ -361,7 +361,7 @@ public final class HeaderTags {
             if (matcher.matches()) {
                 return Optional.ofNullable(matcher.group(name));
             }
-            throw new ArtipieException(new IllegalArgumentException("Provided version is invalid"));
+            throw new PanteraException(new IllegalArgumentException("Provided version is invalid"));
         }
     }
 

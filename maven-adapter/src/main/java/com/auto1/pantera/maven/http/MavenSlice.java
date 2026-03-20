@@ -59,7 +59,7 @@ public final class MavenSlice extends Slice.Wrap {
     );
 
     /**
-     * Private ctor since Artipie doesn't know about `Identities` implementation.
+     * Private ctor since Pantera doesn't know about `Identities` implementation.
      * @param storage The storage.
      * @param policy Access policy.
      * @param users Concrete identities.

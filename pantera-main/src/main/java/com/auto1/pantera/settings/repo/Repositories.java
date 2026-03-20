@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Artipie repositories registry.
+ * Pantera repositories registry.
  */
 public interface Repositories {
 

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.http.client.jetty;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.HttpClientSettings;
@@ -85,7 +85,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 this.clnt.start();
             } catch (Exception e) {
                 started.set(false);  // Reset on failure
-                throw new ArtipieException(
+                throw new PanteraException(
                     "Failed to start Jetty HTTP client. Check logs for connection/SSL issues.",
                     e
                 );
@@ -127,7 +127,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                     .eventOutcome("failure")
                     .error(e)
                     .log();
-                throw new ArtipieException(
+                throw new PanteraException(
                     "Failed to stop Jetty HTTP client. Some connections may not be closed properly.",
                     e
                 );
@@ -321,7 +321,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         result.setFollowRedirects(settings.followRedirects());
         // Remove Jetty's built-in AuthenticationProtocolHandler. Some upstream registries
         // return 401 without a WWW-Authenticate header (non-compliant but common), which
-        // causes Jetty to throw "HTTP protocol violation". Artipie handles authentication
+        // causes Jetty to throw "HTTP protocol violation". Pantera handles authentication
         // itself via AuthClientSlice, so the built-in handler is unnecessary.
         result.getProtocolHandlers().remove(
             org.eclipse.jetty.client.WWWAuthenticationProtocolHandler.NAME

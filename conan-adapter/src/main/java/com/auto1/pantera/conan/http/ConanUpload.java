@@ -4,7 +4,7 @@
  */
 package  com.auto1.pantera.conan.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -95,7 +95,7 @@ public final class ConanUpload {
             line.uri().getPath()
         );
         if (!matcher.matches()) {
-            throw new ArtipieException("Request parameters doesn't match: " + line);
+            throw new PanteraException("Request parameters doesn't match: " + line);
         }
         return matcher;
     }
@@ -119,7 +119,7 @@ public final class ConanUpload {
     public static final class UploadUrls implements Slice {
 
         /**
-         * Current Artipie storage instance.
+         * Current Pantera storage instance.
          */
         private final Storage storage;
 
@@ -129,7 +129,7 @@ public final class ConanUpload {
         private final ItemTokenizer tokenizer;
 
         /**
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenizer for repository items.
          */
         public UploadUrls(final Storage storage, final ItemTokenizer tokenizer) {
@@ -199,7 +199,7 @@ public final class ConanUpload {
     public static final class PutFile implements Slice {
 
         /**
-         * Current Artipie storage instance.
+         * Current Pantera storage instance.
          */
         private final Storage storage;
 
@@ -210,7 +210,7 @@ public final class ConanUpload {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          * @param tokenizer Tokenize repository items via JWT tokens.
          */
         public PutFile(final Storage storage, final ItemTokenizer tokenizer) {

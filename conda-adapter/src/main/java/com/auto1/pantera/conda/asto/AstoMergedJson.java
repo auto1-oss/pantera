@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.conda.asto;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.misc.UncheckedIOFunc;
@@ -66,7 +66,7 @@ public final class AstoMergedJson {
                         parser.get().close();
                     }
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             }
         );

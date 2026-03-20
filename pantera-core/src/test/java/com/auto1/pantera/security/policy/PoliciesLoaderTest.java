@@ -5,7 +5,7 @@
 package com.auto1.pantera.security.policy;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.auth.AuthUser;
 import java.security.Permissions;
 import java.util.Collections;
@@ -42,7 +42,7 @@ public class PoliciesLoaderTest {
     @Test
     void throwsExceptionIfPermNotFound() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new PoliciesLoader().newObject(
                 "unknown_policy",
                 new YamlPolicyConfig(Yaml.createYamlMappingBuilder().build())
@@ -53,7 +53,7 @@ public class PoliciesLoaderTest {
     @Test
     void throwsExceptionIfPermissionsHaveTheSameName() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new PoliciesLoader(
                 Collections.singletonMap(
                     PoliciesLoader.SCAN_PACK, "custom.policy.db;custom.policy.duplicate"

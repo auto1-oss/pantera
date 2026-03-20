@@ -5,7 +5,7 @@
 package com.auto1.pantera.http.filter;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.util.Arrays;
 import java.util.Map;
@@ -14,12 +14,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Load annotated by {@link ArtipieFilterFactory} annotation {@link FilterFactory} classes
+ * Load annotated by {@link PanteraFilterFactory} annotation {@link FilterFactory} classes
  * from the packages via reflection and instantiate filters.
  * @since 1.2
  */
 public final class FilterFactoryLoader extends
-    FactoryLoader<FilterFactory, ArtipieFilterFactory,
+    FactoryLoader<FilterFactory, PanteraFilterFactory,
     YamlMapping, Filter> {
 
     /**
@@ -40,7 +40,7 @@ public final class FilterFactoryLoader extends
      * @param env Environment
      */
     public FilterFactoryLoader(final Map<String, String> env) {
-        super(ArtipieFilterFactory.class, env);
+        super(PanteraFilterFactory.class, env);
     }
 
     @Override
@@ -57,7 +57,7 @@ public final class FilterFactoryLoader extends
     public Filter newObject(final String type, final YamlMapping yaml) {
         final FilterFactory factory = this.factories.get(type);
         if (factory == null) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 String.format(
                     "%s type %s is not found",
                     Filter.class.getSimpleName(),
@@ -71,14 +71,14 @@ public final class FilterFactoryLoader extends
     @Override
     public String getFactoryName(final Class<?> clazz) {
         return Arrays.stream(clazz.getAnnotations())
-            .filter(ArtipieFilterFactory.class::isInstance)
-            .map(inst -> ((ArtipieFilterFactory) inst).value())
+            .filter(PanteraFilterFactory.class::isInstance)
+            .map(inst -> ((PanteraFilterFactory) inst).value())
             .findFirst()
             .orElseThrow(
-                () -> new ArtipieException(
+                () -> new PanteraException(
                     String.format(
                         "Annotation '%s' should have a not empty value",
-                        ArtipieFilterFactory.class.getSimpleName()
+                        PanteraFilterFactory.class.getSimpleName()
                     )
                 )
             );

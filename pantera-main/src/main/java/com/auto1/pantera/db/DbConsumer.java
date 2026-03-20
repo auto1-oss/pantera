@@ -243,7 +243,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     try {
                         final DeadLetterWriter dlWriter = new DeadLetterWriter(
                             Path.of(System.getProperty(
-                                "artipie.home", "/var/artipie"
+                                "pantera.home", "/var/artipie"
                             )).resolve(".dead-letter")
                         );
                         dlWriter.write(sortedEvents, ex, failures);

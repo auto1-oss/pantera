@@ -11,7 +11,7 @@ import java.security.PermissionCollection;
  * Permission factory for {@link AllPermission}.
  * @since 1.2
  */
-@ArtipiePermissionFactory("all_permission")
+@PanteraPermissionFactory("all_permission")
 public final class AllPermissionFactory implements PermissionFactory<PermissionCollection> {
 
     @Override

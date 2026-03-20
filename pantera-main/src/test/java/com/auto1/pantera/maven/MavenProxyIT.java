@@ -29,7 +29,7 @@ final class MavenProxyIT {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("maven/maven-proxy.yml", "my-maven")
             .withRepoConfig("maven/maven-proxy-port.yml", "my-maven-port")
             .withExposedPorts(8081),
@@ -52,7 +52,7 @@ final class MavenProxyIT {
             ),
             "mvn", "-s", "settings.xml", "dependency:get", "-Dartifact=args4j:args4j:2.32:jar"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Artifact wasn't saved in cache",
             String.format("/var/artipie/data/%s/args4j/args4j/2.32/args4j-2.32.jar", repo),
             new IsAnything<>()

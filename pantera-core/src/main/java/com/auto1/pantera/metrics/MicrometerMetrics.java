@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.Map;
 
 /**
- * Micrometer metrics for Artipie.
+ * Micrometer metrics for Pantera.
  * Provides comprehensive observability across all repository types, caches, and upstreams.
  * Uses Micrometer with Prometheus registry for pull-based metrics collection.
  *
@@ -41,7 +41,7 @@ public final class MicrometerMetrics {
         this.registry = registry;
 
         // Register active requests gauge
-        Gauge.builder("artipie.http.active.requests", activeRequests, AtomicLong::get)
+        Gauge.builder("pantera.http.active.requests", activeRequests, AtomicLong::get)
             .description("Currently active HTTP requests")
             .register(registry);
 
@@ -145,13 +145,13 @@ public final class MicrometerMetrics {
             tags = new String[]{"method", method, "status_code", statusCode};
         }
 
-        Counter.builder("artipie.http.requests")
+        Counter.builder("pantera.http.requests")
             .description("Total HTTP requests")
             .tags(tags)
             .register(registry)
             .increment();
 
-        Timer.builder("artipie.http.request.duration")
+        Timer.builder("pantera.http.request.duration")
             .description("HTTP request duration")
             .tags(tags)
             .register(registry)
@@ -159,7 +159,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordHttpRequestSize(String method, long bytes) {
-        DistributionSummary.builder("artipie.http.request.size.bytes")
+        DistributionSummary.builder("pantera.http.request.size.bytes")
             .description("HTTP request body size")
             .tags("method", method)
             .baseUnit("bytes")
@@ -168,7 +168,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordHttpResponseSize(String method, String statusCode, long bytes) {
-        DistributionSummary.builder("artipie.http.response.size.bytes")
+        DistributionSummary.builder("pantera.http.response.size.bytes")
             .description("HTTP response body size")
             .tags("method", method, "status_code", statusCode)
             .baseUnit("bytes")
@@ -193,7 +193,7 @@ public final class MicrometerMetrics {
      * @param bytes Bytes downloaded
      */
     public void recordRepoBytesDownloaded(String repoName, String repoType, long bytes) {
-        Counter.builder("artipie.repo.bytes.downloaded")
+        Counter.builder("pantera.repo.bytes.downloaded")
             .description("Total bytes downloaded from repository")
             .tags("repo_name", repoName, "repo_type", repoType)
             .baseUnit("bytes")
@@ -208,7 +208,7 @@ public final class MicrometerMetrics {
      * @param bytes Bytes uploaded
      */
     public void recordRepoBytesUploaded(String repoName, String repoType, long bytes) {
-        Counter.builder("artipie.repo.bytes.uploaded")
+        Counter.builder("pantera.repo.bytes.uploaded")
             .description("Total bytes uploaded to repository")
             .tags("repo_name", repoName, "repo_type", repoType)
             .baseUnit("bytes")
@@ -217,14 +217,14 @@ public final class MicrometerMetrics {
     }
 
     public void recordDownload(String repoName, String repoType, long sizeBytes) {
-        Counter.builder("artipie.artifact.downloads")
+        Counter.builder("pantera.artifact.downloads")
             .description("Artifact download count")
             .tags("repo_name", repoName, "repo_type", repoType)
             .register(registry)
             .increment();
 
         if (sizeBytes > 0) {
-            DistributionSummary.builder("artipie.artifact.size.bytes")
+            DistributionSummary.builder("pantera.artifact.size.bytes")
                 .description("Artifact size distribution")
                 .tags("repo_name", repoName, "repo_type", repoType, "operation", "download")
                 .baseUnit("bytes")
@@ -237,14 +237,14 @@ public final class MicrometerMetrics {
     }
 
     public void recordUpload(String repoName, String repoType, long sizeBytes) {
-        Counter.builder("artipie.artifact.uploads")
+        Counter.builder("pantera.artifact.uploads")
             .description("Artifact upload count")
             .tags("repo_name", repoName, "repo_type", repoType)
             .register(registry)
             .increment();
 
         if (sizeBytes > 0) {
-            DistributionSummary.builder("artipie.artifact.size.bytes")
+            DistributionSummary.builder("pantera.artifact.size.bytes")
                 .description("Artifact size distribution")
                 .tags("repo_name", repoName, "repo_type", repoType, "operation", "upload")
                 .baseUnit("bytes")
@@ -257,7 +257,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordMetadataOperation(String repoName, String repoType, String operation) {
-        Counter.builder("artipie.metadata.operations")
+        Counter.builder("pantera.metadata.operations")
             .description("Metadata operations count")
             .tags("repo_name", repoName, "repo_type", repoType, "operation", operation)
             .register(registry)
@@ -265,7 +265,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordMetadataGenerationDuration(String repoName, String repoType, long durationMs) {
-        Timer.builder("artipie.metadata.generation.duration")
+        Timer.builder("pantera.metadata.generation.duration")
             .description("Metadata generation duration")
             .tags("repo_name", repoName, "repo_type", repoType)
             .register(registry)
@@ -275,7 +275,7 @@ public final class MicrometerMetrics {
     // ========== Cache Metrics ==========
 
     public void recordCacheHit(String cacheType, String cacheTier) {
-        Counter.builder("artipie.cache.requests")
+        Counter.builder("pantera.cache.requests")
             .description("Cache requests")
             .tags("cache_type", cacheType, "cache_tier", cacheTier, "result", "hit")
             .register(registry)
@@ -283,7 +283,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordCacheMiss(String cacheType, String cacheTier) {
-        Counter.builder("artipie.cache.requests")
+        Counter.builder("pantera.cache.requests")
             .description("Cache requests")
             .tags("cache_type", cacheType, "cache_tier", cacheTier, "result", "miss")
             .register(registry)
@@ -291,7 +291,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordCacheEviction(String cacheType, String cacheTier, String reason) {
-        Counter.builder("artipie.cache.evictions")
+        Counter.builder("pantera.cache.evictions")
             .description("Cache evictions")
             .tags("cache_type", cacheType, "cache_tier", cacheTier, "reason", reason)
             .register(registry)
@@ -299,7 +299,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordCacheError(String cacheType, String cacheTier, String errorType) {
-        Counter.builder("artipie.cache.errors")
+        Counter.builder("pantera.cache.errors")
             .description("Cache errors")
             .tags("cache_type", cacheType, "cache_tier", cacheTier, "error_type", errorType)
             .register(registry)
@@ -307,7 +307,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordCacheOperationDuration(String cacheType, String cacheTier, String operation, long durationMs) {
-        Timer.builder("artipie.cache.operation.duration")
+        Timer.builder("pantera.cache.operation.duration")
             .description("Cache operation latency")
             .tags("cache_type", cacheType, "cache_tier", cacheTier, "operation", operation)
             .register(registry)
@@ -315,7 +315,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordCacheDeduplication(String cacheType, String cacheTier) {
-        Counter.builder("artipie.cache.deduplications")
+        Counter.builder("pantera.cache.deduplications")
             .description("Deduplicated cache requests")
             .tags("cache_type", cacheType, "cache_tier", cacheTier)
             .register(registry)
@@ -327,13 +327,13 @@ public final class MicrometerMetrics {
     // ========== Storage Metrics ==========
 
     public void recordStorageOperation(String operation, String result, long durationMs) {
-        Counter.builder("artipie.storage.operations")
+        Counter.builder("pantera.storage.operations")
             .description("Storage operations count")
             .tags("operation", operation, "result", result)
             .register(registry)
             .increment();
 
-        Timer.builder("artipie.storage.operation.duration")
+        Timer.builder("pantera.storage.operation.duration")
             .description("Storage operation duration")
             .tags("operation", operation, "result", result)
             .register(registry)
@@ -343,13 +343,13 @@ public final class MicrometerMetrics {
     // ========== Proxy & Upstream Metrics ==========
 
     public void recordProxyRequest(String repoName, String upstream, String result, long durationMs) {
-        Counter.builder("artipie.proxy.requests")
+        Counter.builder("pantera.proxy.requests")
             .description("Proxy upstream requests")
             .tags("repo_name", repoName, "upstream", upstream, "result", result)
             .register(registry)
             .increment();
 
-        Timer.builder("artipie.proxy.request.duration")
+        Timer.builder("pantera.proxy.request.duration")
             .description("Proxy upstream request duration")
             .tags("repo_name", repoName, "upstream", upstream, "result", result)
             .register(registry)
@@ -357,7 +357,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordUpstreamLatency(String upstream, String result, long durationMs) {
-        Timer.builder("artipie.upstream.latency")
+        Timer.builder("pantera.upstream.latency")
             .description("Upstream request latency")
             .tags("upstream", upstream, "result", result)
             .register(registry)
@@ -365,7 +365,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordUpstreamError(String repoName, String upstream, String errorType) {
-        Counter.builder("artipie.upstream.errors")
+        Counter.builder("pantera.upstream.errors")
             .description("Upstream errors")
             .tags("repo_name", repoName, "upstream", upstream, "error_type", errorType)
             .register(registry)
@@ -386,7 +386,7 @@ public final class MicrometerMetrics {
     public void setUpstreamAvailability(String upstream, boolean available) {
         upstreamAvailability.computeIfAbsent(upstream, k -> {
             AtomicLong gauge = new AtomicLong(0);
-            Gauge.builder("artipie.upstream.available", gauge, AtomicLong::get)
+            Gauge.builder("pantera.upstream.available", gauge, AtomicLong::get)
                 .description("Upstream availability (1=available, 0=unavailable)")
                 .tags("upstream", upstream)
                 .register(registry);
@@ -397,7 +397,7 @@ public final class MicrometerMetrics {
     // ========== Group Repository Metrics ==========
 
     public void recordGroupRequest(String groupName, String result) {
-        Counter.builder("artipie.group.requests")
+        Counter.builder("pantera.group.requests")
             .description("Group repository requests")
             .tags("group_name", groupName, "result", result)
             .register(registry)
@@ -405,7 +405,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordGroupMemberRequest(String groupName, String memberName, String result) {
-        Counter.builder("artipie.group.member.requests")
+        Counter.builder("pantera.group.member.requests")
             .description("Group member requests")
             .tags("group_name", groupName, "member_name", memberName, "result", result)
             .register(registry)
@@ -413,7 +413,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordGroupMemberLatency(String groupName, String memberName, String result, long durationMs) {
-        Timer.builder("artipie.group.member.latency")
+        Timer.builder("pantera.group.member.latency")
             .description("Group member request latency")
             .tags("group_name", groupName, "member_name", memberName, "result", result)
             .register(registry)
@@ -421,7 +421,7 @@ public final class MicrometerMetrics {
     }
 
     public void recordGroupResolutionDuration(String groupName, long durationMs) {
-        Timer.builder("artipie.group.resolution.duration")
+        Timer.builder("pantera.group.resolution.duration")
             .description("Group resolution duration")
             .tags("group_name", groupName)
             .register(registry)

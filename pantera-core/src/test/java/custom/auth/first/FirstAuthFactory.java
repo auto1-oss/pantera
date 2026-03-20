@@ -5,7 +5,7 @@
 package custom.auth.first;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
@@ -16,7 +16,7 @@ import java.util.Optional;
  * Test auth.
  * @since 1.3
  */
-@ArtipieAuthFactory("first")
+@PanteraAuthFactory("first")
 public final class FirstAuthFactory implements AuthFactory {
 
     @Override

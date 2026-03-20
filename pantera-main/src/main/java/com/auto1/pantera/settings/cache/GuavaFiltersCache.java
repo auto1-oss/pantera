@@ -5,9 +5,9 @@
 package com.auto1.pantera.settings.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.filter.Filters;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.misc.Property;
 import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -40,7 +40,7 @@ public class GuavaFiltersCache implements FiltersCache {
         this.cache = Caffeine.newBuilder()
             .maximumSize(1_000)  // Default: 1000 repos
             .expireAfterAccess(Duration.ofMillis(
-                new Property(ArtipieProperties.FILTERS_TIMEOUT).asLongOrDefault(180_000L)
+                new Property(PanteraProperties.FILTERS_TIMEOUT).asLongOrDefault(180_000L)
             ))
             .recordStats()
             .evictionListener(this::onEviction)

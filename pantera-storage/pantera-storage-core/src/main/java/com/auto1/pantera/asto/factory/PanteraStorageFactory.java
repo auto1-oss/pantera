@@ -14,7 +14,7 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-public @interface ArtipieStorageFactory {
+public @interface PanteraStorageFactory {
     /**
      * Storage type.
      *

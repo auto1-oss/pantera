@@ -36,13 +36,13 @@ final class FileProxyAuthIT {
         Map.ofEntries(
             new MapEntry<>(
                 "artipie",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("binary/bin.yml", "my-bin")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
                 "artipie-proxy",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("binary/bin-proxy.yml", "my-bin-proxy")
                     .withRepoConfig("binary/bin-proxy-cache.yml", "my-bin-proxy-cache")
                     .withRepoConfig("binary/bin-proxy-port.yml", "my-bin-proxy-port")
@@ -57,7 +57,7 @@ final class FileProxyAuthIT {
     @ValueSource(strings = {"8080/my-bin-proxy", "8081/my-bin-proxy-port"})
     void shouldGetFileFromOrigin(final String repo) throws Exception {
         final byte[] data = "Hello world!".getBytes();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             "artipie", data,
             "/var/artipie/data/my-bin/foo/bar.txt"
         );
@@ -73,7 +73,7 @@ final class FileProxyAuthIT {
     @Test
     void cachesDataWhenCacheIsSet() throws IOException {
         final byte[] data = "Hello world!".getBytes();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             "artipie", data,
             "/var/artipie/data/my-bin/foo/bar.txt"
         );
@@ -84,7 +84,7 @@ final class FileProxyAuthIT {
             ),
             "curl", "-i", "-X", "GET", "http://artipie-proxy:8080/my-bin-proxy-cache/foo/bar.txt"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "artipie-proxy", "Proxy cached data",
             "/var/artipie/data/my-bin-proxy-cache/foo/bar.txt",
             new IsEqual<>(data)

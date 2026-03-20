@@ -78,7 +78,7 @@ public final class MavenITCase {
     @ValueSource(booleans = {true, false})
     void downloadsDependency(final boolean anonymous) throws Exception {
         this.init(anonymous);
-        this.addHellowordToArtipie();
+        this.addHellowordToPantera();
         MatcherAssert.assertThat(
             this.exec(
                 "mvn", "-s", "/home/settings.xml", "dependency:get",
@@ -285,7 +285,7 @@ public final class MavenITCase {
         );
     }
 
-    private void addHellowordToArtipie() {
+    private void addHellowordToPantera() {
         new TestResource("com/artipie/helloworld")
             .addFilesTo(this.storage, new Key.From("com", "artipie", "helloworld"));
     }

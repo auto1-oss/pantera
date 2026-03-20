@@ -97,10 +97,10 @@ public final class WebhookDispatcher {
         final io.vertx.ext.web.client.HttpRequest<Buffer> request =
             this.client.postAbs(webhook.url())
                 .putHeader("Content-Type", "application/json")
-                .putHeader("X-Artipie-Event", payload.getString("event"));
+                .putHeader("X-Pantera-Event", payload.getString("event"));
         webhook.signingSecret().ifPresent(secret -> {
             final String signature = computeHmac(body, secret);
-            request.putHeader("X-Artipie-Signature", "sha256=" + signature);
+            request.putHeader("X-Pantera-Signature", "sha256=" + signature);
         });
         request.sendBuffer(Buffer.buffer(body), ar -> {
             if (ar.succeeded() && ar.result().statusCode() < 300) {

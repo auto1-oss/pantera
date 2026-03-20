@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.cache;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -55,7 +55,7 @@ public final class FromRemoteCache implements Cache {
                 } else {
                     final Throwable error;
                     if (throwable == null) {
-                        error = new ArtipieIOException("Failed to load content from remote");
+                        error = new PanteraIOException("Failed to load content from remote");
                     } else {
                         error = throwable;
                     }

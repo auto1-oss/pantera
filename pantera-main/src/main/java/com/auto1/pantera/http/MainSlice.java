@@ -13,7 +13,7 @@ import com.auto1.pantera.http.rt.RtPath;
 import com.auto1.pantera.http.rt.RtRule;
 import com.auto1.pantera.http.rt.RtRulePath;
 import com.auto1.pantera.http.rt.SliceRoute;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.settings.Settings;
@@ -23,7 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 /**
- * Slice Artipie serves on it's main port.
+ * Slice Pantera serves on it's main port.
  * The slice handles `/.health`, `/.version` and repositories requests
  * extracting repository name from URI path.
  */
@@ -44,9 +44,9 @@ public final class MainSlice extends Slice.Wrap {
     };
 
     /**
-     * Artipie entry point.
+     * Pantera entry point.
      *
-     * @param settings Artipie settings.
+     * @param settings Pantera settings.
      * @param slices Repository slices.
      */
     public MainSlice(final Settings settings, final RepositorySlices slices) {
@@ -78,7 +78,7 @@ public final class MainSlice extends Slice.Wrap {
                     MethodRule.GET,
                     new RtRule.ByPath("/.version")
                 ),
-                new VersionSlice(new ArtipieProperties())
+                new VersionSlice(new PanteraProperties())
             ),
             new RtRulePath(
                 new RtRule.All(

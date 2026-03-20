@@ -12,8 +12,8 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
-import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.settings.PanteraSecurity;
+import com.auto1.pantera.test.TestPanteraCaches;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonArray;
@@ -36,11 +36,11 @@ import org.skyscreamer.jsonassert.JSONAssert;
 final class RolesRestTest extends RestApiServerBase {
 
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      * @return Authentication instance.
      */
-    ArtipieSecurity auth() {
-        return new ArtipieSecurity() {
+    PanteraSecurity auth() {
+        return new PanteraSecurity() {
             @Override
             public Authentication authentication() {
                 return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
@@ -226,7 +226,7 @@ final class RolesRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -287,7 +287,7 @@ final class RolesRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -333,7 +333,7 @@ final class RolesRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -378,7 +378,7 @@ final class RolesRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );

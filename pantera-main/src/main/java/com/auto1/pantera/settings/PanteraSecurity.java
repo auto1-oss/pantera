@@ -16,10 +16,10 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 /**
- * Artipie security: authentication and permissions policy.
+ * Pantera security: authentication and permissions policy.
  * @since 0.29
  */
-public interface ArtipieSecurity {
+public interface PanteraSecurity {
 
     /**
      * Instance of {@link CachedUsers} which implements
@@ -41,10 +41,10 @@ public interface ArtipieSecurity {
     Optional<Storage> policyStorage();
 
     /**
-     * Artipie security from yaml settings.
+     * Pantera security from yaml settings.
      * @since 0.29
      */
-    class FromYaml implements ArtipieSecurity {
+    class FromYaml implements PanteraSecurity {
 
         /**
          * YAML node name `type` for credentials type.

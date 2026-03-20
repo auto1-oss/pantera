@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -88,7 +88,7 @@ public final class TgzRelativePath {
         if (replace) {
             final Matcher matcher = TgzRelativePath.VRSN.matcher(matched.name());
             if (!matcher.matches()) {
-                throw new ArtipieException(
+                throw new PanteraException(
                     String.format(
                         "Failed to replace `/-/` in path `%s` with name `%s`",
                         matched.group(),
@@ -127,7 +127,7 @@ public final class TgzRelativePath {
         } else if (curlws.isPresent()) {
             matched = curlws.get();
         } else {
-            throw new ArtipieException(
+            throw new PanteraException(
                 String.format("a relative path was not found for: %s", this.full)
             );
         }

@@ -55,7 +55,7 @@ public final class OneTimePublisher<T> implements Publisher<T> {
                     }
                 }
             );
-            sub.onError(new ArtipieIOException(String.format(msg, subs)));
+            sub.onError(new PanteraIOException(String.format(msg, subs)));
         }
     }
 }

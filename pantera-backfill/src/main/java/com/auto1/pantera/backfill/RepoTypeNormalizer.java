@@ -5,7 +5,7 @@
 package com.auto1.pantera.backfill;
 
 /**
- * Normalises raw Artipie repo type strings to scanner type keys
+ * Normalises raw Pantera repo type strings to scanner type keys
  * understood by {@link ScannerFactory}.
  *
  * <p>Currently only strips the {@code -proxy} suffix

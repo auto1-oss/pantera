@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.fs;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
@@ -37,7 +37,7 @@ public class RxFile {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.asto.rxfile";
+    public static final String POOL_NAME = "pantera.asto.rxfile";
 
     /**
      * Shared thread factory for all RxFile instances.
@@ -117,7 +117,7 @@ public class RxFile {
                             Files.move(this.file, target, StandardCopyOption.REPLACE_EXISTING);
                             res.onComplete();
                         } catch (final IOException iex) {
-                            res.onError(new ArtipieIOException(iex));
+                            res.onError(new PanteraIOException(iex));
                         }
                     }
                 );
@@ -141,7 +141,7 @@ public class RxFile {
                             Files.delete(this.file);
                             res.onComplete();
                         } catch (final IOException iex) {
-                            res.onError(new ArtipieIOException(iex));
+                            res.onError(new PanteraIOException(iex));
                         }
                     }
                 );
@@ -164,7 +164,7 @@ public class RxFile {
                         try {
                             res.onSuccess(Files.size(this.file));
                         } catch (final IOException iex) {
-                            res.onError(new ArtipieIOException(iex));
+                            res.onError(new PanteraIOException(iex));
                         }
                     }
                 );

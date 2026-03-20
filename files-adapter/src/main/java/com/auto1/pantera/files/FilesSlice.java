@@ -77,7 +77,7 @@ public final class FilesSlice extends Slice.Wrap {
     private static final String REPO_TYPE = "file";
 
     /**
-     * Ctor used by Artipie server which knows `Authentication` implementation.
+     * Ctor used by Pantera server which knows `Authentication` implementation.
      * @param storage The storage. And default parameters for free access.
      * @param perms Access permissions.
      * @param auth Auth details.

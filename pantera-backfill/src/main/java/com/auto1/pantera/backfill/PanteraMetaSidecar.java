@@ -46,7 +46,7 @@ import org.slf4j.LoggerFactory;
  *
  * @since 1.20.13
  */
-final class ArtipieMetaSidecar {
+final class PanteraMetaSidecar {
 
     /**
      * Sidecar file suffix appended to the artifact path.
@@ -57,12 +57,12 @@ final class ArtipieMetaSidecar {
      * Logger.
      */
     private static final Logger LOG =
-        LoggerFactory.getLogger(ArtipieMetaSidecar.class);
+        LoggerFactory.getLogger(PanteraMetaSidecar.class);
 
     /**
      * Private ctor — utility class, not instantiated.
      */
-    private ArtipieMetaSidecar() {
+    private PanteraMetaSidecar() {
     }
 
     /**

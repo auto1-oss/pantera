@@ -19,7 +19,7 @@ public final class LoggingContext {
 
     /**
      * Constructor.
-     * @param meta Meta section from Artipie YAML settings (ignored)
+     * @param meta Meta section from Pantera YAML settings (ignored)
      */
     public LoggingContext(final YamlMapping meta) {
         // No-op: logging is now configured via log4j2.xml

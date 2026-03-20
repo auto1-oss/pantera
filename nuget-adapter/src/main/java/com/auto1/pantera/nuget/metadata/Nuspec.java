@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.nuget.metadata;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.jcabi.xml.XML;
 import com.jcabi.xml.XMLDocument;
 import java.io.IOException;
@@ -31,7 +31,7 @@ public interface Nuspec {
     /**
      * Package identifier: original case sensitive and lowercase.
      * @return Package id
-     * @throws ArtipieException If id field is not found
+     * @throws PanteraException If id field is not found
      */
     @SuppressWarnings("PMD.ShortMethodName")
     NuspecField id();
@@ -39,21 +39,21 @@ public interface Nuspec {
     /**
      * Package versions: original version field value or normalised.
      * @return Version of the package
-     * @throws ArtipieException If version field is not found
+     * @throws PanteraException If version field is not found
      */
     NuspecField version();
 
     /**
      * Package description.
      * @return Description
-     * @throws ArtipieException If description field is not found
+     * @throws PanteraException If description field is not found
      */
     String description();
 
     /**
      * Package authors.
      * @return Authors
-     * @throws ArtipieException If authors field is not found
+     * @throws PanteraException If authors field is not found
      */
     String authors();
 
@@ -92,7 +92,7 @@ public interface Nuspec {
     /**
      * Nuspec file bytes.
      * @return Bytes
-     * @throws ArtipieIOException On OI error
+     * @throws PanteraIOException On OI error
      */
     byte[] bytes();
 
@@ -131,7 +131,7 @@ public interface Nuspec {
         /**
          * Ctor.
          * @param input Input stream with nuspec content
-         * @throws ArtipieIOException On IO error
+         * @throws PanteraIOException On IO error
          */
         public Xml(final InputStream input) {
             this(Xml.read(input));
@@ -271,14 +271,14 @@ public interface Nuspec {
         private static String single(final XML xml, final String xpath) {
             final List<String> values = xml.xpath(xpath);
             if (values.isEmpty()) {
-                throw new ArtipieException(
+                throw new PanteraException(
                     new IllegalArgumentException(
                         String.format("No values found in path: '%s'", xpath)
                     )
                 );
             }
             if (values.size() > 1) {
-                throw new ArtipieException(
+                throw new PanteraException(
                     new IllegalArgumentException(
                         String.format("Multiple values found in path: '%s'", xpath)
                     )
@@ -296,7 +296,7 @@ public interface Nuspec {
             try {
                 return IOUtils.toByteArray(input);
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }

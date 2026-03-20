@@ -35,7 +35,7 @@ public final class SearchRest extends BaseRest {
     private final ArtifactIndex index;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 

@@ -4,13 +4,13 @@
  */
 package com.auto1.pantera.scheduling;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Throw this error on any event processing error occurred in consumer.
  * @since 1.13
  */
-public final class EventProcessingError extends ArtipieException {
+public final class EventProcessingError extends PanteraException {
 
     /**
      * Required serial.

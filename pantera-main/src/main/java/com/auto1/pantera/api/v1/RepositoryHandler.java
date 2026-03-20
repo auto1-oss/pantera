@@ -43,7 +43,7 @@ public final class RepositoryHandler {
     private static final String REPO = "repo";
 
     /**
-     * Artipie filters cache.
+     * Pantera filters cache.
      */
     private final FiltersCache filtersCache;
 
@@ -58,7 +58,7 @@ public final class RepositoryHandler {
     private final RepoData repoData;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
@@ -79,10 +79,10 @@ public final class RepositoryHandler {
 
     /**
      * Ctor.
-     * @param filtersCache Artipie filters cache
+     * @param filtersCache Pantera filters cache
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
-     * @param policy Artipie security policy
+     * @param policy Pantera security policy
      * @param events Artifact events queue
      * @param cooldown Cooldown service
      * @param eventBus Vert.x event bus

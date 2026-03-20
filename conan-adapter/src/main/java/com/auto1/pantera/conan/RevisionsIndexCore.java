@@ -37,13 +37,13 @@ public class RevisionsIndexCore {
     private static final String REVISION = "revision";
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
     /**
      * Initializes new instance.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      */
     public RevisionsIndexCore(final Storage storage) {
         this.storage = storage;

@@ -45,7 +45,7 @@ public class Merging {
         final MergeState state = new MergeState(maxSize);
         return source.concatMap(chunk -> {
             if (chunk.remaining() > maxSize) {
-                throw new ArtipieIOException("Input chunk is bigger than maximum size");
+                throw new PanteraIOException("Input chunk is bigger than maximum size");
             }
             final int diff = Math.min(chunk.remaining(), maxSize - state.getAccumulated());
             state.add(chunk, diff);

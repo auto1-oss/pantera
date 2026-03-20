@@ -16,7 +16,7 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * Artipie's meta config yaml builder.
+ * Pantera's meta config yaml builder.
  */
 public class MetaBuilder {
 
@@ -84,7 +84,7 @@ public class MetaBuilder {
                 .add("meta", meta.build())
                 .build()
                 .toString();
-        Path res = base.resolve("artipie.yml");
+        Path res = base.resolve("pantera.yml");
         Files.deleteIfExists(res);
         Files.createFile(res);
         return Files.write(res, data.getBytes());

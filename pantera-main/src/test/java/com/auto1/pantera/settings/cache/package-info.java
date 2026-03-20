@@ -4,7 +4,7 @@
  */
 
 /**
- * Tests for Artipie caches.
+ * Tests for Pantera caches.
  *
  * @since 0.23
  */

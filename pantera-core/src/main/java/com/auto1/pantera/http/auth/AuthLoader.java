@@ -5,7 +5,7 @@
 package com.auto1.pantera.http.auth;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.util.Arrays;
 import java.util.Collections;
@@ -17,7 +17,7 @@ import java.util.Set;
  * @since 1.3
  */
 public final class AuthLoader extends
-    FactoryLoader<AuthFactory, ArtipieAuthFactory, YamlMapping, Authentication> {
+    FactoryLoader<AuthFactory, PanteraAuthFactory, YamlMapping, Authentication> {
 
     /**
      * Environment parameter to define packages to find auth factories.
@@ -30,7 +30,7 @@ public final class AuthLoader extends
      * @param env Environment variable map
      */
     public AuthLoader(final Map<String, String> env) {
-        super(ArtipieAuthFactory.class, env);
+        super(PanteraAuthFactory.class, env);
     }
 
     /**
@@ -54,7 +54,7 @@ public final class AuthLoader extends
     public Authentication newObject(final String type, final YamlMapping mapping) {
         final AuthFactory factory = this.factories.get(type);
         if (factory == null) {
-            throw new ArtipieException(String.format("Auth type %s is not found", type));
+            throw new PanteraException(String.format("Auth type %s is not found", type));
         }
         return factory.getAuthentication(mapping);
     }
@@ -62,11 +62,11 @@ public final class AuthLoader extends
     @Override
     public String getFactoryName(final Class<?> clazz) {
         return Arrays.stream(clazz.getAnnotations())
-            .filter(ArtipieAuthFactory.class::isInstance)
-            .map(inst -> ((ArtipieAuthFactory) inst).value())
+            .filter(PanteraAuthFactory.class::isInstance)
+            .map(inst -> ((PanteraAuthFactory) inst).value())
             .findFirst()
             .orElseThrow(
-                () -> new ArtipieException("Annotation 'ArtipieAuthFactory' should have a not empty value")
+                () -> new PanteraException("Annotation 'PanteraAuthFactory' should have a not empty value")
             );
     }
 }

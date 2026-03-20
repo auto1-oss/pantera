@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie security layer.
+ * Pantera security layer.
  * @since 1.2
  */
 package com.auto1.pantera.security;

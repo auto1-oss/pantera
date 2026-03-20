@@ -83,7 +83,7 @@ public final class DebianSliceS3ITCase {
     private Storage storage;
 
     /**
-     * Artipie port.
+     * Pantera port.
      */
     private int port;
 

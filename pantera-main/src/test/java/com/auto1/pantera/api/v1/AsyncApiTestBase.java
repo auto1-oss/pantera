@@ -12,8 +12,8 @@ import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.nuget.RandomFreePort;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
-import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.settings.PanteraSecurity;
+import com.auto1.pantera.test.TestPanteraCaches;
 import com.auto1.pantera.test.TestSettings;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -71,7 +71,7 @@ public class AsyncApiTestBase {
     final void setUp(final Vertx vertx, final VertxTestContext ctx) throws Exception {
         this.port = new RandomFreePort().value();
         final Storage storage = new InMemoryStorage();
-        final ArtipieSecurity security = new ArtipieSecurity() {
+        final PanteraSecurity security = new PanteraSecurity() {
             @Override
             public Authentication authentication() {
                 return (name, pswd) -> Optional.of(new AuthUser("artipie", "test"));
@@ -94,7 +94,7 @@ public class AsyncApiTestBase {
         );
         vertx.deployVerticle(
             new AsyncApiVerticle(
-                new TestArtipieCaches(),
+                new TestPanteraCaches(),
                 storage,
                 this.port,
                 security,

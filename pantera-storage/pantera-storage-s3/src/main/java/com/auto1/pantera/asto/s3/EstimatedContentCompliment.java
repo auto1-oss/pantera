@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.s3;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
@@ -87,7 +87,7 @@ final class EstimatedContentCompliment {
             );
             temp.toFile().deleteOnExit();
         } catch (final IOException ex) {
-            throw new ArtipieIOException(ex);
+            throw new PanteraIOException(ex);
         }
         final Flowable<ByteBuffer> data = Flowable.fromPublisher(
             new File(temp).content()

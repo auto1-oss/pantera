@@ -9,7 +9,7 @@ import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.ValueNotFoundException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
@@ -221,7 +221,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                     .field("user.name", user.name())
                     .error(err)
                     .log();
-                throw new ArtipieException(err);
+                throw new PanteraException(err);
             }
         });
     }

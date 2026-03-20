@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Redis/Valkey pub/sub channel for cross-instance cache invalidation.
  * <p>
- * When multiple Artipie instances share a Valkey/Redis server, local
+ * When multiple Pantera instances share a Valkey/Redis server, local
  * Caffeine caches can become stale when another instance modifies data.
  * This class uses Redis pub/sub to broadcast invalidation messages so
  * all instances stay in sync.

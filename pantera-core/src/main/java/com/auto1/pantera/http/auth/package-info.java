@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie authentication and authorization mechanism.
+ * Pantera authentication and authorization mechanism.
  * @since 0.8
  */
 package com.auto1.pantera.http.auth;

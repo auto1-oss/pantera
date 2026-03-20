@@ -39,7 +39,7 @@ class BearerAuthenticatorTest {
                 return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
             }
         );
-        final String host = "artipie.com";
+        final String host = "pantera.com";
         final int port = 321;
         final String path = "/get_token";
         new BearerAuthenticator(

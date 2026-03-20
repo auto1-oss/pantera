@@ -51,14 +51,14 @@ public interface GpgConfig {
         private final YamlMapping yaml;
 
         /**
-         * Artipie configuration storage.
+         * Pantera configuration storage.
          */
         private final Storage storage;
 
         /**
          * Ctor.
          * @param yaml Yaml `settings` section
-         * @param storage Artipie configuration storage
+         * @param storage Pantera configuration storage
          */
         public FromYaml(final Optional<YamlMapping> yaml, final Storage storage) {
             this(
@@ -74,7 +74,7 @@ public interface GpgConfig {
         /**
          * Ctor.
          * @param yaml Yaml `settings` section
-         * @param storage Artipie configuration storage
+         * @param storage Pantera configuration storage
          */
         public FromYaml(final YamlMapping yaml, final Storage storage) {
             this.yaml = yaml;

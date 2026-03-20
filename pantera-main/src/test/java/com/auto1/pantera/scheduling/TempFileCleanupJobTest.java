@@ -40,7 +40,7 @@ public final class TempFileCleanupJobTest {
     }
 
     @Test
-    void deletesOldArtipieCacheFiles(@TempDir final Path dir) throws Exception {
+    void deletesOldPanteraCacheFiles(@TempDir final Path dir) throws Exception {
         final Path old = dir.resolve("artipie-cache-data");
         Files.writeString(old, "cache data");
         setOldTimestamp(old, 90);
@@ -196,7 +196,7 @@ public final class TempFileCleanupJobTest {
     }
 
     @Test
-    void deletesOldArtipieStcFilesWithoutTmpExtension(@TempDir final Path dir)
+    void deletesOldPanteraStcFilesWithoutTmpExtension(@TempDir final Path dir)
         throws Exception {
         final Path old = dir.resolve("artipie-stc-nosuffix");
         Files.writeString(old, "stc data");

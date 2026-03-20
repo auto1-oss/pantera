@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -19,10 +19,10 @@ import org.junit.jupiter.api.Test;
 class UncheckedScalarTest {
 
     @Test
-    void throwsArtipieException() {
+    void throwsPanteraException() {
         final Exception error = new Exception("Error");
         final Exception res = Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new UncheckedScalar<>(() -> { throw error; }).value()
         );
         MatcherAssert.assertThat(
@@ -32,10 +32,10 @@ class UncheckedScalarTest {
     }
 
     @Test
-    void throwsArtipieIOException() {
+    void throwsPanteraIOException() {
         final IOException error = new IOException("IO error");
         final Exception res = Assertions.assertThrows(
-            ArtipieIOException.class,
+            PanteraIOException.class,
             () -> new UncheckedIOScalar<>(() -> { throw error; }).value()
         );
         MatcherAssert.assertThat(

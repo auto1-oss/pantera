@@ -26,7 +26,7 @@ public final class MetadataDockerITCase {
      */
     @RegisterExtension
     final TestDeployment deployment = new TestDeployment(
-        () -> new TestDeployment.ArtipieContainer().withConfig("artipie-db.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("artipie-db.yaml")
             .withRepoConfig("docker/registry.yml", "registry")
             .withRepoConfig("docker/docker-proxy-port.yml", "my-docker-proxy")
             .withUser("security/users/alice.yaml", "alice")

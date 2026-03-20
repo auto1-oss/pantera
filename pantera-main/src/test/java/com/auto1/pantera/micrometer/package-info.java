@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie micrometer test.
+ * Pantera micrometer test.
  *
  * @since 0.28
  */

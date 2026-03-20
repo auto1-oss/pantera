@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie authentication providers tests.
+ * Pantera authentication providers tests.
  *
  * @since 0.3
  */

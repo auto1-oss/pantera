@@ -118,9 +118,9 @@ public final class DownloadAssetSlice implements Slice {
                 .log();
             
             // Check if it's an HTTP exception with a specific status
-            if (cause instanceof com.auto1.pantera.http.ArtipieHttpException) {
-                final com.auto1.pantera.http.ArtipieHttpException httpEx = 
-                    (com.auto1.pantera.http.ArtipieHttpException) cause;
+            if (cause instanceof com.auto1.pantera.http.PanteraHttpException) {
+                final com.auto1.pantera.http.PanteraHttpException httpEx = 
+                    (com.auto1.pantera.http.PanteraHttpException) cause;
                 return ResponseBuilder.from(httpEx.status())
                     .jsonBody(String.format(
                         "{\"error\":\"%s\"}",

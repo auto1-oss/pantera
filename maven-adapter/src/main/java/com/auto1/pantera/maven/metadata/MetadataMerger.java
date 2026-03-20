@@ -60,7 +60,7 @@ public final class MetadataMerger {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.maven.merger";
+    public static final String POOL_NAME = "pantera.maven.merger";
 
     /**
      * Dedicated thread pool for metadata merging operations.

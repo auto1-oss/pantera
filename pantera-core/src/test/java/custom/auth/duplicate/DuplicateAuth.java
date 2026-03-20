@@ -5,7 +5,7 @@
 package custom.auth.duplicate;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 
@@ -14,7 +14,7 @@ import java.util.Optional;
 /**
  * Test auth.
  */
-@ArtipieAuthFactory("first")
+@PanteraAuthFactory("first")
 public final class DuplicateAuth implements AuthFactory {
 
     @Override

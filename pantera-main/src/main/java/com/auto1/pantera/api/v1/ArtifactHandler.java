@@ -39,7 +39,7 @@ public final class ArtifactHandler {
     private final RepoData repoData;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
@@ -47,7 +47,7 @@ public final class ArtifactHandler {
      * Ctor.
      * @param crs Repository settings CRUD
      * @param repoData Repository data management
-     * @param policy Artipie security policy
+     * @param policy Pantera security policy
      */
     public ArtifactHandler(final CrudRepoSettings crs, final RepoData repoData,
         final Policy<?> policy) {

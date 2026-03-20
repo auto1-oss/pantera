@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.api.perms;
 
-import com.auto1.pantera.security.perms.ArtipiePermissionFactory;
+import com.auto1.pantera.security.perms.PanteraPermissionFactory;
 import com.auto1.pantera.security.perms.PermissionConfig;
 import com.auto1.pantera.security.perms.PermissionFactory;
 
@@ -12,7 +12,7 @@ import com.auto1.pantera.security.perms.PermissionFactory;
  * Factory for {@link ApiAliasPermission}.
  * @since 0.30
  */
-@ArtipiePermissionFactory(ApiAliasPermission.NAME)
+@PanteraPermissionFactory(ApiAliasPermission.NAME)
 public final class ApiAliasPermissionFactory implements
     PermissionFactory<RestApiPermission.RestApiPermissionCollection> {
 

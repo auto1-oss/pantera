@@ -41,14 +41,14 @@ public final class SearchHandler {
     private final ArtifactIndex index;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
      * @param index Artifact index
-     * @param policy Artipie security policy
+     * @param policy Pantera security policy
      */
     public SearchHandler(final ArtifactIndex index, final Policy<?> policy) {
         this.index = Objects.requireNonNull(index, "index");

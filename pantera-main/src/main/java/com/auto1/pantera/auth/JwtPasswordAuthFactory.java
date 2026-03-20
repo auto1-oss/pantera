@@ -5,7 +5,7 @@
 package com.auto1.pantera.auth;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -37,7 +37,7 @@ import io.vertx.ext.auth.jwt.JWTAuthOptions;
  *
  * @since 1.20.7
  */
-@ArtipieAuthFactory("jwt-password")
+@PanteraAuthFactory("jwt-password")
 public final class JwtPasswordAuthFactory implements AuthFactory {
 
     /**
@@ -97,7 +97,7 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
      * Get or create shared Vertx instance.
      * We need a Vertx instance to create JWTAuth, but we don't want to
      * create a new one each time as it's heavy. This uses the same pattern
-     * as other parts of Artipie that need Vertx for non-web operations.
+     * as other parts of Pantera that need Vertx for non-web operations.
      *
      * @return Shared Vertx instance
      */

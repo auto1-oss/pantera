@@ -54,7 +54,7 @@ public final class RpmUpload implements Slice {
     private final RepoConfig config;
 
     /**
-     * Artipie artifact upload/remove events.
+     * Pantera artifact upload/remove events.
      */
     private final Optional<Queue<ArtifactEvent>> events;
 
@@ -63,7 +63,7 @@ public final class RpmUpload implements Slice {
      *
      * @param storage Storage
      * @param config Repository configuration
-     * @param events Artipie artifact upload/remove events
+     * @param events Pantera artifact upload/remove events
      */
     RpmUpload(final Storage storage, final RepoConfig config,
         final Optional<Queue<ArtifactEvent>> events) {

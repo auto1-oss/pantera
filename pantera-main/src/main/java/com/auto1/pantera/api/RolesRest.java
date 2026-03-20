@@ -20,7 +20,7 @@ import javax.json.JsonObject;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
- * REST API methods to manage Artipie roles.
+ * REST API methods to manage Pantera roles.
  * @since 0.27
  */
 public final class RolesRest extends BaseRest {
@@ -48,20 +48,20 @@ public final class RolesRest extends BaseRest {
     private final CrudRoles roles;
 
     /**
-     * Artipie policy cache.
+     * Pantera policy cache.
      */
     private final Cleanable<String> cache;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
      * @param roles Crud roles object
-     * @param cache Artipie authenticated roles cache
-     * @param policy Artipie policy cache
+     * @param cache Pantera authenticated roles cache
+     * @param policy Pantera policy cache
      */
     public RolesRest(final CrudRoles roles, final Cleanable<String> cache, final Policy<?> policy) {
         this.roles = roles;

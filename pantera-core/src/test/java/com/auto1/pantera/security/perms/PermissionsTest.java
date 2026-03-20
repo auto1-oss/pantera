@@ -5,7 +5,7 @@
 package com.auto1.pantera.security.perms;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.security.AllPermission;
 import java.util.Collections;
 import org.hamcrest.MatcherAssert;
@@ -48,7 +48,7 @@ class PermissionsTest {
     @Test
     void throwsExceptionIfPermNotFound() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new PermissionsLoader().newObject(
                 "unknown_perm",
                 new PermissionConfig.FromYamlMapping(Yaml.createYamlMappingBuilder().build())
@@ -59,7 +59,7 @@ class PermissionsTest {
     @Test
     void throwsExceptionIfPermissionsHaveTheSameName() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new PermissionsLoader(
                 Collections.singletonMap(
                     PermissionsLoader.SCAN_PACK, "adapter.perms.docker;adapter.perms.duplicate"

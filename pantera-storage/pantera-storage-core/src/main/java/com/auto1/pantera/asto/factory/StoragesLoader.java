@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.factory;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Storage;
 import java.util.Arrays;
 import java.util.Collections;
@@ -15,7 +15,7 @@ import java.util.Set;
  * Storages to get instance of storage.
  */
 public final class StoragesLoader
-    extends FactoryLoader<StorageFactory, ArtipieStorageFactory, Config, Storage> {
+    extends FactoryLoader<StorageFactory, PanteraStorageFactory, Config, Storage> {
 
     public static StoragesLoader STORAGES = new StoragesLoader();
 
@@ -38,7 +38,7 @@ public final class StoragesLoader
      * @param env Environment parameters.
      */
     public StoragesLoader(final Map<String, String> env) {
-        super(ArtipieStorageFactory.class, env);
+        super(PanteraStorageFactory.class, env);
     }
 
     @Override
@@ -87,11 +87,11 @@ public final class StoragesLoader
     @Override
     public String getFactoryName(final Class<?> element) {
         return Arrays.stream(element.getAnnotations())
-            .filter(ArtipieStorageFactory.class::isInstance)
-            .map(a -> ((ArtipieStorageFactory) a).value())
+            .filter(PanteraStorageFactory.class::isInstance)
+            .map(a -> ((PanteraStorageFactory) a).value())
             .findFirst()
             .orElseThrow(
-                () -> new ArtipieException("Annotation 'ArtipieStorageFactory' should have a not empty value")
+                () -> new PanteraException("Annotation 'PanteraStorageFactory' should have a not empty value")
             );
     }
 }

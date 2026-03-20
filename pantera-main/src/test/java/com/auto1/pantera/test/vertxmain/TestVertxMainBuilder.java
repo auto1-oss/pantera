@@ -22,7 +22,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Artipie server builder.
+ * Pantera server builder.
  */
 public class TestVertxMainBuilder {
 
@@ -63,7 +63,7 @@ public class TestVertxMainBuilder {
     private final Path roles;
 
     /**
-     * Creates Artipie server builder.
+     * Creates Pantera server builder.
      *
      * @param base Work directory
      */
@@ -231,7 +231,7 @@ public class TestVertxMainBuilder {
     }
 
     /**
-     * Builds and starts Artipie server.
+     * Builds and starts Pantera server.
      *
      * @return TestVertxMain
      * @throws IOException If failed
@@ -241,9 +241,9 @@ public class TestVertxMainBuilder {
     }
 
     /**
-     * Builds and starts Artipie server.
+     * Builds and starts Pantera server.
      *
-     * @param port Artipie http server port
+     * @param port Pantera http server port
      * @return TestVertxMain
      * @throws IOException If failed
      */

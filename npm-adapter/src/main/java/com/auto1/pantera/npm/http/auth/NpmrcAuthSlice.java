@@ -71,7 +71,7 @@ public final class NpmrcAuthSlice implements Slice {
     private final URL baseUrl;
 
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      */
     private final Authentication auth;
 
@@ -88,12 +88,12 @@ public final class NpmrcAuthSlice implements Slice {
     /**
      * Default email domain.
      */
-    private static final String DEFAULT_EMAIL_DOMAIN = "artipie.local";
+    private static final String DEFAULT_EMAIL_DOMAIN = "pantera.local";
 
     /**
      * Constructor.
      * @param baseUrl Repository base URL
-     * @param auth Artipie authentication
+     * @param auth Pantera authentication
      * @param tokens Token service to generate JWT tokens
      * @param tokenAuth Token authentication for Bearer tokens
      */
@@ -129,7 +129,7 @@ public final class NpmrcAuthSlice implements Slice {
                 if (result.user.isEmpty()) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.unauthorized()
-                            .header("WWW-Authenticate", "Basic realm=\"Artipie NPM Registry\"")
+                            .header("WWW-Authenticate", "Basic realm=\"Pantera NPM Registry\"")
                             .textBody("Authentication required")
                             .build()
                     );

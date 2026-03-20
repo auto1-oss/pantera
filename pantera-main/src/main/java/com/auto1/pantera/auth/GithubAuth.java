@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.auth;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.jcabi.github.RtGithub;
@@ -75,7 +75,7 @@ public final class GithubAuth implements Authentication {
             } catch (final AssertionError error) {
                 if (error.getMessage() == null
                     || !error.getMessage().contains("401 Unauthorized")) {
-                    throw new ArtipieException(error);
+                    throw new PanteraException(error);
                 }
             }
         }

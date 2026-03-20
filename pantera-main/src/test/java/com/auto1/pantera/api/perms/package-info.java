@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie Rest API permissions test.
+ * Pantera Rest API permissions test.
  *
  * @since 0.30
  */

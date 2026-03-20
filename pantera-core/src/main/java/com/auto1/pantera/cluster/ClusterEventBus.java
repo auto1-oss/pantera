@@ -18,7 +18,7 @@ import java.util.function.Consumer;
 
 /**
  * Cross-instance event bus using Valkey pub/sub.
- * Broadcasts events to all connected Artipie instances for HA clustering.
+ * Broadcasts events to all connected Pantera instances for HA clustering.
  * <p>
  * Events are published as strings on Valkey channels with the naming
  * convention {@code artipie:events:{topic}}. Each instance subscribes
@@ -101,7 +101,7 @@ public final class ClusterEventBus implements AutoCloseable {
 
     /**
      * Publish an event to a topic.
-     * The event will be broadcast to all Artipie instances subscribed
+     * The event will be broadcast to all Pantera instances subscribed
      * to this topic. The publishing instance will ignore its own message.
      *
      * @param topic Topic name (e.g. "config.change", "repo.update")

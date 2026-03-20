@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.test;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -38,7 +38,7 @@ import org.junit.jupiter.api.Timeout;
 /**
  * Storage verification tests.
  * <p>
- * If a storage implementation passes this tests, it can be used like a storage in Artipie server.
+ * If a storage implementation passes this tests, it can be used like a storage in Pantera server.
  *
  * @since 1.14.0
  */
@@ -197,7 +197,7 @@ public abstract class StorageWhiteboxVerification {
                 final Content value = storage.value(key).join();
                 Flowable.fromPublisher(value).toList().blockingGet();
                 Assertions.assertThrows(
-                    ArtipieIOException.class,
+                    PanteraIOException.class,
                     () -> Flowable.fromPublisher(value).toList().blockingGet(),
                     pair.getKey()
                 );
@@ -455,7 +455,7 @@ public abstract class StorageWhiteboxVerification {
                     MatcherAssert.assertThat(
                         pair.getKey(),
                         completion.getCause(),
-                        new IsInstanceOf(ArtipieIOException.class)
+                        new IsInstanceOf(PanteraIOException.class)
                     );
                 } finally {
                     operation.finished.complete(null);

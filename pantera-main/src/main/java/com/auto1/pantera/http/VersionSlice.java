@@ -6,7 +6,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 
 import javax.json.Json;
 import java.util.concurrent.CompletableFuture;
@@ -16,9 +16,9 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class VersionSlice implements Slice {
 
-    private final ArtipieProperties properties;
+    private final PanteraProperties properties;
 
-    public VersionSlice(final ArtipieProperties properties) {
+    public VersionSlice(final PanteraProperties properties) {
         this.properties = properties;
     }
 

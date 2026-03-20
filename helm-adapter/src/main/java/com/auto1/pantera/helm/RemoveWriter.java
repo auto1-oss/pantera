@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Remaining;
@@ -149,14 +149,14 @@ public interface RemoveWriter {
                                                     bufw.close();
                                                     osw.close();
                                                 } catch (final IOException exc) {
-                                                    throw new ArtipieIOException(exc);
+                                                    throw new PanteraIOException(exc);
                                                 }
                                                 return CompletableFuture.allOf();
                                             }
                                         )
                                 );
                         } catch (final IOException exc) {
-                            throw new ArtipieIOException(exc);
+                            throw new PanteraIOException(exc);
                         }
                     }
                 );
@@ -235,7 +235,7 @@ public interface RemoveWriter {
         ) {
             for (final String pckg : todelete.keySet()) {
                 if (!fromidx.containsKey(pckg)) {
-                    throw new ArtipieException(
+                    throw new PanteraException(
                         new IllegalStateException(
                             String.format(
                                 "Failed to delete package `%s` as it is absent in index", pckg
@@ -245,7 +245,7 @@ public interface RemoveWriter {
                 }
                 for (final String vrsn : todelete.get(pckg)) {
                     if (!fromidx.get(pckg).contains(vrsn)) {
-                        throw new ArtipieException(
+                        throw new PanteraException(
                             new IllegalStateException(
                                 String.format(
                                     "Failed to delete package `%s` with version `%s` as it is absent in index",

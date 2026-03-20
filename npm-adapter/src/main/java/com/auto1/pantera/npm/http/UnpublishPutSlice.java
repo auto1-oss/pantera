@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -153,7 +153,7 @@ final class UnpublishPutSlice implements Slice {
             update.getJsonObject(field).keySet()
         );
         if (diff.size() != 1) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 String.format(
                     "Failed to unpublish single version. Should be one version, but were `%s`",
                     diff.toString()

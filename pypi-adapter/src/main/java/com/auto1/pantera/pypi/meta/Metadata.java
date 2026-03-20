@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.pypi.meta;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -184,8 +184,8 @@ public interface Metadata {
          * @param err Original exception
          * @return IllegalArgumentException instance
          */
-        private static ArtipieIOException error(final Exception err) {
-            return new ArtipieIOException("Failed to parse python package", err);
+        private static PanteraIOException error(final Exception err) {
+            return new PanteraIOException("Failed to parse python package", err);
         }
 
         /**
@@ -211,7 +211,7 @@ public interface Metadata {
                 }
             }
             return res.orElseThrow(
-                () -> new ArtipieIOException("Package metadata file not found")
+                () -> new PanteraIOException("Package metadata file not found")
             );
         }
 

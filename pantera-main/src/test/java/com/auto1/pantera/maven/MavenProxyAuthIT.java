@@ -34,13 +34,13 @@ final class MavenProxyAuthIT {
         Map.ofEntries(
             new MapEntry<>(
                 "artipie",
-                () -> new TestDeployment.ArtipieContainer().withConfig("artipie_with_policy.yaml")
+                () -> new TestDeployment.PanteraContainer().withConfig("artipie_with_policy.yaml")
                     .withRepoConfig("maven/maven-with-perms.yml", "my-maven")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
                 "artipie-proxy",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("maven/maven-proxy-artipie.yml", "my-maven-proxy")
             )
         ),
@@ -53,7 +53,7 @@ final class MavenProxyAuthIT {
 
     @Test
     void shouldGetDependency() throws Exception {
-        this.containers.putResourceToArtipie(
+        this.containers.putResourceToPantera(
             "artipie",
             "com/artipie/helloworld/maven-metadata.xml",
             "/var/artipie/data/my-maven/com/artipie/helloworld/maven-metadata.xml"
@@ -61,7 +61,7 @@ final class MavenProxyAuthIT {
         MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
             .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
             .forEach(
-                item -> this.containers.putResourceToArtipie(
+                item -> this.containers.putResourceToPantera(
                     item, String.join("/", "/var/artipie/data/my-maven", item)
                 )
             );
@@ -74,7 +74,7 @@ final class MavenProxyAuthIT {
             "mvn", "-s", "settings.xml",
             "dependency:get", "-Dartifact=com.auto1.pantera:helloworld:0.1:jar"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "artipie-proxy",
             "Artifact was not cached in proxy",
             "/var/artipie/data/my-maven-proxy/com/artipie/helloworld/0.1/helloworld-0.1.jar",

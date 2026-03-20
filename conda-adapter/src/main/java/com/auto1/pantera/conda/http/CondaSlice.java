@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
 /**
  * Main conda entry point. Note, that {@link com.auto1.pantera.http.slice.TrimPathSlice} is not
  * applied for conda-adapter in artipie, which means all the paths includes repository name
- * when the adapter is used in Artipie ecosystem. The reason is that anaconda performs
+ * when the adapter is used in Pantera ecosystem. The reason is that anaconda performs
  * various requests, for example:
  * /{reponame}/release/{username}/snappy/1.1.3
  * /{reponame}/dist/{username}/snappy/1.1.3/linux-64/snappy-1.1.3-0.tar.bz2

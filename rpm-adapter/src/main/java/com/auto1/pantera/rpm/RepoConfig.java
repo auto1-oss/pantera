@@ -8,7 +8,7 @@ import com.amihaiemil.eoyaml.Node;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -39,14 +39,14 @@ public interface RepoConfig {
     /**
      * Repository update mode, default is {@link UpdateMode#UPLOAD}.
      * @return Instance of {@link UpdateMode}
-     * @throws ArtipieException When configuration is invalid
+     * @throws PanteraException When configuration is invalid
      */
     UpdateMode mode();
 
     /**
      * Schedule to update repository in cron format, available for {@link UpdateMode#CRON} only.
      * @return Cron update schedule
-     * @throws ArtipieException When configuration is invalid
+     * @throws PanteraException When configuration is invalid
      */
     Optional<String> cron();
 
@@ -151,7 +151,7 @@ public interface RepoConfig {
                         && "upload".equals(node.asScalar().value())) {
                         res = UpdateMode.UPLOAD;
                     } else {
-                        throw new ArtipieException(
+                        throw new PanteraException(
                             "Repository settings section `upload` is incorrectly configured"
                         );
                     }

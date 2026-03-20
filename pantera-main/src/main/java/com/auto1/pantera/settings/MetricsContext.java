@@ -49,7 +49,7 @@ public final class MetricsContext {
     private static final String TYPE_STORAGE = "storage";
 
     /**
-     * Meta section from Artipie yaml settings.
+     * Meta section from Pantera yaml settings.
      */
     private final Optional<Pair<String, Integer>> pair;
 
@@ -60,7 +60,7 @@ public final class MetricsContext {
 
     /**
      * Ctor.
-     * @param meta Meta section from Artipie yaml settings
+     * @param meta Meta section from Pantera yaml settings
      */
     public MetricsContext(final YamlMapping meta) {
         this.pair = MetricsContext.parseYaml(meta);

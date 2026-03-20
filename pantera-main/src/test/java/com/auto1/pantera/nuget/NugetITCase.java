@@ -32,7 +32,7 @@ final class NugetITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("nuget/nuget.yml", "my-nuget")
             .withRepoConfig("nuget/nuget-port.yml", "my-nuget-port")
             .withExposedPorts(8081),

@@ -6,7 +6,7 @@
 package com.auto1.pantera.scheduling;
 
 import com.amihaiemil.eoyaml.YamlNode;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.scripting.ScriptContext;
@@ -24,7 +24,7 @@ import org.quartz.JobDataMap;
 import org.quartz.SchedulerException;
 
 /**
- * Scheduler for Artipie scripts.
+ * Scheduler for Pantera scripts.
  * @since 0.30
  */
 public final class ScriptScheduler {
@@ -61,7 +61,7 @@ public final class ScriptScheduler {
         try {
             this.service.schedulePeriodicJob(cronexp, clazz, new JobDataMap(data));
         } catch (final SchedulerException exc) {
-            throw new ArtipieException(exc);
+            throw new PanteraException(exc);
         }
     }
 
@@ -76,7 +76,7 @@ public final class ScriptScheduler {
      *         - path: scripts/script2.groovy
      *           cronexp: * * 11 * * ?
      * </pre>
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param repos Repositories registry
      */
     @SuppressWarnings("PMD.AvoidDuplicateLiterals")
@@ -118,7 +118,7 @@ public final class ScriptScheduler {
                                             cronexp, ScriptRunner.class, data
                                         );
                                     } catch (final SchedulerException ex) {
-                                        throw new ArtipieException(ex);
+                                        throw new PanteraException(ex);
                                     }
                                 }
                             })

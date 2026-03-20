@@ -24,7 +24,7 @@ import java.util.Optional;
 import java.util.Queue;
 
 /**
- * Artipie {@link Slice} for HexPm repository HTTP API.
+ * Pantera {@link Slice} for HexPm repository HTTP API.
  */
 public final class HexSlice extends Slice.Wrap {
 

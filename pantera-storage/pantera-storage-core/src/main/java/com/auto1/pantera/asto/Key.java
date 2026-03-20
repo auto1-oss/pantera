@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -206,10 +206,10 @@ public interface Key {
         public String string() {
             for (final String part : this.parts) {
                 if (part.isEmpty()) {
-                    throw new ArtipieException("Empty parts are not allowed");
+                    throw new PanteraException("Empty parts are not allowed");
                 }
                 if (part.contains(Key.DELIMITER)) {
-                    throw new ArtipieException(String.format("Invalid part: '%s'", part));
+                    throw new PanteraException(String.format("Invalid part: '%s'", part));
                 }
             }
             return String.join(Key.DELIMITER, this.parts);

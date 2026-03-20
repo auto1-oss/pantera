@@ -8,7 +8,7 @@ import java.util.Optional;
 
 /**
  * Global cache configuration holder.
- * Provides shared Valkey connection for all caches across Artipie.
+ * Provides shared Valkey connection for all caches across Pantera.
  * Thread-safe singleton pattern.
  * 
  * @since 1.0

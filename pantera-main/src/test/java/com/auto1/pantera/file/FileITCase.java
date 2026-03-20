@@ -29,7 +29,7 @@ final class FileITCase {
      */
     @RegisterExtension
     final TestDeployment deployment = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("binary/bin.yml", "bin")
             .withRepoConfig("binary/bin-port.yml", "bin-port")
             .withExposedPorts(8081),
@@ -44,7 +44,7 @@ final class FileITCase {
     })
     void canDownload(final String port, final String repo) throws Exception {
         final byte[] target = new byte[]{0, 1, 2, 3};
-        this.deployment.putBinaryToArtipie(
+        this.deployment.putBinaryToPantera(
             target, String.format("/var/artipie/data/%s/target", repo)
         );
         this.deployment.assertExec(
@@ -66,7 +66,7 @@ final class FileITCase {
             "curl", "-X", "PUT", "--data-binary", "123",
             String.format("http://artipie:%s/%s/target", port, repo)
         );
-        this.deployment.assertArtipieContent(
+        this.deployment.assertPanteraContent(
             "Bad content after upload",
             String.format("/var/artipie/data/%s/target", repo),
             Matchers.equalTo("123".getBytes())
@@ -82,7 +82,7 @@ final class FileITCase {
             ),
             "curl", "-i", "-X", "PUT", "--data-binary", "123", "http://artipie:8080/bin-port/target"
         );
-        this.deployment.putBinaryToArtipie(
+        this.deployment.putBinaryToPantera(
             "target".getBytes(StandardCharsets.UTF_8), "/var/artipie/data/bin-port/target"
         );
         this.deployment.assertExec(

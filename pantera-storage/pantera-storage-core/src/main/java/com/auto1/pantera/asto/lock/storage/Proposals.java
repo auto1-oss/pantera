@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.lock.storage;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -88,7 +88,7 @@ final class Proposals {
                                 content -> content.asStringFuture().thenCompose(
                                     expiration -> {
                                         if (isNotExpired(expiration, now)) {
-                                            throw new ArtipieIOException(
+                                            throw new PanteraIOException(
                                                 String.join(
                                                     "\n",
                                                     "Failed to acquire lock.",

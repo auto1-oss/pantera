@@ -38,7 +38,7 @@ import java.io.UncheckedIOException;
  *}</pre>
  * @since 1.2
  */
-@ArtipiePolicyFactory("artipie")
+@PanteraPolicyFactory("artipie")
 public final class YamlPolicyFactory implements PolicyFactory {
 
     @Override

@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * Rewrites download URLs in Composer metadata to proxy through Artipie.
+ * Rewrites download URLs in Composer metadata to proxy through Pantera.
  * Transforms external URLs (GitHub, CDN) to local proxy URLs.
  *
  * @since 1.0
@@ -30,7 +30,7 @@ public final class MetadataUrlRewriter {
     /**
      * Ctor.
      *
-     * @param baseUrl Base URL for the Artipie repository (including repo path)
+     * @param baseUrl Base URL for the Pantera repository (including repo path)
      */
     public MetadataUrlRewriter(final String baseUrl) {
         this.baseUrl = baseUrl;
@@ -165,7 +165,7 @@ public final class MetadataUrlRewriter {
     }
 
     /**
-     * Rewrite dist object to proxy the download through Artipie.
+     * Rewrite dist object to proxy the download through Pantera.
      *
      * @param packageName Package name
      * @param version Version string

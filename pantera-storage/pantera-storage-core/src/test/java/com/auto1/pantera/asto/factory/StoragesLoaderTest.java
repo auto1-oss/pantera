@@ -5,7 +5,7 @@
 package com.auto1.pantera.asto.factory;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.third.party.factory.first2.TestFirst2StorageFactory;
 import java.util.Collections;
@@ -53,7 +53,7 @@ public final class StoragesLoaderTest {
     @Test
     void shouldThrowExceptionWhenReadTwoFactoryWithTheSameName() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new StoragesLoader(
                 Collections.singletonMap(
                     StoragesLoader.SCAN_PACK,

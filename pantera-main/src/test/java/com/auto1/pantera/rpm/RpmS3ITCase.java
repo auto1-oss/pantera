@@ -38,7 +38,7 @@ public final class RpmS3ITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("rpm/my-rpm-s3.yml", "my-rpm")
             .withExposedPorts(8080),
         () -> new TestDeployment.ClientContainer("artipie/rpm-tests-fedora:1.0")

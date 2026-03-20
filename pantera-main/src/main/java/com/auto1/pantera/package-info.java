@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie files.
+ * Pantera files.
  *
  * @since 0.1
  */

@@ -39,7 +39,7 @@ final class PypiS3ITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("pypi-repo/pypi-s3.yml", "my-python")
             .withUser("security/users/alice.yaml", "alice")
             .withRole("security/roles/readers.yaml", "readers")

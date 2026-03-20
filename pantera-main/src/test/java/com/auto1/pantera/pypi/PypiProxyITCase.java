@@ -37,13 +37,13 @@ public final class PypiProxyITCase {
         Map.ofEntries(
             new MapEntry<>(
                 "artipie",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("pypi-proxy/pypi.yml", "my-pypi")
                     .withUser("security/users/alice.yaml", "alice")
             ),
             new MapEntry<>(
                 "artipie-proxy",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("pypi-proxy/pypi-proxy.yml", "my-pypi-proxy")
             )
         ),
@@ -54,7 +54,7 @@ public final class PypiProxyITCase {
     @Test
     void installFromProxy() throws Exception {
         final byte[] data = new TestResource("pypi-repo/alarmtime-0.1.5.tar.gz").asBytes();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             "artipie", data,
             "/var/artipie/data/my-pypi/alarmtime/alarmtime-0.1.5.tar.gz"
         );
@@ -67,7 +67,7 @@ public final class PypiProxyITCase {
             "pip", "install", "--no-deps", "--trusted-host", "artipie-proxy",
             "--index-url", "http://alice:123@artipie-proxy:8080/my-pypi-proxy/", "alarmtime"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "artipie-proxy",
             "/var/artipie/data/my-pypi-proxy/alarmtime/alarmtime-0.1.5.tar.gz",
             new IsEqual<>(data)

@@ -13,10 +13,10 @@ import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.CachedYamlPolicy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.Settings;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.settings.users.CrudRoles;
 import com.auto1.pantera.settings.users.CrudUsers;
@@ -47,12 +47,12 @@ public final class RestApi extends AbstractVerticle {
     private static final String SECURITY_SCHEME = "bearerAuth";
 
     /**
-     * Artipie caches.
+     * Pantera caches.
      */
-    private final ArtipieCaches caches;
+    private final PanteraCaches caches;
 
     /**
-     * Artipie settings storage.
+     * Pantera settings storage.
      */
     private final Storage configsStorage;
 
@@ -62,9 +62,9 @@ public final class RestApi extends AbstractVerticle {
     private final int port;
 
     /**
-     * Artipie security.
+     * Pantera security.
      */
-    private final ArtipieSecurity security;
+    private final PanteraSecurity security;
 
     /**
      * KeyStore.
@@ -87,7 +87,7 @@ public final class RestApi extends AbstractVerticle {
     private final CooldownService cooldown;
 
     /**
-     * Artipie settings.
+     * Pantera settings.
      */
     private final Settings settings;
 
@@ -104,23 +104,23 @@ public final class RestApi extends AbstractVerticle {
 
     /**
      * Primary ctor.
-     * @param caches Artipie settings caches
-     * @param configsStorage Artipie settings storage
+     * @param caches Pantera settings caches
+     * @param configsStorage Pantera settings storage
      * @param port Port to run API on
-     * @param security Artipie security
+     * @param security Pantera security
      * @param keystore KeyStore
      * @param jwt Jwt authentication provider
      * @param events Artifact metadata events queue
      * @param cooldown Cooldown service
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
      */
     public RestApi(
-        final ArtipieCaches caches,
+        final PanteraCaches caches,
         final Storage configsStorage,
         final int port,
-        final ArtipieSecurity security,
+        final PanteraSecurity security,
         final Optional<KeyStore> keystore,
         final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
@@ -144,7 +144,7 @@ public final class RestApi extends AbstractVerticle {
 
     /**
      * Ctor.
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt Jwt authentication provider
      * @param dataSource Database data source, nullable

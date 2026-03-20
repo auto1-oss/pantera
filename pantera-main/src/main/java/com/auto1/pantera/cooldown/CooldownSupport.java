@@ -35,7 +35,7 @@ public final class CooldownSupport {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.cooldown";
+    public static final String POOL_NAME = "pantera.cooldown";
 
     /**
      * Default pool size multiplier for cooldown threads.

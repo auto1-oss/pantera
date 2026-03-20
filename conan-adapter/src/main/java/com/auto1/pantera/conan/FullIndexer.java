@@ -35,7 +35,7 @@ public class FullIndexer {
     private static final String BIN_SUBDIR = "package";
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
@@ -46,7 +46,7 @@ public class FullIndexer {
 
     /**
      * Initializes instance of indexer.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      * @param indexer Revision info indexer.
      */
     public FullIndexer(final Storage storage, final RevisionsIndexer indexer) {
@@ -57,7 +57,7 @@ public class FullIndexer {
     /**
      * Updates binary index file. Fully recursive.
      * Does updateRecipeIndex(), then for each revision & for each pkg binary updateBinaryIndex().
-     * @param key Key in the Artipie Storage for the revisions index file.
+     * @param key Key in the Pantera Storage for the revisions index file.
      * @return CompletionStage to handle operation completion.
      */
     public CompletionStage<Void> fullIndexUpdate(final Key key) {

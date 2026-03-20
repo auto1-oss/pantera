@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Artipie action.
+ * Pantera action.
  * @since 1.2
  */
 public interface Action {

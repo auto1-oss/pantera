@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.auto1.pantera.http.filter;
+package com.auto1.pantera.security.policy;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -10,17 +10,18 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotation to mark FilterFactory implementation.
+ * Annotation to mark Policy implementation.
  * @since 1.2
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-public @interface ArtipieFilterFactory {
+public @interface PanteraPolicyFactory {
 
     /**
-     * Filter factory implementation name.
+     * Policy implementation name value.
      *
      * @return The string name
      */
     String value();
+
 }

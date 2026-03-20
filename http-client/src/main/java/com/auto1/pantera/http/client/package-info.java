@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie HTTP client.
+ * Pantera HTTP client.
  *
  * @since 0.1
  */

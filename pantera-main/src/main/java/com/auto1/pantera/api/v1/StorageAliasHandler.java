@@ -28,17 +28,17 @@ import javax.json.JsonObject;
 public final class StorageAliasHandler {
 
     /**
-     * Artipie settings storage cache.
+     * Pantera settings storage cache.
      */
     private final StoragesCache storagesCache;
 
     /**
-     * Artipie settings storage.
+     * Pantera settings storage.
      */
     private final BlockingStorage asto;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
@@ -49,9 +49,9 @@ public final class StorageAliasHandler {
 
     /**
      * Ctor.
-     * @param storagesCache Artipie settings storage cache
-     * @param asto Artipie settings storage
-     * @param policy Artipie security policy
+     * @param storagesCache Pantera settings storage cache
+     * @param asto Pantera settings storage
+     * @param policy Pantera security policy
      * @param aliasDao Storage alias DAO, nullable
      */
     public StorageAliasHandler(final StoragesCache storagesCache,

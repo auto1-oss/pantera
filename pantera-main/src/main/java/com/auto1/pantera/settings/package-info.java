@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie settings.
+ * Pantera settings.
  *
  * @since 0.26
  */

@@ -32,7 +32,7 @@ public final class CondaITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conda/conda.yml", "my-conda")
             .withRepoConfig("conda/conda-port.yml", "my-conda-port")
@@ -45,15 +45,15 @@ public final class CondaITCase {
         "8080,conda/condarc,my-conda",
         "8081,conda/condarc-port,my-conda-port"
     })
-    void canInstallFromArtipie(final String port, final String condarc, final String repo)
+    void canInstallFromPantera(final String port, final String condarc, final String repo)
         throws IOException {
         this.containers.putClasspathResourceToClient(condarc, "/w/.condarc");
         this.moveCondarc();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource("conda/packages.json").asBytes(),
             String.format("/var/artipie/data/%s/linux-64/repodata.json", repo)
         );
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource("conda/snappy-1.1.3-0.tar.bz2").asBytes(),
             String.format("/var/artipie/data/%s/linux-64/snappy-1.1.3-0.tar.bz2", repo)
         );
@@ -77,7 +77,7 @@ public final class CondaITCase {
         "8080,conda/condarc,my-conda",
         "8081,conda/condarc-port,my-conda-port"
     })
-    void canUploadToArtipie(final String port, final String condarc, final String repo)
+    void canUploadToPantera(final String port, final String condarc, final String repo)
         throws IOException {
         this.containers.putClasspathResourceToClient(condarc, "/w/.condarc");
         this.moveCondarc();
@@ -111,12 +111,12 @@ public final class CondaITCase {
             ),
             "conda", "build", "--output-folder", "/w/conda-out/", "/w/example-project/conda/"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not uploaded to artipie",
             String.format("/var/artipie/data/%s/linux-64/example-package-0.0.1-0.tar.bz2", repo),
             new IsNot<>(new IsNull<>())
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not uploaded to artipie",
             String.format("/var/artipie/data/%s/linux-64/repodata.json", repo),
             new IsNot<>(new IsNull<>())

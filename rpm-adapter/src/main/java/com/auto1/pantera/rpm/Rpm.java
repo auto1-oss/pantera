@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Copy;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -107,7 +107,7 @@ public final class Rpm {
      * Batch update RPM files for repository.
      * @param prefix Repository key prefix
      * @return Completable action
-     * @throws ArtipieIOException On IO-operation errors
+     * @throws PanteraIOException On IO-operation errors
      */
     public Completable batchUpdate(final Key prefix) {
         return this.doWithLock(

@@ -30,25 +30,25 @@ public final class StorageAliasesRest extends BaseRest {
     private static final String ANAME = "aname";
 
     /**
-     * Artipie setting storage cache.
+     * Pantera setting storage cache.
      */
     private final StoragesCache caches;
 
     /**
-     * Artipie settings storage.
+     * Pantera settings storage.
      */
     private final BlockingStorage asto;
 
     /**
-     * Artipie policy.
+     * Pantera policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
-     * @param caches Artipie settings caches
-     * @param asto Artipie settings storage
-     * @param policy Artipie policy
+     * @param caches Pantera settings caches
+     * @param asto Pantera settings storage
+     * @param policy Pantera policy
      */
     public StorageAliasesRest(final StoragesCache caches, final BlockingStorage asto,
                               final Policy<?> policy) {
@@ -122,7 +122,7 @@ public final class StorageAliasesRest extends BaseRest {
     }
 
     /**
-     * Delete common Artipie alias.
+     * Delete common Pantera alias.
      * @param context Routing context
      */
     private void deleteAlias(final RoutingContext context) {
@@ -145,7 +145,7 @@ public final class StorageAliasesRest extends BaseRest {
     }
 
     /**
-     * Add common Artipie alias.
+     * Add common Pantera alias.
      * @param context Routing context
      */
     private void addAlias(final RoutingContext context) {
@@ -194,7 +194,7 @@ public final class StorageAliasesRest extends BaseRest {
     /**
      * Delete alias.
      * @param context Request context
-     * @param key Aliases settings key, empty for common Artipie aliases
+     * @param key Aliases settings key, empty for common Pantera aliases
      */
     private void delete(final RoutingContext context, final Optional<Key> key) {
         try {

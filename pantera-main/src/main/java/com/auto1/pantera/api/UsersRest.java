@@ -13,8 +13,8 @@ import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.PanteraSecurity;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.users.CrudUsers;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.json.JsonArray;
@@ -28,7 +28,7 @@ import javax.json.JsonObject;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
- * REST API methods to manage Artipie users.
+ * REST API methods to manage Pantera users.
  * @since 0.27
  */
 public final class UsersRest extends BaseRest {
@@ -56,33 +56,33 @@ public final class UsersRest extends BaseRest {
     private final CrudUsers users;
 
     /**
-     * Artipie authenticated users cache.
+     * Pantera authenticated users cache.
      */
     private final Cleanable<String> ucache;
 
     /**
-     * Artipie authenticated users cache.
+     * Pantera authenticated users cache.
      */
     private final Cleanable<String> pcache;
 
     /**
-     * Artipie auth.
+     * Pantera auth.
      */
     private final Authentication auth;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
      * @param users Crud users object
-     * @param caches Artipie caches
-     * @param security Artipie security
+     * @param caches Pantera caches
+     * @param security Pantera security
      */
-    public UsersRest(final CrudUsers users, final ArtipieCaches caches,
-        final ArtipieSecurity security) {
+    public UsersRest(final CrudUsers users, final PanteraCaches caches,
+        final PanteraSecurity security) {
         this.users = users;
         this.ucache = caches.usersCache();
         this.pcache = caches.policyCache();

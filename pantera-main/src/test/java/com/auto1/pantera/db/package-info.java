@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie artifacts database.
+ * Pantera artifacts database.
  *
  * @since 0.31
  */

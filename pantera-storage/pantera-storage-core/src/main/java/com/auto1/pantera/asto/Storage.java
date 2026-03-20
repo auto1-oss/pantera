@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.fs.FileStorage;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
@@ -133,7 +133,7 @@ public interface Storage {
     default CompletableFuture<Long> size(final Key key) {
         return this.metadata(key).thenApply(
             meta -> meta.read(Meta.OP_SIZE).orElseThrow(
-                () -> new ArtipieException(
+                () -> new PanteraException(
                     String.format("SIZE could't be read for %s key", key.string())
                 )
             )

@@ -69,7 +69,7 @@ public final class DebianSliceITCase {
     private Storage storage;
 
     /**
-     * Artipie port.
+     * Pantera port.
      */
     private int port;
 

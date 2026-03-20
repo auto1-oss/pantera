@@ -4,7 +4,7 @@
  */
 
 /**
- * Tests for Artipie HTTP layer.
+ * Tests for Pantera HTTP layer.
  *
  * @since 0.9
  */

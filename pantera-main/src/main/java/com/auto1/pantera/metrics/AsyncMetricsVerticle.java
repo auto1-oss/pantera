@@ -360,8 +360,8 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
         request.response()
             .setStatusCode(200)
             .putHeader("Content-Type", PROMETHEUS_CONTENT_TYPE)
-            .putHeader("X-Artipie-Metrics-Cache", fromCache ? "hit" : "miss")
-            .putHeader("X-Artipie-Metrics-Duration-Ms", String.valueOf(totalDuration))
+            .putHeader("X-Pantera-Metrics-Cache", fromCache ? "hit" : "miss")
+            .putHeader("X-Pantera-Metrics-Duration-Ms", String.valueOf(totalDuration))
             .end(metrics);
     }
 

@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie http3 server test.
+ * Pantera http3 server test.
  *
  * @since 0.31
  */

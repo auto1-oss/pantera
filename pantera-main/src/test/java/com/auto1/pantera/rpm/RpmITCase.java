@@ -29,7 +29,7 @@ public final class RpmITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("rpm/my-rpm.yml", "my-rpm")
             .withRepoConfig("rpm/my-rpm-port.yml", "my-rpm-port")
             .withExposedPorts(8081),

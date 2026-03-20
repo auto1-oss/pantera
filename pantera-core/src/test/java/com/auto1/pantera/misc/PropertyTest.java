@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
@@ -26,9 +26,9 @@ final class PropertyTest {
     }
 
     @Test
-    void readsValueFromArtipieProperties() {
+    void readsValueFromPanteraProperties() {
         MatcherAssert.assertThat(
-            new Property(ArtipieProperties.STORAGE_TIMEOUT)
+            new Property(PanteraProperties.STORAGE_TIMEOUT)
                 .asLongOrDefault(123L),
             new IsEqual<>(180_000L)
         );
@@ -37,9 +37,9 @@ final class PropertyTest {
     @Test
     void readsValueFromSetProperties() {
         final long val = 17L;
-        System.setProperty(ArtipieProperties.AUTH_TIMEOUT, String.valueOf(val));
+        System.setProperty(PanteraProperties.AUTH_TIMEOUT, String.valueOf(val));
         MatcherAssert.assertThat(
-            new Property(ArtipieProperties.AUTH_TIMEOUT)
+            new Property(PanteraProperties.AUTH_TIMEOUT)
                 .asLongOrDefault(345L),
             new IsEqual<>(val)
         );
@@ -50,16 +50,16 @@ final class PropertyTest {
         final String key = "my.property.value";
         System.setProperty(key, "can't be parsed");
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new Property(key).asLongOrDefault(50L)
         );
     }
 
     @Test
-    void failsToParseWrongValueFromArtipieProperties() {
+    void failsToParseWrongValueFromPanteraProperties() {
         Assertions.assertThrows(
-            ArtipieException.class,
-            () -> new Property(ArtipieProperties.VERSION_KEY)
+            PanteraException.class,
+            () -> new Property(PanteraProperties.VERSION_KEY)
                 .asLongOrDefault(567L)
         );
     }
@@ -67,7 +67,7 @@ final class PropertyTest {
     @Test
     void propertiesFileDoesNotExist() {
         Assertions.assertTrue(
-            new ArtipieProperties("file_does_not_exist.properties")
+            new PanteraProperties("file_does_not_exist.properties")
                 .valueBy("aaa").isEmpty()
         );
     }

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.s3;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.FailedCompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -58,9 +58,9 @@ final class InternalExceptionHandle<T> implements BiFunction<T, Throwable, Compl
                     this.convert.apply(throwable.getCause())
                 );
             } else if (throwable instanceof CompletionException) {
-                result = new FailedCompletionStage<>(new ArtipieIOException(throwable.getCause()));
+                result = new FailedCompletionStage<>(new PanteraIOException(throwable.getCause()));
             } else {
-                result = new FailedCompletionStage<>(new ArtipieIOException(throwable));
+                result = new FailedCompletionStage<>(new PanteraIOException(throwable));
             }
         }
         return result;

@@ -124,7 +124,7 @@ final class PypiScanner implements Scanner {
             final String pathPrefix = this.repoType.endsWith("-proxy")
                 ? root.relativize(path).toString().replace('\\', '/') : null;
             final Long releaseDate =
-                ArtipieMetaSidecar.readReleaseDate(path).orElse(null);
+                PanteraMetaSidecar.readReleaseDate(path).orElse(null);
             return Stream.of(
                 new ArtifactRecord(
                     this.repoType,

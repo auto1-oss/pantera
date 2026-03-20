@@ -13,7 +13,7 @@ import org.quartz.utils.ConnectionProvider;
  * Quartz {@link ConnectionProvider} backed by an existing {@link DataSource}.
  * <p>
  * Allows Quartz JDBC job store to reuse the same connection pool (HikariCP)
- * that Artipie uses for its artifacts database, eliminating the need for
+ * that Pantera uses for its artifacts database, eliminating the need for
  * Quartz to manage its own connection pool.
  * <p>
  * This provider is registered programmatically via
@@ -22,7 +22,7 @@ import org.quartz.utils.ConnectionProvider;
  *
  * @since 1.20.13
  */
-public final class ArtipieQuartzConnectionProvider implements ConnectionProvider {
+public final class PanteraQuartzConnectionProvider implements ConnectionProvider {
 
     /**
      * The data source name used in Quartz configuration properties.
@@ -39,7 +39,7 @@ public final class ArtipieQuartzConnectionProvider implements ConnectionProvider
      * Ctor.
      * @param dataSource Existing data source to delegate to
      */
-    public ArtipieQuartzConnectionProvider(final DataSource dataSource) {
+    public PanteraQuartzConnectionProvider(final DataSource dataSource) {
         this.dataSource = dataSource;
     }
 
@@ -55,6 +55,6 @@ public final class ArtipieQuartzConnectionProvider implements ConnectionProvider
 
     @Override
     public void initialize() throws SQLException {
-        // Already initialized via Artipie's HikariCP setup.
+        // Already initialized via Pantera's HikariCP setup.
     }
 }

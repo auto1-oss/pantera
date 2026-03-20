@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.test.TestResource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -87,7 +87,7 @@ final class TgzArchiveTest {
         );
         MatcherAssert.assertThat(
             Assertions.assertThrows(
-                ArtipieIOException.class,
+                PanteraIOException.class,
                 tgz::packageJson
             ),
             new HasPropertyWithValue<>(
@@ -110,7 +110,7 @@ final class TgzArchiveTest {
         );
         MatcherAssert.assertThat(
             Assertions.assertThrows(
-                ArtipieException.class,
+                PanteraException.class,
                 tgz::packageJson
             ),
             new HasPropertyWithValue<>(

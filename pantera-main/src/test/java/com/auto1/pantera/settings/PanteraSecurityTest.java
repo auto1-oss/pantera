@@ -17,20 +17,20 @@ import java.io.IOException;
 import java.util.Optional;
 
 /**
- * Test for {@link ArtipieSecurity.FromYaml}.
+ * Test for {@link PanteraSecurity.FromYaml}.
  */
-class ArtipieSecurityTest {
+class PanteraSecurityTest {
 
     private static final Authentication AUTH = (username, password) -> Optional.empty();
 
     @Test
     void initiatesPolicy() throws IOException {
-        final ArtipieSecurity security = new ArtipieSecurity.FromYaml(
+        final PanteraSecurity security = new PanteraSecurity.FromYaml(
             Yaml.createYamlInput(this.policy()).readYamlMapping(),
-            ArtipieSecurityTest.AUTH, Optional.empty()
+            PanteraSecurityTest.AUTH, Optional.empty()
         );
         Assertions.assertInstanceOf(
-            ArtipieSecurityTest.AUTH.getClass(), security.authentication()
+            PanteraSecurityTest.AUTH.getClass(), security.authentication()
         );
         MatcherAssert.assertThat(
             "Returns provided empty optional",
@@ -43,9 +43,9 @@ class ArtipieSecurityTest {
     void returnsFreePolicyIfYamlSectionIsAbsent() {
         MatcherAssert.assertThat(
             "Initiates policy",
-            new ArtipieSecurity.FromYaml(
+            new PanteraSecurity.FromYaml(
                 Yaml.createYamlMappingBuilder().build(),
-                ArtipieSecurityTest.AUTH, Optional.empty()
+                PanteraSecurityTest.AUTH, Optional.empty()
             ).policy(),
             new IsInstanceOf(Policy.FREE.getClass())
         );

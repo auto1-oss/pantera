@@ -84,7 +84,7 @@ public final class RpmSliceITCase {
         "artipie/rpm-tests-ubi:1.0,yum,repo-pkgs",
         "artipie/rpm-tests-fedora:1.0,dnf,repository-packages"
     })
-    void canListAndInstallFromArtipieRepo(final String linux,
+    void canListAndInstallFromPanteraRepo(final String linux,
         final String mngr, final String rey) throws Exception {
         this.start(Policy.FREE, (username, password) -> Optional.empty(), "", linux);
         MatcherAssert.assertThat(
@@ -104,7 +104,7 @@ public final class RpmSliceITCase {
         "artipie/rpm-tests-ubi:1.0,yum,repo-pkgs",
         "artipie/rpm-tests-fedora:1.0,dnf,repository-packages"
     })
-    void canListAndInstallFromArtipieRepoWithAuth(final String linux,
+    void canListAndInstallFromPanteraRepoWithAuth(final String linux,
         final String mngr, final String key) throws Exception {
         final String mark = "mark";
         final String pswd = "abc";

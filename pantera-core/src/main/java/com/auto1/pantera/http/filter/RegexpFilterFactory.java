@@ -11,7 +11,7 @@ import com.amihaiemil.eoyaml.YamlMapping;
  *
  * @since 1.2
  */
-@ArtipieFilterFactory("regexp")
+@PanteraFilterFactory("regexp")
 public final class RegexpFilterFactory implements FilterFactory {
     @Override
     public Filter newFilter(final YamlMapping yaml) {

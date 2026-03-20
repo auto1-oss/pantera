@@ -25,7 +25,7 @@ import javax.json.stream.JsonParser;
  * Conan recognizes two types of packages: package binary and package recipe (sources).
  * Package recipe ("source code") could be built to multiple package binaries with different
  * configuration (conaninfo.txt).
- * Artipie-conan storage structure for now corresponds to standard conan_server.
+ * Pantera-conan storage structure for now corresponds to standard conan_server.
  * @since 0.1
  */
 public final class ConansEntityV2 {
@@ -127,8 +127,8 @@ public final class ConansEntityV2 {
 
     /**
      * Gets latest revision record from Conan revisions.txt json file.
-     * @param key Artipie storage key for revisions.txt file.
-     * @param storage Artipie storage instance.
+     * @param key Pantera storage key for revisions.txt file.
+     * @param storage Pantera storage instance.
      * @return Request result Future with last revision record as String.
      */
     private static CompletableFuture<BaseConanSlice.RequestResult> getLatestRevisionJson(
@@ -174,7 +174,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgBinLatest(final Storage storage) {
             super(storage, new PathWrap.PkgBinLatest());
@@ -201,7 +201,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgSrcLatest(final Storage storage) {
             super(storage, new PathWrap.PkgSrcLatest());
@@ -227,7 +227,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgBinFile(final Storage storage) {
             super(storage, new PathWrap.PkgBinFile());
@@ -266,7 +266,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgBinFiles(final Storage storage) {
             super(storage, new PathWrap.PkgBinFiles());
@@ -298,7 +298,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgSrcFile(final Storage storage) {
             super(storage, new PathWrap.PkgSrcFile());
@@ -337,7 +337,7 @@ public final class ConansEntityV2 {
 
         /**
          * Ctor.
-         * @param storage Current Artipie storage instance.
+         * @param storage Current Pantera storage instance.
          */
         public PkgSrcFiles(final Storage storage) {
             super(storage, new PathWrap.PkgSrcFiles());

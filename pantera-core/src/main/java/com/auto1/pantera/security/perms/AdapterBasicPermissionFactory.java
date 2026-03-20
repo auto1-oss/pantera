@@ -8,7 +8,7 @@ package com.auto1.pantera.security.perms;
  * Factory for {@link AdapterBasicPermission}.
  * @since 1.2
  */
-@ArtipiePermissionFactory("adapter_basic_permissions")
+@PanteraPermissionFactory("adapter_basic_permissions")
 public final class AdapterBasicPermissionFactory implements
     PermissionFactory<AdapterBasicPermission.AdapterBasicPermissionCollection> {
 

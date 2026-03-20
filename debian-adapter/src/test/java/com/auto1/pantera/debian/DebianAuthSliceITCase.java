@@ -81,7 +81,7 @@ public final class DebianAuthSliceITCase {
     Path tmp;
 
     /**
-     * Artipie port.
+     * Pantera port.
      */
     private int port;
 

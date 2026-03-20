@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie cache files.
+ * Pantera cache files.
  *
  * @since 0.23
  */

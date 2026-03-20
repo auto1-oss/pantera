@@ -66,7 +66,7 @@ final class GetUserSlice implements Slice {
                 String.join(
                     "\n",
                     "{",
-                    "  \"company\": \"Artipie\",",
+                    "  \"company\": \"Pantera\",",
                     "  \"created_at\": \"2020-08-01 13:06:29.212000+00:00\",",
                     "  \"description\": \"\",",
                     "  \"location\": \"\",",

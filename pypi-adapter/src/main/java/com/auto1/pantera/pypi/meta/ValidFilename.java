@@ -17,7 +17,7 @@ public final class ValidFilename {
 
     /**
      * Pattern to obtain package name from uploaded file name: for file name
-     * 'Artipie-Testpkg-0.0.3.tar.gz', then package name is 'Artipie-Testpkg'.
+     * 'Pantera-Testpkg-0.0.3.tar.gz', then package name is 'Pantera-Testpkg'.
      */
     private static final Pattern ARCHIVE_PTRN =
         Pattern.compile("(?<name>.*)-(?<version>[0-9a-z.]+?)\\.([a-zA-Z.]+)");

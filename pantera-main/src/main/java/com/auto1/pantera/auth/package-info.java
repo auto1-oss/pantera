@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie authentication providers.
+ * Pantera authentication providers.
  *
  * @since 0.3
  */

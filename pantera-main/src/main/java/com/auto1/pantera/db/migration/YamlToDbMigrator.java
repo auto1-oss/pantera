@@ -128,7 +128,7 @@ public final class YamlToDbMigrator {
         if (Files.isDirectory(usersDir)) {
             this.migrateUsers(usersDir);
         }
-        this.migrateArtipieYml();
+        this.migratePanteraYml();
         settings.put(
             YamlToDbMigrator.MIGRATION_KEY,
             Json.createObjectBuilder()
@@ -275,7 +275,7 @@ public final class YamlToDbMigrator {
      * storage aliases, and auth providers.
      */
     @SuppressWarnings({"PMD.CognitiveComplexity", "PMD.NPathComplexity"})
-    private void migrateArtipieYml() {
+    private void migratePanteraYml() {
         if (this.artipieYml == null || !Files.isRegularFile(this.artipieYml)) {
             LOG.info("No artipie.yml path provided or file not found, skipping settings migration");
             return;

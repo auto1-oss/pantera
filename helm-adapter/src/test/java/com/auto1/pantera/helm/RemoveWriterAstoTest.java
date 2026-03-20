@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
@@ -128,7 +128,7 @@ final class RemoveWriterAstoTest {
         );
         MatcherAssert.assertThat(
             thr.getCause(),
-            new IsInstanceOf(ArtipieException.class)
+            new IsInstanceOf(PanteraException.class)
         );
     }
 

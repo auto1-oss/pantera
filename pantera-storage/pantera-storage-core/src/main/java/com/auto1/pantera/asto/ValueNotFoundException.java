@@ -12,7 +12,7 @@ import java.io.IOException;
  * @since 0.28
  */
 @SuppressWarnings("serial")
-public class ValueNotFoundException extends ArtipieIOException {
+public class ValueNotFoundException extends PanteraIOException {
 
     /**
      * Ctor.

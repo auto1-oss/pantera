@@ -23,12 +23,12 @@ import java.nio.file.Paths;
 public final class Cli {
 
     /**
-     * Artipie conan username for basic auth.
+     * Pantera conan username for basic auth.
      */
     public static final String USERNAME = "demo_login";
 
     /**
-     * Artipie conan password for basic auth.
+     * Pantera conan password for basic auth.
      */
     public static final String PASSWORD = "demo_password";
 

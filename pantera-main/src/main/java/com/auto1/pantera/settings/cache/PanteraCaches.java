@@ -11,11 +11,11 @@ import com.auto1.pantera.security.policy.CachedYamlPolicy;
 import com.auto1.pantera.security.policy.Policy;
 
 /**
- * Encapsulates caches which are possible to use in settings of Artipie server.
+ * Encapsulates caches which are possible to use in settings of Pantera server.
  *
  * @since 0.23
  */
-public interface ArtipieCaches {
+public interface PanteraCaches {
     /**
      * Obtains storages cache.
      *
@@ -49,7 +49,7 @@ public interface ArtipieCaches {
      *
      * @since 0.23
      */
-    class All implements ArtipieCaches {
+    class All implements PanteraCaches {
         /**
          * Cache for user logins.
          */
@@ -61,7 +61,7 @@ public interface ArtipieCaches {
         private final StoragesCache strgcache;
 
         /**
-         * Artipie policy.
+         * Pantera policy.
          */
         private final Policy<?> policy;
 
@@ -74,7 +74,7 @@ public interface ArtipieCaches {
          * Ctor with all initialized caches.
          * @param users Users cache
          * @param strgcache Storages cache
-         * @param policy Artipie policy
+         * @param policy Pantera policy
          * @param filtersCache Filters cache
                          */
         public All(

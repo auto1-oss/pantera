@@ -43,7 +43,7 @@ import org.testcontainers.utility.MountableFile;
 
 /**
  * Junit extension which provides latest artipie server container and client container.
- * Artipie container can be accessed from client container by {@code artipie} hostname.
+ * Pantera container can be accessed from client container by {@code artipie} hostname.
  * To run a command in client container and match a result use {@code assertExec} method.
  * @since 0.19
  */
@@ -56,9 +56,9 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     private static final String DEF = "artipie";
 
     /**
-     * Artipie builder.
+     * Pantera builder.
      */
-    private final Map<String, Supplier<ArtipieContainer>> asup;
+    private final Map<String, Supplier<PanteraContainer>> asup;
 
     /**
      * Client builder.
@@ -71,9 +71,9 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     private Network net;
 
     /**
-     * Artipie container.
+     * Pantera container.
      */
-    private Map<String, ArtipieContainer> artipie;
+    private Map<String, PanteraContainer> artipie;
 
     /**
      * Client container.
@@ -81,7 +81,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     private ClientContainer client;
 
     /**
-     * Artipie loggers.
+     * Pantera loggers.
      */
     private final ConcurrentMap<String, Consumer<OutputFrame>> aloggers;
 
@@ -92,20 +92,20 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
 
     /**
      * New container test.
-     * @param artipie Artipie container definition
+     * @param artipie Pantera container definition
      * @param client Client container definition
      */
-    public TestDeployment(final Supplier<ArtipieContainer> artipie,
+    public TestDeployment(final Supplier<PanteraContainer> artipie,
         final Supplier<ClientContainer> client) {
         this(new MapOf<>(new MapEntry<>(TestDeployment.DEF, artipie)), client);
     }
 
     /**
      * New container test.
-     * @param artipie Artipie container definition
+     * @param artipie Pantera container definition
      * @param client Client container definition
      */
-    public TestDeployment(final Map<String, Supplier<ArtipieContainer>> artipie,
+    public TestDeployment(final Map<String, Supplier<PanteraContainer>> artipie,
         final Supplier<ClientContainer> client) {
         this.asup = artipie;
         this.csup = client;
@@ -127,7 +127,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
                             this.aloggers.computeIfAbsent(
                                 entry.getKey(),
                                 name -> TestDeployment.slfjLog(
-                                    TestDeployment.ArtipieContainer.class, entry.getKey()
+                                    TestDeployment.PanteraContainer.class, entry.getKey()
                                 )
                             )
                         )
@@ -161,13 +161,13 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     }
 
     /**
-     * Assert binary file in Artipie container using matcher provided.
-     * @param name Artipie container name
+     * Assert binary file in Pantera container using matcher provided.
+     * @param name Pantera container name
      * @param msg Assertion message
      * @param path Path in container
      * @param matcher Matcher InputStream of content
      */
-    public void assertArtipieContent(final String name, final String msg, final String path,
+    public void assertPanteraContent(final String name, final String msg, final String path,
         final Matcher<byte[]> matcher) {
         this.artipie.get(name).copyFileFromContainer(
             path, stream -> {
@@ -178,22 +178,22 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     }
 
     /**
-     * Assert binary file in Artipie container using matcher provided.
+     * Assert binary file in Pantera container using matcher provided.
      * @param msg Assertion message
      * @param path Path in container
      * @param matcher Matcher InputStream of content
      */
-    public void assertArtipieContent(final String msg, final String path,
+    public void assertPanteraContent(final String msg, final String path,
         final Matcher<byte[]> matcher) {
-        this.assertArtipieContent(TestDeployment.DEF, msg, path, matcher);
+        this.assertPanteraContent(TestDeployment.DEF, msg, path, matcher);
     }
 
     /**
-     * Get binary file from Artipie container.
+     * Get binary file from Pantera container.
      * @param path Path in container
      * @return Binary data
      */
-    public byte[] getArtipieContent(final String path) {
+    public byte[] getPanteraContent(final String path) {
         return this.artipie.get(TestDeployment.DEF).copyFileFromContainer(
             path, IOUtils::toByteArray
         );
@@ -261,31 +261,31 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     }
 
     /**
-     * Put binary data into Artipie container.
-     * @param name Artipie container name
+     * Put binary data into Pantera container.
+     * @param name Pantera container name
      * @param bin Data to put
      * @param path Path in the container
      */
-    public void putBinaryToArtipie(final String name, final byte[] bin, final String path) {
+    public void putBinaryToPantera(final String name, final byte[] bin, final String path) {
         this.artipie.get(name).copyFileToContainer(Transferable.of(bin), path);
     }
 
     /**
-     * Put binary data into Artipie container.
+     * Put binary data into Pantera container.
      * @param bin Data to put
      * @param path Path in the container
      */
-    public void putBinaryToArtipie(final byte[] bin, final String path) {
-        this.putBinaryToArtipie(TestDeployment.DEF, bin, path);
+    public void putBinaryToPantera(final byte[] bin, final String path) {
+        this.putBinaryToPantera(TestDeployment.DEF, bin, path);
     }
 
     /**
      * Put resource to artipie server.
-     * @param name Artipie container name
+     * @param name Pantera container name
      * @param res Resource path
-     * @param path Artipie path
+     * @param path Pantera path
      */
-    public void putResourceToArtipie(final String name, final String res, final String path) {
+    public void putResourceToPantera(final String name, final String res, final String path) {
         this.artipie.get(name).copyFileToContainer(
             MountableFile.forClasspathResource(res), path
         );
@@ -294,10 +294,10 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     /**
      * Put resource to artipie server.
      * @param res Resource path
-     * @param path Artipie path
+     * @param path Pantera path
      */
-    public void putResourceToArtipie(final String res, final String path) {
-        this.putResourceToArtipie(TestDeployment.DEF, res, path);
+    public void putResourceToPantera(final String res, final String path) {
+        this.putResourceToPantera(TestDeployment.DEF, res, path);
     }
 
     /**
@@ -330,7 +330,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     /**
      * Sets up client environment for docker tests.
      *
-     * @param ports Artipie port
+     * @param ports Pantera port
      * @throws IOException On error
      */
     public void setUpForDockerTests(final int... ports) throws IOException {
@@ -367,15 +367,15 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
     }
 
     /**
-     * Artipie container builder.
+     * Pantera container builder.
      * @since 0.18
      */
-    public static final class ArtipieContainer extends GenericContainer<ArtipieContainer> {
+    public static final class PanteraContainer extends GenericContainer<PanteraContainer> {
 
         /**
          * New default artipie container.
          */
-        public ArtipieContainer() {
+        public PanteraContainer() {
             this(DockerImageName.parse("artipie/artipie-tests:1.0-SNAPSHOT"));
         }
 
@@ -385,7 +385,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          *
          * @param name Image name
          */
-        public ArtipieContainer(final DockerImageName name) {
+        public PanteraContainer(final DockerImageName name) {
             super(name);
             this.withEnv("JVM_ARGS", "-XX:+TieredCompilation -XX:TieredStopAtLevel=1");
         }
@@ -396,8 +396,8 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @return Default container definition
          */
         @SuppressWarnings("PMD.ProhibitPublicStaticMethods")
-        public static ArtipieContainer defaultDefinition() {
-            return new ArtipieContainer().withConfig("artipie.yaml");
+        public static PanteraContainer defaultDefinition() {
+            return new PanteraContainer().withConfig("pantera.yaml");
         }
 
         /**
@@ -406,7 +406,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param res Config resource name
          * @return Self
          */
-        public ArtipieContainer withConfig(final String res) {
+        public PanteraContainer withConfig(final String res) {
             return this.withClasspathResourceMapping(
                 res, "/etc/artipie/artipie.yml", BindMode.READ_ONLY
             );
@@ -419,7 +419,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param cfg Config
          * @return Self
          */
-        public ArtipieContainer withConfig(
+        public PanteraContainer withConfig(
             final Path temp,
             final String cfg
         ) {
@@ -438,7 +438,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param repo Repository name
          * @return Self
          */
-        public ArtipieContainer withRepoConfig(
+        public PanteraContainer withRepoConfig(
             final Path temp,
             final String config,
             final String repo
@@ -457,7 +457,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param repo Repository name
          * @return Self
          */
-        public ArtipieContainer withRepoConfig(final String res, final String repo) {
+        public PanteraContainer withRepoConfig(final String res, final String repo) {
             return this.withClasspathResourceMapping(
                 res, String.format("/var/artipie/repo/%s.yaml", repo), BindMode.READ_ONLY
             );
@@ -470,7 +470,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param uname Username
          * @return Self
          */
-        public ArtipieContainer withUser(final String res, final String uname) {
+        public PanteraContainer withUser(final String res, final String uname) {
             return this.withClasspathResourceMapping(
                 res, String.format("/var/artipie/security/users/%s.yaml", uname), BindMode.READ_ONLY
             );
@@ -483,7 +483,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
          * @param rname Role name
          * @return Self
          */
-        public ArtipieContainer withRole(final String res, final String rname) {
+        public PanteraContainer withRole(final String res, final String rname) {
             return this.withClasspathResourceMapping(
                 res, String.format("/var/artipie/security/roles/%s.yaml", rname), BindMode.READ_ONLY
             );
@@ -604,7 +604,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
         }
 
         /**
-         * Login to Artipie as the user with name 'alice'.
+         * Login to Pantera as the user with name 'alice'.
          *
          * @return Self
          */
@@ -613,7 +613,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
         }
 
         /**
-         * Login to Artipie.
+         * Login to Pantera.
          *
          * @param user User name
          * @param pwd Password
@@ -623,7 +623,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
             this.commands.add(
                 new DockerCommand(
                     this.deployment,
-                    "Failed to login to Artipie",
+                    "Failed to login to Pantera",
                     List.of(
                         "docker", "login",
                         "--username", user,
@@ -690,7 +690,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
                 new DockerCommand(
                     this.deployment,
                     String.format(
-                        "Failed to push image to Artipie [image=%s]", img
+                        "Failed to push image to Pantera [image=%s]", img
                     ),
                     List.of("docker", "push", img),
                     new ContainerResultMatcher(
@@ -746,7 +746,7 @@ public final class TestDeployment implements BeforeEachCallback, AfterEachCallba
                 new DockerCommand(
                     this.deployment,
                     String.format(
-                        "Failed to remove image from Artipie [image=%s]", img
+                        "Failed to remove image from Pantera [image=%s]", img
                     ),
                     List.of("docker", "image", "rm", img),
                     new ContainerResultMatcher(

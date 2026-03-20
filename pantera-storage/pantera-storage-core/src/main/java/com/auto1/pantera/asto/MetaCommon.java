@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 
 /**
  * Helper object to read common metadata from {@link Meta}.
@@ -31,7 +31,7 @@ public final class MetaCommon {
      */
     public long size() {
         return this.meta.read(Meta.OP_SIZE).orElseThrow(
-            () -> new ArtipieException("SIZE couldn't be read")
+            () -> new PanteraException("SIZE couldn't be read")
         ).longValue();
     }
 }

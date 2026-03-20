@@ -24,7 +24,7 @@ public final class RolesITCase {
      */
     @RegisterExtension
     final TestDeployment deployment = new TestDeployment(
-        () -> new TestDeployment.ArtipieContainer().withConfig("artipie_with_policy.yaml")
+        () -> new TestDeployment.PanteraContainer().withConfig("artipie_with_policy.yaml")
             .withRepoConfig("binary/bin.yml", "bin")
             .withUser("security/users/bob.yaml", "bob")
             .withUser("security/users/john.yaml", "john")
@@ -37,7 +37,7 @@ public final class RolesITCase {
     @Test
     void readersAndAdminsCanDownload() throws Exception {
         final byte[] target = new byte[]{0, 1, 2, 3};
-        this.deployment.putBinaryToArtipie(
+        this.deployment.putBinaryToPantera(
             target, "/var/artipie/data/bin/target"
         );
         this.deployment.assertExec(

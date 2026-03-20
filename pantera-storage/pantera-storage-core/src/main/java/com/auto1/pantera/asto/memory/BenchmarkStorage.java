@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.memory;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.FailedCompletionStage;
@@ -122,7 +122,7 @@ public final class BenchmarkStorage implements Storage {
         final CompletableFuture<Void> res;
         if (Key.ROOT.equals(key)) {
             res = new CompletableFutureSupport.Failed<Void>(
-                new ArtipieIOException("Unable to save to root")
+                new PanteraIOException("Unable to save to root")
             ).get();
         } else {
             // OPTIMIZATION: Use size hint for efficient pre-allocation
@@ -194,7 +194,7 @@ public final class BenchmarkStorage implements Storage {
     public CompletableFuture<Content> value(final Key key) {
         final CompletionStage<Content> res;
         if (Key.ROOT.equals(key)) {
-            res = new FailedCompletionStage<>(new ArtipieIOException("Unable to load from root"));
+            res = new FailedCompletionStage<>(new PanteraIOException("Unable to load from root"));
         } else {
             if (this.deleted.contains(key)) {
                 res = notFoundCompletion(key);
@@ -270,7 +270,7 @@ public final class BenchmarkStorage implements Storage {
      */
     private static <T> CompletionStage<T> ioErrorCompletion(final String msg, final Key key) {
         return new FailedCompletionStage<>(
-            new ArtipieIOException(String.format("%s: %s", msg, key.string()))
+            new PanteraIOException(String.format("%s: %s", msg, key.string()))
         );
     }
 }

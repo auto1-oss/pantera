@@ -94,9 +94,9 @@ public final class FileMetaSlice implements Slice {
      */
     private static Headers from(final Meta mtd) {
         final Map<Meta.OpRWSimple<?>, String> fmtd = new HashMap<>();
-        fmtd.put(Meta.OP_MD5, "X-Artipie-MD5");
-        fmtd.put(Meta.OP_CREATED_AT, "X-Artipie-CreatedAt");
-        fmtd.put(Meta.OP_SIZE, "X-Artipie-Size");
+        fmtd.put(Meta.OP_MD5, "X-Pantera-MD5");
+        fmtd.put(Meta.OP_CREATED_AT, "X-Pantera-CreatedAt");
+        fmtd.put(Meta.OP_SIZE, "X-Pantera-Size");
         return new Headers(
             fmtd.entrySet().stream()
                 .map(entry ->

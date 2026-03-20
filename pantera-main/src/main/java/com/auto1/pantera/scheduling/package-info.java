@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie scheduler.
+ * Pantera scheduler.
  *
  * @since 0.30
  */

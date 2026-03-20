@@ -5,15 +5,15 @@
 package com.auto1.pantera;
 
 /**
- * Base Artipie exception.
- * <p>It should be used as a base exception for all Artipie public APIs
+ * Base Pantera exception.
+ * <p>It should be used as a base exception for all Pantera public APIs
  * as a contract instead of others.</p>
  *
  * @since 1.0
- * @implNote ArtipieException is unchecked exception, but it's a good
+ * @implNote PanteraException is unchecked exception, but it's a good
  *  practice to document it via {@code throws} tag in JavaDocs.
  */
-public class ArtipieException extends RuntimeException {
+public class PanteraException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
@@ -22,7 +22,7 @@ public class ArtipieException extends RuntimeException {
      * @param msg Message
      * @param cause Cause
      */
-    public ArtipieException(final String msg, final Throwable cause) {
+    public PanteraException(final String msg, final Throwable cause) {
         super(msg, cause);
     }
 
@@ -30,7 +30,7 @@ public class ArtipieException extends RuntimeException {
      * New exception with base cause.
      * @param cause Cause
      */
-    public ArtipieException(final Throwable cause) {
+    public PanteraException(final Throwable cause) {
         super(cause);
     }
 
@@ -38,7 +38,7 @@ public class ArtipieException extends RuntimeException {
      * New exception with message.
      * @param msg Message
      */
-    public ArtipieException(final String msg) {
+    public PanteraException(final String msg) {
         super(msg);
     }
 }

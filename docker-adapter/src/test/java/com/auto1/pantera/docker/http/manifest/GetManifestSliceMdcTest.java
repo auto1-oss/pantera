@@ -49,7 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class GetManifestSliceMdcTest {
 
     @Test
-    void setsMdcUserNameFromArtipieLoginHeaderBeforeCallingDockerLayer() {
+    void setsMdcUserNameFromPanteraLoginHeaderBeforeCallingDockerLayer() {
         // Capture MDC value on whatever thread manifests.get() runs on.
         // Without the fix this would be null (or a stale value from a previous request).
         final AtomicReference<String> capturedMdc = new AtomicReference<>("not-set");

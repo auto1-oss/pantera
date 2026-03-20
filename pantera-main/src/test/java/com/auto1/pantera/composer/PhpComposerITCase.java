@@ -28,7 +28,7 @@ final class PhpComposerITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withRepoConfig("composer/php.yml", "php")
             .withRepoConfig("composer/php-port.yml", "php-port")
             .withExposedPorts(8081),

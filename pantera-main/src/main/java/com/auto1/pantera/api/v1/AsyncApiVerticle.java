@@ -23,10 +23,10 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;
-import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.Settings;
-import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.settings.repo.DualCrudRepoSettings;
 import com.auto1.pantera.settings.users.CrudRoles;
@@ -50,12 +50,12 @@ import javax.sql.DataSource;
 public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
-     * Artipie caches.
+     * Pantera caches.
      */
-    private final ArtipieCaches caches;
+    private final PanteraCaches caches;
 
     /**
-     * Artipie settings storage.
+     * Pantera settings storage.
      */
     private final Storage configsStorage;
 
@@ -65,9 +65,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final int port;
 
     /**
-     * Artipie security.
+     * Pantera security.
      */
-    private final ArtipieSecurity security;
+    private final PanteraSecurity security;
 
     /**
      * SSL KeyStore.
@@ -90,7 +90,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final CooldownService cooldown;
 
     /**
-     * Artipie settings.
+     * Pantera settings.
      */
     private final Settings settings;
 
@@ -107,23 +107,23 @@ public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
      * Primary constructor.
-     * @param caches Artipie settings caches
-     * @param configsStorage Artipie settings storage
+     * @param caches Pantera settings caches
+     * @param configsStorage Pantera settings storage
      * @param port Port to run API on
-     * @param security Artipie security
+     * @param security Pantera security
      * @param keystore KeyStore
      * @param jwt JWT authentication provider
      * @param events Artifact metadata events queue
      * @param cooldown Cooldown service
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
      */
     public AsyncApiVerticle(
-        final ArtipieCaches caches,
+        final PanteraCaches caches,
         final Storage configsStorage,
         final int port,
-        final ArtipieSecurity security,
+        final PanteraSecurity security,
         final Optional<KeyStore> keystore,
         final JWTAuth jwt,
         final Optional<MetadataEventQueues> events,
@@ -147,7 +147,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
 
     /**
      * Convenience constructor.
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable

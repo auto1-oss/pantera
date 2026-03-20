@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -92,7 +92,7 @@ final class DownloadIndexSlice implements Slice {
         try {
             return URI.create(url.replaceAll("/$", "")).toURL();
         } catch (final MalformedURLException exc) {
-            throw new ArtipieException(
+            throw new PanteraException(
                 new IllegalStateException(
                     String.format("Failed to build URL from '%s'", url),
                     exc

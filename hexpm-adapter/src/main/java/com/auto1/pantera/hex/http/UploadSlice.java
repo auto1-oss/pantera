@@ -5,7 +5,7 @@
 
 package com.auto1.pantera.hex.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Concatenation;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
@@ -184,7 +184,7 @@ public final class UploadSlice implements Slice {
      * @param releases List of releases from storage
      * @param replace Need replace for release
      * @param version Version for searching
-     * @throws ArtipieException if realise exist in releases and don't need to replace.
+     * @throws PanteraException if realise exist in releases and don't need to replace.
      */
     private static void handleReleases(
         final AtomicReference<List<PackageOuterClass.Release>> releases,
@@ -205,7 +205,7 @@ public final class UploadSlice implements Slice {
             }
         }
         if (versionexist && !replace) {
-            throw new ArtipieException(String.format("Version %s already exists.", version.get()));
+            throw new PanteraException(String.format("Version %s already exists.", version.get()));
         }
         if (replace) {
             releases.set(filtered);
@@ -281,7 +281,7 @@ public final class UploadSlice implements Slice {
                                 PackageOuterClass.Package.parseFrom(signed.getPayload());
                             releases.set(pkg.getReleasesList());
                         } catch (final InvalidProtocolBufferException ipbex) {
-                            throw new ArtipieException("Cannot parse package", ipbex);
+                            throw new PanteraException("Cannot parse package", ipbex);
                         }
                     }
                 );
@@ -316,7 +316,7 @@ public final class UploadSlice implements Slice {
                 .setOuterChecksum(ByteString.copyFrom(Hex.decodeHex(outerchecksum.get())))
                 .build();
         } catch (final DecoderException dex) {
-            throw new ArtipieException("Cannot decode hexed checksum", dex);
+            throw new PanteraException("Cannot decode hexed checksum", dex);
         }
         final PackageOuterClass.Package pckg = PackageOuterClass.Package.newBuilder()
             .setName(name.get())

@@ -7,7 +7,7 @@ package com.auto1.pantera.auth;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.DomainFilteredAuth;
@@ -18,7 +18,7 @@ import java.util.List;
  * Factory for auth from github.
  * @since 0.30
  */
-@ArtipieAuthFactory("github")
+@PanteraAuthFactory("github")
 public final class GithubAuthFactory implements AuthFactory {
 
     @Override

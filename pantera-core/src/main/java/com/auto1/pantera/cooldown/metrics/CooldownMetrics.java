@@ -88,19 +88,19 @@ public final class CooldownMetrics {
         this.cacheSizeSupplier = () -> 0L;
 
         // Register cache size gauge - uses 'this' reference to prevent GC
-        Gauge.builder("artipie.cooldown.cache.size", this, m -> m.cacheSizeSupplier.get().doubleValue())
+        Gauge.builder("pantera.cooldown.cache.size", this, m -> m.cacheSizeSupplier.get().doubleValue())
             .description("Current cooldown metadata cache size")
             .register(registry);
 
         // Register global active_blocks gauge - always emits, computes total from per-repo gauges
         // Uses 'this' reference to prevent GC and ensure gauge is never stale
-        Gauge.builder("artipie.cooldown.active_blocks", this, CooldownMetrics::computeTotalActiveBlocks)
+        Gauge.builder("pantera.cooldown.active_blocks", this, CooldownMetrics::computeTotalActiveBlocks)
             .description("Total active cooldown blocks across all repositories")
             .register(registry);
 
         // Register all_blocked gauge - tracks packages where ALL versions are blocked
         // Persisted in database, loaded on startup, always emits current value
-        Gauge.builder("artipie.cooldown.all_blocked", this.allBlockedPackages, AtomicLong::doubleValue)
+        Gauge.builder("pantera.cooldown.all_blocked", this.allBlockedPackages, AtomicLong::doubleValue)
             .description("Number of packages where all versions are blocked")
             .register(registry);
     }
@@ -148,7 +148,7 @@ public final class CooldownMetrics {
      * @param repoName Repository name
      */
     public void recordVersionBlocked(final String repoType, final String repoName) {
-        Counter.builder("artipie.cooldown.versions.blocked")
+        Counter.builder("pantera.cooldown.versions.blocked")
             .description("Number of versions blocked by cooldown")
             .tag("repo_type", repoType)
             .tag("repo_name", repoName)
@@ -163,7 +163,7 @@ public final class CooldownMetrics {
      * @param repoName Repository name
      */
     public void recordVersionAllowed(final String repoType, final String repoName) {
-        Counter.builder("artipie.cooldown.versions.allowed")
+        Counter.builder("pantera.cooldown.versions.allowed")
             .description("Number of versions allowed by cooldown")
             .tag("repo_type", repoType)
             .tag("repo_name", repoName)
@@ -177,7 +177,7 @@ public final class CooldownMetrics {
      * @param tier Cache tier (l1 or l2)
      */
     public void recordCacheHit(final String tier) {
-        Counter.builder("artipie.cooldown.cache.hits")
+        Counter.builder("pantera.cooldown.cache.hits")
             .description("Cooldown cache hits")
             .tag("tier", tier)
             .register(this.registry)
@@ -188,7 +188,7 @@ public final class CooldownMetrics {
      * Record cache miss.
      */
     public void recordCacheMiss() {
-        Counter.builder("artipie.cooldown.cache.misses")
+        Counter.builder("pantera.cooldown.cache.misses")
             .description("Cooldown cache misses")
             .register(this.registry)
             .increment();
@@ -227,7 +227,7 @@ public final class CooldownMetrics {
      * @param reason Invalidation reason (unblock, expire, manual)
      */
     public void recordInvalidation(final String repoType, final String reason) {
-        Counter.builder("artipie.cooldown.invalidations")
+        Counter.builder("pantera.cooldown.invalidations")
             .description("Cooldown cache invalidations")
             .tag("repo_type", repoType)
             .tag("reason", reason)
@@ -283,7 +283,7 @@ public final class CooldownMetrics {
     private AtomicLong getOrCreateRepoGauge(final String repoType, final String repoName, final String key) {
         return this.activeBlocksGauges.computeIfAbsent(key, k -> {
             final AtomicLong newGauge = new AtomicLong(0);
-            Gauge.builder("artipie.cooldown.active_blocks.repo", newGauge, AtomicLong::doubleValue)
+            Gauge.builder("pantera.cooldown.active_blocks.repo", newGauge, AtomicLong::doubleValue)
                 .description("Number of active cooldown blocks per repository")
                 .tag("repo_type", repoType)
                 .tag("repo_name", repoName)
@@ -320,7 +320,7 @@ public final class CooldownMetrics {
         final int versionsTotal,
         final int versionsBlocked
     ) {
-        Timer.builder("artipie.cooldown.metadata.filter.duration")
+        Timer.builder("pantera.cooldown.metadata.filter.duration")
             .description("Cooldown metadata filtering duration")
             .tag("repo_type", repoType)
             .tag("versions_bucket", versionsBucket(versionsTotal))
@@ -340,7 +340,7 @@ public final class CooldownMetrics {
         final long durationMs,
         final boolean blocked
     ) {
-        Timer.builder("artipie.cooldown.evaluate.duration")
+        Timer.builder("pantera.cooldown.evaluate.duration")
             .description("Per-version cooldown evaluation duration")
             .tag("repo_type", repoType)
             .tag("result", blocked ? "blocked" : "allowed")
@@ -354,7 +354,7 @@ public final class CooldownMetrics {
      * @param durationMs Duration in milliseconds
      */
     public void recordCacheLoadDuration(final long durationMs) {
-        Timer.builder("artipie.cooldown.cache.load.duration")
+        Timer.builder("pantera.cooldown.cache.load.duration")
             .description("Cooldown cache load duration on miss")
             .register(this.registry)
             .record(durationMs, TimeUnit.MILLISECONDS);

@@ -119,13 +119,13 @@ public final class UploadSlice implements Slice {
         
         // Track upload metric
         this.recordMetric(() ->
-            com.auto1.pantera.metrics.ArtipieMetrics.instance().upload(this.rname, "maven")
+            com.auto1.pantera.metrics.PanteraMetrics.instance().upload(this.rname, "maven")
         );
 
         // Track bandwidth (upload)
         if (size > 0) {
             this.recordMetric(() ->
-                com.auto1.pantera.metrics.ArtipieMetrics.instance().bandwidth(this.rname, "maven", "upload", size)
+                com.auto1.pantera.metrics.PanteraMetrics.instance().bandwidth(this.rname, "maven", "upload", size)
             );
         }
         
@@ -443,7 +443,7 @@ public final class UploadSlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.PanteraMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {

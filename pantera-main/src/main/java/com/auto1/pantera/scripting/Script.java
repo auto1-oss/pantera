@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.scripting;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import java.util.Arrays;
@@ -130,14 +130,14 @@ public interface Script {
         public PrecompiledScript(final ScriptType type, final String script) {
             final ScriptEngine engine = Script.MANAGER.getEngineByName(type.toString());
             if (!(engine instanceof Compilable)) {
-                throw new ArtipieException(
+                throw new PanteraException(
                     String.format("Scripting engine '%s' does not support compilation", engine)
                 );
             }
             try {
                 this.script = ((Compilable) engine).compile(script);
             } catch (final ScriptException exc) {
-                throw new ArtipieException(exc);
+                throw new PanteraException(exc);
             }
         }
 
@@ -159,14 +159,14 @@ public interface Script {
          * Provides script type based on the storage key of the script.
          * @param key Storage Key of the script.
          * @return ScriptType on success.
-         * @throws ArtipieException in case of the unknown script type.
+         * @throws PanteraException in case of the unknown script type.
          */
         private static ScriptType getScriptType(final Key key) {
             final String ext = FilenameUtils.getExtension(key.string());
             final ScriptType type = Arrays.stream(ScriptType.values())
                 .filter(val -> val.ext().equals(ext)).findFirst().orElse(ScriptType.NONE);
             if (type.equals(ScriptType.NONE)) {
-                throw new ArtipieException(
+                throw new PanteraException(
                     String.join("", "Unknown script type for key: ", key.string())
                 );
             }

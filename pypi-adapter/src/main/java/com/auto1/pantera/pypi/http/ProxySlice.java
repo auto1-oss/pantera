@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.pypi.http;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -898,7 +898,7 @@ final class ProxySlice implements Slice {
                     final Content payload = new Content.From(data);
                     return new ContentAndCoords(payload, info, data.length, data);
                 } catch (final java.io.IOException ex) {
-                    throw new com.auto1.pantera.asto.ArtipieIOException(ex);
+                    throw new com.auto1.pantera.asto.PanteraIOException(ex);
                 }
             })
             .toCompletableFuture()
@@ -974,7 +974,7 @@ final class ProxySlice implements Slice {
                     }
                     return Optional.of(new Content.From(rewritten.getBytes(StandardCharsets.UTF_8)));
                 } catch (final IOException ex) {
-                    throw new ArtipieIOException(ex);
+                    throw new PanteraIOException(ex);
                 }
             })
             .toCompletableFuture()
@@ -1048,7 +1048,7 @@ final class ProxySlice implements Slice {
     /**
      * Extract base path from request URI for link rewriting.
      * 
-     * IMPORTANT: Artipie's routing layer (ApiRoutingSlice, SliceByPath) strips path prefixes
+     * IMPORTANT: Pantera's routing layer (ApiRoutingSlice, SliceByPath) strips path prefixes
      * before requests reach ProxySlice. For example:
      * - External: /test_prefix/api/pypi/pypi_group/simple/requests/
      * - ProxySlice sees: /simple/requests/ (prefix already stripped!)

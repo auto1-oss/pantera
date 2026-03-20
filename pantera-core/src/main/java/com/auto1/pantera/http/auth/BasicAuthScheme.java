@@ -40,7 +40,7 @@ public final class BasicAuthScheme implements AuthScheme {
     /**
      * Pool name for metrics identification.
      */
-    public static final String AUTH_POOL_NAME = "artipie.auth.basic";
+    public static final String AUTH_POOL_NAME = "pantera.auth.basic";
 
     /**
      * Thread pool for blocking authentication operations.

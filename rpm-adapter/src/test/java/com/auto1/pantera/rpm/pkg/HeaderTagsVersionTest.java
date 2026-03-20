@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm.pkg;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
@@ -102,7 +102,7 @@ class HeaderTagsVersionTest {
     })
     void throwsExceptionWhenVersionNotValid(final String param) {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new HeaderTags.Version(param).ver()
         );
     }

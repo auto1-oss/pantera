@@ -51,20 +51,20 @@ public final class RoleHandler {
     private final CrudRoles roles;
 
     /**
-     * Artipie policy cache.
+     * Pantera policy cache.
      */
     private final Cleanable<String> policyCache;
 
     /**
-     * Artipie security policy.
+     * Pantera security policy.
      */
     private final Policy<?> policy;
 
     /**
      * Ctor.
      * @param roles Crud roles object
-     * @param policyCache Artipie policy cache
-     * @param policy Artipie security policy
+     * @param policyCache Pantera policy cache
+     * @param policy Pantera security policy
      */
     public RoleHandler(final CrudRoles roles, final Cleanable<String> policyCache,
         final Policy<?> policy) {

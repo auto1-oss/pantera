@@ -196,7 +196,7 @@ public final class EcsLogger {
 
         // Add data stream fields (ECS data_stream.*)
         this.fields.put("data_stream.type", "logs");
-        this.fields.put("data_stream.dataset", "artipie.log");
+        this.fields.put("data_stream.dataset", "pantera.log");
 
         // Add event fields
         if (this.eventCategory != null) {

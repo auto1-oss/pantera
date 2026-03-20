@@ -43,7 +43,7 @@ public final class OptimizedStorageCache {
     /**
      * Pool name for metrics identification.
      */
-    public static final String POOL_NAME = "artipie.io.cache";
+    public static final String POOL_NAME = "pantera.io.cache";
 
     /**
      * Dedicated executor for blocking file I/O operations.

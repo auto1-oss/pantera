@@ -145,7 +145,7 @@ class YamlSettingsTest {
     }
 
     @Test
-    void initializesArtipieAuth() throws IOException {
+    void initializesPanteraAuth() throws IOException {
         final YamlSettings authz = new YamlSettings(
             Yaml.createYamlInput(this.artipieCreds()).readYamlMapping(), this.temp,
             new QuartzService()
@@ -167,7 +167,7 @@ class YamlSettingsTest {
     }
 
     @Test
-    void initializesArtipieAuthAndPolicy() throws IOException {
+    void initializesPanteraAuthAndPolicy() throws IOException {
         final YamlSettings authz = new YamlSettings(
             Yaml.createYamlInput(this.artipieCredsWithPolicy()).readYamlMapping(), this.temp,
             new QuartzService()

@@ -9,13 +9,13 @@ import javax.json.JsonArray;
 import javax.json.JsonObject;
 
 /**
- * Create/Read/Update/Delete Artipie users.
+ * Create/Read/Update/Delete Pantera users.
  * @since 0.27
  */
 public interface CrudUsers {
     /**
      * List existing users.
-     * @return Artipie users
+     * @return Pantera users
      */
     JsonArray list();
 

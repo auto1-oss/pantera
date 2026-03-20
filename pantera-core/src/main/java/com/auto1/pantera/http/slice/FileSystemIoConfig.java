@@ -41,7 +41,7 @@ public final class FileSystemIoConfig {
     /**
      * System property name for thread pool size.
      */
-    private static final String PROPERTY_THREADS = "artipie.filesystem.io.threads";
+    private static final String PROPERTY_THREADS = "pantera.filesystem.io.threads";
 
     /**
      * Environment variable name for thread pool size.

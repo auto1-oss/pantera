@@ -6,7 +6,7 @@ package com.auto1.pantera.api;
 
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.misc.UncheckedConsumer;
-import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.test.TestPanteraCaches;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonArray;
@@ -190,11 +190,11 @@ final class UsersRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Auth cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wereUsersInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wereUsersInvalidated()
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -255,11 +255,11 @@ final class UsersRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Auth cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wereUsersInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wereUsersInvalidated()
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -309,7 +309,7 @@ final class UsersRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Auth cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wereUsersInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wereUsersInvalidated()
                 );
             }
         );
@@ -372,11 +372,11 @@ final class UsersRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Auth cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wereUsersInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wereUsersInvalidated()
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );
@@ -417,11 +417,11 @@ final class UsersRestTest extends RestApiServerBase {
                 );
                 MatcherAssert.assertThat(
                     "Auth cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wereUsersInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wereUsersInvalidated()
                 );
                 MatcherAssert.assertThat(
                     "Policy cache should be invalidated",
-                    ((TestArtipieCaches) this.settingsCaches()).wasPolicyInvalidated()
+                    ((TestPanteraCaches) this.settingsCaches()).wasPolicyInvalidated()
                 );
             }
         );

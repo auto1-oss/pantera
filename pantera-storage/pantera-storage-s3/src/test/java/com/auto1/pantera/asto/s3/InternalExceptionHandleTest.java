@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.s3;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
@@ -42,7 +42,7 @@ final class InternalExceptionHandleTest {
     }
 
     @Test
-    void wrapsWithArtipieExceptionIfUnmatched() {
+    void wrapsWithPanteraExceptionIfUnmatched() {
         final CompletableFuture<Void> future = CompletableFuture.runAsync(Assertions::fail);
         MatcherAssert.assertThat(
             Assertions.assertThrows(
@@ -57,7 +57,7 @@ final class InternalExceptionHandleTest {
                     .toCompletableFuture()
                     ::get
             ),
-            Matchers.hasProperty("cause", Matchers.isA(ArtipieIOException.class))
+            Matchers.hasProperty("cause", Matchers.isA(PanteraIOException.class))
         );
     }
 

@@ -132,7 +132,7 @@ public class RepositorySlices {
     private static final Pattern PATTERN = Pattern.compile("/(?:[^/.]+)(/.*)?");
 
     /**
-     * Artipie settings.
+     * Pantera settings.
      */
     private final Settings settings;
 
@@ -164,7 +164,7 @@ public class RepositorySlices {
     private final SharedJettyClients sharedClients;
 
     /**
-     * @param settings Artipie settings
+     * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
      */

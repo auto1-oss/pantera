@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.streams;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
@@ -55,7 +55,7 @@ class StorageValuePipelineTest {
                     list.add(2, "three");
                     IOUtils.writeLines(list, "\n", out, charset);
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             }
         ).toCompletableFuture().join();
@@ -94,7 +94,7 @@ class StorageValuePipelineTest {
                         IOUtils.write(buffer, out);
                         out.flush();
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                     return "res";
                 }
@@ -120,7 +120,7 @@ class StorageValuePipelineTest {
                 try {
                     IOUtils.write(text, out, charset);
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             }
         ).toCompletableFuture().join();
@@ -146,7 +146,7 @@ class StorageValuePipelineTest {
                         IOUtils.writeLines(list, "\n", out, charset);
                         return list.size();
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                 }
             ).toCompletableFuture().join(),
@@ -176,7 +176,7 @@ class StorageValuePipelineTest {
                         IOUtils.write(text, out, charset);
                         return text.getBytes(charset).length;
                     } catch (final IOException err) {
-                        throw new ArtipieIOException(err);
+                        throw new PanteraIOException(err);
                     }
                 }
             ).toCompletableFuture().join(),
@@ -203,7 +203,7 @@ class StorageValuePipelineTest {
                         out, charset
                     );
                 } catch (final IOException err) {
-                    throw new ArtipieIOException(err);
+                    throw new PanteraIOException(err);
                 }
             }
         ).toCompletableFuture().join();

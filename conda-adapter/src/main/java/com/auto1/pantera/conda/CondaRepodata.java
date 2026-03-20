@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.conda;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.misc.UncheckedIOFunc;
 import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.auto1.pantera.conda.meta.InfoIndex;
@@ -59,7 +59,7 @@ public interface CondaRepodata {
         /**
          * Removes items from repodata json.
          * @param checksums List of the checksums of the packages to remove.
-         * @throws ArtipieIOException On IO errors
+         * @throws PanteraIOException On IO errors
          */
         public void perform(final Set<String> checksums) {
             final JsonFactory factory = new JsonFactory();
@@ -68,7 +68,7 @@ public interface CondaRepodata {
                     factory.createGenerator(this.out), factory.createParser(this.input)
                 ).clean(checksums);
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }
@@ -123,7 +123,7 @@ public interface CondaRepodata {
         /**
          * Parses provided packages and appends metadata to the the provided `packages.json`.
          * @param packages Packages to add
-         * @throws ArtipieIOException On IO error
+         * @throws PanteraIOException On IO error
          */
         public void perform(final List<PackageItem> packages) {
             final Map<String, JsonObject> items = new HashMap<>(packages.size());
@@ -150,7 +150,7 @@ public interface CondaRepodata {
                     this.input.map(new UncheckedIOFunc<>(factory::createParser))
                 ).merge(items);
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }

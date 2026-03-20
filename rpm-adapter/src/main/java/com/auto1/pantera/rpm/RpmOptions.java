@@ -8,7 +8,7 @@ import org.apache.commons.cli.Option;
 
 /**
  * Rpm repository configuration options. These options are used in rpm-adapter CLI mode and
- * on Artipie storage configuration level.
+ * on Pantera storage configuration level.
  * @since 0.10
  */
 public enum RpmOptions {

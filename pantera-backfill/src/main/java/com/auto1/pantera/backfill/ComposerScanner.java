@@ -112,9 +112,9 @@ final class ComposerScanner implements Scanner {
     }
 
     /**
-     * Scan the Artipie Composer proxy layout.
+     * Scan the Pantera Composer proxy layout.
      *
-     * <p>The Artipie Composer proxy caches per-package metadata as
+     * <p>The Pantera Composer proxy caches per-package metadata as
      * {@code {vendor}/{package}.json} files directly under the repository
      * root (no {@code p2/} prefix). Each file uses the standard Composer
      * {@code {"packages":{...}}} JSON format.</p>
@@ -347,7 +347,7 @@ final class ComposerScanner implements Scanner {
             }
         }
         // Final fallback: progressively strip leading path segments.
-        // Handles Artipie local PHP repos where the dist URL contains
+        // Handles Pantera local PHP repos where the dist URL contains
         // a full HTTP path like "/prefix/api/composer/repo/artifacts/...".
         String stripped = localPath;
         while (stripped.contains("/")) {

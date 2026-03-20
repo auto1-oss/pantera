@@ -8,7 +8,7 @@ import com.auto1.pantera.micrometer.MicrometerSlice;
 import com.auto1.pantera.settings.MetricsContext;
 
 /**
- * Slice is base for any slice served by Artipie.
+ * Slice is base for any slice served by Pantera.
  * It is designed to gather request & response metrics, perform logging, handle errors at top level.
  * With all that functionality provided request are forwarded to origin slice
  * and response is given back to caller.

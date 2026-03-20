@@ -31,14 +31,14 @@ public final class CondaAuthITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conda/conda-auth.yml", "my-conda"),
         () -> new TestDeployment.ClientContainer("artipie/conda-tests:1.0")
     );
 
     @Test
-    void canUploadToArtipie() throws IOException {
+    void canUploadToPantera() throws IOException {
         this.containers.putClasspathResourceToClient("conda/condarc", "/w/.condarc");
         this.moveCondarc();
         this.containers.assertExec(
@@ -68,12 +68,12 @@ public final class CondaAuthITCase {
             ),
             "conda", "build", "--output-folder", "/w/conda-out/", "/w/example-project/conda/"
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not uploaded to artipie",
             "/var/artipie/data/my-conda/linux-64/example-package-0.0.1-0.tar.bz2",
             new IsNot<>(new IsNull<>())
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "Package was not uploaded to artipie",
             "/var/artipie/data/my-conda/linux-64/repodata.json",
             new IsNot<>(new IsNull<>())
@@ -84,11 +84,11 @@ public final class CondaAuthITCase {
     void canInstall() throws IOException {
         this.containers.putClasspathResourceToClient("conda/condarc-auth", "/w/.condarc");
         this.moveCondarc();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource("conda/packages.json").asBytes(),
             "/var/artipie/data/my-conda/linux-64/repodata.json"
         );
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             new TestResource("conda/snappy-1.1.3-0.tar.bz2").asBytes(),
             "/var/artipie/data/my-conda/linux-64/snappy-1.1.3-0.tar.bz2"
         );

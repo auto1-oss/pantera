@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.Assertions;
@@ -38,7 +38,7 @@ public class AssetPathTest {
     public void failsByPattern() {
         final AssetPath path = new AssetPath("npm-proxy");
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> path.value("/npm-proxy/@vue/vue-cli")
         );
     }
@@ -47,7 +47,7 @@ public class AssetPathTest {
     public void failsByPrefix() {
         final AssetPath path = new AssetPath("npm-proxy");
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> path.value("/@vue/vue-cli/-/vue-cli-1.0.0.tgz")
         );
     }

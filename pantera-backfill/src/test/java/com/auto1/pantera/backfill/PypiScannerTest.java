@@ -233,7 +233,7 @@ final class PypiScannerTest {
     @Test
     void scansVersionedSubdirectoryLayout(@TempDir final Path temp)
         throws IOException {
-        // Real Artipie PyPI layout: package-name/version/file
+        // Real Pantera PyPI layout: package-name/version/file
         final Path v100 = temp.resolve("dnssec-validator/1.0.0");
         final Path v101 = temp.resolve("dnssec-validator/1.0.1");
         Files.createDirectories(v100);
@@ -281,7 +281,7 @@ final class PypiScannerTest {
     @Test
     void skipsHiddenDirectories(@TempDir final Path temp)
         throws IOException {
-        // Real Artipie layout has .meta and .pypi hidden dirs
+        // Real Pantera layout has .meta and .pypi hidden dirs
         final Path metaDir = temp.resolve(".meta/pypi/shards/pkg/1.0.0");
         final Path pypiDir = temp.resolve(".pypi/pkg");
         final Path realDir = temp.resolve("pkg/1.0.0");

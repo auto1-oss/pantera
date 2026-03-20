@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.npm;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.regex.Pattern;
@@ -44,7 +44,7 @@ public class PackageNameFromUrl {
                 ""
             );
         } else {
-            throw new ArtipieException(
+            throw new PanteraException(
                 new IllegalArgumentException(
                     String.format(
                         "Path is expected to start with '%s' but was '%s'",

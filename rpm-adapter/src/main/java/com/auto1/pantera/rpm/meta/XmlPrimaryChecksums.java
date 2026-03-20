@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.rpm.meta;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.misc.UncheckedIOConsumer;
 import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.fasterxml.aalto.stax.InputFactoryImpl;
@@ -73,7 +73,7 @@ public final class XmlPrimaryChecksums {
             }
             reader.close();
         } catch (final XMLStreamException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         } finally {
             Optional.of(this.inp).ifPresent(new UncheckedIOConsumer<>(InputStream::close));
         }

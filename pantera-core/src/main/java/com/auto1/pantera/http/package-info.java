@@ -4,7 +4,7 @@
  */
 
 /**
- * Artipie HTTP layer.
+ * Pantera HTTP layer.
  * @since 0.1
  */
 package com.auto1.pantera.http;

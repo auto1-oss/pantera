@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.function.Function;
 
 /**
@@ -35,7 +35,7 @@ public final class UncheckedFunc<T, R, E extends Exception> implements Function<
         try {
             return this.checked.apply(val);
         } catch (final Exception err) {
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         }
     }
 

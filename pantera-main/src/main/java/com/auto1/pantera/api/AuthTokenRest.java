@@ -36,7 +36,7 @@ public final class AuthTokenRest extends BaseRest {
     private final Tokens tokens;
 
     /**
-     * Artipie authentication.
+     * Pantera authentication.
      */
     private final Authentication auth;
 
@@ -44,7 +44,7 @@ public final class AuthTokenRest extends BaseRest {
      * Ctor.
      *
      * @param provider Vertx JWT auth
-     * @param auth Artipie authentication
+     * @param auth Pantera authentication
      */
     public AuthTokenRest(final Tokens provider, final Authentication auth) {
         this.tokens = provider;

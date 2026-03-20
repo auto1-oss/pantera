@@ -7,7 +7,7 @@ package com.auto1.pantera.cache;
 import com.auto1.pantera.asto.misc.Cleanable;
 
 /**
- * Decorator that broadcasts cache invalidation to other Artipie instances
+ * Decorator that broadcasts cache invalidation to other Pantera instances
  * via Redis pub/sub, in addition to performing the local invalidation.
  * <p>
  * When {@link #invalidate(String)} or {@link #invalidateAll()} is called,

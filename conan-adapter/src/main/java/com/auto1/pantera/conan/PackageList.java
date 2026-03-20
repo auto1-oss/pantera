@@ -47,13 +47,13 @@ public class PackageList {
         ));
 
     /**
-     * Current Artipie storage instance.
+     * Current Pantera storage instance.
      */
     private final Storage storage;
 
     /**
      * Initializes new instance.
-     * @param storage Current Artipie storage instance.
+     * @param storage Current Pantera storage instance.
      */
     public PackageList(final Storage storage) {
         this.storage = storage;

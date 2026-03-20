@@ -7,18 +7,18 @@ package com.auto1.pantera.metrics;
 import com.auto1.pantera.http.log.EcsLogger;
 
 /**
- * Artipie metrics - Compatibility wrapper for Micrometer.
+ * Pantera metrics - Compatibility wrapper for Micrometer.
  * Delegates all calls to MicrometerMetrics for backward compatibility.
  *
  * @deprecated Use {@link MicrometerMetrics} directly
  * @since 1.18.20
  */
 @Deprecated
-public final class ArtipieMetrics {
+public final class PanteraMetrics {
 
-    private static volatile ArtipieMetrics instance;
+    private static volatile PanteraMetrics instance;
     
-    private ArtipieMetrics() {
+    private PanteraMetrics() {
         // Private constructor
     }
     
@@ -28,11 +28,11 @@ public final class ArtipieMetrics {
      */
     public static void initialize(final Object registry) {
         if (instance == null) {
-            synchronized (ArtipieMetrics.class) {
+            synchronized (PanteraMetrics.class) {
                 if (instance == null) {
-                    instance = new ArtipieMetrics();
+                    instance = new PanteraMetrics();
                     EcsLogger.info("com.auto1.pantera.metrics")
-                        .message("ArtipieMetrics compatibility wrapper initialized (delegate: OtelMetrics)")
+                        .message("PanteraMetrics compatibility wrapper initialized (delegate: OtelMetrics)")
                         .eventCategory("metrics")
                         .eventAction("metrics_init")
                         .eventOutcome("success")
@@ -42,9 +42,9 @@ public final class ArtipieMetrics {
         }
     }
     
-    public static ArtipieMetrics instance() {
+    public static PanteraMetrics instance() {
         if (instance == null) {
-            throw new IllegalStateException("ArtipieMetrics not initialized");
+            throw new IllegalStateException("PanteraMetrics not initialized");
         }
         return instance;
     }

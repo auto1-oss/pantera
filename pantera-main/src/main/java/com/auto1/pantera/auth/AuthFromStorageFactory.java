@@ -7,9 +7,9 @@ package com.auto1.pantera.auth;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
-import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.DomainFilteredAuth;
@@ -21,7 +21,7 @@ import java.util.List;
  * Factory for auth from artipie storage.
  * @since 0.30
  */
-@ArtipieAuthFactory("artipie")
+@PanteraAuthFactory("artipie")
 public final class AuthFromStorageFactory implements AuthFactory {
 
     @Override
@@ -29,7 +29,7 @@ public final class AuthFromStorageFactory implements AuthFactory {
         final Authentication auth = new YamlSettings.PolicyStorage(yaml).parse().map(
             asto -> new AuthFromStorage(new BlockingStorage(asto))
         ).orElseThrow(
-            () -> new ArtipieException(
+            () -> new PanteraException(
                 "Failed to create artipie auth, storage is not configured"
             )
         );

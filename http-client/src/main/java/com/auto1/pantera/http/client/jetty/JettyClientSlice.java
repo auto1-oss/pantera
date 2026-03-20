@@ -191,7 +191,7 @@ final class JettyClientSlice implements Slice {
     }
 
     /**
-     * Convert Jetty HttpFields to Artipie Headers.
+     * Convert Jetty HttpFields to Pantera Headers.
      *
      * <p>When Jetty auto-decodes a gzip/deflate/br response body via its registered
      * {@code ContentDecoder.Factory} (default behaviour), the decoded (plain) bytes are
@@ -237,7 +237,7 @@ final class JettyClientSlice implements Slice {
     /**
      * Builds jetty basic request from artipie request line and headers.
      * @param headers Headers
-     * @param req Artipie request line
+     * @param req Pantera request line
      * @return Jetty request
      */
     private Request buildRequest(Headers headers, RequestLine req) {

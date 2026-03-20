@@ -44,12 +44,12 @@ final class NpmProxyITCase {
         Map.ofEntries(
             new MapEntry<>(
                 "artipie",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("npm/npm.yml", "my-npm")
             ),
             new MapEntry<>(
                 "artipie-proxy",
-                () -> TestDeployment.ArtipieContainer.defaultDefinition()
+                () -> TestDeployment.PanteraContainer.defaultDefinition()
                     .withRepoConfig("npm/npm-proxy.yml", "my-npm-proxy")
                     .withRepoConfig("npm/npm-proxy-port.yml", "my-npm-proxy-port")
                     .withExposedPorts(8081)
@@ -65,7 +65,7 @@ final class NpmProxyITCase {
         "8081,my-npm-proxy-port"
     })
     void installFromProxy(final String port, final String repo) throws Exception {
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             "artipie",
             new TestResource(
                 String.format("npm/storage/%s/meta.json", NpmProxyITCase.PROJ)
@@ -75,7 +75,7 @@ final class NpmProxyITCase {
         final byte[] tgz = new TestResource(
             String.format("npm/storage/%s/-/%s-1.0.1.tgz", NpmProxyITCase.PROJ, NpmProxyITCase.PROJ)
         ).asBytes();
-        this.containers.putBinaryToArtipie(
+        this.containers.putBinaryToPantera(
             "artipie", tgz,
             String.format(
                 "/var/artipie/data/my-npm/%s/-/%s-1.0.1.tgz",
@@ -93,7 +93,7 @@ final class NpmProxyITCase {
             "npm", "install", NpmProxyITCase.PROJ, "--registry",
             String.format("http://artipie-proxy:%s/%s", port, repo)
         );
-        this.containers.assertArtipieContent(
+        this.containers.assertPanteraContent(
             "artipie-proxy",
             "Package was not cached in proxy",
             String.format(

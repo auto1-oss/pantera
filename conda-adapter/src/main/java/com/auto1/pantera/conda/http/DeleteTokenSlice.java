@@ -23,7 +23,7 @@ import java.util.concurrent.CompletableFuture;
  * Delete token slice.
  * <a href="https://api.anaconda.org/docs#/authentication/delete_authentications">Documentation</a>.
  * This slice checks if the token is valid and returns 201 if yes. Token itself is not removed
- * from the Artipie.
+ * from the Pantera.
  */
 final class DeleteTokenSlice implements Slice {
 

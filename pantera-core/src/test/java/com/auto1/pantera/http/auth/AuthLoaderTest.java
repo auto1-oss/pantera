@@ -5,7 +5,7 @@
 package com.auto1.pantera.http.auth;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import java.util.Collections;
 
 import custom.auth.first.FirstAuthFactory;
@@ -49,7 +49,7 @@ class AuthLoaderTest {
     @Test
     void throwsExceptionIfPermNotFound() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new AuthLoader().newObject(
                 "unknown_policy",
                 Yaml.createYamlMappingBuilder().build()
@@ -60,7 +60,7 @@ class AuthLoaderTest {
     @Test
     void throwsExceptionIfPermissionsHaveTheSameName() {
         Assertions.assertThrows(
-            ArtipieException.class,
+            PanteraException.class,
             () -> new AuthLoader(
                 Collections.singletonMap(
                     AuthLoader.SCAN_PACK, "custom.auth.first;custom.auth.duplicate"

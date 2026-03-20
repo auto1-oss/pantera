@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  *
  * <p>Performance impact: Eliminates 100% of repeated 404 requests, reducing load on both
- * Artipie and upstream repositories.</p>
+ * Pantera and upstream repositories.</p>
  *
  * <p>Distinct from Group Negative Cache which caches per-member 404s within a group.</p>
  *

@@ -12,10 +12,10 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Arti-pie slice.
  * <p>
- * Slice is a part of Artipie server.
- * Each Artipie adapter implements this interface to expose
+ * Slice is a part of Pantera server.
+ * Each Pantera adapter implements this interface to expose
  * repository HTTP API.
- * Artipie main module joins all slices together into solid web server.
+ * Pantera main module joins all slices together into solid web server.
  */
 public interface Slice {
 

@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.memory;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import org.hamcrest.MatcherAssert;
@@ -101,7 +101,7 @@ final class BenchmarkStorageMoveTest {
         );
         MatcherAssert.assertThat(
             thr.getCause(),
-            new IsInstanceOf(ArtipieIOException.class)
+            new IsInstanceOf(PanteraIOException.class)
         );
     }
 }

@@ -12,7 +12,7 @@ import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.misc.Property;
 import com.auto1.pantera.settings.JwtSettings;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -109,7 +109,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         // TTL from property - applies only to direct Basic Auth (IdP passwords)
         // JWT-as-password bypasses cache entirely and uses token's own exp claim
         this.ttl = Duration.ofMillis(
-            new Property(ArtipieProperties.AUTH_TIMEOUT).asLongOrDefault(300_000L)
+            new Property(PanteraProperties.AUTH_TIMEOUT).asLongOrDefault(300_000L)
         );
         
         EcsLogger.info("com.auto1.pantera.settings.cache")

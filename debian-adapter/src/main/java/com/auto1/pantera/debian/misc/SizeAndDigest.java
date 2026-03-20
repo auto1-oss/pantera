@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.debian.misc;
 
-import com.auto1.pantera.ArtipieException;
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -38,9 +38,9 @@ public final class SizeAndDigest implements Function<InputStream, Pair<Long, Str
                 return new ImmutablePair<>(size, Hex.encodeHexString(digest.digest()));
             }
         } catch (final NoSuchAlgorithmException err) {
-            throw new ArtipieException(err);
+            throw new PanteraException(err);
         } catch (final IOException err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 }

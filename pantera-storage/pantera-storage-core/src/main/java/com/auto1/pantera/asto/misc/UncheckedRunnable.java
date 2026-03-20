@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.asto.misc;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import java.io.IOException;
 
 /**
@@ -47,7 +47,7 @@ public final class UncheckedRunnable implements Runnable {
         try {
             this.original.run();
         } catch (final Exception err) {
-            throw new ArtipieIOException(err);
+            throw new PanteraIOException(err);
         }
     }
 

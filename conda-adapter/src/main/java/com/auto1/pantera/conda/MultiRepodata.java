@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.conda;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
@@ -103,7 +103,7 @@ public interface MultiRepodata {
                     Files.delete(fcondas);
                 }
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
 

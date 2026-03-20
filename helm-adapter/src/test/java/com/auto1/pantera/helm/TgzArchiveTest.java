@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.test.TestResource;
 import java.io.IOException;
 import java.util.Collections;
@@ -62,7 +62,7 @@ public final class TgzArchiveTest {
     void throwsExceptionForInvalidGzipFormat() {
         final byte[] invalidContent = "This is not a gzip file".getBytes();
         Assertions.assertThrows(
-            ArtipieIOException.class,
+            PanteraIOException.class,
             () -> new TgzArchive(invalidContent).chartYaml()
         );
     }

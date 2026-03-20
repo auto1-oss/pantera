@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.security.perms;
 
-import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.PanteraException;
 import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.security.PermissionCollection;
 import java.util.Arrays;
@@ -18,7 +18,7 @@ import java.util.stream.Stream;
  * @since 1.2
  */
 public final class PermissionsLoader extends
-    FactoryLoader<PermissionFactory<PermissionCollection>, ArtipiePermissionFactory,
+    FactoryLoader<PermissionFactory<PermissionCollection>, PanteraPermissionFactory,
         PermissionConfig, PermissionCollection> {
 
     /**
@@ -39,7 +39,7 @@ public final class PermissionsLoader extends
      * @param env Environment
      */
     public PermissionsLoader(final Map<String, String> env) {
-        super(ArtipiePermissionFactory.class, env);
+        super(PanteraPermissionFactory.class, env);
     }
 
     @Override
@@ -57,7 +57,7 @@ public final class PermissionsLoader extends
     public PermissionCollection newObject(final String type, final PermissionConfig config) {
         final PermissionFactory<?> factory = this.factories.get(type);
         if (factory == null) {
-            throw new ArtipieException(String.format("Permission type %s is not found", type));
+            throw new PanteraException(String.format("Permission type %s is not found", type));
         }
         return factory.newPermissions(config);
     }
@@ -65,11 +65,11 @@ public final class PermissionsLoader extends
     @Override
     public String getFactoryName(final Class<?> clazz) {
         return Arrays.stream(clazz.getAnnotations())
-            .filter(ArtipiePermissionFactory.class::isInstance)
-            .map(inst -> ((ArtipiePermissionFactory) inst).value())
+            .filter(PanteraPermissionFactory.class::isInstance)
+            .map(inst -> ((PanteraPermissionFactory) inst).value())
             .findFirst()
             .orElseThrow(
-                () -> new ArtipieException("Annotation 'ArtipiePermissionFactory' should have a not empty value")
+                () -> new PanteraException("Annotation 'PanteraPermissionFactory' should have a not empty value")
             );
     }
 }

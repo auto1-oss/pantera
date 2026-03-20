@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.docker.perms;
 
-import com.auto1.pantera.security.perms.ArtipiePermissionFactory;
+import com.auto1.pantera.security.perms.PanteraPermissionFactory;
 import com.auto1.pantera.security.perms.PermissionConfig;
 import com.auto1.pantera.security.perms.PermissionFactory;
 
@@ -21,7 +21,7 @@ import com.auto1.pantera.security.perms.PermissionFactory;
  * }</pre>
  * @since 0.18
  */
-@ArtipiePermissionFactory("docker_repository_permissions")
+@PanteraPermissionFactory("docker_repository_permissions")
 public final class DockerRepositoryPermissionFactory implements
     PermissionFactory<DockerRepositoryPermission.DockerRepositoryPermissionCollection> {
 

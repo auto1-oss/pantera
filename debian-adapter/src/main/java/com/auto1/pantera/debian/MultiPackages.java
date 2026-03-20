@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.debian;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.debian.metadata.ControlField;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -30,7 +30,7 @@ public interface MultiPackages {
      * Merges provided indexes.
      * @param items Items to merge
      * @param res Output stream with merged data
-     * @throws com.auto1.pantera.asto.ArtipieIOException On IO error
+     * @throws com.auto1.pantera.asto.PanteraIOException On IO error
      */
     void merge(Collection<InputStream> items, OutputStream res);
 
@@ -53,7 +53,7 @@ public interface MultiPackages {
                 }
                 gop.finish();
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
 
@@ -93,7 +93,7 @@ public interface MultiPackages {
                     }
                 } while (line != null);
             } catch (final IOException err) {
-                throw new ArtipieIOException(err);
+                throw new PanteraIOException(err);
             }
         }
     }

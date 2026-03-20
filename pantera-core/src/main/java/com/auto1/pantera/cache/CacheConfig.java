@@ -9,7 +9,7 @@ import java.time.Duration;
 import java.util.Optional;
 
 /**
- * General cache configuration for all Artipie caches.
+ * General cache configuration for all Pantera caches.
  * Uses named profiles defined globally in _server.yaml.
  * 
  * <p>Example YAML configuration:

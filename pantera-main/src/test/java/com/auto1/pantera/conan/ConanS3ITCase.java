@@ -64,7 +64,7 @@ public final class ConanS3ITCase {
     private static final Key REPO_BIN_PKG = new Key.From(new Key.From(ConanS3ITCase.REPO), SERVER_BIN_PKG.split(Key.DELIMITER));
 
     /**
-     * S3Storage of Artipie repository.
+     * S3Storage of Pantera repository.
      */
     private Storage repository;
 
@@ -78,7 +78,7 @@ public final class ConanS3ITCase {
      */
     @RegisterExtension
     final TestDeployment containers = new TestDeployment(
-        () -> TestDeployment.ArtipieContainer.defaultDefinition()
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
             .withUser("security/users/alice.yaml", "alice")
             .withRepoConfig("conan/conan-s3.yml", ConanS3ITCase.REPO)
             .withExposedPorts(9301),
@@ -154,7 +154,7 @@ public final class ConanS3ITCase {
     }
 
     @Test
-    public void installFromArtipie() throws IOException, InterruptedException {
+    public void installFromPantera() throws IOException, InterruptedException {
         this.containers.assertExec(
             "rm cache failed", new ContainerResultMatcher(),
             "rm -rf /root/.conan/data".split(" ")
@@ -187,7 +187,7 @@ public final class ConanS3ITCase {
     }
 
     @Test
-    public void uploadToArtipie() throws IOException {
+    public void uploadToPantera() throws IOException {
         MatcherAssert.assertThat(
             "Server key must not exist before test",
             !this.repository.exists(ConanS3ITCase.REPO_BIN_PKG).join()

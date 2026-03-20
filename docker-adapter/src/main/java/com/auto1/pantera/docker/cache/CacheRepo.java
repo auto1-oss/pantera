@@ -39,7 +39,7 @@ public final class CacheRepo implements Repo {
     private final Optional<Queue<ArtifactEvent>> events;
 
     /**
-     * Artipie repository name.
+     * Pantera repository name.
      */
     private final String repoName;
 

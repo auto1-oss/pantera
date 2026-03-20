@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * Thread-safe, high-performance cache using Caffeine with automatic TTL expiry.
  * 
  * Performance impact: Eliminates 100% of repeated 404 requests, reducing load on both
- * Artipie and upstream repositories.
+ * Pantera and upstream repositories.
  * 
  * @since 0.11
  */

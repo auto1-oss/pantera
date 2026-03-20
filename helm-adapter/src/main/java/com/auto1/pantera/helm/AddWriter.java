@@ -4,7 +4,7 @@
  */
 package com.auto1.pantera.helm;
 
-import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.PanteraIOException;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Remaining;
@@ -176,14 +176,14 @@ interface AddWriter {
                                                 bufw.close();
                                                 osw.close();
                                             } catch (final IOException exc) {
-                                                throw new ArtipieIOException(exc);
+                                                throw new PanteraIOException(exc);
                                             }
                                             return CompletableFuture.allOf();
                                         }
                                     )
                             );
                     } catch (final IOException exc) {
-                        throw new ArtipieIOException(exc);
+                        throw new PanteraIOException(exc);
                     }
                 }
             );
@@ -226,7 +226,7 @@ interface AddWriter {
                         );
                         return result;
                     } catch (final IOException exc) {
-                        throw new ArtipieIOException(exc);
+                        throw new PanteraIOException(exc);
                     }
                 }
             ).thenCompose(Function.identity());
@@ -289,7 +289,7 @@ interface AddWriter {
                                     writer.writeLine(line, 2);
                                 }
                             } catch (final IOException exc) {
-                                throw new ArtipieIOException(exc);
+                                throw new PanteraIOException(exc);
                             }
                         })
                 );
@@ -371,7 +371,7 @@ interface AddWriter {
                             }
                         }
                     } catch (final IOException exc) {
-                        throw  new ArtipieIOException(exc);
+                        throw  new PanteraIOException(exc);
                     }
                 }
             );

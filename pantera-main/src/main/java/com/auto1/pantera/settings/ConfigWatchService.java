@@ -90,7 +90,7 @@ public final class ConfigWatchService implements AutoCloseable {
         this.watcher = FileSystems.getDefault().newWatchService();
         this.executor = Executors.newSingleThreadScheduledExecutor(
             r -> {
-                final Thread thread = new Thread(r, "artipie.config.reload");
+                final Thread thread = new Thread(r, "pantera.config.reload");
                 thread.setDaemon(true);
                 return thread;
             }
@@ -119,7 +119,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     .field("file.path", this.configPath.toString())
                     .log();
 
-                this.watchThread = new Thread(this::watchLoop, "artipie.config.watcher");
+                this.watchThread = new Thread(this::watchLoop, "pantera.config.watcher");
                 this.watchThread.setDaemon(true);
                 this.watchThread.start();
             } catch (final IOException ex) {
