@@ -40,7 +40,7 @@ class MetadataFromArchiveTest {
             new Metadata.FromArchive(
                 new TestResource(filename).asInputStream(), filename
             ).read().name(),
-            new IsEqual<>("artipie-sample")
+            new IsEqual<>("pantera-sample")
         );
     }
 

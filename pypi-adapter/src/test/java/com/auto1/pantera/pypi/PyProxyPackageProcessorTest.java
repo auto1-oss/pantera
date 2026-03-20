@@ -108,7 +108,7 @@ class PyProxyPackageProcessorTest {
             this.events.stream()
                 .map(ArtifactEvent::artifactName)
                 .collect(Collectors.toSet()),
-            Matchers.equalTo(Set.of("artipie-sample"))
+            Matchers.equalTo(Set.of("pantera-sample"))
         );
     }
 

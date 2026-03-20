@@ -79,7 +79,7 @@ class WheelSliceTest {
         );
         MatcherAssert.assertThat(
             "Saves content to storage",
-                this.asto.value(new Key.From("artipie-sample", "0.2", filename)).join().asBytes(),
+                this.asto.value(new Key.From("pantera-sample", "0.2", filename)).join().asBytes(),
             new IsEqual<>(body)
         );
         MatcherAssert.assertThat(
@@ -88,11 +88,11 @@ class WheelSliceTest {
         MatcherAssert.assertThat(
             "Artifact event stored per package",
             this.queue.peek().artifactName(),
-            new IsEqual<>("artipie-sample")
+            new IsEqual<>("pantera-sample")
         );
         MatcherAssert.assertThat(
             "Creates package index in .pypi folder",
-            this.asto.exists(new Key.From(".pypi", "artipie-sample", "artipie-sample.html")).join()
+            this.asto.exists(new Key.From(".pypi", "pantera-sample", "pantera-sample.html")).join()
         );
         MatcherAssert.assertThat(
             "Creates repo index in .pypi folder",
