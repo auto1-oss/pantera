@@ -94,7 +94,7 @@ class MavenProxyPackageProcessorTest {
             "Same items were removed from packages queue", this.packages.isEmpty()
         );
         final ArtifactEvent event = this.events.poll();
-        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.auto1.pantera.asto"));
+        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.artipie.asto"));
         MatcherAssert.assertThat(event.artifactVersion(), new IsEqual<String>("0.15"));
     }
 

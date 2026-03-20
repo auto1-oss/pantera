@@ -123,7 +123,7 @@ class NpmrcAuthSliceTest {
         MatcherAssert.assertThat(
             "Should contain email",
             body,
-            Matchers.containsString("//artipie.example.com/:email=testuser@artipie.local")
+            Matchers.containsString("//artipie.example.com/:email=testuser@pantera.local")
         );
 
         MatcherAssert.assertThat(
