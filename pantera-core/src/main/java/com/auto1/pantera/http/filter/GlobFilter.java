@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.filter;
+package com.auto1.pantera.http.filter;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.http.Headers;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.nio.file.FileSystems;
 import java.nio.file.PathMatcher;

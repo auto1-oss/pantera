@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.vertx;
+package com.auto1.pantera.vertx;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogEvent;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.misc.ConfigDefaults;
-import com.artipie.http.slice.EcsLoggingSlice;
-import com.artipie.http.log.LogSanitizer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogEvent;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
+import com.auto1.pantera.http.log.LogSanitizer;
 import co.elastic.apm.api.ElasticApm;
 import co.elastic.apm.api.Transaction;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RequestLine;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.reactivex.Flowable;
@@ -358,7 +358,7 @@ public final class VertxSliceServer implements Closeable {
         if (server != null) {
             // Phase 1: Reject new requests immediately
             this.shuttingDown.set(true);
-            EcsLogger.info("com.artipie.vertx")
+            EcsLogger.info("com.auto1.pantera.vertx")
                 .message(String.format("Initiating graceful shutdown, draining %d in-flight requests", this.inFlightRequests.get()))
                 .eventCategory("http")
                 .eventAction("server_drain")
@@ -375,14 +375,14 @@ public final class VertxSliceServer implements Closeable {
             }
             final int remaining = this.inFlightRequests.get();
             if (remaining > 0) {
-                EcsLogger.warn("com.artipie.vertx")
+                EcsLogger.warn("com.auto1.pantera.vertx")
                     .message(String.format("Drain timeout expired with %d in-flight requests, forcing shutdown", remaining))
                     .eventCategory("http")
                     .eventAction("server_drain")
                     .eventOutcome("timeout")
                     .log();
             } else {
-                EcsLogger.info("com.artipie.vertx")
+                EcsLogger.info("com.auto1.pantera.vertx")
                     .message("All in-flight requests drained successfully")
                     .eventCategory("http")
                     .eventAction("server_drain")
@@ -392,7 +392,7 @@ public final class VertxSliceServer implements Closeable {
             // Phase 3: Close the server
             server.rxClose().blockingAwait();
         } else {
-            EcsLogger.warn("com.artipie.vertx")
+            EcsLogger.warn("com.auto1.pantera.vertx")
                 .message("stop() called but server was not started")
                 .eventCategory("http")
                 .eventAction("server_stop")
@@ -494,7 +494,7 @@ public final class VertxSliceServer implements Closeable {
                     if (hasContentLength && contentLength < this.bodyBufferThreshold) {
                         // Small body - buffer for simpler error handling
                         req.bodyHandler(body -> {
-                            EcsLogger.debug("com.artipie.vertx")
+                            EcsLogger.debug("com.auto1.pantera.vertx")
                                 .message("Small request body buffered")
                                 .eventCategory("http")
                                 .eventAction("request_buffer")
@@ -503,7 +503,7 @@ public final class VertxSliceServer implements Closeable {
                             this.serveWithBody(req, body, guardedResponse).whenComplete((result, throwable) -> {
                                 try {
                                     if (throwable != null) {
-                                        EcsLogger.error("com.artipie.vertx")
+                                        EcsLogger.error("com.auto1.pantera.vertx")
                                             .message("Request serving failed")
                                             .eventCategory("http")
                                             .eventAction("request_serve")
@@ -528,7 +528,7 @@ public final class VertxSliceServer implements Closeable {
                         });
                     } else {
                         // Large body or chunked transfer - stream directly to slice
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Streaming large request body")
                             .eventCategory("http")
                             .eventAction("request_stream")
@@ -537,7 +537,7 @@ public final class VertxSliceServer implements Closeable {
                         this.serveWithStream(req, contentLength, guardedResponse).whenComplete((result, throwable) -> {
                             try {
                                 if (throwable != null) {
-                                    EcsLogger.error("com.artipie.vertx")
+                                    EcsLogger.error("com.auto1.pantera.vertx")
                                         .message("Request serving failed (streaming)")
                                         .eventCategory("http")
                                         .eventAction("request_serve")
@@ -565,7 +565,7 @@ public final class VertxSliceServer implements Closeable {
                     this.serve(req, null, guardedResponse).whenComplete((result, throwable) -> {
                         try {
                             if (throwable != null) {
-                                EcsLogger.error("com.artipie.vertx")
+                                EcsLogger.error("com.auto1.pantera.vertx")
                                     .message("Request serving failed")
                                     .eventCategory("http")
                                     .eventAction("request_serve")
@@ -589,7 +589,7 @@ public final class VertxSliceServer implements Closeable {
                     });
                 }
             } catch (final Exception ex) {
-                EcsLogger.error("com.artipie.vertx")
+                EcsLogger.error("com.auto1.pantera.vertx")
                     .message("Exception in proxy handler")
                     .eventCategory("http")
                     .eventAction("request_handle")
@@ -658,11 +658,11 @@ public final class VertxSliceServer implements Closeable {
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
         // Extract or generate trace ID for request correlation
-        final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.artipie.http.trace.TraceContext.set(traceId);
+        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
+        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.artipie.vertx")
+            EcsLogger.info("com.auto1.pantera.vertx")
                 .message("Serving request with streaming body")
                 .eventCategory("http")
                 .eventAction("request_serve_stream")
@@ -705,9 +705,9 @@ public final class VertxSliceServer implements Closeable {
         return response.thenCombine(continueFuture, (resp, ignored) -> resp)
             .thenCompose(
                 resp -> {
-                    com.artipie.http.trace.TraceContext.set(traceId);
+                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response (streaming)")
                             .eventCategory("http")
                             .eventAction("response_accept")
@@ -726,10 +726,10 @@ public final class VertxSliceServer implements Closeable {
                 }
             )
             .whenComplete((result, error) -> {
-                com.artipie.http.trace.TraceContext.set(traceId);
+                com.auto1.pantera.http.trace.TraceContext.set(traceId);
                 if (error != null) {
                     addRequestContext(
-                        EcsLogger.error("com.artipie.vertx")
+                        EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed (streaming)")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -741,7 +741,7 @@ public final class VertxSliceServer implements Closeable {
                     ).log();
                 } else {
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully (streaming)")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -751,7 +751,7 @@ public final class VertxSliceServer implements Closeable {
                         ctx
                     ).log();
                 }
-                com.artipie.http.trace.TraceContext.clear();
+                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -773,11 +773,11 @@ public final class VertxSliceServer implements Closeable {
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
         // Extract or generate trace ID for request correlation
-        final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.artipie.http.trace.TraceContext.set(traceId);
+        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
+        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.artipie.vertx")
+            EcsLogger.info("com.auto1.pantera.vertx")
                 .message("Serving request with body")
                 .eventCategory("http")
                 .eventAction("request_serve")
@@ -810,9 +810,9 @@ public final class VertxSliceServer implements Closeable {
             .thenCompose(
                 resp -> {
                     // Ensure trace context is set for response handling
-                    com.artipie.http.trace.TraceContext.set(traceId);
+                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
                             .eventCategory("http")
                             .eventAction("response_accept")
@@ -833,10 +833,10 @@ public final class VertxSliceServer implements Closeable {
             )
             .whenComplete((result, error) -> {
                 // Ensure trace context is set for completion logging
-                com.artipie.http.trace.TraceContext.set(traceId);
+                com.auto1.pantera.http.trace.TraceContext.set(traceId);
                 if (error != null) {
                     addRequestContext(
-                        EcsLogger.error("com.artipie.vertx")
+                        EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -848,7 +848,7 @@ public final class VertxSliceServer implements Closeable {
                     ).log();
                 } else {
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -859,7 +859,7 @@ public final class VertxSliceServer implements Closeable {
                     ).log();
                 }
                 // Clean up trace context after request completes
-                com.artipie.http.trace.TraceContext.clear();
+                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -881,11 +881,11 @@ public final class VertxSliceServer implements Closeable {
         final Slice loggedSlice = new EcsLoggingSlice(this.served, ctx.remoteHost());
 
         // Extract or generate trace ID for request correlation
-        final String traceId = com.artipie.http.trace.TraceContext.extractOrGenerate(requestHeaders);
-        com.artipie.http.trace.TraceContext.set(traceId);
+        final String traceId = com.auto1.pantera.http.trace.TraceContext.extractOrGenerate(requestHeaders);
+        com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.artipie.vertx")
+            EcsLogger.info("com.auto1.pantera.vertx")
                 .message("Serving request without body")
                 .eventCategory("http")
                 .eventAction("request_serve")
@@ -912,9 +912,9 @@ public final class VertxSliceServer implements Closeable {
             .thenCompose(
                 resp -> {
                     // Ensure trace context is set for response handling
-                    com.artipie.http.trace.TraceContext.set(traceId);
+                    com.auto1.pantera.http.trace.TraceContext.set(traceId);
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
                             .eventCategory("http")
                             .eventAction("response_accept")
@@ -935,10 +935,10 @@ public final class VertxSliceServer implements Closeable {
             )
             .whenComplete((result, error) -> {
                 // Ensure trace context is set for completion logging
-                com.artipie.http.trace.TraceContext.set(traceId);
+                com.auto1.pantera.http.trace.TraceContext.set(traceId);
                 if (error != null) {
                     addRequestContext(
-                        EcsLogger.error("com.artipie.vertx")
+                        EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -950,7 +950,7 @@ public final class VertxSliceServer implements Closeable {
                     ).log();
                 } else {
                     addRequestContext(
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully")
                             .eventCategory("http")
                             .eventAction("request_serve")
@@ -961,7 +961,7 @@ public final class VertxSliceServer implements Closeable {
                     ).log();
                 }
                 // Clean up trace context after request completes
-                com.artipie.http.trace.TraceContext.clear();
+                com.auto1.pantera.http.trace.TraceContext.clear();
             });
     }
 
@@ -999,7 +999,7 @@ public final class VertxSliceServer implements Closeable {
             if (cause instanceof RequestTimeoutException timeout) {
                 final RequestLogContext timeoutCtx = RequestLogContext.from(req, Headers.from(req.headers()));
                 addRequestContext(
-                    EcsLogger.warn("com.artipie.vertx")
+                    EcsLogger.warn("com.auto1.pantera.vertx")
                         .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
                         .eventCategory("http")
                         .eventAction("request_timeout")
@@ -1034,7 +1034,7 @@ public final class VertxSliceServer implements Closeable {
 
         // Check if response already terminated by another code path (e.g., timeout handler)
         if (guardedResponse.isTerminated()) {
-            EcsLogger.debug("com.artipie.vertx")
+            EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Response already terminated, skipping accept")
                 .eventCategory("http")
                 .eventAction("response_accept")
@@ -1088,7 +1088,7 @@ public final class VertxSliceServer implements Closeable {
                 vpb.subscribe(
                     buffer -> { },
                     error -> {
-                        EcsLogger.error("com.artipie.vertx")
+                        EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Error in HEAD response body")
                             .eventCategory("http")
                             .eventAction("response_write")
@@ -1098,7 +1098,7 @@ public final class VertxSliceServer implements Closeable {
                         terminator.fail(error);
                     },
                     () -> {
-                        EcsLogger.debug("com.artipie.vertx")
+                        EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("HEAD response body fully written")
                             .eventCategory("http")
                             .eventAction("response_write")
@@ -1128,7 +1128,7 @@ public final class VertxSliceServer implements Closeable {
                 response.endHandler(ignored -> {
                     final long bytes = bytesWritten.get();
                     if (expectedBytes > 0 && bytes != expectedBytes) {
-                        EcsLogger.error("com.artipie.vertx")
+                        EcsLogger.error("com.auto1.pantera.vertx")
                             .message(String.format("Incomplete transfer detected: expected %d bytes, wrote %d bytes", expectedBytes, bytes))
                             .eventCategory("http")
                             .eventAction("response_write")
@@ -1146,7 +1146,7 @@ public final class VertxSliceServer implements Closeable {
                 // Use toSubscriber() for backpressure - it will call response.end() on completion
                 vpb.doOnNext(buffer -> bytesWritten.addAndGet(buffer.length()))
                    .doOnError(error -> {
-                       EcsLogger.error("com.artipie.vertx")
+                       EcsLogger.error("com.auto1.pantera.vertx")
                            .message("Error streaming response body")
                            .eventCategory("http")
                            .eventAction("response_write")
@@ -1164,7 +1164,7 @@ public final class VertxSliceServer implements Closeable {
                 terminator.end();
             } else {
                 response.endHandler(ignored -> {
-                    EcsLogger.debug("com.artipie.vertx")
+                    EcsLogger.debug("com.auto1.pantera.vertx")
                         .message("Completing chunked response")
                         .eventCategory("http")
                         .eventAction("response_write")
@@ -1175,7 +1175,7 @@ public final class VertxSliceServer implements Closeable {
                 // CRITICAL: Must execute on Vert.x event loop thread for thread safety
                 // DO NOT use observeOn() - it breaks Vert.x threading model and causes corruption
                 vpb.doOnSubscribe(subscription ->
-                    EcsLogger.debug("com.artipie.vertx")
+                    EcsLogger.debug("com.auto1.pantera.vertx")
                         .message("Subscribed to chunked response body")
                         .eventCategory("http")
                         .eventAction("response_subscribe")
@@ -1359,7 +1359,7 @@ public final class VertxSliceServer implements Closeable {
                     this.promise.complete(null);
                 }
             } else {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Duplicate response completion suppressed (method: end)")
                     .eventCategory("http")
                     .eventAction("response_complete")
@@ -1373,7 +1373,7 @@ public final class VertxSliceServer implements Closeable {
                 this.guardedResponse.markTerminated("ResponseTerminator.completeWithoutEnding");
                 this.promise.complete(null);
             } else {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Duplicate response completion suppressed (method: handler)")
                     .eventCategory("http")
                     .eventAction("response_complete")
@@ -1383,7 +1383,7 @@ public final class VertxSliceServer implements Closeable {
 
         void fail(final Throwable error) {
             if (this.finished.compareAndSet(false, true)) {
-                EcsLogger.error("com.artipie.vertx")
+                EcsLogger.error("com.auto1.pantera.vertx")
                     .message("Error streaming response")
                     .eventCategory("http")
                     .eventAction("response_stream")
@@ -1411,7 +1411,7 @@ public final class VertxSliceServer implements Closeable {
                             this.guardedResponse.safeEnd("ResponseTerminator.fail");
                         }
                     } catch (Exception e) {
-                        EcsLogger.warn("com.artipie.vertx")
+                        EcsLogger.warn("com.auto1.pantera.vertx")
                             .message("Failed to end error response")
                             .eventCategory("http")
                             .eventAction("response_end")
@@ -1422,7 +1422,7 @@ public final class VertxSliceServer implements Closeable {
                 }
                 this.promise.completeExceptionally(error);
             } else {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Late failure after response completion")
                     .eventCategory("http")
                     .eventAction("response_fail")
@@ -1470,7 +1470,7 @@ public final class VertxSliceServer implements Closeable {
             if (!HTTP2_FORBIDDEN_HEADERS.contains(name)) {
                 filtered.add(header);
             } else {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Filtering HTTP/2 forbidden header: " + header.getKey())
                     .eventCategory("http")
                     .eventAction("header_filter")

@@ -7,4 +7,4 @@
  * Docker adapter permissions.
  * @since 0.18
  */
-package com.artipie.docker.perms;
+package com.auto1.pantera.docker.perms;

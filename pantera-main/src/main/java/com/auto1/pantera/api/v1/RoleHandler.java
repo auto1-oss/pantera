@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.AuthTokenRest;
-import com.artipie.api.AuthzHandler;
-import com.artipie.api.perms.ApiRolePermission;
-import com.artipie.api.perms.ApiRolePermission.RoleAction;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.users.CrudRoles;
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.perms.ApiRolePermission;
+import com.auto1.pantera.api.perms.ApiRolePermission.RoleAction;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.users.CrudRoles;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;

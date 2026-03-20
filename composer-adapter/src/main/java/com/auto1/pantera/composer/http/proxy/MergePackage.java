@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.composer.JsonPackage;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.composer.JsonPackage;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -134,7 +134,7 @@ public interface MergePackage {
         ) {
             final Set<String> vrsns = lcl.keySet();
             final JsonObjectBuilder bldr = Json.createObjectBuilder();
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Merging package versions (" + vrsns.size() + " local versions, remote present: " + rmt.isPresent() + ")")
                 .eventCategory("repository")
                 .eventAction("package_merge")

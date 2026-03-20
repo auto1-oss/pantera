@@ -7,4 +7,4 @@
  * Artipie policies test.
  * @since 1.2
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;

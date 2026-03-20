@@ -3,10 +3,10 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.http.hm;
+package com.auto1.pantera.http.hm;
 
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.TypeSafeMatcher;

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Key;
-import com.artipie.cache.GlobalCacheConfig;
-import com.artipie.cache.NegativeCacheConfig;
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cache.GlobalCacheConfig;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.ScanArgs;
@@ -249,11 +249,11 @@ public final class NegativeCache {
         final boolean found = this.notFoundCache.getIfPresent(key) != null;
 
         // Track L1 metrics
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             if (found) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
             } else {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
             }
         }
 
@@ -275,15 +275,15 @@ public final class NegativeCache {
         
         // Check L1 first
         if (this.notFoundCache.getIfPresent(key) != null) {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("maven_negative", "l1");
             }
             return CompletableFuture.completedFuture(true);
         }
 
         // L1 MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("maven_negative", "l1");
         }
         
         // Check L2 if enabled
@@ -295,8 +295,8 @@ public final class NegativeCache {
                 .orTimeout(100, TimeUnit.MILLISECONDS)
                 .exceptionally(err -> {
                     // Track L2 error - simplified for Micrometer
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheMiss("maven_negative", "l2");
                     }
                     return null;
@@ -304,8 +304,8 @@ public final class NegativeCache {
                 .thenApply(l2Bytes -> {
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance()
+                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                                 .recordCacheHit("maven_negative", "l2");
                         }
                         this.notFoundCache.put(key, CACHED);
@@ -313,8 +313,8 @@ public final class NegativeCache {
                     }
 
                     // L2 MISS
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheMiss("maven_negative", "l2");
                     }
                     return false;

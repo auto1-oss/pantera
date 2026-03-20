@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.PostgreSQLTestConfig;
-import com.artipie.index.ArtifactDocument;
-import com.artipie.index.DbArtifactIndex;
+import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.index.ArtifactDocument;
+import com.auto1.pantera.index.DbArtifactIndex;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;

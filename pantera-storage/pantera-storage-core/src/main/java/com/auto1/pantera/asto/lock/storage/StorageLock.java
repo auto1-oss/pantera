@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.lock.storage;
+package com.auto1.pantera.asto.lock.storage;
 
-import com.artipie.asto.FailedCompletionStage;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.lock.Lock;
+import com.auto1.pantera.asto.FailedCompletionStage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.Lock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.manifest;
+package com.auto1.pantera.docker.manifest;
 
-import com.artipie.docker.Digest;
-import com.artipie.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.InvalidManifestException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

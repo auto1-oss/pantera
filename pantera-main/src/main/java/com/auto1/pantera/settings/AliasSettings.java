@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.misc.ContentAsYaml;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.misc.ContentAsYaml;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -49,7 +49,7 @@ public final class AliasSettings {
                 final CompletionStage<StorageByAlias> res;
                 if (found) {
                     // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
-                    res = com.artipie.asto.rx.RxFuture.single(new ConfigFile(key).valueFrom(this.storage))
+                    res = com.auto1.pantera.asto.rx.RxFuture.single(new ConfigFile(key).valueFrom(this.storage))
                         .to(new ContentAsYaml())
                         .to(SingleInterop.get())
                         .thenApply(StorageByAlias::new);

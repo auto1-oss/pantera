@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import io.reactivex.rxjava3.core.Flowable;
 
 import java.io.IOException;
@@ -71,7 +71,7 @@ public final class FileSystemBrowseSlice implements Slice {
      * Files.readAttributes) on a separate thread pool.
      *
      * <p>Thread pool sizing is configurable via system property or environment
-     * variable (see {@link com.artipie.http.slice.FileSystemIoConfig}). Default: 2x CPU cores (minimum 8).
+     * variable (see {@link com.auto1.pantera.http.slice.FileSystemIoConfig}). Default: 2x CPU cores (minimum 8).
      * Named threads for better observability in thread dumps and monitoring.
      *
      * <p>CRITICAL: Without this dedicated executor, blocking I/O operations
@@ -88,7 +88,7 @@ public final class FileSystemBrowseSlice implements Slice {
      */
     private static final ExecutorService BLOCKING_EXECUTOR = TraceContextExecutor.wrap(
         Executors.newFixedThreadPool(
-            com.artipie.http.slice.FileSystemIoConfig.instance().threads(),
+            com.auto1.pantera.http.slice.FileSystemIoConfig.instance().threads(),
             new ThreadFactoryBuilder()
                 .setNameFormat("filesystem-browse-%d")
                 .setDaemon(true)
@@ -153,7 +153,7 @@ public final class FileSystemBrowseSlice implements Slice {
                 );
 
                 final long elapsed = System.currentTimeMillis() - startTime;
-                EcsLogger.debug("com.artipie.http")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("FileSystem browse completed")
                     .eventCategory("http")
                     .eventAction("filesystem_browse")
@@ -168,7 +168,7 @@ public final class FileSystemBrowseSlice implements Slice {
                     .build();
 
             } catch (Exception e) {
-                EcsLogger.error("com.artipie.http")
+                EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to browse directory")
                     .eventCategory("http")
                     .eventAction("filesystem_browse")

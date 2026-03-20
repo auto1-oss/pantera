@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.metrics;
+package com.auto1.pantera.metrics;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 /**
  * Artipie metrics - Compatibility wrapper for Micrometer.
@@ -31,7 +31,7 @@ public final class ArtipieMetrics {
             synchronized (ArtipieMetrics.class) {
                 if (instance == null) {
                     instance = new ArtipieMetrics();
-                    EcsLogger.info("com.artipie.metrics")
+                    EcsLogger.info("com.auto1.pantera.metrics")
                         .message("ArtipieMetrics compatibility wrapper initialized (delegate: OtelMetrics)")
                         .eventCategory("metrics")
                         .eventAction("metrics_init")

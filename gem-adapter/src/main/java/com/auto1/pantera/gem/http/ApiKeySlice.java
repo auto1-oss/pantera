@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.http;
+package com.auto1.pantera.gem.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.AuthScheme;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BasicAuthScheme;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthScheme;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.BasicAuthScheme;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;

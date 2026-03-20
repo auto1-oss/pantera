@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 
 import java.net.URL;
 import java.util.Optional;
@@ -49,7 +49,7 @@ public final class NpmProxySlice implements Slice {
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
         final String repoName, final String repoType, final CooldownService cooldown,
-        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote
+        final CooldownMetadataService cooldownMetadata, final com.auto1.pantera.http.Slice remote
     ) {
         this(path, npm, packages, repoName, repoType, cooldown, cooldownMetadata, remote, Optional.empty());
     }
@@ -69,14 +69,14 @@ public final class NpmProxySlice implements Slice {
     public NpmProxySlice(
         final String path, final NpmProxy npm, final Optional<Queue<ProxyArtifactEvent>> packages,
         final String repoName, final String repoType, final CooldownService cooldown,
-        final CooldownMetadataService cooldownMetadata, final com.artipie.http.Slice remote,
+        final CooldownMetadataService cooldownMetadata, final com.auto1.pantera.http.Slice remote,
         final Optional<URL> baseUrl
     ) {
         final PackagePath ppath = new PackagePath(path);
         final AssetPath apath = new AssetPath(path);
         final NpmCooldownInspector inspector = new NpmCooldownInspector(npm.remoteClient());
         // Register inspector globally so unblock can invalidate its cache
-        com.artipie.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
             .register(repoType, repoName, inspector);
         this.route = new SliceRoute(
             new RtRulePath(

@@ -12,4 +12,4 @@
  *
  * @since 0.1
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;

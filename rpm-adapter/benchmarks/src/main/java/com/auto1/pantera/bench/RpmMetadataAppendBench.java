@@ -3,15 +3,15 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.bench;
+package com.auto1.pantera.bench;
 
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.RpmMetadata;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.pkg.FilePackage;
-import com.artipie.rpm.pkg.FilePackageHeader;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.RpmMetadata;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.pkg.FilePackage;
+import com.auto1.pantera.rpm.pkg.FilePackageHeader;
+import com.auto1.pantera.rpm.pkg.Package;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

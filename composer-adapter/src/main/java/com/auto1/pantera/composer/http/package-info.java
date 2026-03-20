@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.composer.http;
+package com.auto1.pantera.composer.http;

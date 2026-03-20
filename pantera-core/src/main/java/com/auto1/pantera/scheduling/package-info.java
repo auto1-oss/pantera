@@ -8,4 +8,4 @@
  *
  * @since 1.3
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;

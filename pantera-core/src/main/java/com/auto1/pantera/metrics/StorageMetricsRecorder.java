@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.metrics;
+package com.auto1.pantera.metrics;
 
-import com.artipie.asto.metrics.StorageMetricsCollector;
+import com.auto1.pantera.asto.metrics.StorageMetricsCollector;
 
 /**
  * Storage metrics recorder implementation that bridges StorageMetricsCollector

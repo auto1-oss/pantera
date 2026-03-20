@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.group;
+package com.auto1.pantera.http.group;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.RsStatus;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,7 +84,7 @@ public final class GroupSlice implements Slice {
                     ? Content.EMPTY
                     : new Content.From(requestBytes);
 
-                EcsLogger.debug("com.artipie.http")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("Sending request to target (index: " + index + ")")
                     .eventCategory("http")
                     .eventAction("group_race")
@@ -95,7 +95,7 @@ public final class GroupSlice implements Slice {
                 .thenCompose(res -> {
                     // If result already completed (someone else won), consume and discard
                     if (result.isDone()) {
-                        EcsLogger.debug("com.artipie.http")
+                        EcsLogger.debug("com.auto1.pantera.http")
                             .message("Repository response arrived after race completed (index: " + index + ")")
                             .eventCategory("http")
                             .eventAction("group_race")
@@ -107,7 +107,7 @@ public final class GroupSlice implements Slice {
                     }
 
                     if (res.status() == RsStatus.NOT_FOUND) {
-                        EcsLogger.debug("com.artipie.http")
+                        EcsLogger.debug("com.auto1.pantera.http")
                             .message("Repository returned 404 (index: " + index + ")")
                             .eventCategory("http")
                             .eventAction("group_race")
@@ -125,7 +125,7 @@ public final class GroupSlice implements Slice {
 
                     // SUCCESS! This repo has the artifact
                     // Complete the result (first success wins) - don't consume body, it will be served
-                    EcsLogger.debug("com.artipie.http")
+                    EcsLogger.debug("com.auto1.pantera.http")
                         .message("Repository found artifact (index: " + index + ")")
                         .eventCategory("http")
                         .eventAction("group_race")
@@ -139,7 +139,7 @@ public final class GroupSlice implements Slice {
                     if (result.isDone()) {
                         return null;
                     }
-                    EcsLogger.warn("com.artipie.http")
+                    EcsLogger.warn("com.auto1.pantera.http")
                         .message("Failed to get response from repository (index: " + index + ")")
                         .eventCategory("http")
                         .eventAction("group_race")

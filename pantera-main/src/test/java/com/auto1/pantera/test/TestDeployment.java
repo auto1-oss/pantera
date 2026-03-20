@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.test;
+package com.auto1.pantera.test;
 
-import com.artipie.rpm.misc.UncheckedConsumer;
+import com.auto1.pantera.rpm.misc.UncheckedConsumer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;

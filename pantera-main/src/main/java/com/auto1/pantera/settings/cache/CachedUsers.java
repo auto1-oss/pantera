@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.cache;
+package com.auto1.pantera.settings.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.cache.CacheConfig;
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.misc.Property;
-import com.artipie.settings.JwtSettings;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.cache.CacheConfig;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.Property;
+import com.auto1.pantera.settings.JwtSettings;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -112,7 +112,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             new Property(ArtipieProperties.AUTH_TIMEOUT).asLongOrDefault(300_000L)
         );
         
-        EcsLogger.info("com.artipie.settings.cache")
+        EcsLogger.info("com.auto1.pantera.settings.cache")
             .message(String.format("Auth cache initialized - JWT-as-password bypasses cache: basicAuthTtl=%ds, jwtExpiry=%ds",
                 this.ttl.toSeconds(), jwtSettings != null ? jwtSettings.expirySeconds() : -1))
             .eventCategory("cache")
@@ -202,18 +202,18 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 final long l1DurationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
 
                 if (l1Result != null) {
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
                     }
                     return l1Result;
                 }
 
                 // L1 MISS
-                if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                    com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
-                    com.artipie.metrics.MicrometerMetrics.getInstance()
+                if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                         .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
                 }
                 
@@ -232,8 +232,8 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     this.cached.put(key, result);
                     final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
 
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("auth", "l1", "put", putDurationMs);
                     }
 
@@ -269,18 +269,18 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         final long l1DurationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
 
         if (l1Result != null) {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
             }
             return CompletableFuture.completedFuture(l1Result);
         }
 
         // L1 MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l1");
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("auth", "l1", "get", l1DurationMs);
         }
         
@@ -294,8 +294,8 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 .orTimeout(100, TimeUnit.MILLISECONDS)
                 .exceptionally(err -> {
                     // L2 error - treat as miss
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
                     }
                     return null;
                 })
@@ -304,9 +304,9 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
 
                     if (l2Bytes != null) {
                         // L2 HIT: Deserialize and promote to L1
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l2");
-                            com.artipie.metrics.MicrometerMetrics.getInstance()
+                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("auth", "l2");
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                                 .recordCacheOperationDuration("auth", "l2", "get", l2DurationMs);
                         }
 
@@ -319,9 +319,9 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                     }
 
                     // L2 MISS: Fetch from origin (sync, then wrap in CompletableFuture)
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("auth", "l2");
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("auth", "l2", "get", l2DurationMs);
                     }
 
@@ -445,8 +445,8 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         final Optional<AuthUser> user,
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheEviction("auth", "l1", cause.toString().toLowerCase());
         }
     }

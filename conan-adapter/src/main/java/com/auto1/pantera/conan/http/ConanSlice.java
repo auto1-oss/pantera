@@ -2,28 +2,28 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package  com.artipie.conan.http;
+package  com.auto1.pantera.conan.http;
 
-import com.artipie.asto.Storage;
-import com.artipie.conan.ItemTokenizer;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BearerAuthzSlice;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.auth.Tokens;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceDownload;
-import com.artipie.http.slice.StorageArtifactSlice;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.conan.ItemTokenizer;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.BearerAuthzSlice;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceDownload;
+import com.auto1.pantera.http.slice.StorageArtifactSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;

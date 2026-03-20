@@ -7,4 +7,4 @@
  * Tests for misc helpers.
  * @since 0.18
  */
-package com.artipie.http.misc;
+package com.auto1.pantera.http.misc;

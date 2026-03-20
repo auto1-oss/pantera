@@ -2,29 +2,29 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.npm.misc.DateTimeNowStr;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.npm.misc.DateTimeNowStr;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.google.common.base.Strings;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownResult;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -108,7 +108,7 @@ public final class DownloadAssetSlice implements Slice {
             // CRITICAL: Convert exceptions to proper HTTP responses to prevent
             // "Parse Error: Expected HTTP/" errors in npm client.
             final Throwable cause = unwrapException(error);
-            EcsLogger.error("com.artipie.npm")
+            EcsLogger.error("com.auto1.pantera.npm")
                 .message("Error processing asset request")
                 .eventCategory("repository")
                 .eventAction("get_asset")
@@ -118,9 +118,9 @@ public final class DownloadAssetSlice implements Slice {
                 .log();
             
             // Check if it's an HTTP exception with a specific status
-            if (cause instanceof com.artipie.http.ArtipieHttpException) {
-                final com.artipie.http.ArtipieHttpException httpEx = 
-                    (com.artipie.http.ArtipieHttpException) cause;
+            if (cause instanceof com.auto1.pantera.http.ArtipieHttpException) {
+                final com.auto1.pantera.http.ArtipieHttpException httpEx = 
+                    (com.auto1.pantera.http.ArtipieHttpException) cause;
                 return ResponseBuilder.from(httpEx.status())
                     .jsonBody(String.format(
                         "{\"error\":\"%s\"}",
@@ -130,7 +130,7 @@ public final class DownloadAssetSlice implements Slice {
             }
             
             // Generic 502 Bad Gateway for upstream errors
-            return ResponseBuilder.from(com.artipie.http.RsStatus.byCode(502))
+            return ResponseBuilder.from(com.auto1.pantera.http.RsStatus.byCode(502))
                 .jsonBody(String.format(
                     "{\"error\":\"Upstream error: %s\"}",
                     cause.getMessage() != null ? cause.getMessage() : "Unknown error"
@@ -166,7 +166,7 @@ public final class DownloadAssetSlice implements Slice {
             .map(asset -> {
                 // Asset found in storage cache - check if it's served from cache (not remote)
                 // Since getAsset tries storage first, if we have it, serve immediately
-                EcsLogger.info("com.artipie.npm")
+                EcsLogger.info("com.auto1.pantera.npm")
                     .message("Cache hit for asset, serving cached (offline-safe)")
                     .eventCategory("repository")
                     .eventAction("get_asset")
@@ -182,7 +182,7 @@ public final class DownloadAssetSlice implements Slice {
                             millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
                         }
                     } catch (final Exception ex) {
-                        EcsLogger.debug("com.artipie.npm")
+                        EcsLogger.debug("com.auto1.pantera.npm")
                             .message("Failed to parse asset lastModified for proxy event")
                             .error(ex)
                             .log();
@@ -244,7 +244,7 @@ public final class DownloadAssetSlice implements Slice {
             .thenCompose(result -> {
                 if (result.blocked()) {
                     final var block = result.block().orElseThrow();
-                    EcsLogger.info("com.artipie.npm")
+                    EcsLogger.info("com.auto1.pantera.npm")
                         .message(String.format(
                             "Asset download blocked by cooldown: reason=%s, blockedUntil=%s",
                             block.reason(), block.blockedUntil()))
@@ -272,7 +272,7 @@ public final class DownloadAssetSlice implements Slice {
                                 millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
                             }
                         } catch (final Exception ex) {
-                            EcsLogger.debug("com.artipie.npm")
+                            EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Failed to parse asset lastModified for proxy event")
                                 .error(ex)
                                 .log();

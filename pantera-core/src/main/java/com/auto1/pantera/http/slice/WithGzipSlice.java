@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.http.Slice;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
 import java.util.regex.Pattern;
 
 /**

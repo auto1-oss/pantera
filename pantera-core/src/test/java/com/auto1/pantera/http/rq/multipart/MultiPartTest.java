@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.asto.Content;
+import com.auto1.pantera.asto.Content;
 import io.reactivex.internal.functions.Functions;
 import io.reactivex.subjects.SingleSubject;
 import org.hamcrest.MatcherAssert;

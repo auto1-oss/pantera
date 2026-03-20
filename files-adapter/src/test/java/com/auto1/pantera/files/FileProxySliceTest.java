@@ -2,27 +2,27 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.files;
+package com.auto1.pantera.files;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.cache.StreamThroughCache;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.headers.Header;
-import com.artipie.http.hm.RsHasBody;
-import com.artipie.http.hm.RsHasHeaders;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.hm.SliceHasResponse;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.SliceSimple;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.cache.StreamThroughCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.RsHasHeaders;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.SliceSimple;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.collection.IsEmptyIterable;

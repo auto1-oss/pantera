@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.http.audit;
+package com.auto1.pantera.npm.http.audit;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 import java.io.StringReader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -93,7 +93,7 @@ public final class GroupAuditSlice implements Slice {
             .reduce((a, b) -> a + ", " + b)
             .orElse("(none)");
 
-        EcsLogger.info("com.artipie.npm")
+        EcsLogger.info("com.auto1.pantera.npm")
             .message(String.format("NPM Group Audit - START - querying %d members: [%s]", this.members.size(), memberList))
             .eventCategory("repository")
             .eventAction("group_audit_start")
@@ -140,7 +140,7 @@ public final class GroupAuditSlice implements Slice {
 
                     final long duration = System.currentTimeMillis() - startTime;
                     if (merged.isEmpty()) {
-                        EcsLogger.info("com.artipie.npm")
+                        EcsLogger.info("com.auto1.pantera.npm")
                             .message(String.format("NPM Group Audit - no vulnerabilities found: %d empty, %d non-empty members", emptyCount, nonEmptyCount))
                             .eventCategory("repository")
                             .eventAction("group_audit")
@@ -152,7 +152,7 @@ public final class GroupAuditSlice implements Slice {
                             .build();
                     }
 
-                    EcsLogger.info("com.artipie.npm")
+                    EcsLogger.info("com.auto1.pantera.npm")
                         .message(String.format("NPM Group Audit - found %d vulnerabilities: %d empty, %d non-empty members", merged.size(), emptyCount, nonEmptyCount))
                         .eventCategory("repository")
                         .eventAction("group_audit")
@@ -170,7 +170,7 @@ public final class GroupAuditSlice implements Slice {
                 })
                 .exceptionally(err -> {
                     final long duration = System.currentTimeMillis() - startTime;
-                    EcsLogger.error("com.artipie.npm")
+                    EcsLogger.error("com.auto1.pantera.npm")
                         .message("NPM Group Audit failed")
                         .eventCategory("repository")
                         .eventAction("group_audit")
@@ -200,7 +200,7 @@ public final class GroupAuditSlice implements Slice {
         final Headers headers,
         final byte[] bodyBytes
     ) {
-        EcsLogger.debug("com.artipie.npm")
+        EcsLogger.debug("com.auto1.pantera.npm")
             .message("Querying member for audit: " + member.name)
             .eventCategory("repository")
             .eventAction("group_audit")
@@ -215,7 +215,7 @@ public final class GroupAuditSlice implements Slice {
         ).thenCompose(response -> {
             // Check status - only parse successful responses
             if (!response.status().success()) {
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Member audit returned non-success status")
                     .eventCategory("repository")
                     .eventAction("group_audit")
@@ -231,7 +231,7 @@ public final class GroupAuditSlice implements Slice {
                     try {
                         final String json = new String(bytes, StandardCharsets.UTF_8);
                         if (json.isBlank() || json.equals("{}")) {
-                            EcsLogger.debug("com.artipie.npm")
+                            EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Member returned empty audit response")
                                 .eventCategory("repository")
                                 .eventAction("group_audit")
@@ -241,7 +241,7 @@ public final class GroupAuditSlice implements Slice {
                         }
                         try (JsonReader reader = Json.createReader(new StringReader(json))) {
                             final JsonObject result = reader.readObject();
-                            EcsLogger.debug("com.artipie.npm")
+                            EcsLogger.debug("com.auto1.pantera.npm")
                                 .message(String.format("Member returned audit data with %d entries", result.size()))
                                 .eventCategory("repository")
                                 .eventAction("group_audit")
@@ -250,7 +250,7 @@ public final class GroupAuditSlice implements Slice {
                             return result;
                         }
                     } catch (Exception e) {
-                        EcsLogger.warn("com.artipie.npm")
+                        EcsLogger.warn("com.auto1.pantera.npm")
                             .message("Failed to parse audit response from member: " + member.name)
                             .eventCategory("repository")
                             .eventAction("group_audit")
@@ -261,7 +261,7 @@ public final class GroupAuditSlice implements Slice {
                     }
                 });
         }).exceptionally(err -> {
-            EcsLogger.warn("com.artipie.npm")
+            EcsLogger.warn("com.auto1.pantera.npm")
                 .message("Member audit query failed: " + member.name)
                 .eventCategory("repository")
                 .eventAction("group_audit")

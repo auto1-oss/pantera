@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.maven.http.MavenProxySlice;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.maven.http.MavenProxySlice;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;
@@ -36,7 +36,7 @@ import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
 
 /**
- * Integration test for {@link com.artipie.maven.http.MavenProxySlice}.
+ * Integration test for {@link com.auto1.pantera.maven.http.MavenProxySlice}.
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
 final class MavenProxyIT {

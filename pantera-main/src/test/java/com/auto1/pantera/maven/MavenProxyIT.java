@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import org.hamcrest.core.IsAnything;
 import org.hamcrest.core.IsEqual;
 import org.hamcrest.core.StringContains;
@@ -16,7 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * Integration test for {@link com.artipie.maven.http.MavenProxySlice}.
+ * Integration test for {@link com.auto1.pantera.maven.http.MavenProxySlice}.
  *
  * @since 0.11
  */

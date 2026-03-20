@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.hm.RsHasBody;
-import com.artipie.http.hm.RsHasHeaders;
-import com.artipie.http.hm.RsHasStatus;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.RsHasHeaders;
+import com.auto1.pantera.http.hm.RsHasStatus;
 import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;

@@ -7,4 +7,4 @@
  * Tests for authentication and authorization.
  * @since 0.8
  */
-package com.artipie.http.auth;
+package com.auto1.pantera.http.auth;

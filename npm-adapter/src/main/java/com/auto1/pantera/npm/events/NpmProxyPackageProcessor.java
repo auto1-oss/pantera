@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.events;
+package com.auto1.pantera.npm.events;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContext;
-import com.artipie.npm.http.UploadSlice;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.JobDataRegistry;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.scheduling.QuartzJob;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContext;
+import com.auto1.pantera.npm.http.UploadSlice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.JobDataRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzJob;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -90,7 +90,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
 
         final long startTime = System.currentTimeMillis();
 
-        EcsLogger.debug("com.artipie.npm")
+        EcsLogger.debug("com.auto1.pantera.npm")
             .message("Processing NPM batch (size: " + batch.size() + ")")
             .eventCategory("repository")
             .eventAction("batch_processing")
@@ -106,7 +106,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .join();
 
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.artipie.npm")
+            EcsLogger.info("com.auto1.pantera.npm")
                 .message("NPM batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -115,7 +115,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 .log();
         } catch (Exception err) {
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.error("com.artipie.npm")
+            EcsLogger.error("com.auto1.pantera.npm")
                 .message("NPM batch processing failed (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -142,7 +142,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
         // Parse name/version from path - ZERO I/O, ZERO race conditions
         final Optional<PackageCoords> coords = parsePackageCoords(item.artifactKey());
         if (coords.isEmpty()) {
-            EcsLogger.warn("com.artipie.npm")
+            EcsLogger.warn("com.auto1.pantera.npm")
                 .message("Could not parse package coords from path")
                 .eventCategory("repository")
                 .eventAction("package_validation")
@@ -170,7 +170,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                         item.artifactKey().string()
                     )
                 );
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Package event created from path")
                     .eventCategory("repository")
                     .eventAction("package_processing")
@@ -179,7 +179,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                     .log();
             })
             .exceptionally(err -> {
-                EcsLogger.error("com.artipie.npm")
+                EcsLogger.error("com.auto1.pantera.npm")
                     .message("Failed to process NPM package")
                     .eventCategory("repository")
                     .eventAction("package_processing")

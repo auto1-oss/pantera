@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Header;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
 
 import java.net.URLConnection;
 import java.util.ArrayList;

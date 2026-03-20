@@ -8,4 +8,4 @@
  *
  * @since 0.4
  */
-package com.artipie.conda.asto;
+package com.auto1.pantera.conda.asto;

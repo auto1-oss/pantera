@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer.http;
+package com.auto1.pantera.importer.http;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.importer.ImportService;
-import com.artipie.importer.api.ChecksumPolicy;
-import com.artipie.importer.api.ImportHeaders;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.importer.ImportService;
+import com.auto1.pantera.importer.api.ChecksumPolicy;
+import com.auto1.pantera.importer.api.ImportHeaders;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.repo.Repositories;
 import java.lang.reflect.Constructor;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -69,7 +69,7 @@ final class ImportSliceTest {
             headers,
             new Content.From("payload".getBytes(StandardCharsets.UTF_8))
         ).get();
-        Assertions.assertEquals(com.artipie.http.RsStatus.CREATED, response.status());
+        Assertions.assertEquals(com.auto1.pantera.http.RsStatus.CREATED, response.status());
         final JsonObject json = readJson(response);
         Assertions.assertEquals("CREATED", json.getString("status"));
         Assertions.assertTrue(this.root.exists(new Key.From("cli-repo/docs/cli.txt")).join());
@@ -85,7 +85,7 @@ final class ImportSliceTest {
             headers,
             Content.EMPTY
         ).get();
-        Assertions.assertEquals(com.artipie.http.RsStatus.NOT_FOUND, response.status());
+        Assertions.assertEquals(com.auto1.pantera.http.RsStatus.NOT_FOUND, response.status());
     }
 
     private static JsonObject readJson(final Response response) {

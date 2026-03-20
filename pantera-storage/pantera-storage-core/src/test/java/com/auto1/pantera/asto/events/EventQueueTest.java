@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.events;
+package com.auto1.pantera.asto.events;
 
 import java.util.ArrayList;
 import java.util.List;

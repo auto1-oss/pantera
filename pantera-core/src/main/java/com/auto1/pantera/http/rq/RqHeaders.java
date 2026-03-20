@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq;
+package com.auto1.pantera.http.rq;
 
-import com.artipie.http.Headers;
+import com.auto1.pantera.http.Headers;
 
 import java.util.AbstractList;
 import java.util.List;
@@ -13,7 +13,7 @@ import java.util.List;
  * Request headers.
  * <p>
  * Request header values by name from headers.
- * Usage (assume {@link com.artipie.http.Slice} implementation):
+ * Usage (assume {@link com.auto1.pantera.http.Slice} implementation):
  * </p>
  * <pre><code>
  *  Response response(String line, Iterable&lt;Map.Entry&lt;String, String&gt;&gt; headers,

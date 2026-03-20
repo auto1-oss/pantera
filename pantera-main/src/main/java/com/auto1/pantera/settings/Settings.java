@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Storage;
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.settings.cache.ArtipieCaches;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
 import java.util.Optional;
 import javax.sql.DataSource;
 import java.time.Duration;

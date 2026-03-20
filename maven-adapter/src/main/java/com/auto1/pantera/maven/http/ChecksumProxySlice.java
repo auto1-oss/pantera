@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.ext.Digests;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.binary.Hex;
@@ -117,7 +117,7 @@ final class ChecksumProxySlice implements Slice {
                         // CRITICAL: This directly computes the checksum from the artifact body
                         // without relying on caching side effects. This ensures checksums are always
                         // available even if caching fails or is bypassed.
-                        EcsLogger.debug("com.artipie.maven")
+                        EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Computing " + algorithm + " checksum from artifact (streaming mode): " + artifactPath)
                             .eventCategory("repository")
                             .eventAction("checksum_computation")
@@ -158,7 +158,7 @@ final class ChecksumProxySlice implements Slice {
             .doOnComplete(() -> {
                 // Finalize digest and encode as hex
                 final String hash = Hex.encodeHexString(digest.digest());
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Checksum computed successfully (" + algorithm + "): " + hash.substring(0, Math.min(16, hash.length())) + "...")
                     .eventCategory("repository")
                     .eventAction("checksum_computation")
@@ -168,7 +168,7 @@ final class ChecksumProxySlice implements Slice {
                 hashFuture.complete(hash);
             })
             .doOnError(err -> {
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to compute " + algorithm + " checksum during streaming for: " + artifactPath)
                     .eventCategory("repository")
                     .eventAction("checksum_computation")
@@ -189,7 +189,7 @@ final class ChecksumProxySlice implements Slice {
             })
             .exceptionally(err -> {
                 // Graceful fallback on streaming failure
-                EcsLogger.error("com.artipie.maven")
+                EcsLogger.error("com.auto1.pantera.maven")
                     .message("Checksum computation failed")
                     .eventCategory("repository")
                     .eventAction("checksum_computation")

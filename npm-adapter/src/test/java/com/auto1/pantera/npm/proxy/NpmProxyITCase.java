@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy;
+package com.auto1.pantera.npm.proxy;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.npm.RandomFreePort;
-import com.artipie.npm.events.NpmProxyPackageProcessor;
-import com.artipie.npm.proxy.http.NpmProxySlice;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.npm.RandomFreePort;
+import com.auto1.pantera.npm.events.NpmProxyPackageProcessor;
+import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;
 import java.net.URI;
@@ -236,9 +236,9 @@ public final class NpmProxyITCase {
         final NpmProxySlice slice = new NpmProxySlice(
             "npm-proxy", npm, Optional.of(packages),
             "npm-proxy", "npm-proxy",
-            com.artipie.cooldown.NoopCooldownService.INSTANCE,
-            com.artipie.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
-            new com.artipie.http.client.UriClientSlice(this.client, uri)
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
+            new com.auto1.pantera.http.client.UriClientSlice(this.client, uri)
         );
         this.srv = new VertxSliceServer(NpmProxyITCase.VERTX, slice, NpmProxyITCase.listenPort);
         this.srv.start();

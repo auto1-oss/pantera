@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.perms;
+package com.auto1.pantera.docker.perms;
 
-import com.artipie.docker.http.CatalogSlice;
-import com.artipie.security.perms.Action;
+import com.auto1.pantera.docker.http.CatalogSlice;
+import com.auto1.pantera.security.perms.Action;
 
 import java.util.Collections;
 import java.util.Set;
@@ -18,7 +18,7 @@ import java.util.Set;
 public enum RegistryCategory implements Action {
 
     /**
-     * Base category, check {@link com.artipie.docker.http.BaseSlice}.
+     * Base category, check {@link com.auto1.pantera.docker.http.BaseSlice}.
      */
     BASE("base", 0x4),
 

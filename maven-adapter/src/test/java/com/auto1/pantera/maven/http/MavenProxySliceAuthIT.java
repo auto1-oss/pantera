@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.client.auth.BasicAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.hm.SliceHasResponse;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.security.policy.PolicyByUsername;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.client.auth.BasicAuthenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.security.policy.PolicyByUsername;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.net.URI;
 import java.util.Optional;

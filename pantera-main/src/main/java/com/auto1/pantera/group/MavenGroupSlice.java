@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -199,7 +199,7 @@ public final class MavenGroupSlice implements Slice {
                                 .body(hexString.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                 .build();
                         } catch (java.security.NoSuchAlgorithmException e) {
-                            EcsLogger.error("com.artipie.maven")
+                            EcsLogger.error("com.auto1.pantera.maven")
                                 .message("Failed to compute checksum")
                                 .eventCategory("repository")
                                 .eventAction("checksum_compute")
@@ -231,7 +231,7 @@ public final class MavenGroupSlice implements Slice {
         return this.metadataCache.get(cacheKey).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Returning cached merged metadata (cache hit)")
                     .eventCategory("repository")
                     .eventAction("metadata_merge")
@@ -281,7 +281,7 @@ public final class MavenGroupSlice implements Slice {
                     }
                 })
                 .exceptionally(err -> {
-                    EcsLogger.warn("com.artipie.maven")
+                    EcsLogger.warn("com.auto1.pantera.maven")
                         .message("Member failed to fetch metadata")
                         .eventCategory("repository")
                         .eventAction("metadata_fetch")
@@ -315,7 +315,7 @@ public final class MavenGroupSlice implements Slice {
                     return MavenGroupSlice.this.metadataCache.getStale(cacheKey)
                         .thenApply(stale -> {
                             if (stale.isPresent()) {
-                                EcsLogger.warn("com.artipie.maven")
+                                EcsLogger.warn("com.auto1.pantera.maven")
                                     .message("Returning stale metadata (all members failed)")
                                     .eventCategory("repository")
                                     .eventAction("metadata_merge")
@@ -329,7 +329,7 @@ public final class MavenGroupSlice implements Slice {
                                     .body(stale.get())
                                     .build();
                             }
-                            EcsLogger.warn("com.artipie.maven")
+                            EcsLogger.warn("com.auto1.pantera.maven")
                                 .message("No metadata found in any member and no stale fallback")
                                 .eventCategory("repository")
                                 .eventAction("metadata_merge")
@@ -360,7 +360,7 @@ public final class MavenGroupSlice implements Slice {
 
                         // Log slow fetches (>500ms) - expected for proxy repos
                         if (fetchDuration > 500) {
-                            EcsLogger.info("com.artipie.maven")
+                            EcsLogger.info("com.auto1.pantera.maven")
                                 .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_fetch")
@@ -373,7 +373,7 @@ public final class MavenGroupSlice implements Slice {
 
                         // Log slow merges (>50ms) - indicates actual performance issue
                         if (mergeDuration > 50) {
-                            EcsLogger.warn("com.artipie.maven")
+                            EcsLogger.warn("com.auto1.pantera.maven")
                                 .message(String.format("Slow metadata merge (%d members), fetch took %dms", metadataList.size(), fetchDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_merge")
@@ -393,7 +393,7 @@ public final class MavenGroupSlice implements Slice {
             .exceptionally(err -> {
                 // Unwrap CompletionException to get the real cause
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
-                EcsLogger.error("com.artipie.maven")
+                EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to merge metadata")
                     .eventCategory("repository")
                     .eventAction("metadata_merge")
@@ -418,7 +418,7 @@ public final class MavenGroupSlice implements Slice {
         try {
             // Load MetadataMerger class
             final Class<?> mergerClass = Class.forName(
-                "com.artipie.maven.metadata.MetadataMerger"
+                "com.auto1.pantera.maven.metadata.MetadataMerger"
             );
             
             // Create instance
@@ -435,7 +435,7 @@ public final class MavenGroupSlice implements Slice {
             return mergeFuture.thenCompose(this::readResponseBody);
             
         } catch (Exception e) {
-            EcsLogger.error("com.artipie.maven")
+            EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to merge metadata using reflection")
                 .eventCategory("repository")
                 .eventAction("metadata_merge")
@@ -542,10 +542,10 @@ public final class MavenGroupSlice implements Slice {
     }
 
     private void recordMetadataOperation(final String operation, final long duration) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataOperation(this.group, "maven", operation);
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataGenerationDuration(this.group, "maven", duration);
         }
     }

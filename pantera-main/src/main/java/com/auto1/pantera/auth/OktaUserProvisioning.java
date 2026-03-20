@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
@@ -10,9 +10,9 @@ import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.amihaiemil.eoyaml.YamlSequenceBuilder;
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -93,7 +93,7 @@ public final class OktaUserProvisioning {
             final String out = builder.build().toString();
             this.asto.save(target, out.getBytes(StandardCharsets.UTF_8));
         } catch (final IOException err) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to provision Okta user")
                 .eventCategory("authentication")
                 .eventAction("user_provision")

@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer.http;
+package com.auto1.pantera.importer.http;
 
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.ResponseException;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.importer.ImportRequest;
-import com.artipie.importer.ImportResult;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.importer.ImportService;
-import com.artipie.importer.ImportStatus;
-import com.artipie.importer.api.DigestType;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.importer.ImportRequest;
+import com.auto1.pantera.importer.ImportResult;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.importer.ImportService;
+import com.auto1.pantera.importer.ImportStatus;
+import com.auto1.pantera.importer.api.DigestType;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
@@ -47,7 +47,7 @@ public final class ImportSlice implements Slice {
     public CompletableFuture<Response> response(
         final RequestLine line,
         final Headers headers,
-        final com.artipie.asto.Content body
+        final com.auto1.pantera.asto.Content body
     ) {
         final ImportRequest request;
         try {
@@ -55,7 +55,7 @@ public final class ImportSlice implements Slice {
         } catch (final ResponseException error) {
             return CompletableFuture.completedFuture(error.response());
         } catch (final Exception error) {
-            EcsLogger.error("com.artipie.importer")
+            EcsLogger.error("com.auto1.pantera.importer")
                 .message("Failed to parse import request")
                 .eventCategory("api")
                 .eventAction("import_artifact")
@@ -75,7 +75,7 @@ public final class ImportSlice implements Slice {
                     if (cause instanceof ResponseException rex) {
                         return rex.response();
                     }
-                    EcsLogger.error("com.artipie.importer")
+                    EcsLogger.error("com.auto1.pantera.importer")
                         .message("Import processing failed")
                         .eventCategory("repository")
                         .eventAction("import_artifact")
@@ -87,7 +87,7 @@ public final class ImportSlice implements Slice {
         } catch (final ResponseException rex) {
             return CompletableFuture.completedFuture(rex.response());
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.importer")
+            EcsLogger.error("com.auto1.pantera.importer")
                 .message("Import processing failed")
                 .eventCategory("repository")
                 .eventAction("import_artifact")

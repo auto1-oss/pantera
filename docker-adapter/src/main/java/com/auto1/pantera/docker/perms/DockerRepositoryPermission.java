@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.perms;
+package com.auto1.pantera.docker.perms;
 
-import com.artipie.security.perms.Action;
+import com.auto1.pantera.security.perms.Action;
 
 import java.io.Serial;
 import java.security.Permission;

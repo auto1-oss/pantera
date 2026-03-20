@@ -3,43 +3,43 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.BearerAuthzSlice;
-import com.artipie.http.auth.CombinedAuthzSliceWrap;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.auth.Tokens;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceDownload;
-import com.artipie.http.slice.StorageArtifactSlice;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.npm.http.auth.AddUserSlice;
-import com.artipie.npm.http.auth.ArtipieAddUserSlice;
-import com.artipie.npm.http.auth.NpmTokenAuthentication;
-import com.artipie.npm.http.auth.WhoAmISlice;
-import com.artipie.npm.http.search.SearchSlice;
-import com.artipie.npm.http.search.InMemoryPackageIndex;
-import com.artipie.npm.repository.StorageUserRepository;
-import com.artipie.npm.repository.StorageTokenRepository;
-import com.artipie.npm.security.BCryptPasswordHasher;
-import com.artipie.npm.security.TokenGenerator;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.BearerAuthzSlice;
+import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceDownload;
+import com.auto1.pantera.http.slice.StorageArtifactSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.npm.http.auth.AddUserSlice;
+import com.auto1.pantera.npm.http.auth.ArtipieAddUserSlice;
+import com.auto1.pantera.npm.http.auth.NpmTokenAuthentication;
+import com.auto1.pantera.npm.http.auth.WhoAmISlice;
+import com.auto1.pantera.npm.http.search.SearchSlice;
+import com.auto1.pantera.npm.http.search.InMemoryPackageIndex;
+import com.auto1.pantera.npm.repository.StorageUserRepository;
+import com.auto1.pantera.npm.repository.StorageTokenRepository;
+import com.auto1.pantera.npm.security.BCryptPasswordHasher;
+import com.auto1.pantera.npm.security.TokenGenerator;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 
 import java.net.URL;
 import java.util.Optional;
@@ -236,10 +236,10 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
-                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_SCOPE_PATTERN)
+                    new RtRule.ByPath(com.auto1.pantera.npm.http.auth.NpmrcAuthSlice.AUTH_SCOPE_PATTERN)
                 ),
                 NpmSlice.createAuthSlice(
-                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                    new com.auto1.pantera.npm.http.auth.NpmrcAuthSlice(
                         base,
                         basicAuth,
                         this.tokens,
@@ -255,10 +255,10 @@ public final class NpmSlice implements Slice {
             new RtRulePath(
                 new RtRule.All(
                     MethodRule.GET,
-                    new RtRule.ByPath(com.artipie.npm.http.auth.NpmrcAuthSlice.AUTH_PATTERN)
+                    new RtRule.ByPath(com.auto1.pantera.npm.http.auth.NpmrcAuthSlice.AUTH_PATTERN)
                 ),
                 NpmSlice.createAuthSlice(
-                    new com.artipie.npm.http.auth.NpmrcAuthSlice(
+                    new com.auto1.pantera.npm.http.auth.NpmrcAuthSlice(
                         base,
                         basicAuth,
                         this.tokens,
@@ -400,7 +400,7 @@ public final class NpmSlice implements Slice {
                     new RtRule.ByPath(".*/-/npm/v1/security/.*")
                 ),
                 // Use LocalAuditSlice (returns empty) - anonymous access
-                new com.artipie.npm.http.audit.LocalAuditSlice()
+                new com.auto1.pantera.npm.http.audit.LocalAuditSlice()
             ),
             new RtRulePath(
                 new RtRule.All(
@@ -409,7 +409,7 @@ public final class NpmSlice implements Slice {
                 ),
                 // Use JWT-only OAuth login or npm token-based adduser
                 jwtOnly && basicAuth != null
-                    ? new com.artipie.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
+                    ? new com.auto1.pantera.npm.http.auth.OAuthLoginSlice(basicAuth, this.tokens)  // JWT-only
                     : (basicAuth != null 
                         ? new ArtipieAddUserSlice(  // Creates npm tokens
                             basicAuth,
@@ -430,7 +430,7 @@ public final class NpmSlice implements Slice {
                 ),
                 jwtOnly
                     ? NpmSlice.createAuthSlice(  // JWT-only whoami
-                        new com.artipie.npm.http.auth.JwtWhoAmISlice(),
+                        new com.auto1.pantera.npm.http.auth.JwtWhoAmISlice(),
                         basicAuth,
                         npmTokenAuth,
                         new OperationControl(

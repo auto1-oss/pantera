@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.rpm.hm;
+package com.auto1.pantera.rpm.hm;

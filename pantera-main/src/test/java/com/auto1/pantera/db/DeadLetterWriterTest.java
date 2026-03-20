@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

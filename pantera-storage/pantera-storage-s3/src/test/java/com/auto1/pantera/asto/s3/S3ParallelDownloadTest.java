@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.s3;
+package com.auto1.pantera.asto.s3;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -11,12 +11,12 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
 import java.io.ByteArrayInputStream;
 import java.util.Random;
 import java.util.UUID;

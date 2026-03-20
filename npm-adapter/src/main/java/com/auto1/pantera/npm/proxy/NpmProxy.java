@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy;
+package com.auto1.pantera.npm.proxy;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.npm.proxy.model.NpmAsset;
-import com.artipie.npm.proxy.model.NpmPackage;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.npm.proxy.model.NpmAsset;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.reactivex.Maybe;
 import io.reactivex.schedulers.Schedulers;
 import java.io.IOException;
@@ -155,7 +155,7 @@ public class NpmProxy {
      * @param name Package name
      * @return Package content as reactive Content or empty
      */
-    public Maybe<com.artipie.asto.Content> getPackageContentStream(final String name) {
+    public Maybe<com.auto1.pantera.asto.Content> getPackageContentStream(final String name) {
         return this.storage.getPackageMetadata(name)
             .flatMap(metadata -> {
                 if (this.isStale(metadata.lastRefreshed())) {
@@ -181,7 +181,7 @@ public class NpmProxy {
      * @param name Package name
      * @return Abbreviated package content or empty (fall back to full if not available)
      */
-    public Maybe<com.artipie.asto.Content> getAbbreviatedContentStream(final String name) {
+    public Maybe<com.auto1.pantera.asto.Content> getAbbreviatedContentStream(final String name) {
         return this.storage.getPackageMetadata(name)
             .flatMap(metadata -> {
                 if (this.isStale(metadata.lastRefreshed())) {
@@ -232,14 +232,14 @@ public class NpmProxy {
                 .subscribeOn(Schedulers.io())
                 .doFinally(() -> this.refreshing.remove(name))
                 .subscribe(
-                    saved -> EcsLogger.debug("com.artipie.npm.proxy")
+                    saved -> EcsLogger.debug("com.auto1.pantera.npm.proxy")
                         .message("Background refresh completed")
                         .eventCategory("cache")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("success")
                         .field("package.name", name)
                         .log(),
-                    err -> EcsLogger.warn("com.artipie.npm.proxy")
+                    err -> EcsLogger.warn("com.auto1.pantera.npm.proxy")
                         .message("Background refresh failed")
                         .eventCategory("cache")
                         .eventAction("stale_while_revalidate")

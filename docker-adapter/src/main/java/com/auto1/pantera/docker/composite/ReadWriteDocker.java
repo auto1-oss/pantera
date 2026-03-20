@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.composite;
+package com.auto1.pantera.docker.composite;
 
-import com.artipie.docker.Catalog;
-import com.artipie.docker.Docker;
-import com.artipie.docker.Repo;
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -15,8 +15,8 @@ import java.util.concurrent.CompletableFuture;
  * Read-write {@link Docker} implementation.
  * It delegates read operation to one {@link Docker} and writes {@link Docker} to another.
  * This class can be used to create virtual repository
- * by composing {@link com.artipie.docker.proxy.ProxyDocker}
- * and {@link com.artipie.docker.asto.AstoDocker}.
+ * by composing {@link com.auto1.pantera.docker.proxy.ProxyDocker}
+ * and {@link com.auto1.pantera.docker.asto.AstoDocker}.
  */
 public final class ReadWriteDocker implements Docker {
 

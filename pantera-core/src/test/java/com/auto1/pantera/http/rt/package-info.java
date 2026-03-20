@@ -7,5 +7,5 @@
  * Tests routing objects.
  * @since 0.6
  */
-package com.artipie.http.rt;
+package com.auto1.pantera.http.rt;
 

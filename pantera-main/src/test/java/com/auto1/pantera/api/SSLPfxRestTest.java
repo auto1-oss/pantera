@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Key;
-import com.artipie.asto.test.TestResource;
-import com.artipie.test.TestSettings;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.TestSettings;
 import java.io.IOException;
 import java.util.Optional;
 

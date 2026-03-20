@@ -7,4 +7,4 @@
  * Tests for HTTP Maven objects.
  * @since 0.5
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;

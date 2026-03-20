@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.settings.ConfigFile;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.ConfigFile;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -116,7 +116,7 @@ class RepoConfigWatcher implements AutoCloseable {
             (fingerprint, error) -> {
                 try {
                     if (error != null) {
-                        EcsLogger.warn("com.artipie.settings")
+                        EcsLogger.warn("com.auto1.pantera.settings")
                             .message("Failed to poll repository configs")
                             .eventCategory("configuration")
                             .eventAction("config_watch")

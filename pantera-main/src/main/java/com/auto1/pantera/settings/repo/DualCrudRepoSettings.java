@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;
 
-import com.artipie.api.RepositoryName;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Collection;
 import javax.json.JsonStructure;
 
@@ -65,7 +65,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
         try {
             this.secondary.save(rname, value);
         } catch (final Exception ex) {
-            EcsLogger.warn("com.artipie.settings.repo")
+            EcsLogger.warn("com.auto1.pantera.settings.repo")
                 .message("Failed to save repo config to secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)
@@ -79,7 +79,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
         try {
             this.secondary.delete(rname);
         } catch (final Exception ex) {
-            EcsLogger.warn("com.artipie.settings.repo")
+            EcsLogger.warn("com.auto1.pantera.settings.repo")
                 .message("Failed to delete repo config from secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)
@@ -93,7 +93,7 @@ public final class DualCrudRepoSettings implements CrudRepoSettings {
         try {
             this.secondary.move(rname, newrname);
         } catch (final Exception ex) {
-            EcsLogger.warn("com.artipie.settings.repo")
+            EcsLogger.warn("com.auto1.pantera.settings.repo")
                 .message("Failed to move repo config in secondary (YAML)")
                 .field("repository.name", rname.toString())
                 .error(ex)

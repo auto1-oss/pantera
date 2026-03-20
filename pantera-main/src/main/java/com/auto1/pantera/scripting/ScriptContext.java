@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scripting;
+package com.auto1.pantera.scripting;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.misc.Property;
-import com.artipie.settings.Settings;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.Property;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.repo.Repositories;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;

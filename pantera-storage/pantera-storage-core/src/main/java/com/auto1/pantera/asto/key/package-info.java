@@ -8,5 +8,5 @@
  *
  * @since 1.8.1
  */
-package com.artipie.asto.key;
+package com.auto1.pantera.asto.key;
 

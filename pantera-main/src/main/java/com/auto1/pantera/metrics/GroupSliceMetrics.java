@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.metrics;
+package com.auto1.pantera.metrics;
 
 /**
  * GroupSlice metrics - Compatibility wrapper for Micrometer.
  * Delegates to MicrometerMetrics for backward compatibility.
  *
- * @deprecated Use {@link com.artipie.metrics.MicrometerMetrics} directly
+ * @deprecated Use {@link com.auto1.pantera.metrics.MicrometerMetrics} directly
  * @since 1.18.21
  */
 @Deprecated
@@ -37,31 +37,31 @@ public final class GroupSliceMetrics {
     // Delegate to MicrometerMetrics
 
     public void recordRequest(final String groupName) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordGroupRequest(groupName, "success");
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordGroupRequest(groupName, "success");
         }
     }
 
     public void recordSuccess(final String groupName, final String memberName, final long latencyMs) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordGroupMemberRequest(
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordGroupMemberRequest(
                 groupName, memberName, "success"
             );
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordGroupMemberLatency(
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordGroupMemberLatency(
                 groupName, memberName, "success", latencyMs
             );
         }
     }
 
     public void recordBatch(final String groupName, final int batchSize, final long duration) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordGroupResolutionDuration(groupName, duration);
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordGroupResolutionDuration(groupName, duration);
         }
     }
 
     public void recordNotFound(final String groupName) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordGroupMemberRequest(
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordGroupMemberRequest(
                 groupName, "none", "not_found"
             );
         }

@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.nuget.metadata.CatalogEntry;
-import com.artipie.nuget.metadata.Nuspec;
-import com.artipie.nuget.metadata.PackageId;
+import com.auto1.pantera.nuget.metadata.CatalogEntry;
+import com.auto1.pantera.nuget.metadata.Nuspec;
+import com.auto1.pantera.nuget.metadata.PackageId;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;

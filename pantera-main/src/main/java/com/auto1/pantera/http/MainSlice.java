@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.RepositorySlices;
-import com.artipie.importer.ImportService;
-import com.artipie.importer.ImportSessionStore;
-import com.artipie.importer.http.ImportSlice;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtPath;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.settings.Settings;
+import com.auto1.pantera.RepositorySlices;
+import com.auto1.pantera.importer.ImportService;
+import com.auto1.pantera.importer.ImportSessionStore;
+import com.auto1.pantera.importer.http.ImportSlice;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtPath;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.settings.Settings;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;

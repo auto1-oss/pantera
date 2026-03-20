@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.hex.tarball;
+package com.auto1.pantera.hex.tarball;
 
 /**
  * Parses metadata.config file of erlang/elixir tarball's content.

@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.error;
+package com.auto1.pantera.docker.error;
 
-import com.artipie.docker.Digest;
+import com.auto1.pantera.docker.Digest;
 import java.util.Optional;
 
 /**

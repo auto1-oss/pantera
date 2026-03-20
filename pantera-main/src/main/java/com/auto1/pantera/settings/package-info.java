@@ -8,4 +8,4 @@
  *
  * @since 0.26
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;

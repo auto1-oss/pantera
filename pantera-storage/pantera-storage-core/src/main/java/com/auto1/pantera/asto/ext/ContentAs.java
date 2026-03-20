@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.ext;
+package com.auto1.pantera.asto.ext;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.rx.RxFuture;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.rx.RxFuture;
 import io.reactivex.Single;
 import io.reactivex.functions.Function;
 import org.reactivestreams.Publisher;

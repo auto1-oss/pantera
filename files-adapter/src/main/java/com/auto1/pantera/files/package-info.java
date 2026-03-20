@@ -7,4 +7,4 @@
  * Files adapter.
  * @since 0.1
  */
-package com.artipie.files;
+package com.auto1.pantera.files;

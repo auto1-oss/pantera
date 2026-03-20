@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.file;
+package com.auto1.pantera.file;
 
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import java.io.IOException;
 import java.util.Map;
 import org.cactoos.map.MapEntry;

@@ -8,5 +8,5 @@
  *
  * @since 0.3
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 

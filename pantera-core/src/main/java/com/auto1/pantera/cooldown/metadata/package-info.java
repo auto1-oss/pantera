@@ -12,20 +12,20 @@
  *
  * <h2>Key Components</h2>
  * <ul>
- *   <li>{@link com.artipie.cooldown.metadata.CooldownMetadataService} - Main service interface</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataParser} - Parse metadata from bytes</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataFilter} - Filter blocked versions</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataRewriter} - Serialize filtered metadata</li>
- *   <li>{@link com.artipie.cooldown.metadata.FilteredMetadataCache} - Cache filtered metadata</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.CooldownMetadataService} - Main service interface</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataParser} - Parse metadata from bytes</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataFilter} - Filter blocked versions</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataRewriter} - Serialize filtered metadata</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.FilteredMetadataCache} - Cache filtered metadata</li>
  * </ul>
  *
  * <h2>Per-Adapter Implementation</h2>
  * <p>Each adapter (NPM, Maven, PyPI, etc.) implements:</p>
  * <ul>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataRequestDetector} - Detect metadata requests</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataParser} - Parse format-specific metadata</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataFilter} - Filter format-specific metadata</li>
- *   <li>{@link com.artipie.cooldown.metadata.MetadataRewriter} - Serialize format-specific metadata</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataRequestDetector} - Detect metadata requests</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataParser} - Parse format-specific metadata</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataFilter} - Filter format-specific metadata</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metadata.MetadataRewriter} - Serialize format-specific metadata</li>
  * </ul>
  *
  * <h2>Performance Targets</h2>
@@ -37,4 +37,4 @@
  *
  * @since 1.0
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;

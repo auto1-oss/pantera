@@ -8,5 +8,5 @@
  *
  * @since 0.24
  */
-package com.artipie.asto.blocking;
+package com.auto1.pantera.asto.blocking;
 

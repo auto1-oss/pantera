@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.ArtipieException;
-import com.artipie.goproxy.GoProxyPackageProcessor;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.goproxy.GoProxyPackageProcessor;
 
-import com.artipie.maven.MavenProxyPackageProcessor;
-import com.artipie.npm.events.NpmProxyPackageProcessor;
-import com.artipie.pypi.PyProxyPackageProcessor;
-import com.artipie.composer.http.proxy.ComposerProxyPackageProcessor;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.maven.MavenProxyPackageProcessor;
+import com.auto1.pantera.npm.events.NpmProxyPackageProcessor;
+import com.auto1.pantera.pypi.PyProxyPackageProcessor;
+import com.auto1.pantera.composer.http.proxy.ComposerProxyPackageProcessor;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Locale;
@@ -32,8 +32,8 @@ import org.quartz.SchedulerException;
  * <p>
  * 1) This class holds events queue {@link MetadataEventQueues#eventQueue()} for all the adapters,
  * this queue is passed to adapters, adapters adds packages metadata on upload/delete to the queue.
- * Queue is periodically processed by {@link com.artipie.scheduling.EventsProcessor} and consumed
- * by {@link com.artipie.db.DbConsumer}.
+ * Queue is periodically processed by {@link com.auto1.pantera.scheduling.EventsProcessor} and consumed
+ * by {@link com.auto1.pantera.db.DbConsumer}.
  * <p>
  * 2) This class also holds queues for proxy adapters (maven, npm, pypi). Each proxy repository
  * has its own queue with packages metadata ({@link MetadataEventQueues#queues}) and its own quartz
@@ -176,7 +176,7 @@ public final class MetadataEventQueues {
                                 config.name(),
                                 this.quartz.schedulePeriodicJob(interval, threads, type.job(), data)
                             );
-                            EcsLogger.info("com.artipie.scheduling")
+                            EcsLogger.info("com.auto1.pantera.scheduling")
                                 .message("Initialized proxy metadata job and queue")
                                 .eventCategory("scheduling")
                                 .eventAction("metadata_job_init")
@@ -198,7 +198,7 @@ public final class MetadataEventQueues {
                 );
                 result = Optional.of(events);
             } catch (final Exception err) {
-                EcsLogger.error("com.artipie.scheduling")
+                EcsLogger.error("com.auto1.pantera.scheduling")
                     .message("Failed to initialize events queue processing")
                     .eventCategory("scheduling")
                     .eventAction("events_queue_init")

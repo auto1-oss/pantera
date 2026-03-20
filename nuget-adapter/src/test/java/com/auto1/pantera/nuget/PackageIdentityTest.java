@@ -3,10 +3,10 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.nuget.metadata.PackageId;
-import com.artipie.nuget.metadata.Version;
+import com.auto1.pantera.nuget.metadata.PackageId;
+import com.auto1.pantera.nuget.metadata.Version;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;

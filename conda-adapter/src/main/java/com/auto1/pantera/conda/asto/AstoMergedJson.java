@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conda.asto;
+package com.auto1.pantera.conda.asto;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.asto.streams.StorageValuePipeline;
-import com.artipie.conda.meta.MergedJson;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.conda.meta.MergedJson;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import java.io.IOException;

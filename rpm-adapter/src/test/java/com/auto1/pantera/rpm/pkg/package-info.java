@@ -8,5 +8,5 @@
  *
  * @since 0.6.3
  */
-package com.artipie.rpm.pkg;
+package com.auto1.pantera.rpm.pkg;
 

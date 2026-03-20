@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Splitting;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.Headers;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Splitting;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
 import io.reactivex.Flowable;
 import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.http.HttpFields;

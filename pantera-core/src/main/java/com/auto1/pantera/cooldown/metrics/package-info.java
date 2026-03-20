@@ -8,7 +8,7 @@
  *
  * <p>This package provides Micrometer-based metrics for cooldown functionality:</p>
  * <ul>
- *   <li>{@link com.artipie.cooldown.metrics.CooldownMetrics} - Central metrics facade</li>
+ *   <li>{@link com.auto1.pantera.cooldown.metrics.CooldownMetrics} - Central metrics facade</li>
  * </ul>
  *
  * <p>All metrics use the prefix {@code artipie.cooldown.*} and are designed to be
@@ -16,4 +16,4 @@
  *
  * @since 1.0
  */
-package com.artipie.cooldown.metrics;
+package com.auto1.pantera.cooldown.metrics;

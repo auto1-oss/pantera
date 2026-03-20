@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.npm.misc.DateTimeNowStr;
-import com.artipie.npm.misc.DescSortedVersions;
+import com.auto1.pantera.npm.misc.DateTimeNowStr;
+import com.auto1.pantera.npm.misc.DescSortedVersions;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;

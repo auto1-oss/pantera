@@ -7,4 +7,4 @@
  *
  * @since 0.4
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Key;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -148,7 +148,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 }
 
                 final long elapsed = System.currentTimeMillis() - start;
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Restored " + restored + " cache entries from snapshot")
                     .eventCategory("repository")
                     .eventAction("cache_restore")
@@ -157,7 +157,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                     .log();
             }
         } catch (IOException | ClassNotFoundException e) {
-            EcsLogger.warn("com.artipie.maven")
+            EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Failed to restore cache from snapshot, starting with empty cache")
                 .eventCategory("repository")
                 .eventAction("cache_restore")
@@ -176,7 +176,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         try {
             this.snapshotToDisk();
         } catch (IOException e) {
-            EcsLogger.warn("com.artipie.maven")
+            EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Cache snapshot failed")
                 .eventCategory("repository")
                 .eventAction("cache_snapshot")
@@ -222,7 +222,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         Files.move(tempFile, this.snapshotPath, StandardCopyOption.ATOMIC_MOVE);
 
         final long elapsed = System.currentTimeMillis() - start;
-        EcsLogger.debug("com.artipie.maven")
+        EcsLogger.debug("com.auto1.pantera.maven")
             .message("Cache snapshot saved (" + data.entries.size() + " entries)")
             .eventCategory("repository")
             .eventAction("cache_snapshot")
@@ -250,7 +250,7 @@ public final class PersistedMetadataCache extends MetadataCache {
             try {
                 this.snapshotToDisk();
             } catch (IOException e) {
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to save final cache snapshot on shutdown")
                     .eventCategory("repository")
                     .eventAction("cache_snapshot")

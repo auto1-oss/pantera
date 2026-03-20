@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.AuthTokenRest;
-import com.artipie.api.AuthzHandler;
-import com.artipie.api.RepositoryName;
-import com.artipie.api.perms.ApiCooldownPermission;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.cooldown.CooldownRepository;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.cooldown.DbBlockRecord;
-import com.artipie.db.dao.SettingsDao;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.api.perms.ApiCooldownPermission;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.cooldown.CooldownRepository;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.DbBlockRecord;
+import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;

@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.log;
+package com.auto1.pantera.asto.log;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;

@@ -8,4 +8,4 @@
  *
  * @since 0.3
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;

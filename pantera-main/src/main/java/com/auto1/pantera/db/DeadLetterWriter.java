@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
@@ -81,7 +81,7 @@ public final class DeadLetterWriter {
             StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
             Json.createWriter(writer).writeObject(root.build());
         }
-        EcsLogger.error("com.artipie.db")
+        EcsLogger.error("com.auto1.pantera.db")
             .message(String.format("Wrote %d failed events to dead-letter file: %s",
                 events.size(), file))
             .eventCategory("database")

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.cache;
+package com.auto1.pantera.http.cache;
 
-import com.artipie.asto.Key;
-import com.artipie.cache.GlobalCacheConfig;
-import com.artipie.cache.NegativeCacheConfig;
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cache.GlobalCacheConfig;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.ScanArgs;
@@ -278,14 +278,14 @@ public final class NegativeCache {
         final boolean found = this.notFoundCache.getIfPresent(key) != null;
 
         // Track L1 metrics
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
             if (found) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             } else {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             }
         }
 
@@ -307,19 +307,19 @@ public final class NegativeCache {
         // Check L1 first
         final long l1StartNanos = System.nanoTime();
         if (this.notFoundCache.getIfPresent(key) != null) {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
             }
             return CompletableFuture.completedFuture(true);
         }
 
         // L1 MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l1");
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l1", "get", durationMs);
         }
         
         // Check L2 if enabled
@@ -339,18 +339,18 @@ public final class NegativeCache {
 
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l2");
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
+                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("negative", "l2");
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
                         }
                         this.notFoundCache.put(key, CACHED);
                         return true;
                     }
 
                     // L2 MISS
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l2");
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("negative", "l2");
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("negative", "l2", "get", durationMs);
                     }
                     return false;
                 });

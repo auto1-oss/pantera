@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.http.timeout.AutoBlockRegistry;
-import com.artipie.http.timeout.AutoBlockSettings;
+import com.auto1.pantera.http.timeout.AutoBlockRegistry;
+import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import static org.hamcrest.MatcherAssert.assertThat;

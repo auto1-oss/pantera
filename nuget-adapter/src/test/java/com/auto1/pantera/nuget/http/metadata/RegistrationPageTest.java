@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.metadata;
+package com.auto1.pantera.nuget.http.metadata;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.nuget.AstoRepository;
-import com.artipie.nuget.PackageIdentity;
-import com.artipie.nuget.Repository;
-import com.artipie.nuget.metadata.NuspecField;
-import com.artipie.nuget.metadata.PackageId;
-import com.artipie.nuget.metadata.Version;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.nuget.AstoRepository;
+import com.auto1.pantera.nuget.PackageIdentity;
+import com.auto1.pantera.nuget.Repository;
+import com.auto1.pantera.nuget.metadata.NuspecField;
+import com.auto1.pantera.nuget.metadata.PackageId;
+import com.auto1.pantera.nuget.metadata.Version;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;

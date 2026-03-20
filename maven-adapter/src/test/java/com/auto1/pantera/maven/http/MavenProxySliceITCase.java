@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -79,7 +79,7 @@ final class MavenProxySliceITCase {
                     Optional.of(this.events),
                     "my-maven-proxy",
                     "maven-proxy",
-                    com.artipie.cooldown.NoopCooldownService.INSTANCE,
+                    com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
                     Optional.of(this.storage)
                 )
             )

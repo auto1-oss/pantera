@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -34,7 +34,7 @@ final class SafeSlice implements Slice {
         try {
             return this.origin.response(line, headers, body);
         } catch (final Exception err) {
-            EcsLogger.error("com.artipie.http")
+            EcsLogger.error("com.auto1.pantera.http")
                 .message("Failed to respond to request")
                 .eventCategory("http")
                 .eventAction("request_handling")

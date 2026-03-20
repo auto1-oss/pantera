@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.http.auth;
+package com.auto1.pantera.npm.http.auth;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Tokens;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.rq.RequestLine;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -65,7 +65,7 @@ public final class OAuthLoginSlice implements Slice {
                 final String username = json.getString("name");
                 final String password = json.getString("password");
 
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("NPM login attempt")
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -73,13 +73,13 @@ public final class OAuthLoginSlice implements Slice {
                     .log();
 
                 // Validate credentials via Authentication (synchronous)
-                final java.util.Optional<com.artipie.http.auth.AuthUser> optUser =
+                final java.util.Optional<com.auto1.pantera.http.auth.AuthUser> optUser =
                     this.auth.user(username, password);
 
                 if (optUser.isPresent()) {
                     // Authentication successful
                     final AuthUser authUser = optUser.get();
-                    EcsLogger.info("com.artipie.npm")
+                    EcsLogger.info("com.auto1.pantera.npm")
                         .message("NPM login successful")
                         .eventCategory("authentication")
                         .eventAction("login")
@@ -92,7 +92,7 @@ public final class OAuthLoginSlice implements Slice {
                     );
                 }
 
-                EcsLogger.warn("com.artipie.npm")
+                EcsLogger.warn("com.auto1.pantera.npm")
                     .message("NPM login failed")
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -106,7 +106,7 @@ public final class OAuthLoginSlice implements Slice {
                 );
 
             } catch (Exception e) {
-                EcsLogger.error("com.artipie.npm")
+                EcsLogger.error("com.auto1.pantera.npm")
                     .message("NPM login error")
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -141,7 +141,7 @@ public final class OAuthLoginSlice implements Slice {
             try {
                 token = this.tokens.generate(user);
             } catch (final Exception err) {
-                EcsLogger.warn("com.artipie.npm")
+                EcsLogger.warn("com.auto1.pantera.npm")
                     .message("Failed to generate npm token via Tokens service")
                     .eventCategory("authentication")
                     .eventAction("token_generation")

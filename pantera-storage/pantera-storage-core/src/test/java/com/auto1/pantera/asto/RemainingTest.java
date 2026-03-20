@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
 import java.nio.ByteBuffer;
 import org.hamcrest.MatcherAssert;

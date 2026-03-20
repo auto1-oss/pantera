@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.jetty.http3;
+package com.auto1.pantera.jetty.http3;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import org.eclipse.jetty.util.ssl.SslContextFactory;

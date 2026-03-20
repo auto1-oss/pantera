@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.test.TestResource;
 import java.nio.charset.StandardCharsets;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;

@@ -7,4 +7,4 @@
  * Docker misc helper objects.
  * @since 0.1
  */
-package com.artipie.docker.misc;
+package com.auto1.pantera.docker.misc;

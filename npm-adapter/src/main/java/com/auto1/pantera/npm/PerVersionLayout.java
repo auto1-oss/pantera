@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -162,7 +162,7 @@ public final class PerVersionLayout {
                         // Find latest STABLE version using semver (exclude prereleases)
                         final String latestVersion;
                         if (!versionsObj.isEmpty()) {
-                            final List<String> stableVersions = new com.artipie.npm.misc.DescSortedVersions(
+                            final List<String> stableVersions = new com.auto1.pantera.npm.misc.DescSortedVersions(
                                 versionsObj,
                                 true  // excludePrereleases = true
                             ).value();

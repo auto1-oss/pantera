@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
-import com.artipie.docker.asto.TrustedBlobSource;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.asto.TrustedBlobSource;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.reactivex.Flowable;
 
 import java.io.IOException;
@@ -139,7 +139,7 @@ final class CachingBlob implements Blob {
                     if (ex != null) {
                         logWarn("Failed to save blob to cache", ex);
                     } else {
-                        EcsLogger.info("com.artipie.docker")
+                        EcsLogger.info("com.auto1.pantera.docker")
                             .message("Blob cached via streaming")
                             .eventCategory("repository")
                             .eventAction("blob_cache")
@@ -187,7 +187,7 @@ final class CachingBlob implements Blob {
                 ch.close();
             }
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to close file channel")
                 .error(ex)
                 .log();
@@ -198,7 +198,7 @@ final class CachingBlob implements Blob {
         try {
             Files.deleteIfExists(path);
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to delete temp file")
                 .error(ex)
                 .log();
@@ -206,7 +206,7 @@ final class CachingBlob implements Blob {
     }
 
     private static void logWarn(final String msg, final Throwable err) {
-        EcsLogger.warn("com.artipie.docker")
+        EcsLogger.warn("com.auto1.pantera.docker")
             .message(msg)
             .eventCategory("repository")
             .eventAction("blob_cache")

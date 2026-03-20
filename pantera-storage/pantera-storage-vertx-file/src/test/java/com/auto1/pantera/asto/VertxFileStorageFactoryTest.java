@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.fs.VertxFileStorage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.fs.VertxFileStorage;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.Test;

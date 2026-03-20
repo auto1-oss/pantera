@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conan.http;
+package com.auto1.pantera.conan.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.hm.IsJson;
-import com.artipie.http.hm.RsHasBody;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.hm.SliceHasResponse;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.hm.IsJson;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

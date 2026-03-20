@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.http.auth.ArtipieAuthFactory;
-import com.artipie.http.auth.AuthFactory;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.settings.JwtSettings;
+import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.AuthFactory;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.JwtSettings;
 import io.vertx.core.Vertx;
 import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -57,7 +57,7 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
         final JwtSettings settings = JwtSettings.fromYaml(meta);
         final String secret = settings.secret();
         if (secret == null || secret.isEmpty() || "some secret".equals(secret)) {
-            EcsLogger.warn("com.artipie.auth")
+            EcsLogger.warn("com.auto1.pantera.auth")
                 .message("JWT-as-password auth enabled but using default secret - "
                     + "please configure meta.jwt.secret for production")
                 .eventCategory("authentication")
@@ -84,7 +84,7 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
                 }
             }
         }
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message(String.format("JWT-as-password authentication initialized: requireUsernameMatch=%s", requireUsernameMatch))
             .eventCategory("authentication")
             .eventAction("jwt_password_init")

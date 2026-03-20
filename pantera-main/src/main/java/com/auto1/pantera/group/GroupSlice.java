@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogEvent;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.http.misc.ConfigDefaults;
-import com.artipie.index.ArtifactIndex;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogEvent;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.index.ArtifactIndex;
 
 import java.util.ArrayList;
 import java.util.concurrent.Semaphore;
@@ -66,7 +66,7 @@ public final class GroupSlice implements Slice {
     private static final Semaphore DRAIN_PERMITS = new Semaphore(DRAIN_LIMIT);
 
     static {
-        EcsLogger.info("com.artipie.group")
+        EcsLogger.info("com.auto1.pantera.group")
             .message("GroupSlice drain permits configured: " + DRAIN_LIMIT)
             .eventCategory("configuration")
             .eventAction("group_init")
@@ -286,7 +286,7 @@ public final class GroupSlice implements Slice {
             ))
             .toList();
 
-        EcsLogger.debug("com.artipie.group")
+        EcsLogger.debug("com.auto1.pantera.group")
             .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total, " + this.proxyMembers.size() + " proxies)")
             .eventCategory("repository")
             .eventAction("group_init")
@@ -349,7 +349,7 @@ public final class GroupSlice implements Slice {
                             .filter(m -> indexHits.contains(m.name()))
                             .toList();
                         if (!targeted.isEmpty()) {
-                            EcsLogger.debug("com.artipie.group")
+                            EcsLogger.debug("com.auto1.pantera.group")
                                 .message("Index hit via "
                                     + (parsedName.isPresent() ? "name" : "path_prefix")
                                     + ": targeting " + targeted.size() + " member(s)")
@@ -362,7 +362,7 @@ public final class GroupSlice implements Slice {
                         }
                     }
                     // Index miss: fall back to querying all members
-                    EcsLogger.debug("com.artipie.group")
+                    EcsLogger.debug("com.auto1.pantera.group")
                         .message("Index miss: falling back to all members"
                             + (parsedName.isPresent()
                                 ? " (parsed name: " + parsedName.get() + ")"
@@ -517,7 +517,7 @@ public final class GroupSlice implements Slice {
         final RequestContext ctx
     ) {
         if (member.isCircuitOpen()) {
-            ctx.addTo(EcsLogger.warn("com.artipie.group")
+            ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                 .message("Member circuit OPEN, skipping")
                 .eventCategory("repository")
                 .eventAction("group_query")
@@ -561,7 +561,7 @@ public final class GroupSlice implements Slice {
         final RequestContext ctx
     ) {
         if (member.isCircuitOpen()) {
-            ctx.addTo(EcsLogger.warn("com.artipie.group")
+            ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                 .message("Member circuit OPEN, skipping")
                 .eventCategory("repository")
                 .eventAction("group_query")
@@ -582,7 +582,7 @@ public final class GroupSlice implements Slice {
         final RequestLine rewritten = member.rewritePath(line);
 
         // Log the path rewriting for troubleshooting
-        EcsLogger.info("com.artipie.group")
+        EcsLogger.info("com.auto1.pantera.group")
             .message(String.format("Forwarding request to member: rewrote path %s to %s", line.uri().getPath(), rewritten.uri().getPath()))
             .eventCategory("repository")
             .eventAction("group_forward")
@@ -619,7 +619,7 @@ public final class GroupSlice implements Slice {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
                 if (latency > 1000) {
-                    ctx.addTo(EcsLogger.warn("com.artipie.group")
+                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("Slow member response")
                         .eventCategory("repository")
                         .eventAction("group_query")
@@ -635,7 +635,7 @@ public final class GroupSlice implements Slice {
                 recordGroupMemberLatency(member.name(), "success", latency);
                 result.complete(resp);
             } else {
-                ctx.addTo(EcsLogger.debug("com.artipie.group")
+                ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member returned success but another member already won")
                     .eventCategory("repository")
                     .eventAction("group_query")
@@ -648,7 +648,7 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
-                ctx.addTo(EcsLogger.info("com.artipie.group")
+                ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
                     .message("Member returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("repository")
                     .eventAction("group_query")
@@ -664,7 +664,7 @@ public final class GroupSlice implements Slice {
             }
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member
-            ctx.addTo(EcsLogger.info("com.artipie.group")
+            ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
                 .message("Member returned 404")
                 .eventCategory("repository")
                 .eventAction("group_query")
@@ -678,7 +678,7 @@ public final class GroupSlice implements Slice {
             completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
         } else {
             // Server errors (500, 503, etc.): record failure, try next member
-            ctx.addTo(EcsLogger.warn("com.artipie.group")
+            ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                 .message("Member returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("repository")
                 .eventAction("group_query")
@@ -707,7 +707,7 @@ public final class GroupSlice implements Slice {
         final CompletableFuture<Response> result,
         final RequestContext ctx
     ) {
-        ctx.addTo(EcsLogger.warn("com.artipie.group")
+        ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
             .message("Member query failed")
             .eventCategory("repository")
             .eventAction("group_query")
@@ -735,7 +735,7 @@ public final class GroupSlice implements Slice {
     ) {
         if (pending.decrementAndGet() == 0 && !completed.get()) {
             if (anyServerError.get()) {
-                ctx.addTo(EcsLogger.warn("com.artipie.group")
+                ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                     .message("All members exhausted with upstream errors, returning 502")
                     .eventCategory("repository")
                     .eventAction("group_query")
@@ -745,7 +745,7 @@ public final class GroupSlice implements Slice {
                 result.complete(ResponseBuilder.badGateway()
                     .textBody("All upstream members failed").build());
             } else {
-                ctx.addTo(EcsLogger.warn("com.artipie.group")
+                ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                     .message("All members exhausted, returning 404")
                     .eventCategory("repository")
                     .eventAction("group_query")
@@ -766,7 +766,7 @@ public final class GroupSlice implements Slice {
         if (!DRAIN_PERMITS.tryAcquire()) {
             // Too many concurrent drains — skip to prevent memory pressure
             // The response will eventually be GC'd and the connection cleaned up
-            EcsLogger.debug("com.artipie.group")
+            EcsLogger.debug("com.auto1.pantera.group")
                 .message("Skipping body drain (too many concurrent drains)")
                 .eventCategory("repository")
                 .eventAction("body_drain")
@@ -793,7 +793,7 @@ public final class GroupSlice implements Slice {
             @Override
             public void onError(final Throwable err) {
                 DRAIN_PERMITS.release();
-                EcsLogger.warn("com.artipie.group")
+                EcsLogger.warn("com.auto1.pantera.group")
                     .message("Failed to drain response body")
                     .eventCategory("repository")
                     .eventAction("body_drain")
@@ -822,16 +822,16 @@ public final class GroupSlice implements Slice {
     // Metrics helpers
     
     private void recordRequestStart() {
-        final com.artipie.metrics.GroupSliceMetrics metrics =
-            com.artipie.metrics.GroupSliceMetrics.instance();
+        final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
+            com.auto1.pantera.metrics.GroupSliceMetrics.instance();
         if (metrics != null) {
             metrics.recordRequest(this.group);
         }
     }
     
     private void recordSuccess(final String member, final long latency) {
-        final com.artipie.metrics.GroupSliceMetrics metrics =
-            com.artipie.metrics.GroupSliceMetrics.instance();
+        final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
+            com.auto1.pantera.metrics.GroupSliceMetrics.instance();
         if (metrics != null) {
             metrics.recordSuccess(this.group, member, latency);
             metrics.recordBatch(this.group, this.members.size(), latency);
@@ -839,32 +839,32 @@ public final class GroupSlice implements Slice {
     }
     
     private void recordNotFound() {
-        final com.artipie.metrics.GroupSliceMetrics metrics =
-            com.artipie.metrics.GroupSliceMetrics.instance();
+        final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
+            com.auto1.pantera.metrics.GroupSliceMetrics.instance();
         if (metrics != null) {
             metrics.recordNotFound(this.group);
         }
     }
 
     private void recordGroupRequest(final String result, final long duration) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupRequest(this.group, result);
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupResolutionDuration(this.group, duration);
         }
     }
 
     private void recordGroupMemberRequest(final String memberName, final String result) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberRequest(this.group, memberName, result);
         }
     }
 
     private void recordGroupMemberLatency(final String memberName, final String result, final long latencyMs) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberLatency(this.group, memberName, result, latencyMs);
         }
     }

@@ -8,4 +8,4 @@
  *
  * @since 0.26
  */
-package com.artipie.hexpm;
+package com.auto1.pantera.hexpm;

@@ -2,77 +2,77 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie;
+package com.auto1.pantera;
 
-import com.artipie.adapters.docker.DockerProxy;
-import com.artipie.adapters.file.FileProxy;
-import com.artipie.adapters.go.GoProxy;
+import com.auto1.pantera.adapters.docker.DockerProxy;
+import com.auto1.pantera.adapters.file.FileProxy;
+import com.auto1.pantera.adapters.go.GoProxy;
 
-import com.artipie.adapters.maven.MavenProxy;
-import com.artipie.adapters.php.ComposerGroupSlice;
-import com.artipie.adapters.php.ComposerProxy;
-import com.artipie.adapters.pypi.PypiProxy;
-import com.artipie.asto.Key;
-import com.artipie.asto.SubStorage;
-import com.artipie.auth.LoggingAuth;
-import com.artipie.composer.AstoRepository;
-import com.artipie.composer.http.PhpComposer;
-import com.artipie.conan.ItemTokenizer;
-import com.artipie.conan.http.ConanSlice;
-import com.artipie.conda.http.CondaSlice;
-import com.artipie.debian.Config;
-import com.artipie.debian.http.DebianSlice;
-import com.artipie.docker.Docker;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.asto.RegistryRoot;
-import com.artipie.docker.http.DockerSlice;
-import com.artipie.docker.http.TrimmedDocker;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSupport;
-import com.artipie.files.FilesSlice;
-import com.artipie.gem.http.GemSlice;
+import com.auto1.pantera.adapters.maven.MavenProxy;
+import com.auto1.pantera.adapters.php.ComposerGroupSlice;
+import com.auto1.pantera.adapters.php.ComposerProxy;
+import com.auto1.pantera.adapters.pypi.PypiProxy;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.auth.LoggingAuth;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.http.PhpComposer;
+import com.auto1.pantera.conan.ItemTokenizer;
+import com.auto1.pantera.conan.http.ConanSlice;
+import com.auto1.pantera.conda.http.CondaSlice;
+import com.auto1.pantera.debian.Config;
+import com.auto1.pantera.debian.http.DebianSlice;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.asto.RegistryRoot;
+import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.TrimmedDocker;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.files.FilesSlice;
+import com.auto1.pantera.gem.http.GemSlice;
 
-import com.artipie.helm.http.HelmSlice;
-import com.artipie.hex.http.HexSlice;
-import com.artipie.http.ContentLengthRestriction;
-import com.artipie.http.DockerRoutingSlice;
-import com.artipie.http.GoSlice;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Slice;
-import com.artipie.http.TimeoutSlice;
-import com.artipie.group.GroupSlice;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BasicAuthScheme;
-import com.artipie.http.auth.CombinedAuthScheme;
-import com.artipie.http.auth.CombinedAuthzSliceWrap;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.Tokens;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.ProxySettings;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.filter.FilterSlice;
-import com.artipie.http.filter.Filters;
-import com.artipie.http.slice.PathPrefixStripSlice;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.http.slice.TrimPathSlice;
-import com.artipie.maven.http.MavenSlice;
-import com.artipie.npm.http.NpmSlice;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.npm.proxy.http.NpmProxySlice;
-import com.artipie.nuget.http.NuGet;
-import com.artipie.pypi.http.PySlice;
-import com.artipie.rpm.http.RpmSlice;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.Settings;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.helm.http.HelmSlice;
+import com.auto1.pantera.hex.http.HexSlice;
+import com.auto1.pantera.http.ContentLengthRestriction;
+import com.auto1.pantera.http.DockerRoutingSlice;
+import com.auto1.pantera.http.GoSlice;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.TimeoutSlice;
+import com.auto1.pantera.group.GroupSlice;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.BasicAuthScheme;
+import com.auto1.pantera.http.auth.CombinedAuthScheme;
+import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.ProxySettings;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.filter.FilterSlice;
+import com.auto1.pantera.http.filter.Filters;
+import com.auto1.pantera.http.slice.PathPrefixStripSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.http.slice.TrimPathSlice;
+import com.auto1.pantera.maven.http.MavenSlice;
+import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
+import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.pypi.http.PySlice;
+import com.auto1.pantera.rpm.http.RpmSlice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.settings.repo.Repositories;
 import com.google.common.base.Strings;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
@@ -156,7 +156,7 @@ public class RepositorySlices {
     /**
      * Cooldown metadata filtering service.
      */
-    private final com.artipie.cooldown.metadata.CooldownMetadataService cooldownMetadata;
+    private final com.auto1.pantera.cooldown.metadata.CooldownMetadataService cooldownMetadata;
 
     /**
      * Shared Jetty HTTP clients keyed by settings signature.
@@ -233,7 +233,7 @@ public class RepositorySlices {
         final SliceKey skey = new SliceKey(name, port);
         final SliceValue cached = this.slices.getIfPresent(skey);
         if (cached != null) {
-            EcsLogger.debug("com.artipie.settings")
+            EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved from cache")
                 .eventCategory("repository")
                 .eventAction("slice_resolve")
@@ -246,7 +246,7 @@ public class RepositorySlices {
         final Optional<SliceValue> resolved = resolve(name, port, depth);
         if (resolved.isPresent()) {
             this.slices.put(skey, resolved.get());
-            EcsLogger.debug("com.artipie.settings")
+            EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved and cached from config")
                 .eventCategory("repository")
                 .eventAction("slice_resolve")
@@ -257,7 +257,7 @@ public class RepositorySlices {
             return resolved.get().slice();
         }
         // Not found is NOT cached to allow dynamic repo addition without restart
-        EcsLogger.warn("com.artipie.settings")
+        EcsLogger.warn("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
             .eventCategory("repository")
             .eventAction("slice_resolve")
@@ -376,7 +376,7 @@ public class RepositorySlices {
             case "rpm":
                 slice = trimPathSlice(
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.artipie.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty())
+                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty())
                 );
                 break;
             case "php":
@@ -435,7 +435,7 @@ public class RepositorySlices {
             case "nuget":
                 slice = trimPathSlice(
                     new NuGet(
-                        cfg.url(), new com.artipie.nuget.AstoRepository(cfg.storage()),
+                        cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
                     )
                 );
@@ -511,7 +511,7 @@ public class RepositorySlices {
                 clientLease = jettyClientSlices(cfg);
                 clientSlices = clientLease.client();
                 final Slice npmProxySlice = new TimeoutSlice(
-                    new com.artipie.adapters.npm.NpmProxyAdapter(
+                    new com.auto1.pantera.adapters.npm.NpmProxyAdapter(
                         clientSlices,
                         cfg,
                         settings.artifactMetadata().flatMap(queues -> queues.proxyEventQueues(cfg)),
@@ -522,33 +522,33 @@ public class RepositorySlices {
                 );
                 // npm-proxy routing: audit anonymous (via SecurityAuditProxySlice), login blocked, downloads require JWT
                 slice = trimPathSlice(
-                    new com.artipie.http.rt.SliceRoute(
+                    new com.auto1.pantera.http.rt.SliceRoute(
                     // Audit - anonymous, SecurityAuditProxySlice already strips headers
-                    new com.artipie.http.rt.RtRulePath(
-                        new com.artipie.http.rt.RtRule.All(
-                            com.artipie.http.rt.MethodRule.POST,
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
+                    new com.auto1.pantera.http.rt.RtRulePath(
+                        new com.auto1.pantera.http.rt.RtRule.All(
+                            com.auto1.pantera.http.rt.MethodRule.POST,
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
                         ),
                         npmProxySlice
                     ),
                     // Block login/adduser/whoami - proxy is read-only
                     // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                     // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                    new com.artipie.http.rt.RtRulePath(
-                        new com.artipie.http.rt.RtRule.Any(
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                            new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
+                    new com.auto1.pantera.http.rt.RtRulePath(
+                        new com.auto1.pantera.http.rt.RtRule.Any(
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                            new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
                         ),
-                        new com.artipie.http.slice.SliceSimple(
-                            com.artipie.http.ResponseBuilder.forbidden()
+                        new com.auto1.pantera.http.slice.SliceSimple(
+                            com.auto1.pantera.http.ResponseBuilder.forbidden()
                                 .textBody("User management not supported on proxy. Use local npm repository.")
                                 .build()
                         )
                     ),
                     // Downloads - require Keycloak JWT
-                    new com.artipie.http.rt.RtRulePath(
-                        com.artipie.http.rt.RtRule.FALLBACK,
+                    new com.auto1.pantera.http.rt.RtRulePath(
+                        com.auto1.pantera.http.rt.RtRule.FALLBACK,
                         new CombinedAuthzSliceWrap(
                             npmProxySlice,
                             authentication(),
@@ -579,38 +579,38 @@ public class RepositorySlices {
                 final java.util.List<Slice> auditMemberSlices = auditMemberNames.stream()
                     .map(name -> this.slice(new Key.From(name), port, 0))
                     .collect(java.util.stream.Collectors.toList());
-                final Slice npmGroupAuditSlice = new com.artipie.npm.http.audit.GroupAuditSlice(
+                final Slice npmGroupAuditSlice = new com.auto1.pantera.npm.http.audit.GroupAuditSlice(
                     auditMemberNames, auditMemberSlices
                 );
                 // npm-group: audit anonymous, user management blocked, all other operations require auth
                 slice = trimPathSlice(
-                    new com.artipie.http.rt.SliceRoute(
+                    new com.auto1.pantera.http.rt.SliceRoute(
                         // Audit - anonymous, uses GroupAuditSlice to aggregate from all members
-                        new com.artipie.http.rt.RtRulePath(
-                            new com.artipie.http.rt.RtRule.All(
-                                com.artipie.http.rt.MethodRule.POST,
-                                new com.artipie.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.All(
+                                com.auto1.pantera.http.rt.MethodRule.POST,
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/npm/v1/security/.*")
                             ),
                             npmGroupAuditSlice
                         ),
                         // Block login/adduser/whoami - group is read-only
                         // NOTE: Do NOT block generic /auth paths - they conflict with scoped packages
                         // like @verdaccio/auth. Standard NPM auth uses /-/user/ and /-/v1/login.
-                        new com.artipie.http.rt.RtRulePath(
-                            new com.artipie.http.rt.RtRule.Any(
-                                new com.artipie.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
-                                new com.artipie.http.rt.RtRule.ByPath(".*/-/user/.*"),
-                                new com.artipie.http.rt.RtRule.ByPath(".*/-/whoami.*")
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            new com.auto1.pantera.http.rt.RtRule.Any(
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/v1/login.*"),
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/user/.*"),
+                                new com.auto1.pantera.http.rt.RtRule.ByPath(".*/-/whoami.*")
                             ),
-                            new com.artipie.http.slice.SliceSimple(
-                                com.artipie.http.ResponseBuilder.forbidden()
+                            new com.auto1.pantera.http.slice.SliceSimple(
+                                com.auto1.pantera.http.ResponseBuilder.forbidden()
                                     .textBody("User management not supported on group. Use local npm repository.")
                                     .build()
                             )
                         ),
                         // All other operations - require JWT
-                        new com.artipie.http.rt.RtRulePath(
-                            com.artipie.http.rt.RtRule.FALLBACK,
+                        new com.auto1.pantera.http.rt.RtRulePath(
+                            com.auto1.pantera.http.rt.RtRule.FALLBACK,
                             new CombinedAuthzSliceWrap(
                                 npmGroupSlice,
                                 authentication(),
@@ -663,7 +663,7 @@ public class RepositorySlices {
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
-                        new com.artipie.group.MavenGroupSlice(
+                        new com.auto1.pantera.group.MavenGroupSlice(
                             mavenDelegate,
                             cfg.name(),
                             cfg.members(),
@@ -766,10 +766,10 @@ public class RepositorySlices {
             case "deb":
                 // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.auto1.pantera.http.slice.BrowsableSlice(
                         new DebianSlice(
                             cfg.storage(), securityPolicy(), authentication(),
-                            new com.artipie.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
+                            new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
                             artifactEvents()
                         ),
                         cfg.storage()
@@ -778,7 +778,7 @@ public class RepositorySlices {
                 break;
             case "conda":
                 // Use streaming browsing for fast directory listings
-                slice = new com.artipie.http.slice.BrowsableSlice(
+                slice = new com.auto1.pantera.http.slice.BrowsableSlice(
                     new CondaSlice(
                         cfg.storage(), securityPolicy(), authentication(), tokens,
                         cfg.url().toString(), cfg.name(), artifactEvents()
@@ -788,7 +788,7 @@ public class RepositorySlices {
                 break;
             case "conan":
                 // Use streaming browsing for fast directory listings
-                slice = new com.artipie.http.slice.BrowsableSlice(
+                slice = new com.auto1.pantera.http.slice.BrowsableSlice(
                     new ConanSlice(
                         cfg.storage(), securityPolicy(), authentication(), tokens,
                         new ItemTokenizer(Vertx.vertx()), cfg.name()
@@ -799,7 +799,7 @@ public class RepositorySlices {
             case "hexpm":
                 // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.auto1.pantera.http.slice.BrowsableSlice(
                         new HexSlice(cfg.storage(), securityPolicy(), authentication(),
                             artifactEvents(), cfg.name()),
                         cfg.storage()
@@ -809,9 +809,9 @@ public class RepositorySlices {
             case "pypi":
                 // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.artipie.http.slice.BrowsableSlice(
+                    new com.auto1.pantera.http.slice.BrowsableSlice(
                         new PathPrefixStripSlice(
-                            new com.artipie.pypi.http.PySlice(
+                            new com.auto1.pantera.pypi.http.PySlice(
                                 cfg.storage(), securityPolicy(), authentication(),
                                 cfg.name(), artifactEvents()
                             ),
@@ -858,7 +858,7 @@ public class RepositorySlices {
         Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
 
         // Wrap with repository metrics to add repo_name and repo_type labels
-        final Slice withMetrics = new com.artipie.http.slice.RepoMetricsSlice(
+        final Slice withMetrics = new com.auto1.pantera.http.slice.RepoMetricsSlice(
             filtered, cfg.name(), cfg.type()
         );
 
@@ -1037,7 +1037,7 @@ public class RepositorySlices {
             int release() {
                 final int remaining = this.references.updateAndGet(current -> Math.max(0, current - 1));
                 if (remaining == 0 && this.references.get() == 0) {
-                    EcsLogger.debug("com.artipie")
+                    EcsLogger.debug("com.auto1.pantera")
                         .message(String.format("Jetty client reference count reached zero for settings key '%s'", this.key.metricId()))
                         .eventCategory("http_client")
                         .eventAction("client_release")

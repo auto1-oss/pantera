@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
-import com.artipie.asto.factory.Config;
+import com.auto1.pantera.asto.factory.Config;
 
 /**
  * Factory to create {@link Policy} instance.

@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.metrics.MicrometerMetrics;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 import io.reactivex.Flowable;
 
 import java.util.concurrent.CompletableFuture;
@@ -116,7 +116,7 @@ public final class RepoMetricsSlice implements Slice {
                                     );
                                 }
                             } catch (final NumberFormatException ex) {
-                                EcsLogger.debug("com.artipie.metrics")
+                                EcsLogger.debug("com.auto1.pantera.metrics")
                                     .message("Invalid Content-Length header value")
                                     .error(ex)
                                     .log();

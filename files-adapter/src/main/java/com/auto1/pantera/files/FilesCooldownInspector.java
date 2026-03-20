@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.files;
+package com.auto1.pantera.files;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.http.Headers;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -37,7 +37,7 @@ final class FilesCooldownInspector implements CooldownInspector {
     @Override
     public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
         final String path = artifact; // artifact is the full upstream path for files
-        return this.remote.response(new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, com.artipie.asto.Content.EMPTY)
+        return this.remote.response(new RequestLine(RqMethod.HEAD, path), Headers.EMPTY, com.auto1.pantera.asto.Content.EMPTY)
             .thenApply(response -> {
                 if (!response.status().success()) {
                     return Optional.empty();
@@ -60,7 +60,7 @@ final class FilesCooldownInspector implements CooldownInspector {
                 try {
                     return Optional.of(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value)));
                 } catch (final DateTimeParseException ex) {
-                    EcsLogger.debug("com.artipie.files")
+                    EcsLogger.debug("com.auto1.pantera.files")
                         .message("Failed to parse Last-Modified header")
                         .error(ex)
                         .log();

@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm;
+package com.auto1.pantera.helm;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Remaining;
-import com.artipie.asto.Storage;
-import com.artipie.helm.metadata.Index;
-import com.artipie.helm.metadata.ParsedChartName;
-import com.artipie.helm.metadata.YamlWriter;
-import com.artipie.helm.misc.EmptyIndex;
-import com.artipie.helm.misc.SpaceInBeginning;
-import com.artipie.http.misc.TokenizerFlatProc;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.helm.metadata.Index;
+import com.auto1.pantera.helm.metadata.ParsedChartName;
+import com.auto1.pantera.helm.metadata.YamlWriter;
+import com.auto1.pantera.helm.misc.EmptyIndex;
+import com.auto1.pantera.helm.misc.SpaceInBeginning;
+import com.auto1.pantera.http.misc.TokenizerFlatProc;
 import hu.akarnokd.rxjava2.interop.FlowableInterop;
 import io.reactivex.Flowable;
 import java.io.BufferedWriter;

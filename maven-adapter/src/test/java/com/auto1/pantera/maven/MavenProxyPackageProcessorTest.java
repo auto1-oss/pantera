@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
@@ -94,7 +94,7 @@ class MavenProxyPackageProcessorTest {
             "Same items were removed from packages queue", this.packages.isEmpty()
         );
         final ArtifactEvent event = this.events.poll();
-        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.artipie.asto"));
+        MatcherAssert.assertThat(event.artifactName(), new IsEqual<String>("com.auto1.pantera.asto"));
         MatcherAssert.assertThat(event.artifactVersion(), new IsEqual<String>("0.15"));
     }
 

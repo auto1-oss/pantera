@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.events;
+package com.auto1.pantera.asto.events;
 
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,7 +75,7 @@ public final class EventQueue<T> {
         final int current = this.size.getAndIncrement();
         if (current >= this.capacity) {
             this.size.decrementAndGet();
-            EcsLogger.warn("com.artipie.asto.events")
+            EcsLogger.warn("com.auto1.pantera.asto.events")
                 .message(String.format("Event queue full, dropping event: capacity=%d, size=%d", this.capacity, current))
                 .eventCategory("events")
                 .eventAction("queue_drop")

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
-import com.artipie.asto.ext.CompletableFutureSupport;
-import com.artipie.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.ext.CompletableFutureSupport;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.util.Collection;
 import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;

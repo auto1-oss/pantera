@@ -6,4 +6,4 @@
 /**
  * Rpm files, tests.
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;

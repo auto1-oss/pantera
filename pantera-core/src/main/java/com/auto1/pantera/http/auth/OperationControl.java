@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.auth;
+package com.auto1.pantera.http.auth;
 
-import com.artipie.security.policy.Policy;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.security.Permission;
 import java.util.Collection;
@@ -67,7 +67,7 @@ public final class OperationControl {
     public boolean allowed(final AuthUser user) {
         final boolean res = perms.stream()
             .anyMatch(perm -> policy.getPermissions(user).implies(perm));
-        EcsLogger.debug("com.artipie.security")
+        EcsLogger.debug("com.auto1.pantera.security")
             .message("Authorization operation")
             .eventCategory("security")
             .eventAction("authorization_check")

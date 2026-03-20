@@ -3,12 +3,12 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.asto.Storage;
-import com.artipie.docker.Layers;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Repo;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
 
 /**
  * Asto implementation of {@link Repo}.

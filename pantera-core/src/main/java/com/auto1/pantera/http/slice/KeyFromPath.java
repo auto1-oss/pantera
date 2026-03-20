@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Key;
+import com.auto1.pantera.asto.Key;
 
 /**
  * Key from path.

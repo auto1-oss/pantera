@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.composer.AllPackages;
-import com.artipie.composer.AstoRepository;
-import com.artipie.composer.test.ComposerSimple;
-import com.artipie.composer.test.PackageSimple;
-import com.artipie.composer.test.SourceServer;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.misc.RandomFreePort;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.composer.AllPackages;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.test.ComposerSimple;
+import com.auto1.pantera.composer.test.PackageSimple;
+import com.auto1.pantera.composer.test.SourceServer;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;

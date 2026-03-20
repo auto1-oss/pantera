@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
 import io.reactivex.Flowable;
 import java.io.StringReader;
 import java.net.URL;
@@ -105,7 +105,7 @@ public final class Tarballs {
             // and extracts just @scope/pkg/-/@scope/pkg-1.0.0.tgz
             try {
                 tarballPath = new TgzRelativePath(tarballPath).relative();
-            } catch (final com.artipie.ArtipieException ex) {
+            } catch (final com.auto1.pantera.ArtipieException ex) {
                 // If TgzRelativePath can't parse it, use as-is
                 // This preserves backward compatibility
             }

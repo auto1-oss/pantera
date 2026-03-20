@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.test;
+package com.auto1.pantera.test;
 
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.cache.StoragesCache;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.cache.FiltersCache;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.FiltersCache;
 
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.commons.lang3.NotImplementedException;

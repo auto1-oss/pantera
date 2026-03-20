@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.cache.CachedArtifactMetadataStore;
-import com.artipie.http.cache.NegativeCache;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -159,7 +159,7 @@ public final class CachedPyProxySlice implements Slice {
         
         // Check negative cache first (404s)
         if (this.negativeCache.isNotFound(key)) {
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("PyPI package cached as 404 (negative cache hit)")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -200,7 +200,7 @@ public final class CachedPyProxySlice implements Slice {
     ) {
         return this.metadata.orElseThrow().load(key).thenCompose(meta -> {
             if (meta.isPresent()) {
-                EcsLogger.debug("com.artipie.pypi")
+                EcsLogger.debug("com.auto1.pantera.pypi")
                     .message("PyPI proxy: serving from metadata cache")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -228,7 +228,7 @@ public final class CachedPyProxySlice implements Slice {
         final Key key
     ) {
         final long startTime = System.currentTimeMillis();
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("PyPI proxy: fetching upstream")
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -239,7 +239,7 @@ public final class CachedPyProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 // Check for 404 status
                 if (response.status().code() == 404) {
-                    EcsLogger.debug("com.artipie.pypi")
+                    EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("PyPI proxy: caching 404")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -255,7 +255,7 @@ public final class CachedPyProxySlice implements Slice {
                     this.recordProxyMetric("success", duration);
                     if (this.metadata.isPresent() && this.isCacheable(key.string())) {
                         // Cache successful response metadata
-                        EcsLogger.debug("com.artipie.pypi")
+                        EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("PyPI proxy: caching metadata")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -287,8 +287,8 @@ public final class CachedPyProxySlice implements Slice {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.repoName, this.upstreamUrl, result, duration);
             }
         });
@@ -299,14 +299,14 @@ public final class CachedPyProxySlice implements Slice {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.repoName, this.upstreamUrl, errorType);
             }
         });
@@ -318,11 +318,11 @@ public final class CachedPyProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

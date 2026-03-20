@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Scalar;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
-import com.artipie.api.RepositoryName;
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Copy;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.cache.StoragesCache;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Copy;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.http.log.EcsLogger;
 
-import com.artipie.misc.Json2Yaml;
-import com.artipie.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.misc.Json2Yaml;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -69,7 +69,7 @@ public final class RepoData {
                         .deleteAll(new Key.From(repo))
                         .thenAccept(
                             nothing ->
-                                EcsLogger.info("com.artipie.settings")
+                                EcsLogger.info("com.auto1.pantera.settings")
                                     .message("Removed data from repository")
                                     .eventCategory("repository")
                                     .eventAction("data_remove")
@@ -102,7 +102,7 @@ public final class RepoData {
                                 // Delete all files under this path
                                 return asto.deleteAll(artifactKey)
                                     .thenApply(nothing -> {
-                                        EcsLogger.info("com.artipie.settings")
+                                        EcsLogger.info("com.auto1.pantera.settings")
                                             .message("Deleted artifact directory from repository")
                                             .eventCategory("repository")
                                             .eventAction("artifact_delete")
@@ -118,7 +118,7 @@ public final class RepoData {
                     // Single file - delete it
                     return asto.delete(artifactKey)
                         .thenApply(nothing -> {
-                            EcsLogger.info("com.artipie.settings")
+                            EcsLogger.info("com.auto1.pantera.settings")
                                 .message("Deleted artifact file from repository")
                                 .eventCategory("repository")
                                 .eventAction("artifact_delete")
@@ -171,7 +171,7 @@ public final class RepoData {
     }
 
     private void logPackageDelete(final String repo, final String packagePath) {
-        EcsLogger.info("com.artipie.settings")
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Deleted package folder from repository")
             .eventCategory("repository")
             .eventAction("package_delete")
@@ -203,7 +203,7 @@ public final class RepoData {
                         ).thenCompose(nothing -> asto.deleteAll(new Key.From(repo)))
                         .thenAccept(
                             nothing ->
-                                EcsLogger.info("com.artipie.settings")
+                                EcsLogger.info("com.auto1.pantera.settings")
                                     .message("Moved data from repository (" + repo.toString() + " -> " + nrepo.toString() + ")")
                                     .eventCategory("repository")
                                     .eventAction("data_move")

@@ -8,5 +8,5 @@
  *
  * @since 0.1
  */
-package com.artipie.asto.s3;
+package com.auto1.pantera.asto.s3;
 

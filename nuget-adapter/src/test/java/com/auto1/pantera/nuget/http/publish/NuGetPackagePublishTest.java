@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.publish;
+package com.auto1.pantera.nuget.http.publish;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
-import com.artipie.http.headers.Header;
-import com.artipie.http.hm.ResponseMatcher;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.nuget.AstoRepository;
-import com.artipie.nuget.http.NuGet;
-import com.artipie.nuget.http.TestAuthentication;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.policy.PolicyByUsername;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.ResponseMatcher;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.nuget.AstoRepository;
+import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.nuget.http.TestAuthentication;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.PolicyByUsername;
 import com.google.common.io.Resources;
 import org.apache.hc.client5.http.entity.mime.MultipartEntityBuilder;
 import org.apache.hc.core5.http.HttpEntity;

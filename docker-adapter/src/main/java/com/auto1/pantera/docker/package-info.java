@@ -6,4 +6,4 @@
  * Docker-registry Artipie adapter.
  * @since 0.1
  */
-package com.artipie.docker;
+package com.auto1.pantera.docker;

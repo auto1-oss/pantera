@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContext;
-import com.artipie.maven.http.MavenSlice;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.JobDataRegistry;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.scheduling.QuartzJob;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContext;
+import com.auto1.pantera.maven.http.MavenSlice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.JobDataRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzJob;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
@@ -113,7 +113,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
         final long startTime = System.currentTimeMillis();
         final int duplicatesRemoved = batch.size() - uniquePackages.size();
 
-        EcsLogger.debug("com.artipie.maven")
+        EcsLogger.debug("com.auto1.pantera.maven")
             .message("Processing Maven batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + duplicatesRemoved + ")")
             .eventCategory("repository")
             .eventAction("batch_processing")
@@ -131,7 +131,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .join();
 
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.artipie.maven")
+            EcsLogger.info("com.auto1.pantera.maven")
                 .message("Maven batch processing complete (" + uniquePackages.size() + " packages)")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -140,7 +140,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 .log();
         } catch (final RuntimeException err) {
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.error("com.artipie.maven")
+            EcsLogger.error("com.auto1.pantera.maven")
                 .message("Maven batch processing failed (" + uniquePackages.size() + " packages)")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -170,7 +170,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                         .collect(Collectors.toList());
                     
                     if (filtered.isEmpty()) {
-                        EcsLogger.debug("com.artipie.maven")
+                        EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Maven package has only temporary files, skipping (will retry later)")
                             .eventCategory("repository")
                             .eventAction("proxy_package_process")
@@ -212,7 +212,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             // Clear retry count on successful processing
                             this.retryCount.remove(event.artifactKey().string());
 
-                            EcsLogger.debug("com.artipie.maven")
+                            EcsLogger.debug("com.auto1.pantera.maven")
                                 .message("Recorded Maven proxy artifact")
                                 .eventCategory("repository")
                                 .eventAction("proxy_artifact_record")
@@ -228,7 +228,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                             return null;
                         });
                 } catch (final RuntimeException err) {
-                    EcsLogger.error("com.artipie.maven")
+                    EcsLogger.error("com.auto1.pantera.maven")
                         .message("Failed to extract Maven archive from keys")
                         .eventCategory("repository")
                         .eventAction("proxy_package_process")
@@ -240,7 +240,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 }
             })
             .exceptionally(err -> {
-                EcsLogger.error("com.artipie.maven")
+                EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to process Maven package")
                     .eventCategory("repository")
                     .eventAction("proxy_package_process")
@@ -336,7 +336,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
     private void handleProcessingError(final ProxyArtifactEvent event, final Throwable err) {
         // If ValueNotFoundException, the file might still be in transit
         // This can happen if file was just moved after listing
-        if (err.getCause() instanceof com.artipie.asto.ValueNotFoundException) {
+        if (err.getCause() instanceof com.auto1.pantera.asto.ValueNotFoundException) {
             final String key = event.artifactKey().string();
             final int currentRetries = this.retryCount.getOrDefault(key, 0);
 
@@ -345,7 +345,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 this.retryCount.put(key, currentRetries + 1);
                 this.packages.add(event);
 
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Maven package not found (likely still being written), retrying (attempt " + (currentRetries + 1) + "/" + MavenProxyPackageProcessor.MAX_RETRIES + ")")
                     .eventCategory("repository")
                     .eventAction("proxy_package_retry")
@@ -358,7 +358,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 // Max retries reached, give up and clean up retry count
                 this.retryCount.remove(key);
 
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Maven package not found after " + MavenProxyPackageProcessor.MAX_RETRIES + " retries, giving up")
                     .eventCategory("repository")
                     .eventAction("proxy_package_retry")
@@ -369,7 +369,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     .log();
             }
         } else {
-            EcsLogger.error("com.artipie.maven")
+            EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to read Maven artifact metadata")
                 .eventCategory("repository")
                 .eventAction("proxy_package_process")

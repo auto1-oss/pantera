@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.metadata;
+package com.auto1.pantera.nuget.http.metadata;
 
-import com.artipie.nuget.Repository;
-import com.artipie.nuget.http.Absent;
-import com.artipie.nuget.http.Resource;
-import com.artipie.nuget.http.Route;
-import com.artipie.nuget.metadata.PackageId;
+import com.auto1.pantera.nuget.Repository;
+import com.auto1.pantera.nuget.http.Absent;
+import com.auto1.pantera.nuget.http.Resource;
+import com.auto1.pantera.nuget.http.Route;
+import com.auto1.pantera.nuget.metadata.PackageId;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 

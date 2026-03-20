@@ -7,4 +7,4 @@
  * Debian benchmarks.
  * @since 0.8
  */
-package com.artipie.debian.benchmarks;
+package com.auto1.pantera.debian.benchmarks;

@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.misc;
+package com.auto1.pantera.npm.misc;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
@@ -124,7 +124,7 @@ public final class MetadataEnhancer {
             final JsonObject versions = this.original.getJsonObject("versions");
 
             // Find latest stable version using DescSortedVersions
-            final java.util.List<String> stableVersions = new com.artipie.npm.misc.DescSortedVersions(
+            final java.util.List<String> stableVersions = new com.auto1.pantera.npm.misc.DescSortedVersions(
                 versions,
                 true  // excludePrereleases = true
             ).value();
@@ -134,7 +134,7 @@ public final class MetadataEnhancer {
                 tagsBuilder.add("latest", stableVersions.get(0));
             } else {
                 // No stable versions - use highest version overall (including prereleases)
-                final java.util.List<String> allVersions = new com.artipie.npm.misc.DescSortedVersions(
+                final java.util.List<String> allVersions = new com.auto1.pantera.npm.misc.DescSortedVersions(
                     versions,
                     false  // excludePrereleases = false
                 ).value();
@@ -242,7 +242,7 @@ public final class MetadataEnhancer {
             try {
                 return Instant.parse(versionMeta.getString("_publishTime"));
             } catch (final Exception ex) {
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _publishTime field")
                     .error(ex)
                     .log();
@@ -254,7 +254,7 @@ public final class MetadataEnhancer {
             try {
                 return Instant.parse(versionMeta.getString("_time"));
             } catch (final Exception ex) {
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse _time field")
                     .error(ex)
                     .log();
@@ -266,7 +266,7 @@ public final class MetadataEnhancer {
             try {
                 return Instant.parse(versionMeta.getString("publishTime"));
             } catch (final Exception ex) {
-                EcsLogger.debug("com.artipie.npm")
+                EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Failed to parse publishTime field")
                     .error(ex)
                     .log();

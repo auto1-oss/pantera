@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.pkg;
+package com.auto1.pantera.rpm.pkg;
 
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -53,7 +53,7 @@ public final class FilePackageHeader {
     /**
      * Get header.
      * Note: after the header was read from channel, for proper work of piped IO streams in
-     * {@link com.artipie.asto.streams.ContentAsStream}, it's necessary fully read the channel.
+     * {@link com.auto1.pantera.asto.streams.ContentAsStream}, it's necessary fully read the channel.
      * @return The header.
      * @throws InvalidPackageException In case package is invalid.
      * @throws IOException In case of I/O error.
@@ -71,7 +71,7 @@ public final class FilePackageHeader {
                 throw new InvalidPackageException(ex);
             }
             final Header header = format.getHeader();
-            EcsLogger.debug("com.artipie.rpm")
+            EcsLogger.debug("com.auto1.pantera.rpm")
                 .message("Parsed RPM header: " + header.toString())
                 .eventCategory("repository")
                 .eventAction("package_parsing")

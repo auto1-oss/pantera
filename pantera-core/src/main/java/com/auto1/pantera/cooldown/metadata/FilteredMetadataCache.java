@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;
 
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;

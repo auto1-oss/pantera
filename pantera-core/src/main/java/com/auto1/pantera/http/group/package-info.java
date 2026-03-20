@@ -9,5 +9,5 @@
  * ticket for more details.
  * @since 0.11
  */
-package com.artipie.http.group;
+package com.auto1.pantera.http.group;
 

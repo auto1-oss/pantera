@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.Storage;
-import com.artipie.http.auth.Authentication;
-import com.artipie.security.policy.CachedDbPolicy;
-import com.artipie.security.policy.PoliciesLoader;
-import com.artipie.security.policy.Policy;
-import com.artipie.security.policy.YamlPolicyConfig;
-import com.artipie.settings.cache.CachedUsers;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.security.policy.CachedDbPolicy;
+import com.auto1.pantera.security.policy.PoliciesLoader;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.security.policy.YamlPolicyConfig;
+import com.auto1.pantera.settings.cache.CachedUsers;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -23,7 +23,7 @@ public interface ArtipieSecurity {
 
     /**
      * Instance of {@link CachedUsers} which implements
-     * {@link Authentication} and {@link com.artipie.asto.misc.Cleanable}.
+     * {@link Authentication} and {@link com.auto1.pantera.asto.misc.Cleanable}.
      * @return Cached users
      */
     Authentication authentication();
@@ -63,7 +63,7 @@ public interface ArtipieSecurity {
 
         /**
          * Instance of {@link CachedUsers} which implements
-         * {@link Authentication} and {@link com.artipie.asto.misc.Cleanable}.
+         * {@link Authentication} and {@link com.auto1.pantera.asto.misc.Cleanable}.
          */
         private final Authentication auth;
 

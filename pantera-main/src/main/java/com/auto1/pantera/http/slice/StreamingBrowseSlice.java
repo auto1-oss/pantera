@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 import io.reactivex.rxjava3.core.Flowable;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -80,7 +80,7 @@ public final class StreamingBrowseSlice implements Slice {
             final long elapsed = System.currentTimeMillis() - startTime;
             final int totalEntries = result.files().size() + result.directories().size();
 
-            EcsLogger.debug("com.artipie.http")
+            EcsLogger.debug("com.auto1.pantera.http")
                 .message("Listed directory (" + result.files().size() + " files, " + result.directories().size() + " directories, " + totalEntries + " total)")
                 .eventCategory("http")
                 .eventAction("directory_list")
@@ -102,7 +102,7 @@ public final class StreamingBrowseSlice implements Slice {
                 .body(htmlContent)
                 .build();
         }).exceptionally(throwable -> {
-            EcsLogger.error("com.artipie.http")
+            EcsLogger.error("com.auto1.pantera.http")
                 .message("Failed to list directory")
                 .eventCategory("http")
                 .eventAction("directory_list")

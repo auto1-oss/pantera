@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.misc;
+package com.auto1.pantera.http.misc;
 
-import com.artipie.asto.Remaining;
+import com.auto1.pantera.asto.Remaining;
 import io.reactivex.Flowable;
 import java.nio.ByteBuffer;
 import java.util.List;

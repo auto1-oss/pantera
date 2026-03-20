@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian.misc;
+package com.auto1.pantera.debian.misc;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -92,7 +92,7 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.artipie.debian")
+            EcsLogger.error("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("repository")
                 .eventAction("gpg_sign")
@@ -101,7 +101,7 @@ public final class GpgClearsign {
                 .log();
             throw new ArtipieException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.artipie.debian")
+            EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("repository")
                 .eventAction("gpg_sign")
@@ -142,7 +142,7 @@ public final class GpgClearsign {
                 return out.toByteArray();
             }
         } catch (final PGPException err) {
-            EcsLogger.error("com.artipie.debian")
+            EcsLogger.error("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
                 .eventCategory("repository")
                 .eventAction("gpg_sign")
@@ -151,7 +151,7 @@ public final class GpgClearsign {
                 .log();
             throw new ArtipieException(err);
         } catch (final IOException err) {
-            EcsLogger.error("com.artipie.debian")
+            EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
                 .eventCategory("repository")
                 .eventAction("gpg_sign")

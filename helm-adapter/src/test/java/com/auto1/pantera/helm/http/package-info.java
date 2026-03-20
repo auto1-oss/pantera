@@ -7,4 +7,4 @@
  * Tests for HTTP Helm objects.
  * @since 0.3
  */
-package com.artipie.helm.http;
+package com.auto1.pantera.helm.http;

@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.test;
+package com.auto1.pantera.test;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.api.ssl.KeyStoreFactory;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.auth.AuthFromEnv;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.http.auth.Authentication;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.LoggingContext;
-import com.artipie.settings.MetricsContext;
-import com.artipie.settings.PrefixesConfig;
-import com.artipie.settings.Settings;
-import com.artipie.settings.cache.ArtipieCaches;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.api.ssl.KeyStoreFactory;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.auth.AuthFromEnv;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.LoggingContext;
+import com.auto1.pantera.settings.MetricsContext;
+import com.auto1.pantera.settings.PrefixesConfig;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
 import java.util.Optional;
 import javax.sql.DataSource;
 

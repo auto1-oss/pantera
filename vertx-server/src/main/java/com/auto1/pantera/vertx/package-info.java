@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.vertx;
+package com.auto1.pantera.vertx;

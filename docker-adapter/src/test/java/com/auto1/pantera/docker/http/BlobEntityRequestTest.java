@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.docker.http.blobs.BlobsRequest;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.docker.http.blobs.BlobsRequest;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;

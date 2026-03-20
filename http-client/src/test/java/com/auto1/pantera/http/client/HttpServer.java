@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client;
+package com.auto1.pantera.http.client;
 
-import com.artipie.http.Slice;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.reactivex.core.Vertx;
 import java.util.concurrent.atomic.AtomicReference;

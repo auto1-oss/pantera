@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.docker.Docker;
-import com.artipie.docker.http.blobs.GetBlobsSlice;
-import com.artipie.docker.http.blobs.HeadBlobsSlice;
-import com.artipie.docker.http.manifest.GetManifestSlice;
-import com.artipie.docker.http.manifest.HeadManifestSlice;
-import com.artipie.docker.http.manifest.PushManifestSlice;
-import com.artipie.docker.http.upload.DeleteUploadSlice;
-import com.artipie.docker.http.upload.GetUploadSlice;
-import com.artipie.docker.http.upload.PatchUploadSlice;
-import com.artipie.docker.http.upload.PostUploadSlice;
-import com.artipie.docker.http.upload.PutUploadSlice;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.AuthScheme;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.http.blobs.GetBlobsSlice;
+import com.auto1.pantera.docker.http.blobs.HeadBlobsSlice;
+import com.auto1.pantera.docker.http.manifest.GetManifestSlice;
+import com.auto1.pantera.docker.http.manifest.HeadManifestSlice;
+import com.auto1.pantera.docker.http.manifest.PushManifestSlice;
+import com.auto1.pantera.docker.http.upload.DeleteUploadSlice;
+import com.auto1.pantera.docker.http.upload.GetUploadSlice;
+import com.auto1.pantera.docker.http.upload.PatchUploadSlice;
+import com.auto1.pantera.docker.http.upload.PostUploadSlice;
+import com.auto1.pantera.docker.http.upload.PutUploadSlice;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthScheme;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
 
 import java.util.Optional;
 import java.util.Queue;

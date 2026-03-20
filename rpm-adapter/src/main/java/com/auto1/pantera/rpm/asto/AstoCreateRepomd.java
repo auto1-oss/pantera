@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentAs;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.asto.streams.StorageValuePipeline;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.meta.XmlRepomd;
-import com.artipie.rpm.pkg.Checksum;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentAs;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.meta.XmlRepomd;
+import com.auto1.pantera.rpm.pkg.Checksum;
 import com.jcabi.aspects.Tv;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
@@ -108,7 +108,7 @@ public final class AstoCreateRepomd {
             // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
             .<Pair<XmlPackage, String>>flatMapSingle(
                 key -> rxsto.value(key).flatMap(
-                    val -> com.artipie.asto.rx.RxFuture.single(
+                    val -> com.auto1.pantera.asto.rx.RxFuture.single(
                         new ContentDigest(
                             val,
                             () -> this.cnfg.digest().messageDigest()

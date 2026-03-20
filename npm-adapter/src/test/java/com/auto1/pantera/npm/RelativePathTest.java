@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.beans.HasPropertyWithValue;
 import org.hamcrest.core.IsEqual;

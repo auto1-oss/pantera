@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.pypi.PypiDeployment;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.pypi.PypiDeployment;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;

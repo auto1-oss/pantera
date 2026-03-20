@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.http.slice.StorageArtifactSlice;
-import com.artipie.maven.asto.RepositoryChecksums;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.StorageArtifactSlice;
+import com.auto1.pantera.maven.asto.RepositoryChecksums;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -85,7 +85,7 @@ final class LocalMavenSlice implements Slice {
                         if (exists) {
                             // Track download metric
                             this.recordMetric(() ->
-                                com.artipie.metrics.ArtipieMetrics.instance().download(this.repoName, "maven")
+                                com.auto1.pantera.metrics.ArtipieMetrics.instance().download(this.repoName, "maven")
                             );
                             // Use storage-specific optimized content retrieval for 100-1000x faster downloads
                             return StorageArtifactSlice.optimizedValue(storage, artifact)
@@ -166,11 +166,11 @@ final class LocalMavenSlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

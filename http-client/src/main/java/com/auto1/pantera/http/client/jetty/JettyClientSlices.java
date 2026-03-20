@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.HttpClientSettings;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.HttpClientSettings;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.google.common.base.Strings;
 import org.eclipse.jetty.client.BasicAuthentication;
@@ -16,8 +16,8 @@ import org.eclipse.jetty.client.HttpProxy;
 import org.eclipse.jetty.client.Origin;
 import org.eclipse.jetty.io.ArrayByteBufferPool;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 
 /**
  * ClientSlices implementation using Jetty HTTP client as back-end.
@@ -100,7 +100,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
     public void stop() {
         if (stopped.compareAndSet(false, true)) {
             try {
-                EcsLogger.debug("com.artipie.http.client")
+                EcsLogger.debug("com.auto1.pantera.http.client")
                     .message("Stopping Jetty HTTP client (" + this.clnt.getDestinations().size() + " destinations)")
                     .eventCategory("http")
                     .eventAction("http_client_stop")
@@ -113,14 +113,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
                 // This is critical to prevent connection leaks
                 this.clnt.destroy();
 
-                EcsLogger.debug("com.artipie.http.client")
+                EcsLogger.debug("com.auto1.pantera.http.client")
                     .message("Jetty HTTP client stopped and destroyed successfully")
                     .eventCategory("http")
                     .eventAction("http_client_stop")
                     .eventOutcome("success")
                     .log();
             } catch (Exception e) {
-                EcsLogger.error("com.artipie.http.client")
+                EcsLogger.error("com.auto1.pantera.http.client")
                     .message("Failed to stop Jetty HTTP client cleanly")
                     .eventCategory("http")
                     .eventAction("http_client_stop")
@@ -249,7 +249,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         // The HTTP3Client and related classes require extensive refactoring
         // This is acceptable as HTTP/3 is rarely used and the critical fix is the ArrayByteBufferPool
         if (settings.http3()) {
-            EcsLogger.warn("com.artipie.http.client")
+            EcsLogger.warn("com.auto1.pantera.http.client")
                 .message("HTTP/3 transport requested but not supported in Jetty 12.1+")
                 .eventCategory("http")
                 .eventAction("http_client_init")
@@ -288,7 +288,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         );
         result.setByteBufferPool(bufferPool);
         
-        EcsLogger.info("com.artipie.http.client")
+        EcsLogger.info("com.auto1.pantera.http.client")
             .message(String.format(
                 "Configured Jetty ByteBufferPool with bounded buckets: maxBucketSize=%d, maxHeapMB=%d, maxDirectMB=%d",
                 maxBucketSize, maxHeapMemory / (1024 * 1024), maxDirectMemory / (1024 * 1024)))

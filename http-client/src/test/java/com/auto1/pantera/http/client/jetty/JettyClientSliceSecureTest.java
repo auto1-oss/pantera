@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;
 
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.test.TestResource;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.net.JksOptions;
 import org.eclipse.jetty.client.HttpClient;

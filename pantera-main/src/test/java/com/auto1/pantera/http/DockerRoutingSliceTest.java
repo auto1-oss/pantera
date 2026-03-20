@@ -2,34 +2,34 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.hm.AssertSlice;
-import com.artipie.http.hm.RqLineHasUri;
-import com.artipie.http.hm.RsHasHeaders;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.hm.SliceHasResponse;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.LoggingContext;
-import com.artipie.settings.MetricsContext;
-import com.artipie.settings.Settings;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.cache.CachedUsers;
-import com.artipie.test.TestArtipieCaches;
-import com.artipie.test.TestSettings;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.hm.AssertSlice;
+import com.auto1.pantera.http.hm.RqLineHasUri;
+import com.auto1.pantera.http.hm.RsHasHeaders;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.LoggingContext;
+import com.auto1.pantera.settings.MetricsContext;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.CachedUsers;
+import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.test.TestSettings;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.AllOf;
 import org.junit.jupiter.api.Test;
@@ -204,8 +204,8 @@ final class DockerRoutingSliceTest {
         }
 
         @Override
-        public com.artipie.settings.PrefixesConfig prefixes() {
-            return new com.artipie.settings.PrefixesConfig();
+        public com.auto1.pantera.settings.PrefixesConfig prefixes() {
+            return new com.auto1.pantera.settings.PrefixesConfig();
         }
 
         @Override

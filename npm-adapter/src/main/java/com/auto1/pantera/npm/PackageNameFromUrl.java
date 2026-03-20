@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.regex.Pattern;
 

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.security.perms.EmptyPermissions;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.security.perms.EmptyPermissions;
 import java.nio.charset.StandardCharsets;
 import java.security.Permissions;
 import org.hamcrest.MatcherAssert;

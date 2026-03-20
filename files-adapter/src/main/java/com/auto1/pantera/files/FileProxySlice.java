@@ -2,31 +2,31 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.files;
+package com.auto1.pantera.files;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.StreamThroughCache;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.cache.Remote;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.StreamThroughCache;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import io.reactivex.Flowable;
 
 import java.net.URI;
@@ -94,7 +94,7 @@ public final class FileProxySlice implements Slice {
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
         this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -109,7 +109,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
             new StreamThroughCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -126,7 +126,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
             new StreamThroughCache(asto), Optional.of(events), rname,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -136,7 +136,7 @@ public final class FileProxySlice implements Slice {
      */
     FileProxySlice(final Slice remote, final Cache cache) {
         this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
-            com.artipie.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -372,8 +372,8 @@ public final class FileProxySlice implements Slice {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
             }
         });
@@ -384,14 +384,14 @@ public final class FileProxySlice implements Slice {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
             }
         });
@@ -403,11 +403,11 @@ public final class FileProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.files")
+            EcsLogger.debug("com.auto1.pantera.files")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

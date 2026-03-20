@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Key;
+import com.auto1.pantera.asto.Key;
 import java.util.Collection;
 import java.util.stream.Collectors;
 import javax.json.Json;

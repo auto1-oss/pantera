@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.http.rq;
+package com.auto1.pantera.http.rq;
 
 import java.net.URI;
 

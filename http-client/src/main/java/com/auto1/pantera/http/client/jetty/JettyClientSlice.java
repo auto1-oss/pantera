@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;
 
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.log.LogSanitizer;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
 import io.reactivex.Flowable;
 import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
@@ -83,7 +83,7 @@ final class JettyClientSlice implements Slice {
     }
 
     public CompletableFuture<Response> response(
-        RequestLine line, Headers headers, com.artipie.asto.Content body
+        RequestLine line, Headers headers, com.auto1.pantera.asto.Content body
     ) {
         final Request request = this.buildRequest(headers, line);
         final CompletableFuture<Response> res = new CompletableFuture<>();
@@ -100,7 +100,7 @@ final class JettyClientSlice implements Slice {
                 .doFinally(async::close)
                 .subscribe(
                     buf -> async.write(buf, Callback.NOOP),
-                    throwable -> EcsLogger.error("com.artipie.http.client")
+                    throwable -> EcsLogger.error("com.auto1.pantera.http.client")
                         .message("Failed to stream HTTP request body")
                         .eventCategory("http")
                         .eventAction("http_request_body")
@@ -118,7 +118,7 @@ final class JettyClientSlice implements Slice {
                     final RsStatus status = RsStatus.byCode(response.getStatus());
                     final Headers respHeaders = toHeaders(response.getHeaders());
                     final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
-                    EcsLogger.debug("com.artipie.http.client")
+                    EcsLogger.debug("com.auto1.pantera.http.client")
                         .message("Received HTTP response headers (streaming body)")
                         .eventCategory("http")
                         .eventAction("http_response_receive")
@@ -137,7 +137,7 @@ final class JettyClientSlice implements Slice {
                 }
         );
         final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
-        EcsLogger.debug("com.artipie.http.client")
+        EcsLogger.debug("com.auto1.pantera.http.client")
             .message("Sending HTTP request")
             .eventCategory("http")
             .eventAction("http_request_send")
@@ -162,7 +162,7 @@ final class JettyClientSlice implements Slice {
                             .body(Flowable.empty())
                             .build()
                         )) {
-                            EcsLogger.debug("com.artipie.http.client")
+                            EcsLogger.debug("com.auto1.pantera.http.client")
                                 .message("Received HTTP response (no body)")
                                 .eventCategory("http")
                                 .eventAction("http_response_receive")
@@ -174,7 +174,7 @@ final class JettyClientSlice implements Slice {
                         // (edge case: content source callback fired but no chunks)
                         processor.onComplete();
                     } else {
-                        EcsLogger.error("com.artipie.http.client")
+                        EcsLogger.error("com.auto1.pantera.http.client")
                             .message("HTTP request failed")
                             .eventCategory("http")
                             .eventAction("http_request_send")
@@ -314,7 +314,7 @@ final class JettyClientSlice implements Slice {
 
             while (iterations++ < maxIterations) {
                 if (System.nanoTime() - lastDataTime > idleTimeoutNanos) {
-                    EcsLogger.error("com.artipie.http.client")
+                    EcsLogger.error("com.auto1.pantera.http.client")
                         .message(String.format("Response reading idle timeout (120s without data) after %d iterations", iterations))
                         .eventCategory("http")
                         .eventAction("http_response_read")
@@ -338,7 +338,7 @@ final class JettyClientSlice implements Slice {
                     if (chunk.isLast()) {
                         this.processor.onError(failure);
                         this.response.abort(failure);
-                        EcsLogger.error("com.artipie.http.client")
+                        EcsLogger.error("com.auto1.pantera.http.client")
                             .message("HTTP response read failed")
                             .eventCategory("http")
                             .eventAction("http_response_read")
@@ -360,7 +360,7 @@ final class JettyClientSlice implements Slice {
                             // The transient failure is treated as a terminal failure.
                             this.processor.onError(failure);
                             this.response.abort(failure);
-                            EcsLogger.error("com.artipie.http.client")
+                            EcsLogger.error("com.auto1.pantera.http.client")
                                 .message("Transient failure treated as terminal")
                                 .eventCategory("http")
                                 .eventAction("http_response_read")
@@ -388,7 +388,7 @@ final class JettyClientSlice implements Slice {
             }
 
             // Max iterations exceeded
-            EcsLogger.error("com.artipie.http.client")
+            EcsLogger.error("com.auto1.pantera.http.client")
                 .message("Max iterations exceeded while reading response (max: " + maxIterations + ")")
                 .eventCategory("http")
                 .eventAction("http_response_read")

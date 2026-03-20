@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;
 
 import com.adobe.testing.s3mock.junit5.S3MockExtension;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.test.TestResource;
-import com.artipie.debian.http.DebianSlice;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.policy.Policy;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.debian.http.DebianSlice;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 import org.cactoos.list.ListOf;
@@ -109,7 +109,7 @@ public final class DebianSliceS3ITCase {
         this.storage = StoragesLoader.STORAGES
             .newObject(
                 "s3",
-                new com.artipie.asto.factory.Config.YamlStorageConfig(
+                new com.auto1.pantera.asto.factory.Config.YamlStorageConfig(
                     Yaml.createYamlMappingBuilder()
                         .add("region", "us-east-1")
                         .add("bucket", this.bucket)

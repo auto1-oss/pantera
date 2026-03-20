@@ -3,17 +3,17 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.docker.Digest;
-import com.artipie.docker.ExampleStorage;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Tags;
-import com.artipie.docker.error.InvalidManifestException;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ExampleStorage;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

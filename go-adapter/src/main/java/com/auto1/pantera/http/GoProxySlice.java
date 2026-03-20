@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
 import java.util.Optional;
@@ -45,7 +45,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             clients, remote, auth, cache, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
         );
     }
 
@@ -63,7 +63,7 @@ public final class GoProxySlice extends Slice.Wrap {
     ) {
         this(
             client, uri, authenticator, Cache.NOP, Optional.empty(), Optional.empty(), "*",
-            "go-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE
+            "go-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
         );
     }
 
@@ -87,7 +87,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.CooldownService cooldown
     ) {
         this(clients, remote, auth, cache, events, Optional.empty(), rname, rtype, cooldown);
     }
@@ -114,7 +114,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.CooldownService cooldown
     ) {
         this(remote(clients, remote, auth), cache, events, storage, rname, rtype, cooldown);
     }
@@ -126,7 +126,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown
+        final com.auto1.pantera.cooldown.CooldownService cooldown
     ) {
         this(remote, cache, events, storage, rname, rtype, cooldown, new GoCooldownInspector(remote));
     }
@@ -138,7 +138,7 @@ public final class GoProxySlice extends Slice.Wrap {
         final Optional<Storage> storage,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.CooldownService cooldown,
         final GoCooldownInspector inspector
     ) {
         super(

@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.metadata;
+package com.auto1.pantera.nuget.metadata;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
@@ -102,8 +102,8 @@ public final class SearchResults {
          */
         String version() {
             return this.versions.stream()
-                .map(vers -> new com.artipie.nuget.metadata.Version(vers.value))
-                .max(com.artipie.nuget.metadata.Version::compareTo).get().normalized();
+                .map(vers -> new com.auto1.pantera.nuget.metadata.Version(vers.value))
+                .max(com.auto1.pantera.nuget.metadata.Version::compareTo).get().normalized();
         }
     }
 
@@ -148,7 +148,7 @@ public final class SearchResults {
         private void write(final JsonGenerator gen) throws IOException {
             gen.writeStartObject();
             gen.writeStringField(
-                "version", new com.artipie.nuget.metadata.Version(this.value).normalized()
+                "version", new com.auto1.pantera.nuget.metadata.Version(this.value).normalized()
             );
             gen.writeNumberField("downloads", this.downloads);
             gen.writeStringField("@id", this.id);

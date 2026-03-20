@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.micrometer;
+package com.auto1.pantera.micrometer;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -103,7 +103,7 @@ public final class MicrometerSlice implements Slice {
                         try {
                             responseBody.record(Long.parseLong(contentLength));
                         } catch (final NumberFormatException ex) {
-                            EcsLogger.debug("com.artipie.metrics")
+                            EcsLogger.debug("com.auto1.pantera.metrics")
                                 .message("Invalid Content-Length header value")
                                 .error(ex)
                                 .log();
@@ -124,8 +124,8 @@ public final class MicrometerSlice implements Slice {
                         timer.stop(this.registry.timer(name, MicrometerSlice.STATUS, resp.status().name()));
 
                         // Record HTTP request metrics via MicrometerMetrics
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordHttpRequest(
+                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordHttpRequest(
                                 method,
                                 String.valueOf(resp.status().code()),
                                 duration

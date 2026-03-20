@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.FailedCompletionStage;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.Remote;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.composer.AstoRepository;
-import com.artipie.composer.Repository;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.FailedCompletionStage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.Repository;
 import org.cactoos.set.SetOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;

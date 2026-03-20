@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie;
+package com.auto1.pantera;
 
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.BasicAuthzSlice;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.misc.RandomFreePort;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.policy.Policy;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.BasicAuthzSlice;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.StringContains;

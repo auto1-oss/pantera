@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cache;
+package com.auto1.pantera.cache;
 
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
@@ -86,7 +86,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
         this.caches = new ConcurrentHashMap<>();
         this.subConn.addListener(new Listener());
         this.subConn.async().subscribe(CacheInvalidationPubSub.CHANNEL);
-        EcsLogger.info("com.artipie.cache")
+        EcsLogger.info("com.auto1.pantera.cache")
             .message("Cache invalidation pub/sub started (instance: "
                 + this.instanceId.substring(0, 8) + ")")
             .eventCategory("cache")
@@ -134,7 +134,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
     public void close() {
         this.subConn.close();
         this.pubConn.close();
-        EcsLogger.info("com.artipie.cache")
+        EcsLogger.info("com.auto1.pantera.cache")
             .message("Cache invalidation pub/sub closed")
             .eventCategory("cache")
             .eventAction("pubsub_stop")
@@ -173,7 +173,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
             } else {
                 cache.invalidate(key);
             }
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Remote cache invalidation: " + cacheType + ":" + key)
                 .eventCategory("cache")
                 .eventAction("remote_invalidate")

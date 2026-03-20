@@ -8,4 +8,4 @@
  *
  * @since 0.23
  */
-package com.artipie.settings.cache;
+package com.auto1.pantera.settings.cache;

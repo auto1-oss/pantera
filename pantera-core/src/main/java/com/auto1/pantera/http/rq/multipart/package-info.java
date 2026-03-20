@@ -7,5 +7,5 @@
  * Multipart reactive support.
  * @since 1.0
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 

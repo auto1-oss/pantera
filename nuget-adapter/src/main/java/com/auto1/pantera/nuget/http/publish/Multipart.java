@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.publish;
+package com.auto1.pantera.nuget.http.publish;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
-import com.artipie.http.Headers;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.Headers;
 import org.apache.commons.fileupload.MultipartStream;
 import org.apache.commons.fileupload.ParameterParser;
 import org.reactivestreams.Publisher;

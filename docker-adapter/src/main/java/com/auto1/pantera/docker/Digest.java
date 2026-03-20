@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
 import org.apache.commons.codec.digest.DigestUtils;
 

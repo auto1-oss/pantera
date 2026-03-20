@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian.metadata;
+package com.auto1.pantera.debian.metadata;
 
 import java.util.NoSuchElementException;
 import org.hamcrest.MatcherAssert;

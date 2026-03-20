@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.cooldown.NoopCooldownService;
-import com.artipie.nuget.RandomFreePort;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.Settings;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.test.TestArtipieCaches;
-import com.artipie.test.TestSettings;
-import com.artipie.test.TestStoragesCache;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.nuget.RandomFreePort;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.test.TestArtipieCaches;
+import com.auto1.pantera.test.TestSettings;
+import com.auto1.pantera.test.TestStoragesCache;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
@@ -218,7 +218,7 @@ public class RestApiServerBase {
                 Optional.empty(),
                 NoopCooldownService.INSTANCE,
                 this.settings(),
-                com.artipie.index.ArtifactIndex.NOP,
+                com.auto1.pantera.index.ArtifactIndex.NOP,
                 null
             ),
             context.succeedingThenComplete()

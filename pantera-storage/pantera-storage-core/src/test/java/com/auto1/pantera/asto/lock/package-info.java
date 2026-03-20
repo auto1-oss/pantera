@@ -8,4 +8,4 @@
  *
  * @since 0.24
  */
-package com.artipie.asto.lock;
+package com.auto1.pantera.asto.lock;

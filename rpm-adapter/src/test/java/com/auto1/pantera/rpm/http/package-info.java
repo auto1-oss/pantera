@@ -4,8 +4,8 @@
  */
 
 /**
- * Tests for com.artipie.rpm.http package.
+ * Tests for com.auto1.pantera.rpm.http package.
  *
  * @since 0.8.3
  */
-package com.artipie.rpm.http;
+package com.auto1.pantera.rpm.http;

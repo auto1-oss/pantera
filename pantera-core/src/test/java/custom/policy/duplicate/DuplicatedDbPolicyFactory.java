@@ -4,10 +4,10 @@
  */
 package custom.policy.duplicate;
 
-import com.artipie.asto.factory.Config;
-import com.artipie.security.policy.ArtipiePolicyFactory;
-import com.artipie.security.policy.Policy;
-import com.artipie.security.policy.PolicyFactory;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.security.policy.ArtipiePolicyFactory;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.security.policy.PolicyFactory;
 import java.security.PermissionCollection;
 
 /**

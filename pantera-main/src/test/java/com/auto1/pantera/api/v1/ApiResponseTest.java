@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;

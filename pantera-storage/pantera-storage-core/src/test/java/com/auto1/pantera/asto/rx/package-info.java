@@ -4,8 +4,8 @@
  */
 
 /**
- * Tests for {@link com.artipie.asto.rx.RxStorage}.
+ * Tests for {@link com.auto1.pantera.asto.rx.RxStorage}.
  *
  * @since 1.11
  */
-package com.artipie.asto.rx;
+package com.auto1.pantera.asto.rx;

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.fs;
+package com.auto1.pantera.asto.fs;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.ArtipieStorageFactory;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StorageFactory;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.ArtipieStorageFactory;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StorageFactory;
 import io.vertx.reactivex.core.Vertx;
 import java.nio.file.Paths;
 

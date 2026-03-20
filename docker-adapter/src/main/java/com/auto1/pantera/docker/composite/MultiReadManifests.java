@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.composite;
+package com.auto1.pantera.docker.composite;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Tags;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.JoinedTagsSource;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.JoinedTagsSource;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.log.EcsLogger;
 import org.slf4j.MDC;
 
 import java.util.List;
@@ -68,7 +68,7 @@ public final class MultiReadManifests implements Manifests {
                             if (throwable == null) {
                                 result = manifest;
                             } else {
-                                EcsLogger.error("com.artipie.docker")
+                                EcsLogger.error("com.auto1.pantera.docker")
                                     .message("Failed to read manifest")
                                     .eventCategory("repository")
                                     .eventAction("manifest_get")

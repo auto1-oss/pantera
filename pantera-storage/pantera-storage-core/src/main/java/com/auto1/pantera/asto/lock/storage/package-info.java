@@ -4,8 +4,8 @@
  */
 
 /**
- * Storage implementation for {@link com.artipie.asto.lock.Lock}.
+ * Storage implementation for {@link com.auto1.pantera.asto.lock.Lock}.
  *
  * @since 0.24
  */
-package com.artipie.asto.lock.storage;
+package com.auto1.pantera.asto.lock.storage;

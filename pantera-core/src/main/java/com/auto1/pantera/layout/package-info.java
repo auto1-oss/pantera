@@ -24,4 +24,4 @@
  *
  * @since 1.0
  */
-package com.artipie.layout;
+package com.auto1.pantera.layout;

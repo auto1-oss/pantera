@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.misc;
+package com.auto1.pantera.misc;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -68,7 +68,7 @@ public final class JavaResource {
         ) {
             IOUtils.copy(src, out);
         }
-        EcsLogger.debug("com.artipie.misc")
+        EcsLogger.debug("com.auto1.pantera.misc")
             .message("Resource copied successfully")
             .eventCategory("file")
             .eventAction("resource_copy")

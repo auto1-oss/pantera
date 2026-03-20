@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.AuthTokenRest;
-import com.artipie.api.perms.ApiAliasPermission;
-import com.artipie.api.perms.ApiCooldownPermission;
-import com.artipie.api.perms.ApiRepositoryPermission;
-import com.artipie.api.perms.ApiRolePermission;
-import com.artipie.api.perms.ApiSearchPermission;
-import com.artipie.api.perms.ApiUserPermission;
-import com.artipie.auth.JwtTokens;
-import com.artipie.auth.OktaAuthContext;
-import com.artipie.db.dao.AuthProviderDao;
-import com.artipie.db.dao.UserTokenDao;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.Tokens;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.users.CrudUsers;
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.api.perms.ApiAliasPermission;
+import com.auto1.pantera.api.perms.ApiCooldownPermission;
+import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.api.perms.ApiRolePermission;
+import com.auto1.pantera.api.perms.ApiSearchPermission;
+import com.auto1.pantera.api.perms.ApiUserPermission;
+import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.auth.OktaAuthContext;
+import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.UserTokenDao;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -32,7 +32,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import com.artipie.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import java.security.PermissionCollection;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -329,7 +329,7 @@ public final class AuthHandler {
                     throw new IllegalStateException("Token exchange failed: " + ex.getMessage(), ex);
                 }
                 if (resp.statusCode() / 100 != 2) {
-                    EcsLogger.error("com.artipie.api.v1")
+                    EcsLogger.error("com.auto1.pantera.api.v1")
                         .message("SSO token exchange failed")
                         .eventCategory("authentication")
                         .eventAction("sso_callback")
@@ -384,7 +384,7 @@ public final class AuthHandler {
                         groups.add(claims.getString(groupsClaim));
                     }
                 } else {
-                    EcsLogger.warn("com.artipie.api.v1")
+                    EcsLogger.warn("com.auto1.pantera.api.v1")
                         .message("SSO id_token has no groups claim")
                         .eventCategory("authentication")
                         .eventAction("sso_groups")
@@ -393,7 +393,7 @@ public final class AuthHandler {
                         .field("claims.keys", String.join(",", claims.keySet()))
                         .log();
                 }
-                EcsLogger.info("com.artipie.api.v1")
+                EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("SSO groups extracted from id_token")
                     .eventCategory("authentication")
                     .eventAction("sso_groups")
@@ -436,7 +436,7 @@ public final class AuthHandler {
                     }
                 }
                 if (!groupRolesMap.isEmpty()) {
-                    EcsLogger.info("com.artipie.api.v1")
+                    EcsLogger.info("com.auto1.pantera.api.v1")
                         .message("SSO group-roles mapping from config")
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
@@ -457,7 +457,7 @@ public final class AuthHandler {
                         mapped = grp;
                     }
                     roles.add(mapped);
-                    EcsLogger.info("com.artipie.api.v1")
+                    EcsLogger.info("com.auto1.pantera.api.v1")
                         .message("SSO group mapped to role")
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
@@ -473,7 +473,7 @@ public final class AuthHandler {
                     final String defaultRole = config.getString("default-role", "reader");
                     if (defaultRole != null && !defaultRole.isEmpty()) {
                         roles.add(defaultRole);
-                        EcsLogger.info("com.artipie.api.v1")
+                        EcsLogger.info("com.auto1.pantera.api.v1")
                             .message("SSO using default role (no group match)")
                             .eventCategory("authentication")
                             .eventAction("sso_role_mapping")
@@ -494,7 +494,7 @@ public final class AuthHandler {
                     if (email != null && !email.isEmpty()) {
                         userInfo.add("email", email);
                     }
-                    EcsLogger.info("com.artipie.api.v1")
+                    EcsLogger.info("com.auto1.pantera.api.v1")
                         .message("SSO provisioning user with roles")
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
@@ -505,14 +505,14 @@ public final class AuthHandler {
                         .log();
                     AuthHandler.this.users.addOrUpdate(userInfo.build(), username);
                 } else {
-                    EcsLogger.warn("com.artipie.api.v1")
+                    EcsLogger.warn("com.auto1.pantera.api.v1")
                         .message("SSO cannot provision user - users store is null")
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
                         .log();
                 }
-                EcsLogger.info("com.artipie.api.v1")
+                EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("SSO authentication successful")
                     .eventCategory("authentication")
                     .eventAction("sso_callback")

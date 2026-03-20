@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.perms.ApiAliasPermission;
-import com.artipie.api.perms.ApiRepositoryPermission;
-import com.artipie.api.perms.ApiRolePermission;
-import com.artipie.api.perms.ApiSearchPermission;
-import com.artipie.api.perms.ApiUserPermission;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.users.CrudUsers;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.perms.ApiAliasPermission;
+import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.api.perms.ApiRolePermission;
+import com.auto1.pantera.api.perms.ApiSearchPermission;
+import com.auto1.pantera.api.perms.ApiUserPermission;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.users.CrudUsers;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
@@ -157,7 +157,7 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.remove(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to remove user")
                 .eventCategory("api")
                 .eventAction("user_remove")
@@ -182,7 +182,7 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.enable(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to enable user")
                 .eventCategory("api")
                 .eventAction("user_enable")
@@ -207,7 +207,7 @@ public final class UsersRest extends BaseRest {
         try {
             this.users.disable(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to disable user")
                 .eventCategory("api")
                 .eventAction("user_disable")
@@ -287,7 +287,7 @@ public final class UsersRest extends BaseRest {
                 context.response().setStatusCode(HttpStatus.OK_200).end();
                 this.ucache.invalidate(uname);
             } catch (final IllegalStateException err) {
-                EcsLogger.error("com.artipie.api")
+                EcsLogger.error("com.auto1.pantera.api")
                     .message("Failed to alter user password")
                     .eventCategory("api")
                     .eventAction("user_password_change")

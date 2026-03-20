@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.filter;
+package com.auto1.pantera.http.filter;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.ArtipieException;
-import com.artipie.asto.factory.FactoryLoader;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
@@ -45,7 +45,7 @@ public final class FilterFactoryLoader extends
 
     @Override
     public Set<String> defPackages() {
-        return Stream.of("com.artipie.http.filter").collect(Collectors.toSet());
+        return Stream.of("com.auto1.pantera.http.filter").collect(Collectors.toSet());
     }
 
     @Override

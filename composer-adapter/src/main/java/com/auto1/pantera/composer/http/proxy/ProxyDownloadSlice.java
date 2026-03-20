@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -143,14 +143,14 @@ public final class ProxyDownloadSlice implements Slice {
         // GET requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored -> {
             final String path = line.uri().getPath();
-            EcsLogger.info("com.artipie.composer")
+            EcsLogger.info("com.auto1.pantera.composer")
                 .message("ProxyDownloadSlice handling request")
                 .eventCategory("repository")
                 .eventAction("proxy_download")
                 .field("url.path", path)
                 .field("http.request.method", line.method().value())
                 .log();
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Full request URI")
                 .eventCategory("repository")
                 .eventAction("proxy_download")
@@ -160,7 +160,7 @@ public final class ProxyDownloadSlice implements Slice {
             // Extract package info from rewritten URL
             final Matcher matcher = DOWNLOAD_PATTERN.matcher(path);
             if (!matcher.matches()) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("URL doesn't match download pattern (expected pattern: /dist/vendor/package/version)")
                     .eventCategory("repository")
                     .eventAction("proxy_download")
@@ -176,7 +176,7 @@ public final class ProxyDownloadSlice implements Slice {
             final String version = matcher.group("version");
             final String packageName = vendor + "/" + pkg;
 
-            EcsLogger.info("com.artipie.composer")
+            EcsLogger.info("com.auto1.pantera.composer")
                 .message("Download request for package")
                 .eventCategory("repository")
                 .eventAction("proxy_download")
@@ -211,7 +211,7 @@ public final class ProxyDownloadSlice implements Slice {
                 );
             }).thenCompose(foundKey -> {
                 if (foundKey != null) {
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cache HIT for dist artifact")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
@@ -230,7 +230,7 @@ public final class ProxyDownloadSlice implements Slice {
                 // Cache miss — evaluate cooldown, then fetch from upstream
                 return this.cooldown.evaluate(cdreq, this.inspector).thenCompose(result -> {
                     if (result.blocked()) {
-                        EcsLogger.info("com.artipie.composer")
+                        EcsLogger.info("com.auto1.pantera.composer")
                             .message("Cooldown blocked download")
                             .eventCategory("repository")
                             .eventAction("proxy_download")
@@ -262,7 +262,7 @@ public final class ProxyDownloadSlice implements Slice {
     ) {
         return this.findOriginalUrl(packageName, version).thenCompose(originalUrl -> {
             if (originalUrl.isEmpty()) {
-                EcsLogger.error("com.artipie.composer")
+                EcsLogger.error("com.auto1.pantera.composer")
                     .message("Could not find original URL for package")
                     .eventCategory("repository")
                     .eventAction("proxy_download")
@@ -287,7 +287,7 @@ public final class ProxyDownloadSlice implements Slice {
                 line.method().value() + " " + pathWithQuery + " " + line.version()
             );
             final Headers out = buildUpstreamHeaders(headers);
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Fetching dist from upstream")
                 .eventCategory("repository")
                 .eventAction("proxy_download")
@@ -295,7 +295,7 @@ public final class ProxyDownloadSlice implements Slice {
                 .log();
             return target.response(newLine, out, Content.EMPTY).thenCompose(response -> {
                 if (!response.status().success()) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Upstream download failed")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
@@ -308,7 +308,7 @@ public final class ProxyDownloadSlice implements Slice {
                 }
                 // Buffer content, save to storage, then return
                 return response.body().asBytesFuture().thenCompose(bytes -> {
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("Caching dist artifact to storage")
                         .eventCategory("repository")
                         .eventAction("proxy_download")
@@ -338,7 +338,7 @@ public final class ProxyDownloadSlice implements Slice {
      */
     private static Headers buildUpstreamHeaders(final Headers incoming) {
         final Headers out = new Headers();
-        final java.util.List<com.artipie.http.headers.Header> ua = incoming.find("User-Agent");
+        final java.util.List<com.auto1.pantera.http.headers.Header> ua = incoming.find("User-Agent");
         if (!ua.isEmpty()) {
             out.add(ua.getFirst(), true);
         } else {
@@ -425,7 +425,7 @@ public final class ProxyDownloadSlice implements Slice {
         
         return this.storage.exists(metadataKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Metadata not found for package")
                     .eventCategory("repository")
                     .eventAction("proxy_download")
@@ -485,7 +485,7 @@ public final class ProxyDownloadSlice implements Slice {
                         String originalUrl = null;
                         if (dist.containsKey("original_url")) {
                             originalUrl = dist.getString("original_url");
-                            EcsLogger.info("com.artipie.composer")
+                            EcsLogger.info("com.auto1.pantera.composer")
                                 .message("Using original_url from metadata")
                                 .eventCategory("repository")
                                 .eventAction("proxy_download")
@@ -496,7 +496,7 @@ public final class ProxyDownloadSlice implements Slice {
                         } else if (dist.containsKey("url")) {
                             // Fallback to "url" for backward compatibility
                             originalUrl = dist.getString("url");
-                            EcsLogger.warn("com.artipie.composer")
+                            EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("No original_url found in dist, using url field")
                                 .eventCategory("repository")
                                 .eventAction("proxy_download")
@@ -506,7 +506,7 @@ public final class ProxyDownloadSlice implements Slice {
                                 .log();
                         }
                         if (originalUrl == null || originalUrl.isEmpty()) {
-                            EcsLogger.warn("com.artipie.composer")
+                            EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("No dist URL found for package")
                                 .eventCategory("repository")
                                 .eventAction("proxy_download")
@@ -516,7 +516,7 @@ public final class ProxyDownloadSlice implements Slice {
                                 .log();
                             return Optional.empty();
                         }
-                        EcsLogger.info("com.artipie.composer")
+                        EcsLogger.info("com.auto1.pantera.composer")
                             .message("Found original URL for package")
                             .eventCategory("repository")
                             .eventAction("proxy_download")
@@ -526,7 +526,7 @@ public final class ProxyDownloadSlice implements Slice {
                             .log();
                         return Optional.ofNullable(originalUrl);
                     } catch (Exception ex) {
-                        EcsLogger.error("com.artipie.composer")
+                        EcsLogger.error("com.auto1.pantera.composer")
                             .message("Failed to parse metadata")
                             .eventCategory("repository")
                             .eventAction("proxy_download")
@@ -561,7 +561,7 @@ public final class ProxyDownloadSlice implements Slice {
      */
     private void emitEvent(final String packageName, final String version, final Headers headers) {
         if (this.events.isEmpty()) {
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Events queue is empty, skipping event")
                 .eventCategory("repository")
                 .eventAction("proxy_download")
@@ -580,7 +580,7 @@ public final class ProxyDownloadSlice implements Slice {
                 Optional.empty()  // No release date from download
             )
         );
-        EcsLogger.info("com.artipie.composer")
+        EcsLogger.info("com.auto1.pantera.composer")
             .message("Emitted download event (queue size: " + this.events.get().size() + ")")
             .eventCategory("repository")
             .eventAction("proxy_download")

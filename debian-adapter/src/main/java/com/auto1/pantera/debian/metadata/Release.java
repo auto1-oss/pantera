@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian.metadata;
+package com.auto1.pantera.debian.metadata;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.ext.Digests;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.debian.Config;
-import com.artipie.debian.GpgConfig;
-import com.artipie.debian.misc.GpgClearsign;
-import com.artipie.debian.misc.SizeAndDigest;
-import com.artipie.asto.rx.RxFuture;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.debian.Config;
+import com.auto1.pantera.debian.GpgConfig;
+import com.auto1.pantera.debian.misc.GpgClearsign;
+import com.auto1.pantera.debian.misc.SizeAndDigest;
+import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import org.apache.commons.lang3.tuple.ImmutablePair;

@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm.bench;
+package com.auto1.pantera.helm.bench;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.memory.BenchmarkStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.helm.Helm;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.BenchmarkStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.helm.Helm;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,7 +31,7 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 /**
- * Benchmark for {@link com.artipie.helm.Helm.Asto#reindex(Key)}.
+ * Benchmark for {@link com.auto1.pantera.helm.Helm.Asto#reindex(Key)}.
  * @since 0.3
  */
 @BenchmarkMode(Mode.AverageTime)

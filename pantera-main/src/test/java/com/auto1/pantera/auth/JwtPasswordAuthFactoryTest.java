@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.http.auth.AuthLoader;
-import com.artipie.http.auth.Authentication;
+import com.auto1.pantera.http.auth.AuthLoader;
+import com.auto1.pantera.http.auth.Authentication;
 import io.vertx.core.Vertx;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;

@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.settings.AliasSettings;
-import com.artipie.settings.Settings;
-import com.artipie.test.TestSettings;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.settings.AliasSettings;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.test.TestSettings;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

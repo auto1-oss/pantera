@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.FailedCompletionStage;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.cache.FromRemoteCache;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.composer.AstoRepository;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.hm.RsHasBody;
-import com.artipie.http.hm.RsHasHeaders;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.hm.SliceHasResponse;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.SliceSimple;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.FailedCompletionStage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.cache.FromRemoteCache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.RsHasHeaders;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.SliceSimple;
 import org.cactoos.list.ListOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.AllOf;
@@ -179,7 +179,7 @@ final class CachedProxySliceTest {
     private void assertEmptyCache() {
         // With Satis layout, cache might contain index files even on errors
         // Check that no actual package data was cached (p2/ directory should be empty or not exist)
-        final java.util.Collection<com.artipie.asto.Key> allKeys = this.storage.list(Key.ROOT).join();
+        final java.util.Collection<com.auto1.pantera.asto.Key> allKeys = this.storage.list(Key.ROOT).join();
         final boolean hasPackageData = allKeys.stream()
             .anyMatch(key -> key.string().startsWith("p2/") && !key.string().equals("p2/"));
         MatcherAssert.assertThat(

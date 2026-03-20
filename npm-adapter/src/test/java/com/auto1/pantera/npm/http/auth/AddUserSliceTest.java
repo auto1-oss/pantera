@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.http.auth;
+package com.auto1.pantera.npm.http.auth;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.npm.model.User;
-import com.artipie.npm.repository.StorageTokenRepository;
-import com.artipie.npm.repository.StorageUserRepository;
-import com.artipie.npm.security.BCryptPasswordHasher;
-import com.artipie.npm.security.TokenGenerator;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.npm.model.User;
+import com.auto1.pantera.npm.repository.StorageTokenRepository;
+import com.auto1.pantera.npm.repository.StorageUserRepository;
+import com.auto1.pantera.npm.security.BCryptPasswordHasher;
+import com.auto1.pantera.npm.security.TokenGenerator;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.BeforeEach;

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer;
+package com.auto1.pantera.composer;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -99,7 +99,7 @@ public final class ComposerImportMerge {
     public CompletionStage<MergeResult> mergeAll() {
         final Key stagingRoot = new Key.From(".versions");
 
-        EcsLogger.info("com.artipie.composer")
+        EcsLogger.info("com.auto1.pantera.composer")
             .message("Starting Composer import merge from staging area")
             .eventCategory("repository")
             .eventAction("import_merge")
@@ -111,7 +111,7 @@ public final class ComposerImportMerge {
         return this.discoverStagedPackages(stagingRoot)
             .thenCompose(packages -> {
                 if (packages.isEmpty()) {
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("No staged imports found, nothing to merge")
                         .eventCategory("repository")
                         .eventAction("import_merge")
@@ -123,7 +123,7 @@ public final class ComposerImportMerge {
                     );
                 }
 
-                EcsLogger.info("com.artipie.composer")
+                EcsLogger.info("com.auto1.pantera.composer")
                     .message("Found " + packages.size() + " packages to merge")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -145,7 +145,7 @@ public final class ComposerImportMerge {
             .thenCompose(result -> {
                 // Clean up staging area after successful merge
                 if (result.failedPackages == 0) {
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("Merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions), cleaning up staging area")
                         .eventCategory("repository")
                         .eventAction("import_merge")
@@ -154,7 +154,7 @@ public final class ComposerImportMerge {
                     return this.cleanupStagingArea(stagingRoot)
                         .thenApply(ignored -> result);
                 }
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -174,7 +174,7 @@ public final class ComposerImportMerge {
         return this.storage.list(stagingRoot)
             .exceptionally(ex -> {
                 // If .versions doesn't exist, return empty list
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Staging area not found or empty")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -243,7 +243,7 @@ public final class ComposerImportMerge {
                 return packageName;
             })
             .exceptionally(ex -> {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to extract package name from file")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -263,7 +263,7 @@ public final class ComposerImportMerge {
      * @return Completion stage
      */
     private CompletionStage<Void> mergePackage(final String packageName) {
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Merging package")
             .eventCategory("repository")
             .eventAction("import_merge")
@@ -292,7 +292,7 @@ public final class ComposerImportMerge {
             })
             .thenCompose(versionMetadataList -> {
                 if (versionMetadataList.isEmpty()) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("No valid version files found for package")
                         .eventCategory("repository")
                         .eventAction("import_merge")
@@ -310,7 +310,7 @@ public final class ComposerImportMerge {
                     this.extractVersions(versionMetadata, packageName, devVersions, stableVersions);
                 }
 
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Package '" + packageName + "' version breakdown: " + stableVersions.size() + " stable, " + devVersions.size() + " dev")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -336,7 +336,7 @@ public final class ComposerImportMerge {
                 });
             })
             .exceptionally(error -> {
-                EcsLogger.error("com.artipie.composer")
+                EcsLogger.error("com.auto1.pantera.composer")
                     .message("Failed to merge package")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -468,7 +468,7 @@ public final class ComposerImportMerge {
                         return Optional.of(reader.readObject());
                     }
                 } catch (final Exception error) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to parse version file")
                         .eventCategory("repository")
                         .eventAction("import_merge")
@@ -480,7 +480,7 @@ public final class ComposerImportMerge {
                 }
             })
             .exceptionally(error -> {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to read version file")
                     .eventCategory("repository")
                     .eventAction("import_merge")
@@ -510,7 +510,7 @@ public final class ComposerImportMerge {
             })
             .thenCompose(ignored -> this.storage.delete(stagingRoot))
             .exceptionally(error -> {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to cleanup staging area")
                     .eventCategory("repository")
                     .eventAction("import_merge")

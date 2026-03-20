@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.webhook;
+package com.auto1.pantera.webhook;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
@@ -104,7 +104,7 @@ public final class WebhookDispatcher {
         });
         request.sendBuffer(Buffer.buffer(body), ar -> {
             if (ar.succeeded() && ar.result().statusCode() < 300) {
-                EcsLogger.debug("com.artipie.webhook")
+                EcsLogger.debug("com.auto1.pantera.webhook")
                     .message("Webhook delivered")
                     .eventCategory("webhook")
                     .eventAction("deliver")
@@ -121,7 +121,7 @@ public final class WebhookDispatcher {
                 final String error = ar.succeeded()
                     ? "HTTP " + ar.result().statusCode()
                     : ar.cause().getMessage();
-                EcsLogger.warn("com.artipie.webhook")
+                EcsLogger.warn("com.auto1.pantera.webhook")
                     .message("Webhook delivery failed after retries")
                     .eventCategory("webhook")
                     .eventAction("deliver")

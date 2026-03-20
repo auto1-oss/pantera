@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
@@ -43,7 +43,7 @@ final class SecurityAuditProxySlice implements Slice {
     ) {
         final RequestLine upstreamLine = upstream(line);
 
-        EcsLogger.info("com.artipie.npm")
+        EcsLogger.info("com.auto1.pantera.npm")
             .message("NPM Audit Proxy - Streaming request (repo: " + this.repo + ")")
             .eventCategory("repository")
             .eventAction("audit_proxy")

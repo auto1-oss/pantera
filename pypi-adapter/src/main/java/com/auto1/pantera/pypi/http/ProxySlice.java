@@ -2,35 +2,35 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.cache.Remote;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.Headers;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.pypi.NormalizedProjectName;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.io.IOException;
@@ -288,7 +288,7 @@ final class ProxySlice implements Slice {
             .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     // Cache HIT - serve immediately without any network calls
-                    EcsLogger.info("com.artipie.pypi")
+                    EcsLogger.info("com.auto1.pantera.pypi")
                         .message("Cache hit, serving cached artifact (offline-safe)")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -337,7 +337,7 @@ final class ProxySlice implements Slice {
             user,
             Instant.now()
         );
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Evaluating cooldown for artifact")
             .eventCategory("repository")
             .eventAction("cooldown_evaluation")
@@ -349,7 +349,7 @@ final class ProxySlice implements Slice {
             .log();
         return this.cooldown.evaluate(request, this.inspector).thenCompose(evaluation -> {
             if (evaluation.blocked()) {
-                EcsLogger.warn("com.artipie.pypi")
+                EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("Artifact BLOCKED by cooldown")
                     .eventCategory("repository")
                     .eventAction("cooldown_evaluation")
@@ -361,7 +361,7 @@ final class ProxySlice implements Slice {
                     CooldownResponses.forbidden(evaluation.block().orElseThrow())
                 );
             }
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Artifact ALLOWED by cooldown - serving content")
                 .eventCategory("repository")
                 .eventAction("cooldown_evaluation")
@@ -404,7 +404,7 @@ final class ProxySlice implements Slice {
                 line, rqheaders, body, user, key, upstream, remote, remoteSuccess
             );
         }).exceptionally(err -> {
-            EcsLogger.warn("com.artipie.pypi")
+            EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("Non-artifact request failed")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -500,7 +500,7 @@ final class ProxySlice implements Slice {
     ) {
         final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
         if (mirror != null) {
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Serving via cached mirror")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -513,7 +513,7 @@ final class ProxySlice implements Slice {
             final URI filesUri = URI.create(
                 "https://files.pythonhosted.org" + line.uri().getPath()
             );
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Package file request -> files.pythonhosted.org")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -521,7 +521,7 @@ final class ProxySlice implements Slice {
                 .log();
             return this.fetchFromMirror(line, filesUri);
         }
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Forwarding to primary upstream")
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -563,7 +563,7 @@ final class ProxySlice implements Slice {
                     new Content.From(rewritten.getBytes(StandardCharsets.UTF_8))
                 );
             } catch (final Exception ex) {
-                EcsLogger.warn("com.artipie.pypi")
+                EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("Write-time rewriting failed, caching original")
                     .eventCategory("cache")
                     .eventAction("pre_rewrite")
@@ -628,7 +628,7 @@ final class ProxySlice implements Slice {
                     .thenCompose(response -> {
                         if (response.status().code() == 304) {
                             // Not modified — keep cached version
-                            EcsLogger.debug("com.artipie.pypi")
+                            EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
                                 .eventCategory("cache")
                                 .eventAction("stale_while_revalidate")
@@ -666,7 +666,7 @@ final class ProxySlice implements Slice {
                     }).whenComplete((v, err) -> {
                         this.refreshing.remove(keyStr);
                         if (err != null) {
-                            EcsLogger.warn("com.artipie.pypi")
+                            EcsLogger.warn("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh failed for key '%s'", keyStr))
                                 .eventCategory("cache")
                                 .eventAction("stale_while_revalidate")
@@ -674,7 +674,7 @@ final class ProxySlice implements Slice {
                                 .error(err)
                                 .log();
                         } else {
-                            EcsLogger.debug("com.artipie.pypi")
+                            EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh completed for key '%s'", keyStr))
                                 .eventCategory("cache")
                                 .eventAction("stale_while_revalidate")
@@ -684,7 +684,7 @@ final class ProxySlice implements Slice {
                     });
             } catch (final Exception ex) {
                 this.refreshing.remove(keyStr);
-                EcsLogger.warn("com.artipie.pypi")
+                EcsLogger.warn("com.auto1.pantera.pypi")
                     .message(String.format("Background refresh exception for key '%s'", keyStr))
                     .eventCategory("cache")
                     .eventAction("stale_while_revalidate")
@@ -741,7 +741,7 @@ final class ProxySlice implements Slice {
                     // Check mirror cache first for all paths
                     final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
                     if (mirror != null) {
-                        EcsLogger.debug("com.artipie.pypi")
+                        EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Serving via cached mirror")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -754,7 +754,7 @@ final class ProxySlice implements Slice {
                         // PyPI serves package files from files.pythonhosted.org, not pypi.org/simple
                         // Construct the CDN URL directly since pip may request files before index pages
                         final URI filesUri = URI.create("https://files.pythonhosted.org" + line.uri().getPath());
-                        EcsLogger.debug("com.artipie.pypi")
+                        EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Package file request (no mirror) -> fetching from files.pythonhosted.org")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -762,7 +762,7 @@ final class ProxySlice implements Slice {
                             .field("destination.address", filesUri.toString())
                             .log();
                         fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
-                            EcsLogger.debug("com.artipie.pypi")
+                            EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message("files.pythonhosted.org response")
                                 .eventCategory("repository")
                                 .eventAction("proxy_request")
@@ -773,7 +773,7 @@ final class ProxySlice implements Slice {
                         });
                     } else {
                         // For other paths without mirrors, forward to upstream
-                        EcsLogger.debug("com.artipie.pypi")
+                        EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Forwarding to primary upstream")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -835,7 +835,7 @@ final class ProxySlice implements Slice {
             .body(content);
         content.size().ifPresent(size ->
             builder.header(
-                new com.artipie.http.headers.ContentLength(size), true
+                new com.auto1.pantera.http.headers.ContentLength(size), true
             )
         );
         return CompletableFuture.completedFuture(builder.build());
@@ -859,7 +859,7 @@ final class ProxySlice implements Slice {
                     .body(content);
                 content.size().ifPresent(size ->
                     builder.header(
-                        new com.artipie.http.headers.ContentLength(size), true
+                        new com.auto1.pantera.http.headers.ContentLength(size), true
                     )
                 );
                 return CompletableFuture.completedFuture(builder.build());
@@ -884,11 +884,11 @@ final class ProxySlice implements Slice {
         final String user = new Login(rqheaders).getValue();
         
         // Use content from cache (passed as parameter) instead of reading from storage again.
-        return new com.artipie.asto.streams.ContentAsStream<ContentAndCoords>(content)
+        return new com.auto1.pantera.asto.streams.ContentAsStream<ContentAndCoords>(content)
             .process(stream -> {
                 try {
                     final byte[] data = stream.readAllBytes();
-                    EcsLogger.debug("com.artipie.pypi")
+                    EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Responding with cached artifact")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -898,7 +898,7 @@ final class ProxySlice implements Slice {
                     final Content payload = new Content.From(data);
                     return new ContentAndCoords(payload, info, data.length, data);
                 } catch (final java.io.IOException ex) {
-                    throw new com.artipie.asto.ArtipieIOException(ex);
+                    throw new com.auto1.pantera.asto.ArtipieIOException(ex);
                 }
             })
             .toCompletableFuture()
@@ -925,7 +925,7 @@ final class ProxySlice implements Slice {
                     ResponseBuilder.ok()
                         .headers(Headers.from(ProxySlice.contentType(remote, line)))
                         .body(cac.payload)
-                        .header(new com.artipie.http.headers.ContentLength((long) cac.length), true)
+                        .header(new com.auto1.pantera.http.headers.ContentLength((long) cac.length), true)
                         .build()
                 );
             }));
@@ -942,7 +942,7 @@ final class ProxySlice implements Slice {
         final Header header,
         final RequestLine line
     ) {
-        return new com.artipie.asto.streams.ContentAsStream<Optional<Content>>(content)
+        return new com.auto1.pantera.asto.streams.ContentAsStream<Optional<Content>>(content)
             .process(stream -> {
                 try {
                     final byte[] bytes = stream.readAllBytes();
@@ -954,7 +954,7 @@ final class ProxySlice implements Slice {
                     }
                     // Size limit protection
                     if (bytes.length > MAX_INDEX_SIZE) {
-                        EcsLogger.warn("com.artipie.pypi")
+                        EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
                             .eventCategory("repository")
                             .eventAction("index_rewrite")
@@ -981,7 +981,7 @@ final class ProxySlice implements Slice {
             .handle(
                 (Optional<Content> body, Throwable error) -> {
                     if (error != null) {
-                        EcsLogger.warn("com.artipie.pypi")
+                        EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("Failed to rewrite PyPI index content")
                             .eventCategory("repository")
                             .eventAction("index_rewrite")
@@ -1028,7 +1028,7 @@ final class ProxySlice implements Slice {
         // Example: /test_prefix/api/pypi/pypi_group/workday/ -> /test_prefix/api/pypi/pypi_group
         // This ensures download links preserve the correct path prefix for proxy routing.
         final String base = this.extractBasePath(line);
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Rewriting index body")
             .eventCategory("repository")
             .eventAction("index_rewrite")
@@ -1159,7 +1159,7 @@ final class ProxySlice implements Slice {
         
         // Pattern: /packages/{hash}/{filename} or /packages/{hash}/{filename}.metadata
         final boolean isPackage = path.startsWith("/packages/");
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("isPackageFilePath check: " + path + " (repo prefix: " + repoPrefix + ", is package: " + isPackage + ")")
             .eventCategory("repository")
             .eventAction("path_classification")
@@ -1206,12 +1206,12 @@ final class ProxySlice implements Slice {
                 String.format("Unsupported mirror scheme: %s", scheme)
             );
         }
-        return new com.artipie.http.client.auth.AuthClientSlice(base, this.auth);
+        return new com.auto1.pantera.http.client.auth.AuthClientSlice(base, this.auth);
     }
 
     private void storeMirror(final String path, final URI upstream) {
         this.mirrors.put(path, upstream);
-        EcsLogger.debug("com.artipie.pypi")
+        EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Registered mirror mapping")
             .eventCategory("repository")
             .eventAction("mirror_registration")
@@ -1221,7 +1221,7 @@ final class ProxySlice implements Slice {
         if (!path.endsWith(".metadata")) {
             final URI metadata = ProxySlice.metadataUri(upstream);
             this.mirrors.put(path + ".metadata", metadata);
-            EcsLogger.debug("com.artipie.pypi")
+            EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Registered metadata mirror mapping (cache size: " + this.mirrors.estimatedSize() + ")")
                 .eventCategory("repository")
                 .eventAction("mirror_registration")
@@ -1331,7 +1331,7 @@ final class ProxySlice implements Slice {
                 try {
                     return Optional.of(Instant.from(RFC_1123.parse(value)));
                 } catch (final DateTimeParseException ex) {
-                    EcsLogger.debug("com.artipie.pypi")
+                    EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Failed to parse Last-Modified header")
                         .error(ex)
                         .log();

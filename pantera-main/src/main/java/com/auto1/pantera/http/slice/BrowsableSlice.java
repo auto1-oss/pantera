@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Accept;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Accept;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -236,7 +236,7 @@ public final class BrowsableSlice implements Slice {
         // FileStorage: Use direct NIO for 10x performance boost
         // IMPORTANT: Pass original storage (with SubStorage prefix) to maintain repo scoping
         if (unwrapped instanceof FileStorage) {
-            EcsLogger.debug("com.artipie.http")
+            EcsLogger.debug("com.auto1.pantera.http")
                 .message("Using FileSystemBrowseSlice for direct NIO access (unwrapped: " + unwrapped.getClass().getSimpleName() + ", original: " + this.storage.getClass().getSimpleName() + ")")
                 .eventCategory("http")
                 .eventAction("browse_slice_select")
@@ -247,7 +247,7 @@ public final class BrowsableSlice implements Slice {
 
         // S3 and other storage types: Use streaming abstraction
         // TODO: Add S3BrowseSlice with pagination for large S3 directories
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Using StreamingBrowseSlice for storage type: " + unwrapped.getClass().getSimpleName())
             .eventCategory("http")
             .eventAction("browse_slice_select")
@@ -278,7 +278,7 @@ public final class BrowsableSlice implements Slice {
                         current.getClass().getDeclaredField("delegate");
                     delegate.setAccessible(true);
                     final Storage next = (Storage) delegate.get(current);
-                    EcsLogger.debug("com.artipie.http")
+                    EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped DispatchedStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("http")
                         .eventAction("storage_unwrap")
@@ -293,7 +293,7 @@ public final class BrowsableSlice implements Slice {
                         current.getClass().getDeclaredField("backend");
                     backend.setAccessible(true);
                     final Storage next = (Storage) backend.get(current);
-                    EcsLogger.debug("com.artipie.http")
+                    EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped DiskCacheStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("http")
                         .eventAction("storage_unwrap")
@@ -308,7 +308,7 @@ public final class BrowsableSlice implements Slice {
                         current.getClass().getDeclaredField("origin");
                     origin.setAccessible(true);
                     final Storage next = (Storage) origin.get(current);
-                    EcsLogger.debug("com.artipie.http")
+                    EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped SubStorage to: " + next.getClass().getSimpleName())
                         .eventCategory("http")
                         .eventAction("storage_unwrap")
@@ -323,7 +323,7 @@ public final class BrowsableSlice implements Slice {
                 }
 
             } catch (Exception e) {
-                EcsLogger.debug("com.artipie.http")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("Could not unwrap storage type: " + className)
                     .eventCategory("http")
                     .eventAction("storage_unwrap")

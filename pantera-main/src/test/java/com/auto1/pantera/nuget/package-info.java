@@ -8,4 +8,4 @@
  *
  * @since 0.11
  */
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;

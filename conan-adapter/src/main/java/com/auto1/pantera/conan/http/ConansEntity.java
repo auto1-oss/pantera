@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package  com.artipie.conan.http;
+package  com.auto1.pantera.conan.http;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqParams;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqParams;
 import com.google.common.base.Strings;
 import io.vavr.Tuple2;
 import org.apache.hc.core5.http.HttpHost;
@@ -225,7 +225,7 @@ public final class ConansEntity {
          * @throws IOException In case of conaninfo.txt contents access problems.
          */
         private static CompletableFuture<String> pkgInfoToJson(
-            final com.artipie.asto.Content content,
+            final com.auto1.pantera.asto.Content content,
             final JsonObjectBuilder jsonbuilder,
             final String pkghash
         ) throws IOException {

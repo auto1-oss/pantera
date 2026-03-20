@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Header;
-import com.artipie.http.misc.BufAccumulator;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.misc.BufAccumulator;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;

@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.hm;
+package com.auto1.pantera.rpm.hm;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.meta.XmlPackage;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.meta.XmlPackage;
 import com.jcabi.xml.XMLDocument;
 import org.hamcrest.Matcher;
 import org.hamcrest.core.AllOf;

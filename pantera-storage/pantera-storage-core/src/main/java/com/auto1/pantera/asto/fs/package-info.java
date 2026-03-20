@@ -8,4 +8,4 @@
  *
  * @since 0.10
  */
-package com.artipie.asto.fs;
+package com.auto1.pantera.asto.fs;

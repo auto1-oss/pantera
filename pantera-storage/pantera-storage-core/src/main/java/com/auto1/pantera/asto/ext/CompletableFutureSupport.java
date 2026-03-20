@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.asto.ext;
+package com.auto1.pantera.asto.ext;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;

@@ -2,33 +2,33 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.npm.proxy.json.ClientContent;
-import com.artipie.npm.misc.AbbreviatedMetadata;
-import com.artipie.npm.misc.MetadataETag;
-import com.artipie.npm.misc.MetadataEnhancer;
-import com.artipie.npm.misc.StreamingJsonTransformer;
-import com.artipie.npm.misc.ByteLevelUrlTransformer;
-import com.artipie.cooldown.metadata.CooldownMetadataService;
-import com.artipie.cooldown.metadata.AllVersionsBlockedException;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.npm.cooldown.NpmMetadataParser;
-import com.artipie.npm.cooldown.NpmMetadataFilter;
-import com.artipie.npm.cooldown.NpmMetadataRewriter;
-import com.artipie.npm.cooldown.NpmCooldownInspector;
-import com.artipie.asto.rx.RxFuture;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.npm.proxy.json.ClientContent;
+import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
+import com.auto1.pantera.npm.misc.MetadataETag;
+import com.auto1.pantera.npm.misc.MetadataEnhancer;
+import com.auto1.pantera.npm.misc.StreamingJsonTransformer;
+import com.auto1.pantera.npm.misc.ByteLevelUrlTransformer;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.cooldown.metadata.AllVersionsBlockedException;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.npm.cooldown.NpmMetadataParser;
+import com.auto1.pantera.npm.cooldown.NpmMetadataFilter;
+import com.auto1.pantera.npm.cooldown.NpmMetadataRewriter;
+import com.auto1.pantera.npm.cooldown.NpmCooldownInspector;
+import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.apache.commons.lang3.StringUtils;
@@ -147,7 +147,7 @@ public final class DownloadPackageSlice implements Slice {
             // Without this, exceptions propagate up and Vert.x closes the connection
             // without sending HTTP headers.
             final Throwable cause = unwrapException(error);
-            EcsLogger.error("com.artipie.npm")
+            EcsLogger.error("com.auto1.pantera.npm")
                 .message("Error processing package request")
                 .eventCategory("repository")
                 .eventAction("get_package")
@@ -157,9 +157,9 @@ public final class DownloadPackageSlice implements Slice {
                 .log();
             
             // Check if it's an HTTP exception with a specific status
-            if (cause instanceof com.artipie.http.ArtipieHttpException) {
-                final com.artipie.http.ArtipieHttpException httpEx = 
-                    (com.artipie.http.ArtipieHttpException) cause;
+            if (cause instanceof com.auto1.pantera.http.ArtipieHttpException) {
+                final com.auto1.pantera.http.ArtipieHttpException httpEx = 
+                    (com.auto1.pantera.http.ArtipieHttpException) cause;
                 return ResponseBuilder.from(httpEx.status())
                     .jsonBody(String.format(
                         "{\"error\":\"%s\"}",
@@ -281,7 +281,7 @@ public final class DownloadPackageSlice implements Slice {
     private io.reactivex.Maybe<Response> applyAbbreviatedCooldown(
         final byte[] abbreviatedBytes,
         final String packageName,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final Optional<String> clientETag
     ) {
@@ -300,7 +300,7 @@ public final class DownloadPackageSlice implements Slice {
     private io.reactivex.Maybe<Response> applyFullMetadataCooldown(
         final byte[] fullBytes,
         final String packageName,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final Optional<String> clientETag
     ) {
@@ -320,7 +320,7 @@ public final class DownloadPackageSlice implements Slice {
                 Throwable cause = ex;
                 while (cause != null) {
                     if (cause instanceof AllVersionsBlockedException) {
-                        EcsLogger.info("com.artipie.npm")
+                        EcsLogger.info("com.auto1.pantera.npm")
                             .message("All versions blocked by cooldown (full fallback)")
                             .eventCategory("cooldown")
                             .eventAction("all_versions_blocked")
@@ -336,7 +336,7 @@ public final class DownloadPackageSlice implements Slice {
                     }
                     cause = cause.getCause();
                 }
-                EcsLogger.warn("com.artipie.npm")
+                EcsLogger.warn("com.auto1.pantera.npm")
                     .message("Cooldown filter error (full fallback) - serving unfiltered")
                     .eventCategory("cooldown")
                     .eventAction("filter_error")
@@ -359,7 +359,7 @@ public final class DownloadPackageSlice implements Slice {
     private CompletableFuture<Response> applyFilterAndBuildResponse(
         final byte[] abbreviatedBytes,
         final String packageName,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final Optional<String> clientETag
     ) {
@@ -379,7 +379,7 @@ public final class DownloadPackageSlice implements Slice {
                     Throwable cause = ex;
                     while (cause != null) {
                         if (cause instanceof AllVersionsBlockedException) {
-                            EcsLogger.info("com.artipie.npm")
+                            EcsLogger.info("com.auto1.pantera.npm")
                                 .message("All versions blocked by cooldown (abbreviated)")
                                 .eventCategory("cooldown")
                                 .eventAction("all_versions_blocked")
@@ -395,7 +395,7 @@ public final class DownloadPackageSlice implements Slice {
                         }
                         cause = cause.getCause();
                     }
-                    EcsLogger.warn("com.artipie.npm")
+                    EcsLogger.warn("com.auto1.pantera.npm")
                         .message("Cooldown filter error (abbreviated) - falling back to unfiltered")
                         .eventCategory("cooldown")
                         .eventAction("filter_error")
@@ -461,7 +461,7 @@ public final class DownloadPackageSlice implements Slice {
                                             Throwable cause = ex;
                                             while (cause != null) {
                                                 if (cause instanceof AllVersionsBlockedException) {
-                                                    EcsLogger.info("com.artipie.npm")
+                                                    EcsLogger.info("com.auto1.pantera.npm")
                                                         .message("All versions blocked by cooldown")
                                                         .eventCategory("cooldown")
                                                         .eventAction("all_versions_blocked")
@@ -477,7 +477,7 @@ public final class DownloadPackageSlice implements Slice {
                                                 }
                                                 cause = cause.getCause();
                                             }
-                                            EcsLogger.warn("com.artipie.npm")
+                                            EcsLogger.warn("com.auto1.pantera.npm")
                                                 .message("Cooldown filter error - falling back to unfiltered")
                                                 .eventCategory("cooldown")
                                                 .eventAction("filter_error")
@@ -507,7 +507,7 @@ public final class DownloadPackageSlice implements Slice {
      */
     private Response buildAbbreviatedResponse(
         final byte[] abbreviatedBytes,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final Optional<String> clientETag
     ) {
@@ -550,7 +550,7 @@ public final class DownloadPackageSlice implements Slice {
      */
     private Response buildResponse(
         final byte[] rawBytes,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final boolean abbreviated,
         final Optional<String> clientETag
@@ -624,7 +624,7 @@ public final class DownloadPackageSlice implements Slice {
      */
     private Response buildResponseFallback(
         final byte[] rawBytes,
-        final com.artipie.npm.proxy.model.NpmPackage.Metadata metadata,
+        final com.auto1.pantera.npm.proxy.model.NpmPackage.Metadata metadata,
         final Headers headers,
         final boolean abbreviated,
         final Optional<String> clientETag

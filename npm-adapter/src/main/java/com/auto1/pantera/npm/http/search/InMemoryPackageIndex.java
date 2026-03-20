@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.http.search;
+package com.auto1.pantera.npm.http.search;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.cache.CacheConfig;
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.http.misc.ConfigDefaults;
+import com.auto1.pantera.cache.CacheConfig;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -59,7 +59,7 @@ public final class InMemoryPackageIndex implements PackageIndex {
      * Auto-connects to Valkey if GlobalCacheConfig is initialized.
      */
     public InMemoryPackageIndex() {
-        this(com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null));
+        this(com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null));
     }
     
     /**
@@ -101,7 +101,7 @@ public final class InMemoryPackageIndex implements PackageIndex {
         // Check global config if no explicit valkey passed
         final ValkeyConnection actualValkey = (valkey != null) 
             ? valkey 
-            : com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+            : com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
         
         final CacheConfig config = CacheConfig.from(serverYaml, "npm-search");
         this.twoTier = (actualValkey != null && config.valkeyEnabled());

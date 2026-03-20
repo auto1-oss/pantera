@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.metadata;
+package com.auto1.pantera.maven.metadata;
 
-import com.artipie.asto.Content;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;

@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.jcabi.xml.XML;
 import com.jcabi.xml.XMLDocument;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -90,7 +90,7 @@ final class MavenCooldownInspector implements CooldownInspector {
                     return result;
                 });
         }).exceptionally(throwable -> {
-            EcsLogger.error("com.artipie.maven")
+            EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to read dependencies from POM")
                 .eventCategory("repository")
                 .eventAction("dependency_resolution")
@@ -113,7 +113,7 @@ final class MavenCooldownInspector implements CooldownInspector {
             // CRITICAL: Always consume body to prevent Vert.x request leak
             return bodyBytes(response.body()).thenApply(bytes -> {
                 if (!response.status().success()) {
-                    EcsLogger.warn("com.artipie.maven")
+                    EcsLogger.warn("com.auto1.pantera.maven")
                         .message("Failed to fetch POM from upstream")
                         .eventCategory("repository")
                         .eventAction("pom_fetch")
@@ -155,7 +155,7 @@ final class MavenCooldownInspector implements CooldownInspector {
                     );
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Invalid Last-Modified header, using fallback: " + raw)
                     .eventCategory("network")
                     .eventAction("header_parsing")
@@ -249,7 +249,7 @@ final class MavenCooldownInspector implements CooldownInspector {
                 return result;
             });
         }).exceptionally(throwable -> {
-            EcsLogger.warn("com.artipie.maven")
+            EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Failed to resolve parent POM chain")
                 .eventCategory("repository")
                 .eventAction("parent_resolution")

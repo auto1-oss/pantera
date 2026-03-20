@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.manifest;
+package com.auto1.pantera.docker.http.manifest;
 
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.http.PathPatterns;
-import com.artipie.docker.misc.ImageRepositoryName;
-import com.artipie.docker.misc.RqByRegex;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.http.PathPatterns;
+import com.auto1.pantera.docker.misc.ImageRepositoryName;
+import com.auto1.pantera.docker.misc.RqByRegex;
+import com.auto1.pantera.http.rq.RequestLine;
 
 /**
  * @param name The name of the image.

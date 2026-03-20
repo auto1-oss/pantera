@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.cache;
+package com.auto1.pantera.asto.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.ContentIs;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.ContentIs;
 import com.jcabi.log.Logger;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -136,7 +136,7 @@ final class FromStorageCacheTest {
                 .thenApply(Content.From::new)
                 .thenApply(Optional::of);
         Observable.range(0, count).flatMapCompletable(
-            num -> com.artipie.asto.rx.RxFuture.single(cache.load(key, remote, CacheControl.Standard.ALWAYS))
+            num -> com.auto1.pantera.asto.rx.RxFuture.single(cache.load(key, remote, CacheControl.Standard.ALWAYS))
                 .flatMapCompletable(
                     pub -> CompletableInterop.fromFuture(
                         this.storage.save(new Key.From("out", num.toString()), pub.get())

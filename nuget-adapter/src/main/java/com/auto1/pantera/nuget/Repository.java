@@ -3,12 +3,12 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.nuget.metadata.Nuspec;
-import com.artipie.nuget.metadata.NuspecField;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.nuget.metadata.Nuspec;
+import com.auto1.pantera.nuget.metadata.NuspecField;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 

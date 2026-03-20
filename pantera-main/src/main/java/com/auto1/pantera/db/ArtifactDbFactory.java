@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.ArtipieException;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.misc.ConfigDefaults;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
@@ -227,7 +227,7 @@ public final class ArtifactDbFactory {
         final HikariDataSource source = new HikariDataSource(hikariConfig);
 
         // Log connection pool configuration for monitoring
-        EcsLogger.info("com.artipie.db")
+        EcsLogger.info("com.auto1.pantera.db")
             .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: 120000ms)")
             .eventCategory("database")
             .eventAction("connection_pool_init")
@@ -352,7 +352,7 @@ public final class ArtifactDbFactory {
                     "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS search_tokens tsvector"
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to add search_tokens column (may already exist)")
                     .error(ex)
                     .log();
@@ -363,7 +363,7 @@ public final class ArtifactDbFactory {
                     "CREATE INDEX IF NOT EXISTS idx_artifacts_search ON artifacts USING gin(search_tokens)"
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create GIN index idx_artifacts_search (may already exist)")
                     .error(ex)
                     .log();
@@ -391,7 +391,7 @@ public final class ArtifactDbFactory {
                     )
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create artifacts_search_update function")
                     .error(ex)
                     .log();
@@ -410,7 +410,7 @@ public final class ArtifactDbFactory {
                     )
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create trigger trg_artifacts_search")
                     .error(ex)
                     .log();
@@ -432,7 +432,7 @@ public final class ArtifactDbFactory {
                     )
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to backfill search_tokens (may have no rows)")
                     .error(ex)
                     .log();
@@ -468,7 +468,7 @@ public final class ArtifactDbFactory {
                     "ALTER TABLE artifact_cooldowns DROP CONSTRAINT IF EXISTS cooldown_parent_fk"
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to drop constraint cooldown_parent_fk (may not exist)")
                     .error(ex)
                     .log();
@@ -478,7 +478,7 @@ public final class ArtifactDbFactory {
                     "ALTER TABLE artifact_cooldowns DROP COLUMN IF EXISTS parent_block_id"
                 );
             } catch (final SQLException ex) {
-                EcsLogger.debug("com.artipie.db")
+                EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to drop column parent_block_id (may not exist)")
                     .error(ex)
                     .log();

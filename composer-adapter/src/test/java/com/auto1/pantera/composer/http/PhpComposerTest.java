@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http;
+package com.auto1.pantera.composer.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.composer.AllPackages;
-import com.artipie.composer.AstoRepository;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.composer.AllPackages;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.security.policy.Policy;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,7 +60,7 @@ class PhpComposerTest {
         this.php = new PhpComposer(
             new AstoRepository(this.storage),
             Policy.FREE,
-            new com.artipie.http.auth.Authentication.Single(user, password),
+            new com.auto1.pantera.http.auth.Authentication.Single(user, password),
             "*",
             Optional.empty()
         );

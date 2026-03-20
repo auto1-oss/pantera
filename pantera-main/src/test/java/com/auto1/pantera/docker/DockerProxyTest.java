@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.adapters.docker.DockerProxy;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.cache.StoragesCache;
-import com.artipie.http.Headers;
-import com.artipie.http.Slice;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.hm.RsHasStatus;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.StorageByAlias;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.test.TestStoragesCache;
+import com.auto1.pantera.adapters.docker.DockerProxy;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.StorageByAlias;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.test.TestStoragesCache;
 import org.hamcrest.CustomMatcher;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsNot;
@@ -90,7 +90,7 @@ class DockerProxyTest {
             (username, password) -> Optional.empty(),
             token -> java.util.concurrent.CompletableFuture.completedFuture(Optional.empty()),
             Optional.empty(),
-            com.artipie.cooldown.NoopCooldownService.INSTANCE
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
         );
     }
 

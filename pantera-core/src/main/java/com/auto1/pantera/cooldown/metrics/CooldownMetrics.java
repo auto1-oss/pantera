@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metrics;
+package com.auto1.pantera.cooldown.metrics;
 
-import com.artipie.metrics.MicrometerMetrics;
+import com.auto1.pantera.metrics.MicrometerMetrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;

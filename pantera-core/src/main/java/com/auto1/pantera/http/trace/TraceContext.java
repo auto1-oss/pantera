@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.trace;
+package com.auto1.pantera.http.trace;
 
 import org.slf4j.MDC;
 import java.security.SecureRandom;
@@ -86,11 +86,11 @@ public final class TraceContext {
      * @param headers Request headers
      * @return Trace ID (extracted or generated)
      */
-    public static String extractOrGenerate(final com.artipie.http.Headers headers) {
+    public static String extractOrGenerate(final com.auto1.pantera.http.Headers headers) {
         // Try W3C Trace Context format: traceparent: 00-<trace-id>-<span-id>-<flags>
         final Optional<String> traceparent = headers.stream()
             .filter(h -> TRACE_PARENT_HEADER.equalsIgnoreCase(h.getKey()))
-            .map(com.artipie.http.headers.Header::getValue)
+            .map(com.auto1.pantera.http.headers.Header::getValue)
             .findFirst();
         
         if (traceparent.isPresent()) {
@@ -103,7 +103,7 @@ public final class TraceContext {
         // Try X-Trace-Id header
         final Optional<String> xTraceId = headers.stream()
             .filter(h -> X_TRACE_ID_HEADER.equalsIgnoreCase(h.getKey()))
-            .map(com.artipie.http.headers.Header::getValue)
+            .map(com.auto1.pantera.http.headers.Header::getValue)
             .findFirst();
         
         if (xTraceId.isPresent() && !xTraceId.get().trim().isEmpty()) {
@@ -113,7 +113,7 @@ public final class TraceContext {
         // Try X-Request-Id header
         final Optional<String> xRequestId = headers.stream()
             .filter(h -> X_REQUEST_ID_HEADER.equalsIgnoreCase(h.getKey()))
-            .map(com.artipie.http.headers.Header::getValue)
+            .map(com.auto1.pantera.http.headers.Header::getValue)
             .findFirst();
         
         if (xRequestId.isPresent() && !xRequestId.get().trim().isEmpty()) {

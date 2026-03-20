@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
-import com.artipie.docker.asto.Uploads;
+import com.auto1.pantera.docker.asto.Uploads;
 
 /**
  * Docker repository files and metadata.

@@ -6,4 +6,4 @@
 /**
  * HTTP repository API.
  */
-package  com.artipie.conan.http;
+package  com.auto1.pantera.conan.http;

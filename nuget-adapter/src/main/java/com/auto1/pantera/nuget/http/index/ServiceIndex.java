@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.index;
+package com.auto1.pantera.nuget.http.index;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.nuget.http.Absent;
-import com.artipie.nuget.http.Resource;
-import com.artipie.nuget.http.Route;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.nuget.http.Absent;
+import com.auto1.pantera.nuget.http.Resource;
+import com.auto1.pantera.nuget.http.Route;
 
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;

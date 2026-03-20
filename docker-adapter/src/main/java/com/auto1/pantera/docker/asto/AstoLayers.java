@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;

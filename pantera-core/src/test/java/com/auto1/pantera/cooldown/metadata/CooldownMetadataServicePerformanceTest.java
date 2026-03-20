@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;
 
-import com.artipie.cooldown.CooldownCache;
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.CooldownCache;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResult;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -277,10 +277,10 @@ final class CooldownMetadataServicePerformanceTest {
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
-                    CooldownResult.blocked(new com.artipie.cooldown.CooldownBlock(
+                    CooldownResult.blocked(new com.auto1.pantera.cooldown.CooldownBlock(
                         request.repoType(), request.repoName(),
                         request.artifact(), request.version(),
-                        com.artipie.cooldown.CooldownReason.FRESH_RELEASE,
+                        com.auto1.pantera.cooldown.CooldownReason.FRESH_RELEASE,
                         Instant.now(), Instant.now().plus(Duration.ofDays(7)),
                         java.util.Collections.emptyList()
                     ))
@@ -302,7 +302,7 @@ final class CooldownMetadataServicePerformanceTest {
         }
 
         @Override
-        public CompletableFuture<List<com.artipie.cooldown.CooldownBlock>> activeBlocks(
+        public CompletableFuture<List<com.auto1.pantera.cooldown.CooldownBlock>> activeBlocks(
             String repoType, String repoName
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());

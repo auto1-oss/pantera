@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm.metadata;
+package com.auto1.pantera.helm.metadata;
 
-import com.artipie.asto.Content;
-import com.artipie.helm.misc.DateTimeNow;
-import com.artipie.helm.misc.EmptyIndex;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.helm.misc.DateTimeNow;
+import com.auto1.pantera.helm.misc.EmptyIndex;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;

@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm;
+package com.auto1.pantera.helm;
 
-import com.artipie.asto.ArtipieIOException;
+import com.auto1.pantera.asto.ArtipieIOException;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

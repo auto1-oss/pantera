@@ -9,4 +9,4 @@
  * @since 0.1
  */
 
-package com.artipie.composer;
+package com.auto1.pantera.composer;

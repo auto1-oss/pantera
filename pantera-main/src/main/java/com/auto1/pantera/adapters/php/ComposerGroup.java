@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.php;
+package com.auto1.pantera.adapters.php;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +46,7 @@ public final class ComposerGroup implements Slice {
      */
     public ComposerGroup(final List<Slice> repositories) {
         this.repositories = repositories;
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Created Composer group (" + this.repositories.size() + " repositories)")
             .eventCategory("repository")
             .eventAction("group_create")
@@ -59,7 +59,7 @@ public final class ComposerGroup implements Slice {
         final Headers headers,
         final Content body
     ) {
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Composer group request")
             .eventCategory("http")
             .eventAction("group_request")
@@ -75,7 +75,7 @@ public final class ComposerGroup implements Slice {
         final Content body
     ) {
         if (index >= this.repositories.size()) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("No repository in group could serve request")
                 .eventCategory("http")
                 .eventAction("group_request")
@@ -88,7 +88,7 @@ public final class ComposerGroup implements Slice {
         final Slice repo = this.repositories.get(index);
         return repo.response(line, headers, body).thenCompose(response -> {
             if (response.status().success()) {
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Repository served request successfully (index: " + index + ")")
                     .eventCategory("http")
                     .eventAction("group_request")
@@ -97,7 +97,7 @@ public final class ComposerGroup implements Slice {
                     .log();
                 return CompletableFuture.completedFuture(response);
             }
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Repository failed, trying next (index: " + index + ")")
                 .eventCategory("http")
                 .eventAction("group_request")

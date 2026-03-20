@@ -8,4 +8,4 @@
  *
  * @since 1.1
  */
-package com.artipie.asto.misc;
+package com.auto1.pantera.asto.misc;

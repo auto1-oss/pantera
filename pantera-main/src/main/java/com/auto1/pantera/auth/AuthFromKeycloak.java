@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 import org.keycloak.authorization.client.AuthzClient;
 import org.keycloak.authorization.client.Configuration;
@@ -39,7 +39,7 @@ public final class AuthFromKeycloak implements Authentication {
             client.obtainAccessToken(username, password);
             res = Optional.of(new AuthUser(username, "keycloak"));
         } catch (final Throwable err) {
-            final EcsLogger logger = EcsLogger.error("com.artipie.auth")
+            final EcsLogger logger = EcsLogger.error("com.auto1.pantera.auth")
                 .message("Keycloak authentication failed")
                 .eventCategory("authentication")
                 .eventAction("login")

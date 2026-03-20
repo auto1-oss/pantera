@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Queue;
 import java.util.function.Consumer;
 import org.quartz.JobExecutionContext;
@@ -68,7 +68,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                             processed = true;
                             break;
                         } catch (final EventProcessingError ex) {
-                            EcsLogger.error("com.artipie.scheduling")
+                            EcsLogger.error("com.auto1.pantera.scheduling")
                                 .message("Event processing failed (attempt "
                                     + (attempt + 1) + "/" + MAX_RETRY + ")")
                                 .eventCategory("scheduling")
@@ -79,7 +79,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                         }
                     }
                     if (!processed) {
-                        EcsLogger.error("com.artipie.scheduling")
+                        EcsLogger.error("com.auto1.pantera.scheduling")
                             .message("Dropping event after " + MAX_RETRY
                                 + " failed attempts")
                             .eventCategory("scheduling")
@@ -89,7 +89,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                     }
                 }
             }
-            EcsLogger.debug("com.artipie.scheduling")
+            EcsLogger.debug("com.auto1.pantera.scheduling")
                 .message("Processed " + cnt + " elements from queue")
                 .eventCategory("scheduling")
                 .eventAction("event_process")

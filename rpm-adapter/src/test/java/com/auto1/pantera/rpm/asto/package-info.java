@@ -8,4 +8,4 @@
  *
  * @since 1.9
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;

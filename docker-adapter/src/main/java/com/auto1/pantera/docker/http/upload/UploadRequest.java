@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.upload;
+package com.auto1.pantera.docker.http.upload;
 
-import com.artipie.docker.Digest;
-import com.artipie.docker.http.PathPatterns;
-import com.artipie.docker.misc.ImageRepositoryName;
-import com.artipie.docker.misc.RqByRegex;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqParams;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.http.PathPatterns;
+import com.auto1.pantera.docker.misc.ImageRepositoryName;
+import com.auto1.pantera.docker.misc.RqByRegex;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqParams;
 
 import java.util.Optional;
 import java.util.regex.Matcher;

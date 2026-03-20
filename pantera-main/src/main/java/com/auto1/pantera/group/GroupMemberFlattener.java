@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -99,7 +99,7 @@ public final class GroupMemberFlattener {
         // Deduplicate while preserving order
         final List<String> deduplicated = new ArrayList<>(new LinkedHashSet<>(flat));
 
-        EcsLogger.debug("com.artipie.group")
+        EcsLogger.debug("com.auto1.pantera.group")
             .message("Flattened group members (" + flat.size() + " total, " + deduplicated.size() + " unique)")
             .eventCategory("repository")
             .eventAction("group_flatten")
@@ -137,7 +137,7 @@ public final class GroupMemberFlattener {
 
         // Check if this is a group repository
         if (this.isGroup.apply(repoName)) {
-            EcsLogger.debug("com.artipie.group")
+            EcsLogger.debug("com.auto1.pantera.group")
                 .message("Flattening group repository (recursion depth: " + visited.size() + ")")
                 .eventCategory("repository")
                 .eventAction("group_flatten_recursive")
@@ -157,7 +157,7 @@ public final class GroupMemberFlattener {
             visited.remove(repoName);
         } else {
             // Leaf repository - add directly
-            EcsLogger.debug("com.artipie.group")
+            EcsLogger.debug("com.auto1.pantera.group")
                 .message("Adding leaf repository")
                 .eventCategory("repository")
                 .eventAction("group_add_leaf")
@@ -181,7 +181,7 @@ public final class GroupMemberFlattener {
         final LinkedHashSet<String> unique = new LinkedHashSet<>();
         flattenIntoSet(groupName, visited, unique);
 
-        EcsLogger.debug("com.artipie.group")
+        EcsLogger.debug("com.auto1.pantera.group")
             .message("Flattened and deduplicated group (" + unique.size() + " unique members)")
             .eventCategory("repository")
             .eventAction("group_flatten_deduplicate")

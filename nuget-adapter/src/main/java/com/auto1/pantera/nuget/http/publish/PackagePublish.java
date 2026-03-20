@@ -3,20 +3,20 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget.http.publish;
+package com.auto1.pantera.nuget.http.publish;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.headers.Login;
-import com.artipie.http.RsStatus;
-import com.artipie.nuget.InvalidPackageException;
-import com.artipie.nuget.PackageVersionAlreadyExistsException;
-import com.artipie.nuget.Repository;
-import com.artipie.nuget.http.Resource;
-import com.artipie.nuget.http.Route;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.nuget.InvalidPackageException;
+import com.auto1.pantera.nuget.PackageVersionAlreadyExistsException;
+import com.auto1.pantera.nuget.Repository;
+import com.auto1.pantera.nuget.http.Resource;
+import com.auto1.pantera.nuget.http.Route;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.util.Optional;
 import java.util.Queue;

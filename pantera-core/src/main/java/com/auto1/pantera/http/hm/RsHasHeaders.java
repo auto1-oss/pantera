@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.hm;
+package com.auto1.pantera.http.hm;
 
-import com.artipie.http.Response;
-import com.artipie.http.headers.Header;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.Header;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;

@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
-import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.PostgreSQLTestConfig;
-import com.artipie.http.Headers;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.importer.api.ChecksumPolicy;
-import com.artipie.importer.api.DigestType;
-import com.artipie.importer.api.ImportHeaders;
+import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.importer.api.ChecksumPolicy;
+import com.auto1.pantera.importer.api.DigestType;
+import com.auto1.pantera.importer.api.ImportHeaders;
 import java.io.IOException;
 import java.util.EnumMap;
 import java.util.Map;

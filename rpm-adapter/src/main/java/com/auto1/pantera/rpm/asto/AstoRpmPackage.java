@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.RpmMetadata;
-import com.artipie.rpm.pkg.Checksum;
-import com.artipie.rpm.pkg.FilePackageHeader;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.RpmMetadata;
+import com.auto1.pantera.rpm.pkg.Checksum;
+import com.auto1.pantera.rpm.pkg.FilePackageHeader;
+import com.auto1.pantera.rpm.pkg.Package;
 import java.util.concurrent.CompletionStage;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.redline_rpm.header.Header;

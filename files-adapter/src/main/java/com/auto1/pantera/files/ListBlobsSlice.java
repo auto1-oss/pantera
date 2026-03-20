@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.files;
+package com.auto1.pantera.files;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
@@ -24,7 +24,7 @@ import java.util.function.Function;
  * <p>
  * It formats response content according to {@link Function}
  * formatter.
- * It also converts URI path to storage {@link com.artipie.asto.Key}
+ * It also converts URI path to storage {@link com.auto1.pantera.asto.Key}
  * and use it to access storage.
  */
 public final class ListBlobsSlice implements Slice {

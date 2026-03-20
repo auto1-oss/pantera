@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;
 
-import com.artipie.cooldown.CooldownCache;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.cooldown.metrics.CooldownMetrics;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.cooldown.CooldownCache;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.log.EcsLogger;
 import org.slf4j.MDC;
 
 import java.time.Duration;
@@ -166,7 +166,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
     ) {
         // Check if cooldown is enabled for this repo type
         if (!this.settings.enabledFor(repoType)) {
-            EcsLogger.debug("com.artipie.cooldown.metadata")
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message("Cooldown disabled for repo type, returning raw metadata")
                 .eventCategory("cooldown")
                 .eventAction("metadata_filter")
@@ -211,7 +211,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             final List<String> allVersions = parser.extractVersions(parsed);
 
             if (allVersions.isEmpty()) {
-                EcsLogger.debug("com.artipie.cooldown.metadata")
+                EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                     .message("No versions in metadata")
                     .eventCategory("cooldown")
                     .eventAction("metadata_filter")
@@ -293,7 +293,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     .collect(Collectors.toList());
             }
 
-            EcsLogger.debug("com.artipie.cooldown.metadata")
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message(String.format(
                     "Evaluating cooldown for versions: %d total, %d to evaluate",
                     allVersions.size(), versionsToEvaluate.size()))
@@ -348,7 +348,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     }
                 }
 
-                EcsLogger.debug("com.artipie.cooldown.metadata")
+                EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                     .message(String.format(
                         "Cooldown evaluation complete: %d versions blocked", blockedVersions.size()))
                     .eventCategory("cooldown")
@@ -382,7 +382,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     );
                     if (newLatest.isPresent()) {
                         filtered = ctx.filter.updateLatest(filtered, newLatest.get());
-                        EcsLogger.debug("com.artipie.cooldown.metadata")
+                        EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                             .message(String.format(
                                 "Updated latest version (by release date): %s -> %s",
                                 currentLatest.get(), newLatest.get()))
@@ -398,7 +398,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
 
                 // Log performance
                 final long durationMs = (System.nanoTime() - ctx.startTime) / 1_000_000;
-                EcsLogger.info("com.artipie.cooldown.metadata")
+                EcsLogger.info("com.auto1.pantera.cooldown.metadata")
                     .message(String.format(
                         "Metadata filtering complete: %d total versions, %d blocked",
                         ctx.allVersions.size(), blockedVersions.size()))
@@ -500,7 +500,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         final Map<String, Instant> releaseDates = provider.releaseDates(parsed);
         if (!releaseDates.isEmpty()) {
             ((MetadataAwareInspector) inspector).preloadReleaseDates(releaseDates);
-            EcsLogger.debug("com.artipie.cooldown.metadata")
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message(String.format(
                     "Preloaded %d release dates from metadata", releaseDates.size()))
                 .eventCategory("cooldown")
@@ -519,7 +519,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         if (CooldownMetrics.isAvailable()) {
             CooldownMetrics.getInstance().recordInvalidation(repoType, "unblock");
         }
-        EcsLogger.debug("com.artipie.cooldown.metadata")
+        EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
             .message("Invalidated metadata cache")
             .eventCategory("cooldown")
             .eventAction("cache_invalidate")
@@ -535,7 +535,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         if (CooldownMetrics.isAvailable()) {
             CooldownMetrics.getInstance().recordInvalidation(repoType, "unblock_all");
         }
-        EcsLogger.debug("com.artipie.cooldown.metadata")
+        EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
             .message("Invalidated all metadata cache for repository")
             .eventCategory("cooldown")
             .eventAction("cache_invalidate")

@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;

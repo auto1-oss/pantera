@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.streams;
+package com.auto1.pantera.asto.streams;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.ByteArray;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.misc.UncheckedIOSupplier;
-import com.artipie.asto.misc.UncheckedRunnable;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.ByteArray;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.misc.UncheckedIOSupplier;
+import com.auto1.pantera.asto.misc.UncheckedRunnable;
 import io.reactivex.Flowable;
 import io.reactivex.Scheduler;
 import io.reactivex.processors.UnicastProcessor;

@@ -7,4 +7,4 @@
  * Tests for debian adapter misc files.
  * @since 0.3
  */
-package com.artipie.debian.misc;
+package com.auto1.pantera.debian.misc;

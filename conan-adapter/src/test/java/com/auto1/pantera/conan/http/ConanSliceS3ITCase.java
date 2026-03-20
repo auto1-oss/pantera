@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conan.http;
+package com.auto1.pantera.conan.http;
 
 import com.adobe.testing.s3mock.junit5.S3MockExtension;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.test.TestResource;
-import com.artipie.conan.ItemTokenizer;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.security.policy.PolicyByUsername;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.conan.ItemTokenizer;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.security.policy.PolicyByUsername;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.core.Vertx;
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.AfterEach;

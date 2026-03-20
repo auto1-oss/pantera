@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.junit;
+package com.auto1.pantera.docker.junit;
 
-import com.artipie.docker.Docker;
-import com.artipie.docker.http.DockerSlice;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 

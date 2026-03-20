@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conda.http.auth;
+package com.auto1.pantera.conda.http.auth;
 
-import com.artipie.http.Headers;
-import com.artipie.http.auth.AuthScheme;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.AuthScheme;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;

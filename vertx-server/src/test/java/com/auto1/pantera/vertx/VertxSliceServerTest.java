@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.vertx;
+package com.auto1.pantera.vertx;
 
-import com.artipie.asto.Content;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.reactivex.Flowable;
 import io.vertx.core.http.HttpServerOptions;
@@ -542,7 +542,7 @@ public final class VertxSliceServerTest {
             new java.util.concurrent.atomic.AtomicReference<>();
         final Slice echoSlice = (line, headers, body) -> {
             // Read the entire body and echo it back
-            final CompletableFuture<com.artipie.http.Response> future = new CompletableFuture<>();
+            final CompletableFuture<com.auto1.pantera.http.Response> future = new CompletableFuture<>();
             final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             io.reactivex.Flowable.fromPublisher(body)
                 .doOnNext(buf -> {
@@ -651,7 +651,7 @@ public final class VertxSliceServerTest {
             new java.util.concurrent.atomic.AtomicReference<>();
         final Slice captureSlice = (line, headers, body) -> {
             sizeWasUnknown.set(body.size().isEmpty());
-            final CompletableFuture<com.artipie.http.Response> future = new CompletableFuture<>();
+            final CompletableFuture<com.auto1.pantera.http.Response> future = new CompletableFuture<>();
             final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             Flowable.fromPublisher(body)
                 .doOnNext(buf -> {
@@ -716,7 +716,7 @@ public final class VertxSliceServerTest {
         final java.util.concurrent.atomic.AtomicInteger chunkCount =
             new java.util.concurrent.atomic.AtomicInteger(0);
         final Slice countSlice = (line, headers, body) -> {
-            final CompletableFuture<com.artipie.http.Response> future = new CompletableFuture<>();
+            final CompletableFuture<com.auto1.pantera.http.Response> future = new CompletableFuture<>();
             Flowable.fromPublisher(body)
                 .doOnNext(buf -> {
                     chunkCount.incrementAndGet();

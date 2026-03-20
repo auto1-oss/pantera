@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.meta;
+package com.auto1.pantera.pypi.meta;
 
-import com.artipie.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.NormalizedProjectName;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;

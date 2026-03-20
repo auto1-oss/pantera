@@ -8,4 +8,4 @@
  *
  * @since 0.3
  */
-package com.artipie.http.client.auth;
+package com.auto1.pantera.http.client.auth;

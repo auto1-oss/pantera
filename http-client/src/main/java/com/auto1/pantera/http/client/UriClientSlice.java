@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client;
+package com.auto1.pantera.http.client;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RequestLine;
 
 /**
  * Client slice that sends requests to host and port using scheme specified in URI.

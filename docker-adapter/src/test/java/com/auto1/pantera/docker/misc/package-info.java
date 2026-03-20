@@ -8,4 +8,4 @@
  *
  * @since 0.2
  */
-package com.artipie.docker.misc;
+package com.auto1.pantera.docker.misc;

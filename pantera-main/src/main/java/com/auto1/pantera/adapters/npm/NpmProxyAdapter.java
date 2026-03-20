@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.npm;
+package com.auto1.pantera.adapters.npm;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.metadata.CooldownMetadataService;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.group.GroupSlice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.npm.proxy.http.CachedNpmProxySlice;
-import com.artipie.npm.proxy.http.NpmProxySlice;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.settings.repo.RepoConfig;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.npm.proxy.http.CachedNpmProxySlice;
+import com.auto1.pantera.npm.proxy.http.NpmProxySlice;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.settings.repo.RepoConfig;
 
 import java.net.URL;
 import java.util.Optional;

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
 import java.io.IOException;
 import java.util.concurrent.CompletionStage;
 import java.util.zip.GZIPOutputStream;

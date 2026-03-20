@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.proxy;
+package com.auto1.pantera.docker.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.http.ArtipieHttpException;
-import com.artipie.http.Headers;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 
 import java.util.concurrent.CompletableFuture;
 

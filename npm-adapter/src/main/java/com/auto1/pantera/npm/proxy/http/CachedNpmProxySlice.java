@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.cache.CachedArtifactMetadataStore;
-import com.artipie.http.cache.DedupStrategy;
-import com.artipie.http.cache.NegativeCache;
-import com.artipie.http.cache.RequestDeduplicator;
-import com.artipie.http.cache.RequestDeduplicator.FetchSignal;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.cache.DedupStrategy;
+import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.RequestDeduplicator;
+import com.auto1.pantera.http.cache.RequestDeduplicator.FetchSignal;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -236,7 +236,7 @@ public final class CachedNpmProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.recordProxyMetric("exception", duration);
                 this.recordUpstreamErrorMetric(error);
-                EcsLogger.warn("com.artipie.npm")
+                EcsLogger.warn("com.auto1.pantera.npm")
                     .message("NPM proxy: upstream request failed")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -282,8 +282,8 @@ public final class CachedNpmProxySlice implements Slice {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.repoName, this.upstreamUrl, result, duration);
             }
         });
@@ -294,14 +294,14 @@ public final class CachedNpmProxySlice implements Slice {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.repoName, this.upstreamUrl, errorType);
             }
         });
@@ -313,11 +313,11 @@ public final class CachedNpmProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.npm")
+            EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

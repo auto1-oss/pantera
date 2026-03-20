@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.ExampleStorage;
-import com.artipie.docker.Layers;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Repo;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.asto.Uploads;
-import com.artipie.docker.cache.DockerProxyCooldownInspector;
-import com.artipie.docker.fake.FakeManifests;
-import com.artipie.docker.fake.FullTagsManifests;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ExampleStorage;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.asto.Uploads;
+import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.fake.FakeManifests;
+import com.auto1.pantera.docker.fake.FullTagsManifests;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.google.common.base.Stopwatch;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -421,7 +421,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<Digest> put(final com.artipie.docker.asto.BlobSource source) {
+        public CompletableFuture<Digest> put(final com.auto1.pantera.docker.asto.BlobSource source) {
             throw new UnsupportedOperationException();
         }
 
@@ -455,7 +455,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<com.artipie.docker.Tags> tags(final Pagination pagination) {
+        public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
             throw new UnsupportedOperationException();
         }
     }
@@ -463,7 +463,7 @@ final class CacheManifestsTest {
     private static final class RecordingLayers implements Layers {
 
         @Override
-        public CompletableFuture<Digest> put(final com.artipie.docker.asto.BlobSource source) {
+        public CompletableFuture<Digest> put(final com.auto1.pantera.docker.asto.BlobSource source) {
             return CompletableFuture.completedFuture(source.digest());
         }
 
@@ -492,7 +492,7 @@ final class CacheManifestsTest {
         }
 
         @Override
-        public CompletableFuture<com.artipie.docker.Tags> tags(final Pagination pagination) {
+        public CompletableFuture<com.auto1.pantera.docker.Tags> tags(final Pagination pagination) {
             throw new UnsupportedOperationException();
         }
     }

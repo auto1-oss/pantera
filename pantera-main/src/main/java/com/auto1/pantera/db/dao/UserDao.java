@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db.dao;
+package com.auto1.pantera.db.dao;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -16,7 +16,7 @@ import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
 import javax.sql.DataSource;
-import com.artipie.settings.users.CrudUsers;
+import com.auto1.pantera.settings.users.CrudUsers;
 
 /**
  * PostgreSQL-backed user storage.
@@ -198,7 +198,7 @@ public final class UserDao implements CrudUsers {
             ps.setString(1, uname);
             final ResultSet rs = ps.executeQuery();
             if (!rs.next()) {
-                EcsLogger.warn("com.artipie.db")
+                EcsLogger.warn("com.auto1.pantera.db")
                     .message("updateUserRoles: user not found in DB after insert")
                     .eventCategory("user")
                     .eventAction("role_assignment")
@@ -214,7 +214,7 @@ public final class UserDao implements CrudUsers {
             "DELETE FROM user_roles WHERE user_id = ?")) {
             ps.setInt(1, userId);
             final int deleted = ps.executeUpdate();
-            EcsLogger.info("com.artipie.db")
+            EcsLogger.info("com.auto1.pantera.db")
                 .message("updateUserRoles: cleared existing roles")
                 .eventCategory("user")
                 .eventAction("role_assignment")
@@ -229,7 +229,7 @@ public final class UserDao implements CrudUsers {
             for (int idx = 0; idx < roles.size(); idx++) {
                 roleNames.add(roles.getString(idx));
             }
-            EcsLogger.info("com.artipie.db")
+            EcsLogger.info("com.auto1.pantera.db")
                 .message("updateUserRoles: assigning roles")
                 .eventCategory("user")
                 .eventAction("role_assignment")
@@ -254,7 +254,7 @@ public final class UserDao implements CrudUsers {
                     ps.setInt(1, userId);
                     ps.setString(2, roleName);
                     final int inserted = ps.executeUpdate();
-                    EcsLogger.info("com.artipie.db")
+                    EcsLogger.info("com.auto1.pantera.db")
                         .message("updateUserRoles: role assignment result")
                         .eventCategory("user")
                         .eventAction("role_assignment")
@@ -265,7 +265,7 @@ public final class UserDao implements CrudUsers {
                 }
             }
         } else {
-            EcsLogger.warn("com.artipie.db")
+            EcsLogger.warn("com.auto1.pantera.db")
                 .message("updateUserRoles: no roles to assign")
                 .eventCategory("user")
                 .eventAction("role_assignment")

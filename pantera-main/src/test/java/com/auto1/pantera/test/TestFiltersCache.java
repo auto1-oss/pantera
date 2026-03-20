@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.test;
+package com.auto1.pantera.test;
 
-import com.artipie.settings.cache.GuavaFiltersCache;
+import com.auto1.pantera.settings.cache.GuavaFiltersCache;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**

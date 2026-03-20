@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.FactoryLoader;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.FactoryLoader;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
@@ -42,7 +42,7 @@ public final class PoliciesLoader extends
 
     @Override
     public Set<String> defPackages() {
-        return Collections.singleton("com.artipie.security");
+        return Collections.singleton("com.auto1.pantera.security");
     }
 
     @Override

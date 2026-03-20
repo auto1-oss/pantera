@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.manifest;
+package com.auto1.pantera.docker.http.manifest;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Docker;
-import com.artipie.docker.error.ManifestError;
-import com.artipie.docker.http.DigestHeader;
-import com.artipie.docker.http.DockerActionSlice;
-import com.artipie.docker.perms.DockerActions;
-import com.artipie.docker.perms.DockerRepositoryPermission;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.error.ManifestError;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.http.DockerActionSlice;
+import com.auto1.pantera.docker.perms.DockerActions;
+import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
 
 import java.nio.ByteBuffer;
@@ -36,7 +36,7 @@ public class HeadManifestSlice extends DockerActionSlice {
     public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
         ManifestRequest request = ManifestRequest.from(line);
 
-        EcsLogger.debug("com.artipie.docker")
+        EcsLogger.debug("com.auto1.pantera.docker")
             .message("HEAD manifest request")
             .eventCategory("repository")
             .eventAction("manifest_head")
@@ -58,7 +58,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                             long size = found.size();
                             Content head = new Content.From(size, Flowable.<ByteBuffer>empty());
 
-                            EcsLogger.debug("com.artipie.docker")
+                            EcsLogger.debug("com.auto1.pantera.docker")
                                 .message("Manifest found")
                                 .eventCategory("repository")
                                 .eventAction("manifest_head")
@@ -77,7 +77,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                         }
                     ).orElseGet(
                         () -> {
-                            EcsLogger.warn("com.artipie.docker")
+                            EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Manifest not found")
                                 .eventCategory("repository")
                                 .eventAction("manifest_head")

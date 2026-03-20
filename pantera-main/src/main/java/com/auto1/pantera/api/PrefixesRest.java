@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.amihaiemil.eoyaml.YamlSequenceBuilder;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.settings.PrefixesConfig;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.PrefixesConfig;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
@@ -135,7 +135,7 @@ public final class PrefixesRest {
                 .putHeader("Content-Type", "application/json")
                 .end(response.encode());
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to validate prefixes")
                 .eventCategory("api")
                 .eventAction("prefixes_validate")
@@ -186,7 +186,7 @@ public final class PrefixesRest {
             this.updateConfigFile(newPrefixes)
                 .thenAccept(updated -> {
                     if (updated) {
-                        EcsLogger.info("com.artipie.api")
+                        EcsLogger.info("com.auto1.pantera.api")
                             .message("Updated global_prefixes in artipie.yml: " + newPrefixes.toString())
                             .eventCategory("api")
                             .eventAction("prefixes_update")
@@ -213,7 +213,7 @@ public final class PrefixesRest {
                     }
                 })
                 .exceptionally(ex -> {
-                    EcsLogger.error("com.artipie.api")
+                    EcsLogger.error("com.auto1.pantera.api")
                         .message("Failed to update prefixes")
                         .eventCategory("api")
                         .eventAction("prefixes_update")
@@ -231,7 +231,7 @@ public final class PrefixesRest {
                     return null;
                 });
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to update prefixes")
                 .eventCategory("api")
                 .eventAction("prefixes_update")
@@ -290,7 +290,7 @@ public final class PrefixesRest {
 
                 return true;
             } catch (final IOException ex) {
-                EcsLogger.error("com.artipie.api")
+                EcsLogger.error("com.auto1.pantera.api")
                     .message("Failed to update config file")
                     .eventCategory("api")
                     .eventAction("config_update")

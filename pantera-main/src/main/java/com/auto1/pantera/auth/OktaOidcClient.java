@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URI;
@@ -100,7 +100,7 @@ public final class OktaOidcClient {
         final String password,
         final String mfaCode
     ) throws IOException, InterruptedException {
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message(String.format("Starting Okta authentication: issuer=%s, authnUrl=%s, authorizeUrl=%s", this.issuer, this.authnUrl, this.authorizeUrl))
             .eventCategory("authentication")
             .eventAction("login")
@@ -124,12 +124,12 @@ public final class OktaOidcClient {
                 errorCode = errBody.getString("errorCode", "");
                 errorSummary = errBody.getString("errorSummary", "");
             } catch (final Exception ex) {
-                EcsLogger.debug("com.artipie.auth")
+                EcsLogger.debug("com.auto1.pantera.auth")
                     .message("Failed to parse Okta error response as JSON")
                     .error(ex)
                     .log();
             }
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message(String.format("Okta /authn failed: url=%s, errorCode=%s, errorSummary=%s", this.authnUrl, errorCode, errorSummary))
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -148,7 +148,7 @@ public final class OktaOidcClient {
             sessionToken = handleMfa(body, mfaCode, username);
         }
         if (sessionToken == null || sessionToken.isEmpty()) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication did not return sessionToken")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -157,7 +157,7 @@ public final class OktaOidcClient {
                 .log();
             return null;
         }
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message("Got sessionToken, exchanging for code")
             .eventCategory("authentication")
             .eventAction("login")
@@ -165,7 +165,7 @@ public final class OktaOidcClient {
             .log();
         final String code = exchangeSessionForCode(sessionToken, username);
         if (code == null || code.isEmpty()) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to exchange sessionToken for code")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -174,7 +174,7 @@ public final class OktaOidcClient {
                 .log();
             return null;
         }
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message("Got authorization code, exchanging for tokens")
             .eventCategory("authentication")
             .eventAction("login")
@@ -182,7 +182,7 @@ public final class OktaOidcClient {
             .log();
         final TokenResponse tokens = exchangeCodeForTokens(code, username);
         if (tokens == null || tokens.idToken == null) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to exchange code for tokens")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -191,7 +191,7 @@ public final class OktaOidcClient {
                 .log();
             return null;
         }
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message("Got tokens, parsing id_token")
             .eventCategory("authentication")
             .eventAction("login")
@@ -279,7 +279,7 @@ public final class OktaOidcClient {
             for (int attempt = 0; attempt < maxAttempts; attempt = attempt + 1) {
                 if ("SUCCESS".equals(status)) {
                     final String token = body.getString("sessionToken", null);
-                    EcsLogger.info("com.artipie.auth")
+                    EcsLogger.info("com.auto1.pantera.auth")
                         .message("Okta MFA push verified successfully")
                         .eventCategory("authentication")
                         .eventAction("mfa")
@@ -304,7 +304,7 @@ public final class OktaOidcClient {
                 status = body.getString("status", "");
             }
         }
-        EcsLogger.error("com.artipie.auth")
+        EcsLogger.error("com.auto1.pantera.auth")
             .message("Okta MFA verification failed")
             .eventCategory("authentication")
             .eventAction("login")
@@ -357,7 +357,7 @@ public final class OktaOidcClient {
             request, HttpResponse.BodyHandlers.discarding()
         );
         if (resp.statusCode() / 100 != 3) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message(String.format("Okta authorize did not redirect: authorizeUrl=%s, issuer=%s", this.authorizeUrl, this.issuer))
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -369,7 +369,7 @@ public final class OktaOidcClient {
         }
         final List<String> locations = resp.headers().allValues("Location");
         if (locations.isEmpty()) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authorize redirect missing Location header")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -380,7 +380,7 @@ public final class OktaOidcClient {
             return null;
         }
         final String location = locations.get(0);
-        EcsLogger.info("com.artipie.auth")
+        EcsLogger.info("com.auto1.pantera.auth")
             .message("Okta authorize redirect received")
             .eventCategory("authentication")
             .eventAction("login")
@@ -389,7 +389,7 @@ public final class OktaOidcClient {
         final URI loc = URI.create(location);
         final String queryStr = loc.getQuery();
         if (queryStr == null) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authorize redirect has no query string")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -421,7 +421,7 @@ public final class OktaOidcClient {
             }
         }
         if (error != null) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message(String.format("Okta authorize returned error: %s - %s", error, errorDesc != null ? errorDesc : ""))
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -431,7 +431,7 @@ public final class OktaOidcClient {
             return null;
         }
         if (code == null || !state.equals(returnedState)) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message(String.format("Okta authorize missing code or state mismatch: codePresent=%s, stateMatch=%s", code != null, state.equals(returnedState)))
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -461,7 +461,7 @@ public final class OktaOidcClient {
             request, HttpResponse.BodyHandlers.ofString()
         );
         if (resp.statusCode() / 100 != 2) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta token endpoint failed")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -496,7 +496,7 @@ public final class OktaOidcClient {
         try {
             final String[] parts = idToken.split("\\.");
             if (parts.length < 2) {
-                EcsLogger.error("com.artipie.auth")
+                EcsLogger.error("com.auto1.pantera.auth")
                     .message("Invalid id_token format")
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -509,7 +509,7 @@ public final class OktaOidcClient {
             final JsonObject json = json(new String(payload, StandardCharsets.UTF_8));
             final String iss = json.getString("iss", "");
             if (!this.issuer.equals(iss)) {
-                EcsLogger.error("com.artipie.auth")
+                EcsLogger.error("com.auto1.pantera.auth")
                     .message(String.format("id_token issuer mismatch: expected=%s, actual=%s", this.issuer, iss))
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -526,7 +526,7 @@ public final class OktaOidcClient {
                 aud = json.getString("aud", "");
             }
             if (!this.clientId.equals(aud)) {
-                EcsLogger.error("com.artipie.auth")
+                EcsLogger.error("com.auto1.pantera.auth")
                     .message(String.format("id_token audience mismatch: expected=%s, actual=%s", this.clientId, aud))
                     .eventCategory("authentication")
                     .eventAction("login")
@@ -557,7 +557,7 @@ public final class OktaOidcClient {
                     }
                 }
             }
-            EcsLogger.info("com.artipie.auth")
+            EcsLogger.info("com.auto1.pantera.auth")
                 .message(String.format("Okta authentication successful: groups=[%s], groupsClaim=%s", String.join(",", groups), this.groupsClaim))
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -567,7 +567,7 @@ public final class OktaOidcClient {
                 .log();
             return new OktaAuthResult(uname, email, groups);
         } catch (final IllegalArgumentException err) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to parse Okta id_token")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -604,7 +604,7 @@ public final class OktaOidcClient {
                 request, HttpResponse.BodyHandlers.ofString()
             );
             if (resp.statusCode() / 100 != 2) {
-                EcsLogger.warn("com.artipie.auth")
+                EcsLogger.warn("com.auto1.pantera.auth")
                     .message(String.format("Okta userinfo endpoint failed: url=%s", this.userinfoUrl))
                     .eventCategory("authentication")
                     .eventAction("userinfo")
@@ -615,7 +615,7 @@ public final class OktaOidcClient {
                 return null;
             }
             final JsonObject userinfo = json(resp.body());
-            EcsLogger.info("com.artipie.auth")
+            EcsLogger.info("com.auto1.pantera.auth")
                 .message(String.format("Okta userinfo response: keys=[%s]", String.join(",", userinfo.keySet())))
                 .eventCategory("authentication")
                 .eventAction("userinfo")
@@ -624,7 +624,7 @@ public final class OktaOidcClient {
                 .log();
             return userinfo;
         } catch (final IOException | InterruptedException err) {
-            EcsLogger.warn("com.artipie.auth")
+            EcsLogger.warn("com.auto1.pantera.auth")
                 .message("Failed to fetch Okta userinfo")
                 .eventCategory("authentication")
                 .eventAction("userinfo")

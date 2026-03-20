@@ -8,4 +8,4 @@
  *
  * @since 0.20
  */
-package com.artipie.adapters.php;
+package com.auto1.pantera.adapters.php;

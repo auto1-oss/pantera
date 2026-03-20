@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.docker.Docker;
+import com.auto1.pantera.docker.Docker;
 
 public abstract class DockerActionSlice implements ScopeSlice {
 

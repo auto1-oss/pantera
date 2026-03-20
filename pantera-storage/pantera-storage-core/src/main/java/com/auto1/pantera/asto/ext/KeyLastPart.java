@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.ext;
+package com.auto1.pantera.asto.ext;
 
-import com.artipie.asto.Key;
+import com.auto1.pantera.asto.Key;
 
 /**
- * Last part of the storage {@link com.artipie.asto.Key}.
+ * Last part of the storage {@link com.auto1.pantera.asto.Key}.
  * @since 0.24
  */
 public final class KeyLastPart {

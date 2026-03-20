@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown;
+package com.auto1.pantera.cooldown;
 
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
@@ -88,7 +88,7 @@ public final class CooldownCache {
         this(
             10_000,
             Duration.ofHours(24),  // Default single-tier TTL
-            com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null)
+            com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null)
         );
     }
 
@@ -179,20 +179,20 @@ public final class CooldownCache {
         final Boolean l1Cached = this.decisions.getIfPresent(key);
         if (l1Cached != null) {
             this.hits++;
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
             }
             return CompletableFuture.completedFuture(l1Cached);
         }
 
         // L1 MISS
         this.misses++;
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             final long durationMs = (System.nanoTime() - l1StartNanos) / 1_000_000;
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l1");
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l1", "get", durationMs);
         }
         
         // Two-tier: Check L2 (Valkey) before database
@@ -211,9 +211,9 @@ public final class CooldownCache {
 
                     if (l2Bytes != null) {
                         // L2 HIT
-                        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l2");
-                            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
+                        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("cooldown", "l2");
+                            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
                         }
 
                         // Parse boolean and promote to L1
@@ -223,9 +223,9 @@ public final class CooldownCache {
                     }
 
                     // L2 MISS
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l2");
-                        com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("cooldown", "l2");
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheOperationDuration("cooldown", "l2", "get", durationMs);
                     }
 
                     // Query database

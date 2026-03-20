@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.test;
+package com.auto1.pantera.asto.test;
 
-import com.artipie.asto.Content;
+import com.auto1.pantera.asto.Content;
 import com.google.common.util.concurrent.Uninterruptibles;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;

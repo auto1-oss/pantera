@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.asto.streams.StorageValuePipeline;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.meta.PackageInfo;
-import com.artipie.rpm.meta.XmlAlter;
-import com.artipie.rpm.meta.XmlMaid;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.meta.XmlPrimaryMaid;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.meta.PackageInfo;
+import com.auto1.pantera.rpm.meta.XmlAlter;
+import com.auto1.pantera.rpm.meta.XmlMaid;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.meta.XmlPrimaryMaid;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.InputStream;

@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Remaining;
-import com.artipie.asto.SubStorage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.Digest;
-import com.artipie.docker.error.InvalidDigestException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.InvalidDigestException;
 import com.google.common.base.Throwables;
 import io.reactivex.Flowable;
 import org.hamcrest.MatcherAssert;

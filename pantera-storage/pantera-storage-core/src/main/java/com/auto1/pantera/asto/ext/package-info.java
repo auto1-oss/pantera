@@ -8,5 +8,5 @@
  *
  * @since 0.6
  */
-package com.artipie.asto.ext;
+package com.auto1.pantera.asto.ext;
 

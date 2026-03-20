@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.asto;
+package com.auto1.pantera.maven.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.ext.Digests;
-import com.artipie.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import org.apache.commons.lang3.tuple.ImmutablePair;
@@ -61,7 +61,7 @@ public final class RepositoryChecksums {
             .filter(key -> SUPPORTED_ALGS.contains(extension(key)))
             .flatMapSingle(
                 // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
-                item -> com.artipie.asto.rx.RxFuture.single(
+                item -> com.auto1.pantera.asto.rx.RxFuture.single(
                     this.repo.value(item).thenCompose(Content::asStringFuture)
                         .thenApply(hash -> new ImmutablePair<>(extension(item), hash))
                 )

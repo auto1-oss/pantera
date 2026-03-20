@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.fs;
+package com.auto1.pantera.asto.fs;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.ListResult;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.UnderLockOperation;
-import com.artipie.asto.ValueNotFoundException;
-import com.artipie.asto.ext.CompletableFutureSupport;
-import com.artipie.asto.lock.storage.StorageLock;
-import com.artipie.asto.log.EcsLogger;
-import com.artipie.asto.metrics.StorageMetricsCollector;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListResult;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.UnderLockOperation;
+import com.auto1.pantera.asto.ValueNotFoundException;
+import com.auto1.pantera.asto.ext.CompletableFutureSupport;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.log.EcsLogger;
+import com.auto1.pantera.asto.metrics.StorageMetricsCollector;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Completable;
@@ -130,7 +130,7 @@ public final class VertxFileStorage implements Storage {
                 } else {
                     keys = Collections.emptyList();
                 }
-                EcsLogger.debug("com.artipie.asto")
+                EcsLogger.debug("com.auto1.pantera.asto")
                     .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
                     .eventCategory("storage")
                     .eventAction("list_keys")
@@ -199,7 +199,7 @@ public final class VertxFileStorage implements Storage {
                 } catch (final IOException iex) {
                     throw new ArtipieIOException(iex);
                 }
-                EcsLogger.debug("com.artipie.asto")
+                EcsLogger.debug("com.auto1.pantera.asto")
                     .message(
                         "Hierarchical list for prefix '"
                             + prefix.string() + "' (" + files.size()

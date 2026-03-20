@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm;
+package com.auto1.pantera.rpm;
 
 import com.amihaiemil.eoyaml.Node;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 import java.util.Locale;
 import java.util.Optional;
 

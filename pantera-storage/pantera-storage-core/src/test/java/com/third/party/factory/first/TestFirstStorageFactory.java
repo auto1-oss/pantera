@@ -4,11 +4,11 @@
  */
 package com.third.party.factory.first;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.ArtipieStorageFactory;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StorageFactory;
-import com.artipie.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.ArtipieStorageFactory;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StorageFactory;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
 
 /**
  * Test storage factory.

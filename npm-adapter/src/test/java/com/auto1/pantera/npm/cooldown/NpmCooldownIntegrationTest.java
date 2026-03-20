@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.cooldown;
+package com.auto1.pantera.npm.cooldown;
 
-import com.artipie.cooldown.CooldownBlock;
-import com.artipie.cooldown.CooldownCache;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownReason;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.cooldown.metadata.CooldownMetadataServiceImpl;
-import com.artipie.cooldown.metadata.FilteredMetadataCache;
+import com.auto1.pantera.cooldown.CooldownBlock;
+import com.auto1.pantera.cooldown.CooldownCache;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownReason;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResult;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;

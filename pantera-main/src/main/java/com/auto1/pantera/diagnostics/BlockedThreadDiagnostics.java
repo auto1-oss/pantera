@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.diagnostics;
+package com.auto1.pantera.diagnostics;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.VertxOptions;
 
 import java.lang.management.GarbageCollectorMXBean;
@@ -91,7 +91,7 @@ public final class BlockedThreadDiagnostics {
         // Check if disabled via environment variable
         final String disabled = System.getenv(DISABLE_ENV);
         if ("true".equalsIgnoreCase(disabled)) {
-            EcsLogger.info("com.artipie.diagnostics")
+            EcsLogger.info("com.auto1.pantera.diagnostics")
                 .message("Blocked thread diagnostics disabled via environment variable")
                 .eventCategory("system")
                 .eventAction("diagnostics_disabled")
@@ -102,7 +102,7 @@ public final class BlockedThreadDiagnostics {
         if (instance == null) {
             instance = new BlockedThreadDiagnostics();
             instance.start();
-            EcsLogger.info("com.artipie.diagnostics")
+            EcsLogger.info("com.auto1.pantera.diagnostics")
                 .message(String.format(
                     "Blocked thread diagnostics initialized: GC check interval 1s, thread check interval 5s, GC pause threshold %dms",
                     GC_PAUSE_THRESHOLD_MS))
@@ -156,7 +156,7 @@ public final class BlockedThreadDiagnostics {
             // Log if GC took more than threshold in the last second
             if (gcTimeDelta > GC_PAUSE_THRESHOLD_MS && gcCountDelta > 0) {
                 final long avgPauseMs = gcTimeDelta / gcCountDelta;
-                EcsLogger.warn("com.artipie.diagnostics")
+                EcsLogger.warn("com.auto1.pantera.diagnostics")
                     .message(String.format(
                         "Long GC pause detected - may cause blocked thread warnings: time delta %dms, %d collections, avg pause %dms, total GC time %dms",
                         gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
@@ -203,7 +203,7 @@ public final class BlockedThreadDiagnostics {
 
             // Only log if there are blocked event loop threads
             if (blockedCount > 0) {
-                EcsLogger.warn("com.artipie.diagnostics")
+                EcsLogger.warn("com.auto1.pantera.diagnostics")
                     .message(String.format(
                         "Event loop threads in BLOCKED state: %d blocked, %d waiting, %d runnable",
                         blockedCount, waitingCount, runnableCount))
@@ -237,7 +237,7 @@ public final class BlockedThreadDiagnostics {
                         sb.append("\tat ").append(element).append("\n");
                     }
 
-                    EcsLogger.error("com.artipie.diagnostics")
+                    EcsLogger.error("com.auto1.pantera.diagnostics")
                         .message(String.format(
                             "Blocked event loop thread details: lock=%s, lock owner=%s",
                             info.getLockName(), info.getLockOwnerName()))

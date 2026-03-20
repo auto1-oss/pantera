@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.Key;
+import com.auto1.pantera.asto.Key;
 
 /**
  * This exception can be thrown when artifact was not found.

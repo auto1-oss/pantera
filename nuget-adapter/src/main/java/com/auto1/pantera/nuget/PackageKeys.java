@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.Key;
-import com.artipie.nuget.metadata.NuspecField;
-import com.artipie.nuget.metadata.PackageId;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.nuget.metadata.NuspecField;
+import com.auto1.pantera.nuget.metadata.PackageId;
 
 /**
  * Package identifier.

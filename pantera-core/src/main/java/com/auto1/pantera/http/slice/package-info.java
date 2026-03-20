@@ -7,4 +7,4 @@
  * Slice objects.
  * @since 0.6
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;

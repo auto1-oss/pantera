@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.cache.Cache;
-import com.artipie.composer.Repository;
-import com.artipie.composer.http.PackageMetadataSlice;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.composer.http.PackageMetadataSlice;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
 import java.util.Optional;
@@ -42,7 +42,7 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Repository repo, final Authenticator auth
     ) {
         this(clients, remote, repo, auth, Cache.NOP, Optional.empty(), "composer", "php",
-            com.artipie.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080");
     }
@@ -63,7 +63,7 @@ public class ComposerProxySlice extends Slice.Wrap {
         final Cache cache
     ) {
         this(clients, remote, repository, auth, cache, Optional.empty(), "composer", "php",
-            com.artipie.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080");
     }

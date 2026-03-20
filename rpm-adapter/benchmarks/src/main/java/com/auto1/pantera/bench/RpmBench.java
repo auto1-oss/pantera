@@ -3,15 +3,15 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.bench;
+package com.auto1.pantera.bench;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.memory.BenchmarkStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.rpm.Rpm;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.memory.BenchmarkStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.rpm.Rpm;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
@@ -93,10 +93,10 @@ public class RpmBench {
      * @param dst Destination storage
      */
     private static void sync(final Storage src, final Storage dst) {
-        com.artipie.asto.rx.RxFuture.single(src.list(Key.ROOT))
+        com.auto1.pantera.asto.rx.RxFuture.single(src.list(Key.ROOT))
             .flatMapObservable(Observable::fromIterable)
             .flatMapSingle(
-                key -> com.artipie.asto.rx.RxFuture.single(
+                key -> com.auto1.pantera.asto.rx.RxFuture.single(
                     src.value(key)
                         .thenCompose(content -> dst.save(key, content))
                         .thenApply(none -> true)

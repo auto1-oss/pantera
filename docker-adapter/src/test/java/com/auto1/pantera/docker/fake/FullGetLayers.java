@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.fake;
+package com.auto1.pantera.docker.fake;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
-import com.artipie.docker.asto.AstoBlob;
-import com.artipie.docker.asto.BlobSource;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.asto.AstoBlob;
+import com.auto1.pantera.docker.asto.BlobSource;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 

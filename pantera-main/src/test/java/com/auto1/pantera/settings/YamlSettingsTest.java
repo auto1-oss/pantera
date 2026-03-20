@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.SubStorage;
-import com.artipie.scheduling.QuartzService;
-import com.artipie.security.policy.CachedYamlPolicy;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.security.policy.CachedYamlPolicy;
+import com.auto1.pantera.security.policy.Policy;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.stream.Stream;

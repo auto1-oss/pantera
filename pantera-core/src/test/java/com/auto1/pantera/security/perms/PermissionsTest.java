@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.perms;
+package com.auto1.pantera.security.perms;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 import java.security.AllPermission;
 import java.util.Collections;
 import org.hamcrest.MatcherAssert;

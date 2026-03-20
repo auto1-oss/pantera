@@ -8,4 +8,4 @@
  *
  * @since 1.4
  */
-package com.artipie.asto.streams;
+package com.auto1.pantera.asto.streams;

@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
@@ -110,7 +110,7 @@ public final class VersionPolicySlice implements Slice {
 
         // Enforce policy
         if (this.policy == Policy.RELEASE && isSnapshot) {
-            EcsLogger.warn("com.artipie.maven")
+            EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Rejected SNAPSHOT version in RELEASE repository (policy: RELEASE)")
                 .eventCategory("repository")
                 .eventAction("version_policy_check")
@@ -132,7 +132,7 @@ public final class VersionPolicySlice implements Slice {
         }
 
         if (this.policy == Policy.SNAPSHOT && !isSnapshot) {
-            EcsLogger.warn("com.artipie.maven")
+            EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Rejected RELEASE version in SNAPSHOT repository (policy: SNAPSHOT)")
                 .eventCategory("repository")
                 .eventAction("version_policy_check")
@@ -154,7 +154,7 @@ public final class VersionPolicySlice implements Slice {
         }
 
         // Policy check passed
-        EcsLogger.debug("com.artipie.maven")
+        EcsLogger.debug("com.auto1.pantera.maven")
             .message("Version policy check passed (policy: " + this.policy.toString() + ")")
             .eventCategory("repository")
             .eventAction("version_policy_check")

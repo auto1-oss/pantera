@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.HttpException;
@@ -45,7 +45,7 @@ abstract class BaseRest {
             // Check if response headers have already been sent
             if (context.response().headWritten()) {
                 // Headers already sent, just log the error - can't modify response
-                EcsLogger.warn("com.artipie.api")
+                EcsLogger.warn("com.auto1.pantera.api")
                     .message("REST API request failed (response already sent)")
                     .eventCategory("api")
                     .eventAction("request_handling")
@@ -71,7 +71,7 @@ abstract class BaseRest {
                     .put("code", status)
                     .put("message", msg)
                     .encode());
-            EcsLogger.warn("com.artipie.api")
+            EcsLogger.warn("com.auto1.pantera.api")
                 .message("REST API request failed")
                 .eventCategory("api")
                 .eventAction("request_handling")

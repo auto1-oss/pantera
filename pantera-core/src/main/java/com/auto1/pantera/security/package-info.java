@@ -7,4 +7,4 @@
  * Artipie security layer.
  * @since 1.2
  */
-package com.artipie.security;
+package com.auto1.pantera.security;

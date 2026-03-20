@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.log.EcsLogger;
 import org.quartz.Job;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobKey;
@@ -30,7 +30,7 @@ public abstract class QuartzJob implements Job {
     protected void stopJob(final JobExecutionContext context) {
         final JobKey key = context.getJobDetail().getKey();
         try {
-            EcsLogger.error("com.artipie.scheduling")
+            EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Job processing failed, stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
@@ -38,7 +38,7 @@ public abstract class QuartzJob implements Job {
                 .field("process.name", key.toString())
                 .log();
             context.getScheduler().deleteJob(key);
-            EcsLogger.error("com.artipie.scheduling")
+            EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Job stopped")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
@@ -46,7 +46,7 @@ public abstract class QuartzJob implements Job {
                 .field("process.name", key.toString())
                 .log();
         } catch (final SchedulerException error) {
-            EcsLogger.error("com.artipie.scheduling")
+            EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Error while stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")

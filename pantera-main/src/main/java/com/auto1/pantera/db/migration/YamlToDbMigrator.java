@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db.migration;
+package com.auto1.pantera.db.migration;
 
 import com.amihaiemil.eoyaml.Node;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.api.RepositoryName;
-import com.artipie.db.dao.AuthProviderDao;
-import com.artipie.db.dao.RoleDao;
-import com.artipie.db.dao.RepositoryDao;
-import com.artipie.db.dao.SettingsDao;
-import com.artipie.db.dao.StorageAliasDao;
-import com.artipie.db.dao.UserDao;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.RoleDao;
+import com.auto1.pantera.db.dao.RepositoryDao;
+import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.db.dao.StorageAliasDao;
+import com.auto1.pantera.db.dao.UserDao;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;

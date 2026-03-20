@@ -8,4 +8,4 @@
  *
  * @since 0.6
  */
-package com.artipie.nuget.metadata;
+package com.auto1.pantera.nuget.metadata;

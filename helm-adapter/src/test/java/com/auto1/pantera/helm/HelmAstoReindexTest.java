@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm;
+package com.auto1.pantera.helm;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.helm.metadata.IndexYaml;
-import com.artipie.helm.metadata.IndexYamlMapping;
-import com.artipie.helm.test.ContentOfIndex;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.helm.metadata.IndexYaml;
+import com.auto1.pantera.helm.metadata.IndexYamlMapping;
+import com.auto1.pantera.helm.test.ContentOfIndex;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

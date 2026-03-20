@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.debian.metadata.ControlField;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.debian.metadata.ControlField;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,7 +30,7 @@ public interface MultiPackages {
      * Merges provided indexes.
      * @param items Items to merge
      * @param res Output stream with merged data
-     * @throws com.artipie.asto.ArtipieIOException On IO error
+     * @throws com.auto1.pantera.asto.ArtipieIOException On IO error
      */
     void merge(Collection<InputStream> items, OutputStream res);
 

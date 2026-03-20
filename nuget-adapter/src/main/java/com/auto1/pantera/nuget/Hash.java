@@ -3,12 +3,12 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.ext.Digests;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
 import java.nio.ByteBuffer;
 import java.util.Base64;
 import java.util.concurrent.CompletionStage;

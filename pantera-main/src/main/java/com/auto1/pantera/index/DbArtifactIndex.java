@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.index;
+package com.auto1.pantera.index;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -214,7 +214,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 setUpsertParams(stmt, doc);
                 stmt.executeUpdate();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to index artifact")
                     .eventCategory("index")
                     .eventAction("db_index")
@@ -236,7 +236,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 stmt.setString(2, artifactPath);
                 stmt.executeUpdate();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to remove artifact")
                     .eventCategory("index")
                     .eventAction("db_remove")
@@ -289,7 +289,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 // Graceful degradation: if tsvector column doesn't exist or
                 // any FTS-related error occurs, fall back to LIKE
-                EcsLogger.warn("com.artipie.index")
+                EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: "
                         + ex.getMessage())
                     .eventCategory("search")
@@ -451,7 +451,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 }
             }
         } catch (final SQLException ex) {
-            EcsLogger.error("com.artipie.index")
+            EcsLogger.error("com.auto1.pantera.index")
                 .message("LIKE search failed for pattern: " + pattern)
                 .eventCategory("search")
                 .eventAction("db_search_like")
@@ -482,7 +482,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     }
                 }
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("Locate failed for path: " + artifactPath)
                     .eventCategory("search")
                     .eventAction("db_locate")
@@ -508,7 +508,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     }
                 }
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("LocateByName failed for: " + artifactName)
                     .eventCategory("search")
                     .eventAction("db_locate_by_name")
@@ -589,7 +589,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 rs.next();
                 stats.put("documents", rs.getLong(1));
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to get index stats")
                     .eventCategory("index")
                     .eventAction("db_stats")
@@ -621,7 +621,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 stmt.executeBatch();
                 conn.commit();
             } catch (final SQLException ex) {
-                EcsLogger.error("com.artipie.index")
+                EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to batch index " + docs.size() + " artifacts")
                     .eventCategory("index")
                     .eventAction("db_index_batch")

@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.junit.DockerClient;
-import com.artipie.docker.junit.DockerClientSupport;
-import com.artipie.docker.junit.DockerRepository;
-import com.artipie.http.auth.BasicAuthScheme;
-import com.artipie.security.policy.PolicyByUsername;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.junit.DockerClient;
+import com.auto1.pantera.docker.junit.DockerClientSupport;
+import com.auto1.pantera.docker.junit.DockerRepository;
+import com.auto1.pantera.http.auth.BasicAuthScheme;
+import com.auto1.pantera.security.policy.PolicyByUsername;
 import java.util.Optional;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.StringContains;

@@ -6,4 +6,4 @@
 /**
  * Conan adapter tests.
  */
-package  com.artipie.conan;
+package  com.auto1.pantera.conan;

@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http;
+package com.auto1.pantera.composer.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.test.TestResource;
-import com.artipie.composer.test.EmptyZip;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.composer.test.EmptyZip;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletionException;
 import org.hamcrest.MatcherAssert;

@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.MetaCommon;
-import com.artipie.asto.Storage;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
-import com.artipie.docker.error.InvalidDigestException;
-import com.artipie.docker.misc.DigestedFlowable;
-import com.artipie.http.Headers;
-import com.artipie.http.slice.ContentWithSize;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.MetaCommon;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.error.InvalidDigestException;
+import com.auto1.pantera.docker.misc.DigestedFlowable;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.slice.ContentWithSize;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;

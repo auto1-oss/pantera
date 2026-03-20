@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.auth;
+package com.auto1.pantera.http.auth;
 
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.WwwAuthenticate;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.WwwAuthenticate;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import org.slf4j.MDC;
 
 import java.util.Optional;
@@ -105,7 +105,7 @@ public final class CombinedAuthzSlice implements Slice {
 
     @Override
     public CompletableFuture<Response> response(
-        final RequestLine line, final Headers headers, final com.artipie.asto.Content body
+        final RequestLine line, final Headers headers, final com.auto1.pantera.asto.Content body
     ) {
         return this.authenticate(headers, line)
             .toCompletableFuture()
@@ -139,7 +139,7 @@ public final class CombinedAuthzSlice implements Slice {
                                     .completedFuture();
                             }
                         } catch (final UnsupportedOperationException ex) {
-                            EcsLogger.debug("com.artipie.http.auth")
+                            EcsLogger.debug("com.auto1.pantera.http.auth")
                                 .message("Auth scheme does not provide challenge")
                                 .error(ex)
                                 .log();

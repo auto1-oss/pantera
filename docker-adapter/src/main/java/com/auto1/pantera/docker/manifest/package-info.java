@@ -7,4 +7,4 @@
  * Docker image manifests.
  * @since 0.2
  */
-package com.artipie.docker.manifest;
+package com.auto1.pantera.docker.manifest;

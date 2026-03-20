@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.headers.Header;
-import com.artipie.http.hm.ResponseAssert;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.RsStatus;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.ResponseAssert;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.security.policy.Policy;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.StringContains;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +53,7 @@ class PySliceTest {
         this.storage = new InMemoryStorage();
         this.slice = new PySlice(
             this.storage, Policy.FREE,
-            new com.artipie.http.auth.Authentication.Single(USER, PASSWORD),
+            new com.auto1.pantera.http.auth.Authentication.Single(USER, PASSWORD),
             "*", Optional.empty()
         );
         this.authorization = Headers.from(new Authorization.Basic(USER, PASSWORD));

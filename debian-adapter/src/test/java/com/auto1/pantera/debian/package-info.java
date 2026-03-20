@@ -7,4 +7,4 @@
  * Debian adapter tests.
  * @since 0.1
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;

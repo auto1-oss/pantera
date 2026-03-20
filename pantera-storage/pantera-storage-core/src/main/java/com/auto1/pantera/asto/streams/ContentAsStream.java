@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.streams;
+package com.auto1.pantera.asto.streams;
 
-import com.artipie.asto.ArtipieIOException;
+import com.auto1.pantera.asto.ArtipieIOException;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import java.io.IOException;

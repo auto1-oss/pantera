@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.NoopCooldownService;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.npm.TgzArchive;
-import com.artipie.npm.misc.NextSafeAvailablePort;
-import com.artipie.npm.proxy.NpmProxy;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.npm.TgzArchive;
+import com.auto1.pantera.npm.misc.NextSafeAvailablePort;
+import com.auto1.pantera.npm.proxy.NpmProxy;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.hamcrest.MatcherAssert;

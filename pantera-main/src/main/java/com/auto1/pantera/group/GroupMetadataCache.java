@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.cache.GlobalCacheConfig;
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.cache.GlobalCacheConfig;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -223,8 +223,8 @@ public final class GroupMetadataCache {
      * Record cache hit metric.
      */
     private void recordCacheHit(final String tier) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheHit("maven_group_metadata", tier);
         }
     }
@@ -233,8 +233,8 @@ public final class GroupMetadataCache {
      * Record cache miss metric.
      */
     private void recordCacheMiss(final String tier) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheMiss("maven_group_metadata", tier);
         }
     }

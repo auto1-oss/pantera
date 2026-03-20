@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.LogSanitizer;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.LogSanitizer;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
@@ -57,7 +57,7 @@ public final class LoggingSlice implements Slice {
 
         // Log request at DEBUG level (diagnostic only)
         if (this.level.intValue() <= Level.FINE.intValue()) {
-            EcsLogger.debug("com.artipie.http")
+            EcsLogger.debug("com.auto1.pantera.http")
                 .message("HTTP request: " + msg.toString())
                 .eventCategory("http")
                 .eventAction("request")
@@ -72,7 +72,7 @@ public final class LoggingSlice implements Slice {
 
                 // Log response at DEBUG level (diagnostic only)
                 if (LoggingSlice.this.level.intValue() <= Level.FINE.intValue()) {
-                    EcsLogger.debug("com.artipie.http")
+                    EcsLogger.debug("com.auto1.pantera.http")
                         .message("HTTP response: " + sb.toString())
                         .eventCategory("http")
                         .eventAction("response")

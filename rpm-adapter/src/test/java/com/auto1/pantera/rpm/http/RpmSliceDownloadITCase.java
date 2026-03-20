@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.http;
+package com.auto1.pantera.rpm.http;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.NamingPolicy;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.Rpm;
-import com.artipie.rpm.TestRpm;
-import com.artipie.security.policy.Policy;
-import com.artipie.security.policy.PolicyByUsername;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.NamingPolicy;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.Rpm;
+import com.auto1.pantera.rpm.TestRpm;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.security.policy.PolicyByUsername;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;
 import java.nio.file.Files;

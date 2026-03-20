@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.hex;
+package com.auto1.pantera.hex;
 
 import java.net.URISyntaxException;
 import java.nio.file.Path;

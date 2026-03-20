@@ -3,23 +3,23 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.npm.PackageNameFromUrl;
-import com.artipie.npm.PerVersionLayout;
-import com.artipie.npm.Tarballs;
-import com.artipie.npm.misc.AbbreviatedMetadata;
-import com.artipie.npm.misc.MetadataETag;
-import com.artipie.npm.misc.MetadataEnhancer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.npm.PackageNameFromUrl;
+import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.Tarballs;
+import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
+import com.auto1.pantera.npm.misc.MetadataETag;
+import com.auto1.pantera.npm.misc.MetadataEnhancer;
 import javax.json.JsonObject;
 
 import java.net.URL;
@@ -144,7 +144,7 @@ public final class DownloadPackageSlice implements Slice {
         // P0.2: Check if client has matching ETag (304 Not Modified)
         if (clientETag.isPresent() && clientETag.get().equals(etag)) {
             return CompletableFuture.completedFuture(
-                ResponseBuilder.from(com.artipie.http.RsStatus.NOT_MODIFIED)
+                ResponseBuilder.from(com.auto1.pantera.http.RsStatus.NOT_MODIFIED)
                     .header("ETag", etag)
                     .header("Cache-Control", "public, max-age=300")
                     .build()

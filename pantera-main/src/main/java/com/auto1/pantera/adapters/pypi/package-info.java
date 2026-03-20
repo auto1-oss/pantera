@@ -8,4 +8,4 @@
  *
  * @since 0.12
  */
-package com.artipie.adapters.pypi;
+package com.auto1.pantera.adapters.pypi;

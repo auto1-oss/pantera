@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.asto.key;
+package com.auto1.pantera.asto.key;
 
-import com.artipie.asto.Key;
+import com.auto1.pantera.asto.Key;
 import java.util.stream.Collectors;
 
 /**

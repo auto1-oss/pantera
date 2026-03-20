@@ -8,4 +8,4 @@
  *
  * @since 0.31
  */
-package com.artipie.db;
+package com.auto1.pantera.db;

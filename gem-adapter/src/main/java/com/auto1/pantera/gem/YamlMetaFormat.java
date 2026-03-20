@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem;
+package com.auto1.pantera.gem;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.amihaiemil.eoyaml.YamlSequenceBuilder;
-import com.artipie.gem.GemMeta.MetaFormat;
-import com.artipie.gem.GemMeta.MetaInfo;
+import com.auto1.pantera.gem.GemMeta.MetaFormat;
+import com.auto1.pantera.gem.GemMeta.MetaInfo;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 

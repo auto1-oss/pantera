@@ -7,4 +7,4 @@
  * RPM benchmarks.
  * @since 1.4
  */
-package com.artipie.bench;
+package com.auto1.pantera.bench;

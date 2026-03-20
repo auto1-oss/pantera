@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http;
+package com.auto1.pantera.composer.http;
 
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.composer.AstoRepository;
-import com.artipie.composer.test.ComposerSimple;
-import com.artipie.composer.test.HttpUrlUpload;
-import com.artipie.composer.test.PackageSimple;
-import com.artipie.composer.test.SourceServer;
-import com.artipie.composer.test.TestAuthentication;
-import com.artipie.http.Slice;
-import com.artipie.http.misc.RandomFreePort;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.security.policy.PolicyByUsername;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.test.ComposerSimple;
+import com.auto1.pantera.composer.test.HttpUrlUpload;
+import com.auto1.pantera.composer.test.PackageSimple;
+import com.auto1.pantera.composer.test.SourceServer;
+import com.auto1.pantera.composer.test.TestAuthentication;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.security.policy.PolicyByUsername;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
 import java.io.IOException;

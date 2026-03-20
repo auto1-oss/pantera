@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.sql.DataSource;
-import com.artipie.api.RepositoryName;
-import com.artipie.db.dao.*;
-import com.artipie.db.migration.YamlToDbMigrator;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.db.dao.*;
+import com.auto1.pantera.db.migration.YamlToDbMigrator;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterAll;

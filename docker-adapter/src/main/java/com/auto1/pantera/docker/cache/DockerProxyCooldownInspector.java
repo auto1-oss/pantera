@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.http.misc.ConfigDefaults;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
  * Uses Caffeine cache with automatic eviction to limit Old Gen growth.
  */
 public final class DockerProxyCooldownInspector implements CooldownInspector,
-    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
 
     /**
      * Bounded cache of image release dates.

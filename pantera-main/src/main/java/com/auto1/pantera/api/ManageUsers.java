@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlMappingBuilder;
 import com.amihaiemil.eoyaml.YamlNode;
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.misc.Json2Yaml;
-import com.artipie.misc.Yaml2Json;
-import com.artipie.settings.users.CrudUsers;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.misc.Json2Yaml;
+import com.auto1.pantera.misc.Yaml2Json;
+import com.auto1.pantera.settings.users.CrudUsers;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import javax.json.Json;

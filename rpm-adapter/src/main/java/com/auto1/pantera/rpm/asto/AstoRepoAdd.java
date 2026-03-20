@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.key.KeyExcludeFirst;
-import com.artipie.asto.lock.storage.StorageLock;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.http.RpmUpload;
-import com.artipie.rpm.meta.PackageInfo;
-import com.artipie.rpm.pkg.HeaderTags;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.key.KeyExcludeFirst;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.http.RpmUpload;
+import com.auto1.pantera.rpm.meta.PackageInfo;
+import com.auto1.pantera.rpm.pkg.HeaderTags;
+import com.auto1.pantera.rpm.pkg.Package;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.schedulers.Schedulers;
@@ -55,7 +55,7 @@ public final class AstoRepoAdd {
     }
 
     /**
-     * Performs whole workflow to add items, listed in {@link com.artipie.rpm.http.RpmUpload#TO_ADD}
+     * Performs whole workflow to add items, listed in {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}
      * location, to the repository and metadata files.
      * @return Completable action
      */
@@ -66,7 +66,7 @@ public final class AstoRepoAdd {
     }
 
     /**
-     * Performs whole workflow to add items, listed in {@link com.artipie.rpm.http.RpmUpload#TO_ADD}
+     * Performs whole workflow to add items, listed in {@link com.auto1.pantera.rpm.http.RpmUpload#TO_ADD}
      * location, to the repository and metadata files. Returns list with info about added
      * packages.
      * @return Completable action with added packages info list
@@ -135,7 +135,7 @@ public final class AstoRepoAdd {
                     ).toCompletableFuture()
                 ).onErrorResumeNext(
                     throwable -> {
-                        EcsLogger.warn("com.artipie.rpm")
+                        EcsLogger.warn("com.auto1.pantera.rpm")
                             .message("Failed to parse rpm package")
                             .eventCategory("repository")
                             .eventAction("package_parsing")

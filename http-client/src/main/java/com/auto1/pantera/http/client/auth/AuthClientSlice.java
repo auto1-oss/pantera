@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.auth;
+package com.auto1.pantera.http.client.auth;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.RemoteConfig;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.RsStatus;
 
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;

@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian.benchmarks;
+package com.auto1.pantera.debian.benchmarks;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.memory.BenchmarkStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.debian.Config;
-import com.artipie.debian.Debian;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.memory.BenchmarkStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.debian.Config;
+import com.auto1.pantera.debian.Debian;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,7 +36,7 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 /**
- * Benchmark for {@link com.artipie.debian.Debian.Asto}.
+ * Benchmark for {@link com.auto1.pantera.debian.Debian.Asto}.
  * @since 0.8
  */
 @BenchmarkMode(Mode.AverageTime)

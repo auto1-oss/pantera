@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.metadata;
+package com.auto1.pantera.maven.metadata;
 
-import com.artipie.maven.MetadataXml;
+import com.auto1.pantera.maven.MetadataXml;
 import org.cactoos.list.ListOf;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -24,7 +24,7 @@ class DeployMetadataTest {
         final String release = "1.098";
         MatcherAssert.assertThat(
             new DeployMetadata(
-                new MetadataXml("com.artipie", "abc").get(
+                new MetadataXml("com.auto1.pantera", "abc").get(
                     new MetadataXml.VersionTags(
                         "12", release, new ListOf<>(release, "0.3", "12", "0.1")
                     )
@@ -39,7 +39,7 @@ class DeployMetadataTest {
         Assertions.assertThrows(
             IllegalArgumentException.class,
             () -> new DeployMetadata(
-                new MetadataXml("com.artipie", "abc").get(
+                new MetadataXml("com.auto1.pantera", "abc").get(
                     new MetadataXml.VersionTags("0.3", "12", "0.1")
                 )
             ).release()

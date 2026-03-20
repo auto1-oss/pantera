@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.cache;
+package com.auto1.pantera.asto.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -56,7 +56,7 @@ public interface Remote extends Supplier<CompletionStage<Optional<? extends Cont
                     if (throwable == null) {
                         res = content;
                     } else {
-                        EcsLogger.error("com.artipie.asto")
+                        EcsLogger.error("com.auto1.pantera.asto")
                             .message("Remote content retrieval failed")
                             .eventCategory("cache")
                             .eventAction("remote_get")

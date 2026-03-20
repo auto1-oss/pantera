@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy;
+package com.auto1.pantera.npm.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.rx.RxFuture;
-import com.artipie.asto.rx.RxStorage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.npm.misc.AbbreviatedMetadata;
-import com.artipie.npm.proxy.model.NpmAsset;
-import com.artipie.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.asto.rx.RxStorage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.npm.misc.AbbreviatedMetadata;
+import com.auto1.pantera.npm.proxy.model.NpmAsset;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
 import io.reactivex.Single;
 import io.vertx.core.json.JsonObject;
 
-import com.artipie.npm.misc.MetadataETag;
+import com.auto1.pantera.npm.misc.MetadataETag;
 import javax.json.Json;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -103,7 +103,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             // Note: Release dates are included in abbreviated metadata via the "time" field
             // (added for pnpm compatibility). No separate cache needed - cooldown filtering
             // parses dates directly from abbreviated metadata.
-            EcsLogger.debug("com.artipie.npm")
+            EcsLogger.debug("com.auto1.pantera.npm")
                 .message(String.format("Generated abbreviated metadata: abbreviated=%d bytes, full=%d bytes", result.length, fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")
@@ -112,7 +112,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
                 .log();
             return result;
         } catch (final Exception e) {
-            EcsLogger.error("com.artipie.npm")
+            EcsLogger.error("com.auto1.pantera.npm")
                 .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", fullContent.length()))
                 .eventCategory("cache")
                 .eventAction("generate_abbreviated")

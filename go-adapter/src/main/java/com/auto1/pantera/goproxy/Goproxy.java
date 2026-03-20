@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.goproxy;
+package com.auto1.pantera.goproxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Remaining;
-import com.artipie.asto.Storage;
-import com.artipie.asto.fs.RxFile;
-import com.artipie.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.RxFile;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
 import io.reactivex.Single;

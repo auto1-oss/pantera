@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.factory;
+package com.auto1.pantera.asto.factory;
 
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.log.EcsLogger;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -107,7 +107,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                         }
                         try {
                             res.put(type, (F) element.getDeclaredConstructor().newInstance());
-                            EcsLogger.debug("com.artipie.asto")
+                            EcsLogger.debug("com.auto1.pantera.asto")
                                 .message("Initiated factory (type: " + type + ", class: " + element.getSimpleName() + ")")
                                 .eventCategory("factory")
                                 .eventAction("factory_init")

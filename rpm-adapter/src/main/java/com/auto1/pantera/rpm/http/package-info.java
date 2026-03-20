@@ -8,5 +8,5 @@
  *
  * @since 0.7
  */
-package com.artipie.rpm.http;
+package com.auto1.pantera.rpm.http;
 

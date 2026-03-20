@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,7 +36,7 @@ public abstract class NpmPath {
         final Matcher matcher = this.pattern().matcher(abspath);
         if (matcher.matches()) {
             final String path = matcher.group(1);
-            EcsLogger.debug("com.artipie.npm")
+            EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Determined path")
                 .eventCategory("repository")
                 .eventAction("path_resolution")

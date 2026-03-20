@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.auth;
+package com.auto1.pantera.http.client.auth;
 
-import com.artipie.http.Headers;
-import com.artipie.http.client.FakeClientSlices;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.WwwAuthenticate;
-import com.artipie.http.ResponseBuilder;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.client.FakeClientSlices;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.WwwAuthenticate;
+import com.auto1.pantera.http.ResponseBuilder;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

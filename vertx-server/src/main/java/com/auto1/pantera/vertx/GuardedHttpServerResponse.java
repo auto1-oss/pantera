@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.vertx;
+package com.auto1.pantera.vertx;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.reactivex.core.http.HttpServerResponse;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -108,7 +108,7 @@ public final class GuardedHttpServerResponse {
                 return true;
             } catch (Exception e) {
                 // Response may have been ended by Vert.x internally
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message(String.format("Response end() failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_end")
@@ -119,7 +119,7 @@ public final class GuardedHttpServerResponse {
             }
         } else {
             // Already terminated by another path
-            EcsLogger.warn("com.artipie.vertx")
+            EcsLogger.warn("com.auto1.pantera.vertx")
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
@@ -145,7 +145,7 @@ public final class GuardedHttpServerResponse {
                 }
                 return true;
             } catch (Exception e) {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message(String.format("Response end(body) failed (likely already ended by Vert.x), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_end")
@@ -155,7 +155,7 @@ public final class GuardedHttpServerResponse {
                 return false;
             }
         } else {
-            EcsLogger.warn("com.artipie.vertx")
+            EcsLogger.warn("com.auto1.pantera.vertx")
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_end_duplicate")
@@ -186,7 +186,7 @@ public final class GuardedHttpServerResponse {
                 }
                 return true;
             } catch (Exception e) {
-                EcsLogger.debug("com.artipie.vertx")
+                EcsLogger.debug("com.auto1.pantera.vertx")
                     .message(String.format("Error response failed (likely already ended), caller=%s", caller))
                     .eventCategory("http")
                     .eventAction("response_error")
@@ -196,7 +196,7 @@ public final class GuardedHttpServerResponse {
                 return false;
             }
         } else {
-            EcsLogger.warn("com.artipie.vertx")
+            EcsLogger.warn("com.auto1.pantera.vertx")
                 .message(String.format("End has already been called: '%s', caller=%s, terminatedBy=%s", this.requestId, caller, this.terminatedBy.get()))
                 .eventCategory("http")
                 .eventAction("response_error_duplicate")

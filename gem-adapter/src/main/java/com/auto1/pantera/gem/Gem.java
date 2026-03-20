@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem;
+package com.auto1.pantera.gem;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Copy;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.misc.UncheckedSupplier;
-import com.artipie.gem.GemMeta.MetaInfo;
-import com.artipie.gem.ruby.RubyGemDependencies;
-import com.artipie.gem.ruby.RubyGemIndex;
-import com.artipie.gem.ruby.RubyGemMeta;
-import com.artipie.gem.ruby.SharedRuntime;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Copy;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.gem.GemMeta.MetaInfo;
+import com.auto1.pantera.gem.ruby.RubyGemDependencies;
+import com.auto1.pantera.gem.ruby.RubyGemIndex;
+import com.auto1.pantera.gem.ruby.RubyGemMeta;
+import com.auto1.pantera.gem.ruby.SharedRuntime;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;

@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rt;
+package com.auto1.pantera.http.rt;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import com.artipie.http.Response;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.rq.RequestLine;
 
 /**
  * Route path.

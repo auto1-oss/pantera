@@ -7,4 +7,4 @@
  * Artipie permissions test.
  * @since 1.2
  */
-package com.artipie.security.perms;
+package com.auto1.pantera.security.perms;

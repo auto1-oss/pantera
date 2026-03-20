@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.DigestVerification;
-import com.artipie.asto.cache.Remote;
-import com.artipie.asto.ext.Digests;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.DigestVerification;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import io.reactivex.Flowable;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
@@ -150,7 +150,7 @@ final class CachedProxySlice implements Slice {
         final Content body
     ) {
         final String path = line.uri().getPath();
-        EcsLogger.info("com.artipie.go")
+        EcsLogger.info("com.auto1.pantera.go")
             .message("Processing Go proxy request")
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -159,7 +159,7 @@ final class CachedProxySlice implements Slice {
             .log();
 
         if ("/".equals(path) || path.isEmpty()) {
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Handling root path")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -171,7 +171,7 @@ final class CachedProxySlice implements Slice {
 
         // For non-artifact paths (e.g., list endpoints), skip cooldown and cache directly
         if (!matcher.matches()) {
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Non-artifact path, skipping cooldown")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -184,7 +184,7 @@ final class CachedProxySlice implements Slice {
         final String module = matcher.group("module");
         final String version = matcher.group("version");
         final String user = new Login(headers).getValue();
-        EcsLogger.debug("com.artipie.go")
+        EcsLogger.debug("com.auto1.pantera.go")
             .message("Go artifact request")
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -202,7 +202,7 @@ final class CachedProxySlice implements Slice {
         ).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT - serve immediately without any network calls
-                EcsLogger.info("com.artipie.go")
+                EcsLogger.info("com.auto1.pantera.go")
                     .message("Cache hit, serving cached artifact (offline-safe)")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -222,7 +222,7 @@ final class CachedProxySlice implements Slice {
             }
 
             // Cache MISS - now we need network, evaluate cooldown
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Cache miss, evaluating cooldown")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -243,7 +243,7 @@ final class CachedProxySlice implements Slice {
             return this.cooldown.evaluate(request, this.inspector)
                 .thenCompose(result -> {
                     if (result.blocked()) {
-                        EcsLogger.info("com.artipie.go")
+                        EcsLogger.info("com.auto1.pantera.go")
                             .message("Blocked Go artifact due to cooldown: " + result.block().orElseThrow().reason())
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -255,7 +255,7 @@ final class CachedProxySlice implements Slice {
                             CooldownResponses.forbidden(result.block().orElseThrow())
                         );
                     }
-                    EcsLogger.debug("com.artipie.go")
+                    EcsLogger.debug("com.auto1.pantera.go")
                         .message("Cooldown passed, proceeding with fetch")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -266,7 +266,7 @@ final class CachedProxySlice implements Slice {
                     // Get the release date for database event
                     return this.inspector.releaseDate(module, version)
                         .thenCompose(releaseDate -> {
-                            EcsLogger.debug("com.artipie.go")
+                            EcsLogger.debug("com.auto1.pantera.go")
                                 .message("Release date retrieved")
                                 .eventCategory("repository")
                                 .eventAction("proxy_request")
@@ -309,7 +309,7 @@ final class CachedProxySlice implements Slice {
         ).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT - serve immediately without contacting remote
-                EcsLogger.debug("com.artipie.go")
+                EcsLogger.debug("com.auto1.pantera.go")
                     .message("Cache hit, serving cached content")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -327,7 +327,7 @@ final class CachedProxySlice implements Slice {
                 );
             }
             // Cache MISS - fetch from remote with checksum validation
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Cache miss, fetching from remote")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -364,7 +364,7 @@ final class CachedProxySlice implements Slice {
             .exceptionally(err -> {
                 // Network error during HEAD - log and continue with empty headers
                 // This allows cache to work in degraded mode (no checksum validation)
-                EcsLogger.warn("com.artipie.go")
+                EcsLogger.warn("com.auto1.pantera.go")
                     .message("Remote HEAD failed, proceeding without checksum validation")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -401,7 +401,7 @@ final class CachedProxySlice implements Slice {
                             })
                             .exceptionally(err -> {
                                 // Network error during fetch - complete with empty
-                                EcsLogger.warn("com.artipie.go")
+                                EcsLogger.warn("com.auto1.pantera.go")
                                     .message("Remote fetch failed")
                                     .eventCategory("repository")
                                     .eventAction("proxy_request")
@@ -421,7 +421,7 @@ final class CachedProxySlice implements Slice {
                     if (throwable == null && content.isPresent()) {
                         // Record database event ONLY after successful cache load for .zip files
                         if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
-                            EcsLogger.debug("com.artipie.go")
+                            EcsLogger.debug("com.auto1.pantera.go")
                                 .message("Attempting to enqueue Go proxy event")
                                 .eventCategory("repository")
                                 .eventAction("proxy_request")
@@ -442,7 +442,7 @@ final class CachedProxySlice implements Slice {
                             .build();
                     }
                     if (throwable != null) {
-                        EcsLogger.error("com.artipie.go")
+                        EcsLogger.error("com.auto1.pantera.go")
                             .message("Failed to fetch through cache")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -450,7 +450,7 @@ final class CachedProxySlice implements Slice {
                             .error(throwable)
                             .log();
                     } else {
-                        EcsLogger.warn("com.artipie.go")
+                        EcsLogger.warn("com.auto1.pantera.go")
                             .message("Cache load returned empty, returning 404")
                             .eventCategory("repository")
                             .eventAction("proxy_request")
@@ -479,7 +479,7 @@ final class CachedProxySlice implements Slice {
                 .map(Header::getValue)
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)));
         } catch (final DateTimeParseException ex) {
-            EcsLogger.warn("com.artipie.go")
+            EcsLogger.warn("com.auto1.pantera.go")
                 .message("Failed to parse Last-Modified header: " + ex.getParsedString())
                 .eventCategory("http")
                 .eventAction("header_parse")
@@ -525,7 +525,7 @@ final class CachedProxySlice implements Slice {
      */
     private void addEventToQueue(final Key key, final String owner, final Optional<Long> release) {
         if (this.events.isEmpty()) {
-            EcsLogger.error("com.artipie.go")
+            EcsLogger.error("com.auto1.pantera.go")
                 .message("Events queue is NOT present - cannot enqueue events")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -542,7 +542,7 @@ final class CachedProxySlice implements Slice {
                 release
             );
             queue.add(event);
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
                 .eventCategory("repository")
                 .eventAction("proxy_request")

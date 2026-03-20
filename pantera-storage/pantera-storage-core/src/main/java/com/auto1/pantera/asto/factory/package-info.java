@@ -8,5 +8,5 @@
  *
  * @since 1.13.0
  */
-package com.artipie.asto.factory;
+package com.auto1.pantera.asto.factory;
 

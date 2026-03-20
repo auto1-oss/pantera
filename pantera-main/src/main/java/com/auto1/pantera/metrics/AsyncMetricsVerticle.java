@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.metrics;
+package com.auto1.pantera.metrics;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
 import io.vertx.core.AbstractVerticle;
@@ -154,7 +154,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
 
         this.server.listen(ar -> {
             if (ar.succeeded()) {
-                EcsLogger.info("com.artipie.metrics.AsyncMetricsVerticle")
+                EcsLogger.info("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message(String.format("Async metrics server started with cache TTL %dms", this.cacheTtlMs))
                     .eventCategory("configuration")
                     .eventAction("metrics_server_start")
@@ -164,7 +164,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                     .log();
                 startPromise.complete();
             } else {
-                EcsLogger.error("com.artipie.metrics.AsyncMetricsVerticle")
+                EcsLogger.error("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message("Failed to start async metrics server")
                     .eventCategory("configuration")
                     .eventAction("metrics_server_start")
@@ -181,7 +181,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
         if (this.server != null) {
             this.server.close(ar -> {
                 if (ar.succeeded()) {
-                    EcsLogger.info("com.artipie.metrics.AsyncMetricsVerticle")
+                    EcsLogger.info("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                         .message("Async metrics server stopped")
                         .eventCategory("configuration")
                         .eventAction("metrics_server_stop")
@@ -246,7 +246,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 this.cachedMetrics.set(newCache);
                 promise.complete(metrics);
             } catch (Exception e) {
-                EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
+                EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message("Metrics scrape failed, using stale cache")
                     .eventCategory("metrics")
                     .eventAction("scrape")
@@ -331,7 +331,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
 
         // Log slow scrapes (> 1 second)
         if (scrapeDuration > 1000) {
-            EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
+            EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                 .message(String.format("Slow metrics scrape detected: %d bytes", result.getBytes(StandardCharsets.UTF_8).length))
                 .eventCategory("metrics")
                 .eventAction("scrape")
@@ -431,7 +431,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
             }
         }, false, ar -> {
             if (ar.failed()) {
-                EcsLogger.warn("com.artipie.metrics.AsyncMetricsVerticle")
+                EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message("Cache refresh failed")
                     .eventCategory("metrics")
                     .eventAction("cache_refresh")

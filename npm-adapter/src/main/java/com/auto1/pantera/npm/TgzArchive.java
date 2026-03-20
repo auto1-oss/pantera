@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.ArtipieIOException;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.ArtipieIOException;
 import io.reactivex.Completable;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.cache.BaseCachedProxySlice;
-import com.artipie.http.cache.DigestComputer;
-import com.artipie.http.cache.ProxyCacheConfig;
-import com.artipie.http.cache.SidecarFile;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.BaseCachedProxySlice;
+import com.auto1.pantera.http.cache.DigestComputer;
+import com.auto1.pantera.http.cache.ProxyCacheConfig;
+import com.auto1.pantera.http.cache.SidecarFile;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;

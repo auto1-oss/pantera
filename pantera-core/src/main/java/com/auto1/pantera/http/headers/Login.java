@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.headers;
+package com.auto1.pantera.http.headers;
 
-import com.artipie.http.Headers;
-import com.artipie.http.auth.AuthzSlice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.AuthzSlice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.slf4j.MDC;
 
 import java.nio.charset.StandardCharsets;
@@ -86,7 +86,7 @@ public final class Login extends Header {
                     return Optional.of(credentials);
                 }
             } catch (final IllegalArgumentException ex) {
-                EcsLogger.debug("com.artipie.http")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("Failed to decode Basic auth credentials")
                     .error(ex)
                     .log();

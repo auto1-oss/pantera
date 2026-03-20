@@ -7,4 +7,4 @@
  * Debian adapter.
  * @since 0.2
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;

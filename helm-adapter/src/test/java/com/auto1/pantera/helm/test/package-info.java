@@ -7,4 +7,4 @@
  * Package for auxiliary classes in test scope.
  * @since 0.3
  */
-package com.artipie.helm.test;
+package com.auto1.pantera.helm.test;

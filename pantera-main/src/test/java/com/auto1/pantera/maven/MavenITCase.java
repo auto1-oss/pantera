@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.test.TestResource;
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -72,7 +72,7 @@ public final class MavenITCase {
             "Failed to get dependency",
             new ContainerResultMatcher(),
             "mvn", "-B", "-q", "-s", stn, "-e", "dependency:get",
-            String.format("-Dartifact=com.artipie:%s:%s", type, vers)
+            String.format("-Dartifact=com.auto1.pantera:%s:%s", type, vers)
         );
     }
 
@@ -97,7 +97,7 @@ public final class MavenITCase {
             "Download failed",
             new ContainerResultMatcher(ContainerResultMatcher.SUCCESS),
             "mvn", "-B", "-q", "-s", stn, "-U", "dependency:get",
-            String.format("-Dartifact=com.artipie:%s:%s", type, vers)
+            String.format("-Dartifact=com.auto1.pantera:%s:%s", type, vers)
         );
     }
 

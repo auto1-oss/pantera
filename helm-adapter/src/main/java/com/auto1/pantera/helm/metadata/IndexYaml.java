@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.helm.metadata;
+package com.auto1.pantera.helm.metadata;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Remaining;
-import com.artipie.asto.Storage;
-import com.artipie.asto.rx.RxStorage;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.helm.ChartYaml;
-import com.artipie.helm.TgzArchive;
-import com.artipie.helm.misc.DateTimeNow;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.rx.RxStorage;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.helm.ChartYaml;
+import com.auto1.pantera.helm.TgzArchive;
+import com.auto1.pantera.helm.misc.DateTimeNow;
 import io.reactivex.Completable;
 import io.reactivex.Single;
 import java.io.FileNotFoundException;

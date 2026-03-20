@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.cache;
+package com.auto1.pantera.settings.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.ArtipieException;
-import com.artipie.http.filter.Filters;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.misc.Property;
-import com.artipie.cache.CacheConfig;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.filter.Filters;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.Property;
+import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
@@ -70,9 +70,9 @@ public class GuavaFiltersCache implements FiltersCache {
         if (existing != null) {
             // Cache HIT
             final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("filters", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("filters", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheOperationDuration("filters", "l1", "get", durationMs);
             }
             return existing;
@@ -80,9 +80,9 @@ public class GuavaFiltersCache implements FiltersCache {
 
         // Cache MISS
         final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("filters", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("filters", "l1");
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("filters", "l1", "get", durationMs);
         }
 
@@ -94,8 +94,8 @@ public class GuavaFiltersCache implements FiltersCache {
 
         // Record PUT latency
         final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("filters", "l1", "put", putDurationMs);
         }
 
@@ -136,8 +136,8 @@ public class GuavaFiltersCache implements FiltersCache {
         final Optional<Filters> filters,
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheEviction("filters", "l1", cause.toString().toLowerCase());
         }
     }

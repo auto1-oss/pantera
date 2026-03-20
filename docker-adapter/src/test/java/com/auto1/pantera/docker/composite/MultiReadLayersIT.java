@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.composite;
+package com.auto1.pantera.docker.composite;
 
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.misc.DigestFromContent;
-import com.artipie.docker.proxy.ProxyLayers;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.slice.LoggingSlice;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.misc.DigestFromContent;
+import com.auto1.pantera.docker.proxy.ProxyLayers;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.slice.LoggingSlice;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cluster;
+package com.auto1.pantera.cluster;
 
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
@@ -88,7 +88,7 @@ public final class ClusterEventBus implements AutoCloseable {
         this.pubCommands = this.pubConn.async();
         this.handlers = new ConcurrentHashMap<>();
         this.subConn.addListener(new Dispatcher());
-        EcsLogger.info("com.artipie.cluster")
+        EcsLogger.info("com.auto1.pantera.cluster")
             .message(
                 "Cluster event bus started (instance: "
                     + this.instanceId.substring(0, 8) + ")"
@@ -113,7 +113,7 @@ public final class ClusterEventBus implements AutoCloseable {
             ClusterEventBus.SEP, this.instanceId, payload
         );
         this.pubCommands.publish(channel, message);
-        EcsLogger.debug("com.artipie.cluster")
+        EcsLogger.debug("com.auto1.pantera.cluster")
             .message("Event published: " + topic)
             .eventCategory("cluster")
             .eventAction("event_publish")
@@ -139,7 +139,7 @@ public final class ClusterEventBus implements AutoCloseable {
             .add(handler);
         if (firstHandler) {
             this.subConn.async().subscribe(channel);
-            EcsLogger.debug("com.artipie.cluster")
+            EcsLogger.debug("com.auto1.pantera.cluster")
                 .message("Subscribed to topic: " + topic)
                 .eventCategory("cluster")
                 .eventAction("topic_subscribe")
@@ -171,7 +171,7 @@ public final class ClusterEventBus implements AutoCloseable {
     public void close() {
         this.subConn.close();
         this.pubConn.close();
-        EcsLogger.info("com.artipie.cluster")
+        EcsLogger.info("com.auto1.pantera.cluster")
             .message("Cluster event bus closed")
             .eventCategory("cluster")
             .eventAction("eventbus_stop")
@@ -210,7 +210,7 @@ public final class ClusterEventBus implements AutoCloseable {
                 try {
                     handler.accept(payload);
                 } catch (final Exception ex) {
-                    EcsLogger.error("com.artipie.cluster")
+                    EcsLogger.error("com.auto1.pantera.cluster")
                         .message(
                             "Event handler failed for topic: " + topic
                         )
@@ -222,7 +222,7 @@ public final class ClusterEventBus implements AutoCloseable {
                         .log();
                 }
             }
-            EcsLogger.debug("com.artipie.cluster")
+            EcsLogger.debug("com.auto1.pantera.cluster")
                 .message(
                     "Event dispatched: " + topic + " to "
                         + topicHandlers.size() + " handler(s)"

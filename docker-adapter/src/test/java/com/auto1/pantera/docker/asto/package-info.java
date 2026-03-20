@@ -7,5 +7,5 @@
  * Tests for ASTO implementations.
  * @since 0.1
  */
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 

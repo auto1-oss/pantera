@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.misc.ConfigDefaults;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
 import io.reactivex.rxjava3.disposables.Disposable;
@@ -99,7 +99,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
         final String msg = record.releaseDate().isPresent()
             ? String.format("Artifact publish recorded (release=%s)", record.releaseDate().get())
             : "Artifact publish recorded";
-        EcsLogger.info("com.artipie.audit")
+        EcsLogger.info("com.auto1.pantera.audit")
             .message(msg)
             .eventCategory("artifact")
             .eventAction("artifact_publish")
@@ -127,7 +127,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
         @Override
         public void onSubscribe(final @NonNull Disposable disposable) {
-            EcsLogger.debug("com.artipie.db")
+            EcsLogger.debug("com.auto1.pantera.db")
                 .message("Subscribed to insert/delete db records")
                 .eventCategory("database")
                 .eventAction("subscription_start")
@@ -196,7 +196,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             delete.execute();
                         }
                     } catch (final SQLException ex) {
-                        EcsLogger.error("com.artipie.db")
+                        EcsLogger.error("com.auto1.pantera.db")
                             .message("Failed to process artifact event")
                             .eventCategory("database")
                             .eventAction("artifact_event_process")
@@ -213,7 +213,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             } catch (final SQLException ex) {
                 final int failures = this.consecutiveFailures.incrementAndGet();
                 if (failures <= 3) {
-                    EcsLogger.error("com.artipie.db")
+                    EcsLogger.error("com.auto1.pantera.db")
                         .message("Batch commit failed, re-queuing " + sortedEvents.size()
                             + " events (attempt " + failures + "/3)")
                         .eventCategory("database")
@@ -231,7 +231,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     }
                     sortedEvents.forEach(DbConsumer.this.subject::onNext);
                 } else {
-                    EcsLogger.error("com.artipie.db")
+                    EcsLogger.error("com.auto1.pantera.db")
                         .message("Writing " + sortedEvents.size()
                             + " events to dead-letter after " + failures
                             + " consecutive batch failures")
@@ -248,7 +248,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                         );
                         dlWriter.write(sortedEvents, ex, failures);
                     } catch (final IOException dlError) {
-                        EcsLogger.error("com.artipie.db")
+                        EcsLogger.error("com.auto1.pantera.db")
                             .message(String.format(
                                 "Failed to write dead-letter file, dropping %d events",
                                 sortedEvents.size()))
@@ -266,7 +266,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                     // Only re-queue a small number of individual errors
                     errors.forEach(DbConsumer.this.subject::onNext);
                 } else {
-                    EcsLogger.error("com.artipie.db")
+                    EcsLogger.error("com.auto1.pantera.db")
                         .message("Dropping " + errors.size()
                             + " individually failed events (too many errors in batch)")
                         .eventCategory("database")
@@ -279,7 +279,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
         @Override
         public void onError(final @NonNull Throwable error) {
-            EcsLogger.error("com.artipie.db")
+            EcsLogger.error("com.auto1.pantera.db")
                 .message("Fatal error in database consumer")
                 .eventCategory("database")
                 .eventAction("subscription_error")
@@ -290,7 +290,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
         @Override
         public void onComplete() {
-            EcsLogger.debug("com.artipie.db")
+            EcsLogger.debug("com.auto1.pantera.db")
                 .message("Subscription cancelled")
                 .eventCategory("database")
                 .eventAction("subscription_complete")

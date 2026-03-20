@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.http.Headers;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.headers.Authorization;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.headers.Authorization;
 
 import java.util.stream.Collectors;
 import java.util.stream.Stream;

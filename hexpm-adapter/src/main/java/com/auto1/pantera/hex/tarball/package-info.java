@@ -8,5 +8,5 @@
  *
  * @since 0.1
  */
-package com.artipie.hex.tarball;
+package com.auto1.pantera.hex.tarball;
 

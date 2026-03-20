@@ -8,5 +8,5 @@
  *
  * @since 0.2
  */
-package com.artipie.hex.utils;
+package com.auto1.pantera.hex.utils;
 

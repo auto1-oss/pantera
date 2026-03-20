@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.meta;
+package com.auto1.pantera.pypi.meta;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -122,7 +122,7 @@ public interface Metadata {
             ) {
                 return FromArchive.readArchive(archive);
             } catch (final IOException ex) {
-                EcsLogger.error("com.artipie.pypi")
+                EcsLogger.error("com.auto1.pantera.pypi")
                     .message("Failed to read metadata from archive")
                     .eventCategory("repository")
                     .eventAction("metadata_extraction")

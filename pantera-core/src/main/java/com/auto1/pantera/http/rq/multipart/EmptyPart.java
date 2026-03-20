@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.http.Headers;
+import com.auto1.pantera.http.Headers;
 import java.nio.ByteBuffer;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;

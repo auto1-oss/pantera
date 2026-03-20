@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
-import com.artipie.asto.fs.RxFile;
+import com.auto1.pantera.asto.fs.RxFile;
 import io.reactivex.Flowable;
 import java.io.IOException;
 import java.nio.ByteBuffer;

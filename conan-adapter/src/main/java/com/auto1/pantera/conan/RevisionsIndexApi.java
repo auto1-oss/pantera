@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package  com.artipie.conan;
+package  com.auto1.pantera.conan;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.lock.Lock;
-import com.artipie.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.lock.Lock;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;

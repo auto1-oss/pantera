@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.scripting.ScriptRunner;
-import com.artipie.settings.Settings;
-import com.artipie.settings.YamlSettings;
-import com.artipie.settings.repo.MapRepositories;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.settings.repo.RepoConfigYaml;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.scripting.ScriptRunner;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.YamlSettings;
+import com.auto1.pantera.settings.repo.MapRepositories;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.repo.RepoConfigYaml;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi;
+package com.auto1.pantera.pypi;
 
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import org.cactoos.list.ListOf;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

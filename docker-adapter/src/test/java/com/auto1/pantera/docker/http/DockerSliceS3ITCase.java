@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
 import com.adobe.testing.s3mock.junit5.S3MockExtension;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.junit.DockerClient;
-import com.artipie.docker.junit.DockerClientSupport;
-import com.artipie.docker.junit.DockerRepository;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.junit.DockerClient;
+import com.auto1.pantera.docker.junit.DockerClientSupport;
+import com.auto1.pantera.docker.junit.DockerRepository;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.hamcrest.Matcher;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -75,7 +75,7 @@ final class DockerSliceS3ITCase {
         this.storage = StoragesLoader.STORAGES
             .newObject(
                 "s3",
-                new com.artipie.asto.factory.Config.YamlStorageConfig(
+                new com.auto1.pantera.asto.factory.Config.YamlStorageConfig(
                     Yaml.createYamlMappingBuilder()
                         .add("region", "buck1")
                         .add("bucket", this.bucket)

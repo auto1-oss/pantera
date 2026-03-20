@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.ruby;
+package com.auto1.pantera.gem.ruby;
 
-import com.artipie.gem.GemMeta;
+import com.auto1.pantera.gem.GemMeta;
 import java.nio.file.Path;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;

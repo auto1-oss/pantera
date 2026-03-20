@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.cache.ProxyCacheConfig;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.ProxyCacheConfig;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
 import java.time.Duration;
@@ -43,7 +43,7 @@ public final class MavenProxySlice extends Slice.Wrap {
     public MavenProxySlice(final ClientSlices clients, final URI remote,
         final Authenticator auth, final Cache cache) {
         this(clients, remote, auth, cache, Optional.empty(), "*",
-            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
+            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty());
     }
 
     /**
@@ -57,7 +57,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Authenticator authenticator
     ) {
         this(client, uri, authenticator, Cache.NOP, Optional.empty(), "*",
-            "maven-proxy", com.artipie.cooldown.NoopCooldownService.INSTANCE, Optional.empty(),
+            "maven-proxy", com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, Optional.empty(),
             Duration.ofHours(24), Duration.ofHours(24), true);
     }
 
@@ -81,7 +81,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.CooldownService cooldown,
         final Optional<Storage> storage
     ) {
         this(clients, remote, auth, cache, events, rname, rtype, cooldown, storage,
@@ -112,7 +112,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final Optional<Queue<ProxyArtifactEvent>> events,
         final String rname,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl,
         final Duration negativeCacheTtl,
@@ -141,7 +141,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.CooldownService cooldown,
         final Optional<Storage> storage,
         final Duration metadataTtl
     ) {
@@ -162,7 +162,7 @@ public final class MavenProxySlice extends Slice.Wrap {
         final String rname,
         final String upstreamUrl,
         final String rtype,
-        final com.artipie.cooldown.CooldownService cooldown,
+        final com.auto1.pantera.cooldown.CooldownService cooldown,
         final MavenCooldownInspector inspector,
         final Optional<Storage> storage,
         final Duration metadataTtl
@@ -171,8 +171,8 @@ public final class MavenProxySlice extends Slice.Wrap {
         // delegates to the cooldown service for freshness enforcement.
         final ProxyCacheConfig config = ProxyCacheConfig.withCooldown();
         // Create MetadataCache with provided TTL
-        final com.artipie.cache.ValkeyConnection valkeyConn =
-            com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+        final com.auto1.pantera.cache.ValkeyConnection valkeyConn =
+            com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
         final MetadataCache metadataCache = new MetadataCache(
             metadataTtl,
             new MavenCacheConfig().metadataMaxSize(),

@@ -8,4 +8,4 @@
  *
  * @since 0.9
  */
-package com.artipie.npm.misc;
+package com.auto1.pantera.npm.misc;

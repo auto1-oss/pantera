@@ -3,10 +3,10 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.test.TestResource;
 
 /**
  * Newton.Json package resource.

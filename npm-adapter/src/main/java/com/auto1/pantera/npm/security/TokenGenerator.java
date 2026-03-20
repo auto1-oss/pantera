@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.security;
+package com.auto1.pantera.npm.security;
 
-import com.artipie.npm.model.NpmToken;
-import com.artipie.npm.model.User;
+import com.auto1.pantera.npm.model.NpmToken;
+import com.auto1.pantera.npm.model.User;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;

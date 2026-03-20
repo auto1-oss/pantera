@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Catalog;
-import com.artipie.docker.Docker;
-import com.artipie.docker.Layers;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Repo;
-import com.artipie.docker.asto.Uploads;
-import com.artipie.docker.fake.FakeCatalogDocker;
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.asto.Uploads;
+import com.auto1.pantera.docker.fake.FakeCatalogDocker;
+import com.auto1.pantera.docker.misc.Pagination;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Assertions;

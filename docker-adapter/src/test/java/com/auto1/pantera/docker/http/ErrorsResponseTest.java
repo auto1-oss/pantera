@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.docker.Digest;
-import com.artipie.docker.error.BlobUnknownError;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.hm.RsHasBody;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.BlobUnknownError;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.hm.RsHasBody;
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test case for {@code com.artipie.docker.error.DockerError.json()}.
+ * Test case for {@code com.auto1.pantera.docker.error.DockerError.json()}.
  */
 public final class ErrorsResponseTest {
     @Test

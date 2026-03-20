@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 
 /**
  * Throw this error on any event processing error occurred in consumer.

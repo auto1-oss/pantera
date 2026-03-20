@@ -3,15 +3,15 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.concurrent.CompletableFuture;
 
 /**
  * Docker registry storage main object.
- * @see com.artipie.docker.asto.AstoDocker
+ * @see com.auto1.pantera.docker.asto.AstoDocker
  */
 public interface Docker {
 

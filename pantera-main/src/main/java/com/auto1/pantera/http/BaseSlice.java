@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.micrometer.MicrometerSlice;
-import com.artipie.settings.MetricsContext;
+import com.auto1.pantera.micrometer.MicrometerSlice;
+import com.auto1.pantera.settings.MetricsContext;
 
 /**
  * Slice is base for any slice served by Artipie.

@@ -2,27 +2,27 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.docker;
+package com.auto1.pantera.adapters.docker;
 
-import com.artipie.asto.Content;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Docker;
-import com.artipie.docker.cache.DockerProxyCooldownInspector;
-import com.artipie.docker.http.DigestHeader;
-import com.artipie.docker.http.PathPatterns;
-import com.artipie.docker.http.manifest.ManifestRequest;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.http.PathPatterns;
+import com.auto1.pantera.docker.http.manifest.ManifestRequest;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import javax.json.Json;
 import javax.json.JsonException;
@@ -85,7 +85,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         try {
             request = ManifestRequest.from(line);
         } catch (final IllegalArgumentException ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to parse manifest request, falling through to origin")
                 .error(ex)
                 .log();
@@ -168,7 +168,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                                 );
                         });
                 }).exceptionally(ex -> {
-                    EcsLogger.warn("com.artipie.docker")
+                    EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Failed to process manifest")
                         .eventCategory("docker")
                         .eventAction("manifest_process")
@@ -223,7 +223,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).whenComplete((release, error) -> {
             if (error != null) {
-                EcsLogger.warn("com.artipie.docker")
+                EcsLogger.warn("com.auto1.pantera.docker")
                     .message("Failed to extract release date from config")
                     .eventCategory("docker")
                     .eventAction("release_date_extract")
@@ -233,7 +233,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                     .error(error)
                     .log();
             } else if (release.isPresent()) {
-                EcsLogger.debug("com.artipie.docker")
+                EcsLogger.debug("com.auto1.pantera.docker")
                     .message("Extracted release date from config")
                     .eventCategory("docker")
                     .eventAction("release_date_extract")
@@ -246,7 +246,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            EcsLogger.warn("com.artipie.docker")
+            EcsLogger.warn("com.auto1.pantera.docker")
                 .message("Exception extracting release date")
                 .eventCategory("docker")
                 .eventAction("release_date_extract")
@@ -287,7 +287,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 .thenApply(this::extractCreatedInstant);
         }).thenAccept(release -> {
             if (release.isPresent()) {
-                EcsLogger.debug("com.artipie.docker")
+                EcsLogger.debug("com.auto1.pantera.docker")
                     .message("Extracted release date from config")
                     .eventCategory("docker")
                     .eventAction("release_date_extract")
@@ -300,7 +300,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 digest.ifPresent(d -> this.inspector.recordRelease(artifact, d, release.get()));
             }
         }).exceptionally(ex -> {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to extract release date from config")
                 .eventCategory("docker")
                 .eventAction("release_date_extract")
@@ -318,7 +318,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             final Digest digest = new DigestHeader(headers).value();
             return Optional.of(new Manifest(digest, bytes));
         } catch (final IllegalArgumentException ex) {
-            EcsLogger.warn("com.artipie.docker")
+            EcsLogger.warn("com.auto1.pantera.docker")
                 .message("Failed to build manifest from response headers")
                 .eventCategory("docker")
                 .eventAction("manifest_build")
@@ -337,7 +337,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 return Optional.of(Instant.parse(created));
             }
         } catch (final DateTimeParseException | JsonException ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Unable to parse manifest config created field")
                 .eventCategory("docker")
                 .eventAction("manifest_parse")
@@ -367,7 +367,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 try {
                     return Optional.of(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value)));
                 } catch (final DateTimeParseException ex) {
-                    EcsLogger.debug("com.artipie.docker")
+                    EcsLogger.debug("com.auto1.pantera.docker")
                         .message("Failed to parse date header for release time")
                         .error(ex)
                         .log();

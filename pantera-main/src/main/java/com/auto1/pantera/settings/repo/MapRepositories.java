@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContextExecutor;
-import com.artipie.settings.AliasSettings;
-import com.artipie.settings.ConfigFile;
-import com.artipie.settings.Settings;
-import com.artipie.settings.StorageByAlias;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.settings.AliasSettings;
+import com.auto1.pantera.settings.ConfigFile;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.StorageByAlias;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
@@ -94,7 +94,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
         } else {
             // ENTERPRISE: Non-blocking startup - server accepts requests while configs load.
             // Empty snapshot serves 404 until first load completes (typically <1s).
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Repository loading started asynchronously (non-blocking startup)")
                 .eventCategory("configuration")
                 .eventAction("startup")
@@ -145,7 +145,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                 (snap, err) -> {
                     this.reloading.compareAndSet(created, null);
                     if (err != null) {
-                        EcsLogger.error("com.artipie.settings")
+                        EcsLogger.error("com.auto1.pantera.settings")
                             .message("Failed to refresh repository configurations")
                             .eventCategory("configuration")
                             .eventAction("config_load")
@@ -163,7 +163,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
 
     private RepoSnapshot applySnapshot(final RepoSnapshot snap) {
         this.snapshot.set(snap);
-        EcsLogger.info("com.artipie.settings")
+        EcsLogger.info("com.auto1.pantera.settings")
             .message(
                 String.format(
                     "Loaded %d repository configurations (version %d)",
@@ -203,7 +203,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
             this.version.incrementAndGet()
         );
         final long duration = System.nanoTime() - start;
-        EcsLogger.debug("com.artipie.settings")
+        EcsLogger.debug("com.auto1.pantera.settings")
             .message(
                 String.format(
                     "Repository snapshot v%d built in %d ms",
@@ -238,7 +238,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                             this.settings.metrics().storage()
                         );
                     } catch (final Exception err) {
-                        EcsLogger.error("com.artipie.settings")
+                        EcsLogger.error("com.auto1.pantera.settings")
                             .message("Cannot parse repository config file")
                             .eventCategory("configuration")
                             .eventAction("config_parse")
@@ -250,7 +250,7 @@ public class MapRepositories implements Repositories, AutoCloseable {
                     }
                 }
             ).exceptionally(err -> {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to load repository config")
                     .eventCategory("configuration")
                     .eventAction("config_load")

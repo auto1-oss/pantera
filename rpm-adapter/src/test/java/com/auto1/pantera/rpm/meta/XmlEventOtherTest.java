@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 
-import com.artipie.asto.test.TestResource;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.hm.IsXmlEqual;
-import com.artipie.rpm.pkg.FilePackage;
-import com.artipie.rpm.pkg.FilePackageHeader;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.hm.IsXmlEqual;
+import com.auto1.pantera.rpm.pkg.FilePackage;
+import com.auto1.pantera.rpm.pkg.FilePackageHeader;
 import com.fasterxml.aalto.stax.OutputFactoryImpl;
 import java.io.IOException;
 import java.io.OutputStream;

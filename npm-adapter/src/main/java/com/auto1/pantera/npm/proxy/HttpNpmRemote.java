@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy;
+package com.auto1.pantera.npm.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.http.ArtipieHttpException;
-import com.artipie.http.Headers;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.asto.rx.RxFuture;
-import com.artipie.npm.misc.DateTimeNowStr;
-import com.artipie.npm.proxy.json.CachedContent;
-import com.artipie.npm.proxy.model.NpmAsset;
-import com.artipie.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.npm.misc.DateTimeNowStr;
+import com.auto1.pantera.npm.proxy.json.CachedContent;
+import com.auto1.pantera.npm.proxy.model.NpmAsset;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
@@ -75,7 +75,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 // Other errors (timeouts, connection issues) are propagated so
                 // they are not cached as 404.
                 if (HttpNpmRemote.isNotFoundError(throwable)) {
-                    EcsLogger.debug("com.artipie.npm")
+                    EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Package not found upstream (404)")
                         .eventCategory("repository")
                         .eventAction("get_package")
@@ -85,7 +85,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     return Maybe.empty();
                 }
                 // For transient errors, log and re-throw to prevent negative cache poisoning
-                EcsLogger.error("com.artipie.npm")
+                EcsLogger.error("com.auto1.pantera.npm")
                     .message("Error occurred when process get package call")
                     .eventCategory("repository")
                     .eventAction("get_package")
@@ -115,7 +115,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 // Distinguish between true 404s and transient errors so the
                 // negative cache only stores real "not found" responses.
                 if (HttpNpmRemote.isNotFoundError(throwable)) {
-                    EcsLogger.debug("com.artipie.npm")
+                    EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Asset not found upstream (404)")
                         .eventCategory("repository")
                         .eventAction("get_asset")
@@ -125,7 +125,7 @@ public final class HttpNpmRemote implements NpmRemote {
                     return Maybe.empty();
                 }
                 // For transient errors, log and re-throw to prevent negative cache poisoning
-                EcsLogger.error("com.artipie.npm")
+                EcsLogger.error("com.auto1.pantera.npm")
                     .message("Error occurred when process get asset call")
                     .eventCategory("repository")
                     .eventAction("get_asset")

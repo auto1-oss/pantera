@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.repository;
+package com.auto1.pantera.npm.repository;
 
-import com.artipie.npm.model.User;
+import com.auto1.pantera.npm.model.User;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 

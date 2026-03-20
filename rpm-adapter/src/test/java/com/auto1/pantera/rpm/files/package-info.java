@@ -8,4 +8,4 @@
  *
  * @since 0.8
  */
-package com.artipie.rpm.files;
+package com.auto1.pantera.rpm.files;

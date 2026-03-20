@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.pkg.Checksum;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.pkg.Checksum;
 import com.jcabi.matchers.XhtmlMatchers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

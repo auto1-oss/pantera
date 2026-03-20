@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cache;
+package com.auto1.pantera.cache;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.ArtipieException;
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.misc.Property;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.misc.Property;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.base.Strings;
 import org.apache.commons.lang3.NotImplementedException;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.misc.DispatchedStorage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.DispatchedStorage;
 
 import java.time.Duration;
 
@@ -66,7 +66,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .recordStats()
             .evictionListener(this::onEviction)
             .build();
-        EcsLogger.info("com.artipie.cache")
+        EcsLogger.info("com.auto1.pantera.cache")
             .message("StoragesCache initialized with config: " + config.toString())
             .eventCategory("cache")
             .eventAction("cache_init")
@@ -95,9 +95,9 @@ public class StoragesCache implements Cleanable<YamlMapping> {
         if (existing != null) {
             // Cache HIT
             final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheHit("storage", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheHit("storage", "l1");
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheOperationDuration("storage", "l1", "get", durationMs);
             }
             return existing;
@@ -105,9 +105,9 @@ public class StoragesCache implements Cleanable<YamlMapping> {
 
         // Cache MISS - create new storage
         final long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance().recordCacheMiss("storage", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance().recordCacheMiss("storage", "l1");
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("storage", "l1", "get", durationMs);
         }
 
@@ -127,8 +127,8 @@ public class StoragesCache implements Cleanable<YamlMapping> {
 
         // Record PUT latency
         final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("storage", "l1", "put", putDurationMs);
         }
 
@@ -172,7 +172,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
         final RemovalCause cause
     ) {
         if (storage != null && key != null) {
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Storage evicted from cache (type: " + key.string("type") + ", cause: " + cause.toString() + ")")
                 .eventCategory("cache")
                 .eventAction("cache_evict")
@@ -180,8 +180,8 @@ public class StoragesCache implements Cleanable<YamlMapping> {
                 .log();
 
             // Record eviction metric
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheEviction("storage", "l1", cause.toString().toLowerCase());
             }
         }

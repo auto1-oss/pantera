@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.cache;
+package com.auto1.pantera.asto.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.rx.RxFuture;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -62,7 +62,7 @@ public final class FromStorageCache implements Cache {
                 ).map(Optional::of)
             )
             .doOnError(err ->
-                EcsLogger.warn("com.artipie.asto")
+                EcsLogger.warn("com.auto1.pantera.asto")
                     .message("Failed to read cached item: " + key.string())
                     .eventCategory("cache")
                     .eventAction("cache_read")
@@ -118,7 +118,7 @@ public final class FromStorageCache implements Cache {
                         sto.save(key, new Content.From(buffer.toByteArray()))
                             .whenComplete((ignored, err) -> {
                                 if (err != null) {
-                                    EcsLogger.warn("com.artipie.asto.cache")
+                                    EcsLogger.warn("com.auto1.pantera.asto.cache")
                                         .message(String.format("Stream-through: failed to save to cache for key '%s'", key.string()))
                                         .eventCategory("cache")
                                         .eventAction("stream_through_save")
@@ -128,7 +128,7 @@ public final class FromStorageCache implements Cache {
                                 }
                             });
                     } catch (final Exception ex) {
-                        EcsLogger.warn("com.artipie.asto.cache")
+                        EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: exception initiating save for key '%s'", key.string()))
                             .eventCategory("cache")
                             .eventAction("stream_through_save")

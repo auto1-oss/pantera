@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 
 import com.google.common.primitives.Ints;
 import java.text.ParseException;

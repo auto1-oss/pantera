@@ -8,4 +8,4 @@
  *
  * @since 0.30
  */
-package com.artipie.api.perms;
+package com.auto1.pantera.api.perms;

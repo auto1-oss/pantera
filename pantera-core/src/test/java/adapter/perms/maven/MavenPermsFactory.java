@@ -4,9 +4,9 @@
  */
 package adapter.perms.maven;
 
-import com.artipie.security.perms.ArtipiePermissionFactory;
-import com.artipie.security.perms.PermissionConfig;
-import com.artipie.security.perms.PermissionFactory;
+import com.auto1.pantera.security.perms.ArtipiePermissionFactory;
+import com.auto1.pantera.security.perms.PermissionConfig;
+import com.auto1.pantera.security.perms.PermissionFactory;
 import java.security.AllPermission;
 import java.security.PermissionCollection;
 

@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 import org.apache.hc.core5.net.URIBuilder;
 
 import java.net.URI;
@@ -78,7 +78,7 @@ public final class TrimPathSlice implements Slice {
         final boolean recursion = !new RqHeaders(headers, TrimPathSlice.HDR_FULL_PATH).isEmpty();
         if (matcher.matches() && recursion) {
             // Recursion detected - pass through without trimming
-            org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+            org.slf4j.LoggerFactory.getLogger("com.auto1.pantera.http.slice.TrimPathSlice")
                 .debug("TrimPathSlice recursion: path={}, pattern={}", full, this.ptn);
             return this.slice.response(line, headers, body);
         }
@@ -92,7 +92,7 @@ public final class TrimPathSlice implements Slice {
                 throw new ArtipieException(e);
             }
             final String trimmedPath = respUri.getPath();
-            org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+            org.slf4j.LoggerFactory.getLogger("com.auto1.pantera.http.slice.TrimPathSlice")
                 .debug("TrimPathSlice trim: {} -> {} (pattern={})", full, trimmedPath, this.ptn);
             return this.slice.response(
                 new RequestLine(line.method(), respUri, line.version()),
@@ -101,7 +101,7 @@ public final class TrimPathSlice implements Slice {
             );
         }
         // Consume request body to prevent Vert.x request leak
-        org.slf4j.LoggerFactory.getLogger("com.artipie.http.slice.TrimPathSlice")
+        org.slf4j.LoggerFactory.getLogger("com.auto1.pantera.http.slice.TrimPathSlice")
             .warn("TrimPathSlice NO MATCH: path={}, pattern={}", full, this.ptn);
         return body.asBytesFuture().thenApply(ignored ->
             ResponseBuilder.internalError()

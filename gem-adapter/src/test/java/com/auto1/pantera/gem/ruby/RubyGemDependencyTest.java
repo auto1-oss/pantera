@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.ruby;
+package com.auto1.pantera.gem.ruby;
 
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.test.TestResource;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.Arrays;

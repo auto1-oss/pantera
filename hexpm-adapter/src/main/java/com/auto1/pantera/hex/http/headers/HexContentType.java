@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.hex.http.headers;
+package com.auto1.pantera.hex.http.headers;
 
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Accept;
-import com.artipie.http.headers.ContentType;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Accept;
+import com.auto1.pantera.http.headers.ContentType;
 
 import java.util.Map;
 

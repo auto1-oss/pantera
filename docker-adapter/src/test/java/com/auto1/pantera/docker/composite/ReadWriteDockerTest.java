@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.composite;
+package com.auto1.pantera.docker.composite;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.Catalog;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.fake.FakeCatalogDocker;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.docker.proxy.ProxyDocker;
-import com.artipie.http.ResponseBuilder;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.fake.FakeCatalogDocker;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.docker.proxy.ProxyDocker;
+import com.auto1.pantera.http.ResponseBuilder;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsInstanceOf;

@@ -8,4 +8,4 @@
  *
  * @since 1.17
  */
-package com.artipie.asto.events;
+package com.auto1.pantera.asto.events;

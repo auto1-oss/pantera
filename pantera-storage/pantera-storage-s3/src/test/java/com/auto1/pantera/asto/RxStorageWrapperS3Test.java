@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -10,12 +10,12 @@ import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.ext.ContentAs;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.rx.RxStorage;
-import com.artipie.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.ext.ContentAs;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.rx.RxStorage;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Single;
 import org.hamcrest.MatcherAssert;

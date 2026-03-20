@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -22,7 +22,7 @@ import java.util.concurrent.CompletableFuture;
  * Uses bounded Caffeine cache to prevent unbounded memory growth in Old Gen.
  */
 final class PyProxyCooldownInspector implements CooldownInspector,
-    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
     /**
      * Bounded cache of artifact versions and their release times.
      * Key format: "artifact:version"
@@ -30,7 +30,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
      */
     private final com.github.benmanes.caffeine.cache.Cache<String, Instant> releases;
 
-    private final com.artipie.http.Slice metadata;
+    private final com.auto1.pantera.http.Slice metadata;
 
     /**
      * Default constructor.
@@ -39,7 +39,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
         this(null);
     }
 
-    PyProxyCooldownInspector(final com.artipie.http.Slice metadata) {
+    PyProxyCooldownInspector(final com.auto1.pantera.http.Slice metadata) {
         this.releases = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
             .maximumSize(10_000)  // Limit memory usage
             .expireAfterWrite(Duration.ofHours(24))  // Auto-evict old entries
@@ -122,12 +122,12 @@ final class PyProxyCooldownInspector implements CooldownInspector,
         final java.net.URI uri = java.net.URI.create(
             String.format("/pypi/%s/%s/json", artifact, version)
         );
-        final com.artipie.http.rq.RequestLine line = new com.artipie.http.rq.RequestLine(
-            com.artipie.http.rq.RqMethod.GET,
+        final com.auto1.pantera.http.rq.RequestLine line = new com.auto1.pantera.http.rq.RequestLine(
+            com.auto1.pantera.http.rq.RqMethod.GET,
             uri,
             "HTTP/1.1"
         );
-        com.artipie.http.log.EcsLogger.debug("com.artipie.pypi")
+        com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Fetching release date from PyPI JSON API")
             .eventCategory("repository")
             .eventAction("cooldown_inspection")
@@ -137,11 +137,11 @@ final class PyProxyCooldownInspector implements CooldownInspector,
             .log();
         return this.metadata.response(
             line,
-            com.artipie.http.Headers.EMPTY,
-            com.artipie.asto.Content.EMPTY
+            com.auto1.pantera.http.Headers.EMPTY,
+            com.auto1.pantera.asto.Content.EMPTY
         ).toCompletableFuture().thenCompose(response -> {
             if (!response.status().success()) {
-                com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("PyPI JSON API returned non-success status")
                     .eventCategory("repository")
                     .eventAction("cooldown_inspection")
@@ -160,7 +160,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     // PyPI JSON API structure: { "urls": [ { "upload_time_iso_8601": "..." } ] }
                     final javax.json.JsonArray urls = root.getJsonArray("urls");
                     if (urls == null || urls.isEmpty()) {
-                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                        com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("No 'urls' field or empty urls array in PyPI JSON response")
                             .eventCategory("repository")
                             .eventAction("cooldown_inspection")
@@ -174,7 +174,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     final javax.json.JsonObject first = urls.getJsonObject(0);
                     final String iso = first.getString("upload_time_iso_8601", null);
                     if (iso == null) {
-                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                        com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("No upload_time_iso_8601 field in PyPI JSON response")
                             .eventCategory("repository")
                             .eventAction("cooldown_inspection")
@@ -186,7 +186,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     }
                     try {
                         final java.time.Instant releaseDate = java.time.Instant.parse(iso);
-                        com.artipie.http.log.EcsLogger.debug("com.artipie.pypi")
+                        com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Found release date")
                             .eventCategory("repository")
                             .eventAction("cooldown_inspection")
@@ -197,7 +197,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                             .log();
                         return java.util.Optional.of(releaseDate);
                     } catch (final Exception ex) {
-                        com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                        com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("Failed to parse upload_time_iso_8601: " + iso)
                             .eventCategory("repository")
                             .eventAction("cooldown_inspection")
@@ -209,7 +209,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                         return java.util.Optional.empty();
                     }
                 } catch (final Exception ex) {
-                    com.artipie.http.log.EcsLogger.warn("com.artipie.pypi")
+                    com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                         .message("Failed to parse PyPI JSON response")
                         .eventCategory("repository")
                         .eventAction("cooldown_inspection")

@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.reactivestreams.Publisher;
 
@@ -136,7 +136,7 @@ public final class FileSystemArtifactSlice implements Slice {
                 final Content fileContent = streamFromFilesystem(filePath, fileSize);
 
                 final long elapsed = System.currentTimeMillis() - startTime;
-                EcsLogger.debug("com.artipie.http")
+                EcsLogger.debug("com.auto1.pantera.http")
                     .message("FileSystem artifact served: " + key.string())
                     .eventCategory("storage")
                     .eventAction("artifact_serve")
@@ -152,7 +152,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     .build();
 
             } catch (IOException e) {
-                EcsLogger.error("com.artipie.http")
+                EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to serve artifact: " + key.string())
                     .eventCategory("storage")
                     .eventAction("artifact_serve")
@@ -449,7 +449,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     }
                 } catch (Exception ex) {
                     // Last resort: let GC handle it eventually (may cause OOM under load)
-                    EcsLogger.warn("com.artipie.http")
+                    EcsLogger.warn("com.auto1.pantera.http")
                         .message("Failed to explicitly clean direct buffer, relying on GC")
                         .eventCategory("memory")
                         .eventAction("buffer_cleanup")

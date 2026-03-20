@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.meta.XmlPackage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.meta.XmlPackage;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import io.reactivex.Single;
@@ -69,7 +69,7 @@ final class AstoMetadataNames {
             // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
             .<Pair<Key, Key>>flatMapSingle(
                 key -> rxsto.value(key).flatMap(
-                    val -> com.artipie.asto.rx.RxFuture.single(
+                    val -> com.auto1.pantera.asto.rx.RxFuture.single(
                         new ContentDigest(val, () -> this.cnfg.digest().messageDigest()).hex()
                             .thenApply(
                                 hex -> new ImmutablePair<Key, Key>(

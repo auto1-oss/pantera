@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cache;
+package com.auto1.pantera.cache;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -219,7 +219,7 @@ public final class ValkeyConnection implements AutoCloseable {
                 try {
                     this.pool.returnObject(this.connections[idx]);
                 } catch (final Exception ex) {
-                    EcsLogger.debug("com.artipie.cache")
+                    EcsLogger.debug("com.auto1.pantera.cache")
                         .message("Failed to return connection to pool during close")
                         .error(ex)
                         .log();

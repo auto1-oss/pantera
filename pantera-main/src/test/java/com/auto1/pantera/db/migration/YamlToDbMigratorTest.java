@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db.migration;
+package com.auto1.pantera.db.migration;
 
-import com.artipie.api.RepositoryName;
-import com.artipie.db.DbManager;
-import com.artipie.db.PostgreSQLTestConfig;
-import com.artipie.db.dao.AuthProviderDao;
-import com.artipie.db.dao.RoleDao;
-import com.artipie.db.dao.RepositoryDao;
-import com.artipie.db.dao.SettingsDao;
-import com.artipie.db.dao.UserDao;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.db.DbManager;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.RoleDao;
+import com.auto1.pantera.db.dao.RepositoryDao;
+import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.db.dao.UserDao;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Files;

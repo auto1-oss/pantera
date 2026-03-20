@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 
 /**
@@ -112,7 +112,7 @@ public final class JwtSettings {
                     expirySeconds = DEFAULT_EXPIRY_SECONDS;
                 }
             } catch (final NumberFormatException ex) {
-                EcsLogger.warn("com.artipie.settings")
+                EcsLogger.warn("com.auto1.pantera.settings")
                     .message("Invalid JWT expiry-seconds value, using default")
                     .error(ex)
                     .log();

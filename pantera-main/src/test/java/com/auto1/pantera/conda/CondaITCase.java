@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conda;
+package com.auto1.pantera.conda;
 
-import com.artipie.asto.test.TestResource;
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import java.io.IOException;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

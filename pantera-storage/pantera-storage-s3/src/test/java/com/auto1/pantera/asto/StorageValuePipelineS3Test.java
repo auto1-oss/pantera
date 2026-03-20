@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -10,14 +10,14 @@ import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.asto.s3.S3Storage;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.asto.streams.StorageValuePipeline;
-import com.artipie.asto.test.ReadWithDelaysStorage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.asto.s3.S3Storage;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.asto.test.ReadWithDelaysStorage;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

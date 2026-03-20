@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.metrics;
+package com.auto1.pantera.metrics;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -11,7 +11,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -45,7 +45,7 @@ public final class MicrometerMetrics {
             .description("Currently active HTTP requests")
             .register(registry);
 
-        EcsLogger.info("com.artipie.metrics.MicrometerMetrics")
+        EcsLogger.info("com.auto1.pantera.metrics.MicrometerMetrics")
             .message("Micrometer metrics initialized with Prometheus registry")
             .eventCategory("configuration")
             .eventAction("micrometer_metrics_init")

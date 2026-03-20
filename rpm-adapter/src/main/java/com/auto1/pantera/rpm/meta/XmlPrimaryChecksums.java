@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.misc.UncheckedIOConsumer;
-import com.artipie.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.misc.UncheckedIOConsumer;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
 import com.fasterxml.aalto.stax.InputFactoryImpl;
 import java.io.InputStream;
 import java.nio.file.Files;

@@ -8,4 +8,4 @@
  *
  * @since 0.15
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;

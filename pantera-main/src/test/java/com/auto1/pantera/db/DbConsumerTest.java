@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.ResultSet;
@@ -223,7 +223,7 @@ class DbConsumerTest {
         for (int i = 0; i < 10; i++) {
             consumer.accept(
                 new ArtifactEvent(
-                    "maven", "my-maven", "Alice", "com.artipie.asto",
+                    "maven", "my-maven", "Alice", "com.auto1.pantera.asto",
                     String.valueOf(i), 1250L, created - i
                 )
             );
@@ -241,7 +241,7 @@ class DbConsumerTest {
                 }
             }
         );
-        consumer.accept(new ArtifactEvent("maven", "my-maven", "com.artipie.asto"));
+        consumer.accept(new ArtifactEvent("maven", "my-maven", "com.auto1.pantera.asto"));
         Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
             () -> {
                 try (

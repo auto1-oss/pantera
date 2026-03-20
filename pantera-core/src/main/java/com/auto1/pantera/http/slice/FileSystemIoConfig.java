@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 /**
  * Configuration for filesystem I/O thread pool.
@@ -73,7 +73,7 @@ public final class FileSystemIoConfig {
      */
     private FileSystemIoConfig() {
         this.threads = this.resolveThreadPoolSize();
-        EcsLogger.info("com.artipie.http")
+        EcsLogger.info("com.auto1.pantera.http")
             .message("FileSystem I/O thread pool configured with " + this.threads + " threads (" + Runtime.getRuntime().availableProcessors() + " CPU cores)")
             .eventCategory("configuration")
             .eventAction("thread_pool_init")
@@ -113,7 +113,7 @@ public final class FileSystemIoConfig {
                 final int value = Integer.parseInt(sysProp.trim());
                 return this.validateThreadPoolSize(value, "system property");
             } catch (final NumberFormatException ex) {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Invalid thread pool size in system property " + PROPERTY_THREADS + "='" + sysProp + "', using default")
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
@@ -129,7 +129,7 @@ public final class FileSystemIoConfig {
                 final int value = Integer.parseInt(envVar.trim());
                 return this.validateThreadPoolSize(value, "environment variable");
             } catch (final NumberFormatException ex) {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Invalid thread pool size in environment variable " + ENV_THREADS + "='" + envVar + "', using default")
                     .eventCategory("configuration")
                     .eventAction("thread_pool_config")
@@ -141,7 +141,7 @@ public final class FileSystemIoConfig {
         // Use default: 2x CPU cores (minimum 8)
         final int cpuCores = Runtime.getRuntime().availableProcessors();
         final int defaultSize = Math.max(8, cpuCores * 2);
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Using default thread pool size of " + defaultSize + " threads (" + cpuCores + " CPU cores)")
             .eventCategory("configuration")
             .eventAction("thread_pool_config")
@@ -159,7 +159,7 @@ public final class FileSystemIoConfig {
      */
     private int validateThreadPoolSize(final int value, final String source) {
         if (value < MIN_THREADS) {
-            EcsLogger.warn("com.artipie.http")
+            EcsLogger.warn("com.auto1.pantera.http")
                 .message("Thread pool size from " + source + " below minimum (requested: " + value + ", using: " + MIN_THREADS + ", min: " + MIN_THREADS + ")")
                 .eventCategory("configuration")
                 .eventAction("thread_pool_validate")
@@ -168,7 +168,7 @@ public final class FileSystemIoConfig {
             return MIN_THREADS;
         }
         if (value > MAX_THREADS) {
-            EcsLogger.warn("com.artipie.http")
+            EcsLogger.warn("com.auto1.pantera.http")
                 .message("Thread pool size from " + source + " exceeds maximum (requested: " + value + ", using: " + MAX_THREADS + ", max: " + MAX_THREADS + ")")
                 .eventCategory("configuration")
                 .eventAction("thread_pool_validate")
@@ -176,7 +176,7 @@ public final class FileSystemIoConfig {
                 .log();
             return MAX_THREADS;
         }
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Thread pool size from " + source + " validated: " + value + " threads")
             .eventCategory("configuration")
             .eventAction("thread_pool_validate")

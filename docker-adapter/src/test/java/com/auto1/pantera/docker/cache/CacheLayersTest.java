@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.docker.Digest;
-import com.artipie.docker.fake.FakeLayers;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.fake.FakeLayers;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.params.ParameterizedTest;

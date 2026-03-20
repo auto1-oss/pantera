@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;

@@ -8,4 +8,4 @@
  *
  * @since 0.6
  */
-package com.artipie.pypi.meta;
+package com.auto1.pantera.pypi.meta;

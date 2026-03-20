@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.SubStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.importer.api.ChecksumPolicy;
-import com.artipie.importer.api.ImportHeaders;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.importer.api.ChecksumPolicy;
+import com.auto1.pantera.importer.api.ImportHeaders;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.repo.Repositories;
 import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -40,7 +40,7 @@ final class ImportServiceTest {
 
     private ImportService service;
 
-    private Queue<com.artipie.scheduling.ArtifactEvent> events;
+    private Queue<com.auto1.pantera.scheduling.ArtifactEvent> events;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -74,7 +74,7 @@ final class ImportServiceTest {
         ).toCompletableFuture().get();
         Assertions.assertEquals(ImportStatus.CREATED, result.status());
         Assertions.assertTrue(this.repoStorage.exists(new Key.From("dist/hello.txt")).join());
-        Assertions.assertEquals(sha256, result.digests().get(com.artipie.importer.api.DigestType.SHA256));
+        Assertions.assertEquals(sha256, result.digests().get(com.auto1.pantera.importer.api.DigestType.SHA256));
         Assertions.assertEquals(1, this.events.size());
     }
 

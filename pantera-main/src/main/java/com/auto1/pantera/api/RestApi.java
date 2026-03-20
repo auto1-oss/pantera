@@ -2,28 +2,28 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.auth.JwtTokens;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSupport;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.CachedYamlPolicy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.RepoData;
-import com.artipie.settings.Settings;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.repo.CrudRepoSettings;
-import com.artipie.settings.users.CrudRoles;
-import com.artipie.settings.users.CrudUsers;
-import com.artipie.db.dao.RepositoryDao;
-import com.artipie.db.dao.UserDao;
-import com.artipie.db.dao.RoleDao;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.CachedYamlPolicy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.settings.users.CrudRoles;
+import com.auto1.pantera.settings.users.CrudUsers;
+import com.auto1.pantera.db.dao.RepositoryDao;
+import com.auto1.pantera.db.dao.UserDao;
+import com.auto1.pantera.db.dao.RoleDao;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.http.HttpServer;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -275,7 +275,7 @@ public final class RestApi extends AbstractVerticle {
         }
         server.requestHandler(router)
             .listen(this.port)
-            .onComplete(res -> EcsLogger.info("com.artipie.api")
+            .onComplete(res -> EcsLogger.info("com.auto1.pantera.api")
                 .message("Rest API started")
                 .eventCategory("api")
                 .eventAction("server_start")
@@ -284,7 +284,7 @@ public final class RestApi extends AbstractVerticle {
                 .field("url.scheme", schema)
                 .field("url.full", schema + "://localhost:" + this.port + "/api/index.html")
                 .log())
-            .onFailure(err -> EcsLogger.error("com.artipie.api")
+            .onFailure(err -> EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to start Rest API")
                 .eventCategory("api")
                 .eventAction("server_start")

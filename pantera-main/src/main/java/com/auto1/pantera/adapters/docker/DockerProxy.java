@@ -2,37 +2,37 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.docker;
+package com.auto1.pantera.adapters.docker;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.SubStorage;
-import com.artipie.docker.Docker;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.asto.RegistryRoot;
-import com.artipie.docker.cache.CacheDocker;
-import com.artipie.docker.cache.DockerProxyCooldownInspector;
-import com.artipie.docker.composite.MultiReadDocker;
-import com.artipie.docker.composite.ReadWriteDocker;
-import com.artipie.docker.http.DockerSlice;
-import com.artipie.docker.http.TrimmedDocker;
-import com.artipie.docker.proxy.ProxyDocker;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.auth.CombinedAuthScheme;
-import com.artipie.http.DockerRoutingSlice;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.RemoteConfig;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.repo.RepoConfig;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.asto.RegistryRoot;
+import com.auto1.pantera.docker.cache.CacheDocker;
+import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;
+import com.auto1.pantera.docker.composite.MultiReadDocker;
+import com.auto1.pantera.docker.composite.ReadWriteDocker;
+import com.auto1.pantera.docker.http.DockerSlice;
+import com.auto1.pantera.docker.http.TrimmedDocker;
+import com.auto1.pantera.docker.proxy.ProxyDocker;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.auth.CombinedAuthScheme;
+import com.auto1.pantera.http.DockerRoutingSlice;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.repo.RepoConfig;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -76,7 +76,7 @@ public final class DockerProxy implements Slice {
         final Content body
     ) {
         final long start = System.currentTimeMillis();
-        EcsLogger.info("com.artipie.docker.proxy")
+        EcsLogger.info("com.auto1.pantera.docker.proxy")
             .message("DockerProxy request")
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -87,7 +87,7 @@ public final class DockerProxy implements Slice {
             .whenComplete((resp, err) -> {
                 final long duration = System.currentTimeMillis() - start;
                 if (err != null) {
-                    EcsLogger.error("com.artipie.docker.proxy")
+                    EcsLogger.error("com.auto1.pantera.docker.proxy")
                         .message("DockerProxy error")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -97,7 +97,7 @@ public final class DockerProxy implements Slice {
                         .error(err)
                         .log();
                 } else {
-                    EcsLogger.info("com.artipie.docker.proxy")
+                    EcsLogger.info("com.auto1.pantera.docker.proxy")
                         .message("DockerProxy response")
                         .eventCategory("repository")
                         .eventAction("proxy_request")
@@ -126,7 +126,7 @@ public final class DockerProxy implements Slice {
     ) {
         final DockerProxyCooldownInspector inspector = new DockerProxyCooldownInspector();
         // Register inspector globally so unblock can invalidate its cache
-        com.artipie.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
             .register("docker", cfg.name(), inspector);
         final Docker proxies = new MultiReadDocker(
             cfg.remotes().stream().map(r -> proxy(client, cfg, events, r, inspector))

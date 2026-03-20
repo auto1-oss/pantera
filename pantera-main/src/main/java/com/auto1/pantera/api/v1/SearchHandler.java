@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.AuthTokenRest;
-import com.artipie.api.AuthzHandler;
-import com.artipie.api.perms.ApiSearchPermission;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.perms.ApiSearchPermission;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -204,7 +204,7 @@ public final class SearchHandler {
      * @param ctx Routing context
      */
     private void reindex(final RoutingContext ctx) {
-        EcsLogger.info("com.artipie.api.v1")
+        EcsLogger.info("com.auto1.pantera.api.v1")
             .message("Full reindex triggered via API")
             .eventCategory("search")
             .eventAction("reindex")

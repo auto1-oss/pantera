@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db.dao;
+package com.auto1.pantera.db.dao;
 
 import java.io.StringReader;
 import java.sql.Connection;
@@ -14,8 +14,8 @@ import java.util.List;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.sql.DataSource;
-import com.artipie.api.RepositoryName;
-import com.artipie.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
 
 /**
  * PostgreSQL-backed repository configuration storage.

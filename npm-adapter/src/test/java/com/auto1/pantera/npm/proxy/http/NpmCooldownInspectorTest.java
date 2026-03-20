@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.npm.proxy.NpmRemote;
-import com.artipie.npm.proxy.model.NpmAsset;
-import com.artipie.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.npm.proxy.NpmRemote;
+import com.auto1.pantera.npm.proxy.model.NpmAsset;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Maybe;
 import java.io.IOException;
 import java.nio.file.Path;

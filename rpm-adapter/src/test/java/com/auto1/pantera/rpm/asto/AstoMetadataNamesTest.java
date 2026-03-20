@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.StandardNamingPolicy;
-import com.artipie.rpm.meta.XmlPackage;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.StandardNamingPolicy;
+import com.auto1.pantera.rpm.meta.XmlPackage;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;

@@ -2,23 +2,23 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.composer.JsonPackage;
-import com.artipie.composer.http.Archive;
-import com.artipie.composer.http.TarArchive;
-import com.artipie.gem.Gem;
-import com.artipie.helm.TgzArchive;
-import com.artipie.helm.metadata.IndexYaml;
-import com.artipie.importer.api.DigestType;
-import com.artipie.maven.metadata.MavenTimestamp;
-import com.artipie.maven.metadata.Version;
-import com.artipie.npm.MetaUpdate;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.pypi.http.IndexGenerator;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.composer.JsonPackage;
+import com.auto1.pantera.composer.http.Archive;
+import com.auto1.pantera.composer.http.TarArchive;
+import com.auto1.pantera.gem.Gem;
+import com.auto1.pantera.helm.TgzArchive;
+import com.auto1.pantera.helm.metadata.IndexYaml;
+import com.auto1.pantera.importer.api.DigestType;
+import com.auto1.pantera.maven.metadata.MavenTimestamp;
+import com.auto1.pantera.maven.metadata.Version;
+import com.auto1.pantera.npm.MetaUpdate;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.pypi.http.IndexGenerator;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Flowable;
 import org.xembly.Directives;
@@ -128,7 +128,7 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     public CompletionStage<Void> regenerate(final Key artifactKey, final ImportRequest request) {
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Regenerating metadata for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
             .eventCategory("repository")
             .eventAction("metadata_regenerate")
@@ -149,7 +149,7 @@ public final class MetadataRegenerator {
             case "rpm" -> this.regenerateRpm(artifactKey);
             case "conda" -> this.regenerateConda(artifactKey);
             default -> {
-                EcsLogger.warn("com.artipie.importer")
+                EcsLogger.warn("com.auto1.pantera.importer")
                     .message("Unknown repository type - skipping metadata regeneration")
                     .eventCategory("repository")
                     .eventAction("metadata_regenerate")
@@ -165,7 +165,7 @@ public final class MetadataRegenerator {
                 this.successCount.incrementAndGet();
             } else {
                 this.failureCount.incrementAndGet();
-                EcsLogger.warn("com.artipie.importer")
+                EcsLogger.warn("com.auto1.pantera.importer")
                     .message("Metadata regeneration failed for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
                     .eventCategory("repository")
                     .eventAction("metadata_regenerate")
@@ -244,7 +244,7 @@ public final class MetadataRegenerator {
             metadataKey,
             lockedStorage -> this.storage.list(baseKey)
                 .exceptionally(ex -> {
-                    EcsLogger.debug("com.artipie.importer")
+                    EcsLogger.debug("com.auto1.pantera.importer")
                         .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
                         .eventCategory("repository")
                         .eventAction("maven_metadata_regenerate")
@@ -305,7 +305,7 @@ public final class MetadataRegenerator {
                 versions.add(firstSegment);
             } catch (final Exception ex) {
                 // Not a valid version, skip it
-                EcsLogger.debug("com.artipie.importer")
+                EcsLogger.debug("com.auto1.pantera.importer")
                     .message("Skipping non-version directory")
                     .eventCategory("repository")
                     .eventAction("maven_metadata_regenerate")
@@ -413,7 +413,7 @@ public final class MetadataRegenerator {
      * Update Composer metadata during import.
      * 
      * <p><b>IMPORTANT:</b> Uses import staging layout to avoid lock contention
-     * during bulk imports. After import completes, use {@link com.artipie.composer.ComposerImportMerge}
+     * during bulk imports. After import completes, use {@link com.auto1.pantera.composer.ComposerImportMerge}
      * to consolidate staging files into final p2/ layout.</p>
      * 
      * <p>Normal package uploads (via AddArchiveSlice) bypass this and use SatisLayout directly
@@ -433,7 +433,7 @@ public final class MetadataRegenerator {
     ) {
         final String packageName = composerJson.getString("name", null);
         if (packageName == null || packageName.isBlank()) {
-            EcsLogger.warn("com.artipie.importer")
+            EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Skipping Composer metadata regeneration - package name missing at key: " + storagePath)
                 .eventCategory("repository")
                 .eventAction("composer_metadata_regenerate")
@@ -448,7 +448,7 @@ public final class MetadataRegenerator {
                 .orElse(null);
         }
         if (version == null || version.isBlank()) {
-            EcsLogger.warn("com.artipie.importer")
+            EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Skipping Composer metadata regeneration - unable to determine version at key: " + storagePath)
                 .eventCategory("repository")
                 .eventAction("composer_metadata_regenerate")
@@ -484,8 +484,8 @@ public final class MetadataRegenerator {
         final Optional<String> versionOpt = Optional.of(sanitizedVersion);
         
         // Create import staging layout
-        final com.artipie.composer.ImportStagingLayout staging = 
-            new com.artipie.composer.ImportStagingLayout(
+        final com.auto1.pantera.composer.ImportStagingLayout staging = 
+            new com.auto1.pantera.composer.ImportStagingLayout(
                 this.storage,
                 Optional.of(this.repositoryRoot())
             );
@@ -515,14 +515,14 @@ public final class MetadataRegenerator {
                 try {
                     // Create TgzArchive from base64-encoded bytes (single source of truth)
                     final String encoded = Base64.getEncoder().encodeToString(bytes);
-                    final com.artipie.npm.TgzArchive tgz = new com.artipie.npm.TgzArchive(encoded);
+                    final com.auto1.pantera.npm.TgzArchive tgz = new com.auto1.pantera.npm.TgzArchive(encoded);
                     
                     // Extract package name from archive
                     final JsonObject manifest = tgz.packageJson();
                     final String packageName = manifest.getString("name", null);
                     
                     if (packageName == null || packageName.isBlank()) {
-                        EcsLogger.warn("com.artipie.importer")
+                        EcsLogger.warn("com.auto1.pantera.importer")
                             .message("Skipping NPM metadata regeneration - package name missing at key: " + path)
                             .eventCategory("repository")
                             .eventAction("npm_metadata_regenerate")
@@ -534,7 +534,7 @@ public final class MetadataRegenerator {
                     // MetaUpdate.ByJson now uses storage.exclusively() for atomic updates
                     return new MetaUpdate.ByTgz(tgz).update(new Key.From(packageName), this.storage);
                 } catch (final Exception ex) {
-                    EcsLogger.error("com.artipie.importer")
+                    EcsLogger.error("com.auto1.pantera.importer")
                         .message("Failed to extract NPM package metadata at key: " + path)
                         .eventCategory("repository")
                         .eventAction("npm_metadata_regenerate")
@@ -713,7 +713,7 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateDebian(final Key artifactKey) {
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Debian metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("repository")
             .eventAction("debian_metadata_regenerate")
@@ -728,7 +728,7 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateRpm(final Key artifactKey) {
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("RPM metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("repository")
             .eventAction("rpm_metadata_regenerate")
@@ -743,7 +743,7 @@ public final class MetadataRegenerator {
      * @return Completion stage
      */
     private CompletionStage<Void> regenerateConda(final Key artifactKey) {
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Conda metadata regeneration not implemented for key: " + artifactKey.string())
             .eventCategory("repository")
             .eventAction("conda_metadata_regenerate")
@@ -838,7 +838,7 @@ public final class MetadataRegenerator {
                                 // Generate checksums for this artifact
                                 return this.generateMavenChecksums(artifactKey)
                                     .exceptionally(ex -> {
-                                        EcsLogger.warn("com.artipie.importer")
+                                        EcsLogger.warn("com.auto1.pantera.importer")
                                             .message("Failed to generate checksums")
                                             .eventCategory("repository")
                                             .eventAction("maven_checksum_generate")
@@ -934,7 +934,7 @@ public final class MetadataRegenerator {
                 if (attempt < maxRetries) {
                     // Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms, ...
                     final long delayMs = 10L * (1L << attempt);
-                    EcsLogger.warn("com.artipie.importer")
+                    EcsLogger.warn("com.auto1.pantera.importer")
                         .message("Retrying operation '" + description + "' (attempt " + (attempt + 1) + "/" + maxRetries + ", delay: " + delayMs + "ms)")
                         .eventCategory("repository")
                         .eventAction("metadata_regenerate_retry")
@@ -943,7 +943,7 @@ public final class MetadataRegenerator {
                     // Return null to signal retry needed
                     return null;
                 } else {
-                    EcsLogger.error("com.artipie.importer")
+                    EcsLogger.error("com.auto1.pantera.importer")
                         .message("Failed operation '" + description + "' after " + maxRetries + " retry attempts")
                         .eventCategory("repository")
                         .eventAction("metadata_regenerate_retry")
@@ -1010,10 +1010,10 @@ public final class MetadataRegenerator {
     }
 
     private void recordMetadataOperation(final String operation, final long duration) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataOperation(this.repoName, this.repoType, operation);
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataGenerationDuration(this.repoName, this.repoType, duration);
         }
     }

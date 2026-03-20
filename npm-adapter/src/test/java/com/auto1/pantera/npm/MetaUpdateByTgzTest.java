@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
 import java.nio.charset.StandardCharsets;
 import javax.json.JsonObject;
 import org.hamcrest.MatcherAssert;
@@ -41,7 +41,7 @@ final class MetaUpdateByTgzTest {
         new PerVersionLayout(this.asto).generateMetaJson(prefix)
             .thenCompose(meta -> this.asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();
@@ -65,7 +65,7 @@ final class MetaUpdateByTgzTest {
         new PerVersionLayout(this.asto).generateMetaJson(prefix)
             .thenCompose(meta -> this.asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();
@@ -83,7 +83,7 @@ final class MetaUpdateByTgzTest {
         new PerVersionLayout(this.asto).generateMetaJson(prefix)
             .thenCompose(meta -> this.asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();
@@ -111,7 +111,7 @@ final class MetaUpdateByTgzTest {
         new PerVersionLayout(this.asto).generateMetaJson(prefix)
             .thenCompose(meta -> this.asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();
@@ -149,7 +149,7 @@ final class MetaUpdateByTgzTest {
         
         // Read existing meta.json
         final JsonObject meta = this.asto.value(metaKey)
-            .thenCompose(com.artipie.asto.Content::asJsonObjectFuture)
+            .thenCompose(com.auto1.pantera.asto.Content::asJsonObjectFuture)
             .toCompletableFuture()
             .join();
         

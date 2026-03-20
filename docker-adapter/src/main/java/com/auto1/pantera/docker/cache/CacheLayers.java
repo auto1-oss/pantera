@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
-import com.artipie.docker.asto.BlobSource;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.asto.BlobSource;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -127,7 +127,7 @@ public final class CacheLayers implements Layers {
                             final long duration = System.currentTimeMillis() - startTime;
                             this.recordProxyMetric("exception", duration);
                             this.recordUpstreamErrorMetric(error);
-                            EcsLogger.warn("com.artipie.docker")
+                            EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Both cache and origin failed for blob")
                                 .eventCategory("repository")
                                 .eventAction("blob_get")
@@ -147,8 +147,8 @@ public final class CacheLayers implements Layers {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.repoName, this.upstreamUrl, result, duration);
             }
         });
@@ -159,14 +159,14 @@ public final class CacheLayers implements Layers {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.repoName, this.upstreamUrl, errorType);
             }
         });
@@ -178,11 +178,11 @@ public final class CacheLayers implements Layers {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

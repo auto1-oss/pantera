@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.http;
+package com.auto1.pantera.gem.http;
 
-import com.artipie.gem.GemMeta.MetaInfo;
-import com.artipie.gem.JsonMetaFormat;
-import com.artipie.gem.YamlMetaFormat;
-import com.artipie.http.ArtipieHttpException;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.gem.GemMeta.MetaInfo;
+import com.auto1.pantera.gem.JsonMetaFormat;
+import com.auto1.pantera.gem.YamlMetaFormat;
+import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
 
 import javax.json.Json;
 import javax.json.JsonObjectBuilder;

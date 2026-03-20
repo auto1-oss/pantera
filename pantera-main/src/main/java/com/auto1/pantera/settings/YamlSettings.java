@@ -2,47 +2,47 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.ArtipieException;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.api.ssl.KeyStoreFactory;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.auth.AuthFromDb;
-import com.artipie.auth.AuthFromEnv;
-import com.artipie.cache.CacheInvalidationPubSub;
-import com.artipie.cache.GlobalCacheConfig;
-import com.artipie.cache.NegativeCacheConfig;
-import com.artipie.cache.PublishingCleanable;
-import com.artipie.cache.StoragesCache;
-import com.artipie.cache.ValkeyConnection;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.cooldown.YamlCooldownSettings;
-import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
-import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.DbConsumer;
-import com.artipie.http.auth.AuthLoader;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.scheduling.QuartzService;
-import com.artipie.security.policy.CachedYamlPolicy;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.cache.CachedUsers;
-import com.artipie.settings.cache.GuavaFiltersCache;
-import com.artipie.settings.cache.PublishingFiltersCache;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.index.DbArtifactIndex;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.api.ssl.KeyStoreFactory;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.auth.AuthFromDb;
+import com.auto1.pantera.auth.AuthFromEnv;
+import com.auto1.pantera.cache.CacheInvalidationPubSub;
+import com.auto1.pantera.cache.GlobalCacheConfig;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.cache.PublishingCleanable;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.YamlCooldownSettings;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
+import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.DbConsumer;
+import com.auto1.pantera.http.auth.AuthLoader;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.security.policy.CachedYamlPolicy;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.cache.CachedUsers;
+import com.auto1.pantera.settings.cache.GuavaFiltersCache;
+import com.auto1.pantera.settings.cache.PublishingFiltersCache;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.DbArtifactIndex;
 import org.quartz.SchedulerException;
 
 import javax.sql.DataSource;
@@ -57,8 +57,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
-import com.artipie.asto.factory.StorageFactory;
-import com.artipie.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.factory.StorageFactory;
+import com.auto1.pantera.asto.factory.StoragesLoader;
 
 /**
  * Settings built from YAML.
@@ -415,7 +415,7 @@ public final class YamlSettings implements Settings {
             return;
         }
         this.closed = true;
-        EcsLogger.info("com.artipie.settings")
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Closing YamlSettings and cleaning up storage resources")
             .eventCategory("configuration")
             .eventAction("settings_close")
@@ -436,7 +436,7 @@ public final class YamlSettings implements Settings {
                 if (storageType != null) {
                     final StorageFactory factory = StoragesLoader.STORAGES.getFactory(storageType);
                     factory.closeStorage(storage);
-                    EcsLogger.info("com.artipie.settings")
+                    EcsLogger.info("com.auto1.pantera.settings")
                         .message("Closed storage via factory (type: " + storageType + ")")
                         .eventCategory("configuration")
                         .eventAction("storage_close")
@@ -445,7 +445,7 @@ public final class YamlSettings implements Settings {
                 } else if (storage instanceof AutoCloseable) {
                     // Fallback: direct close for AutoCloseable storages
                     ((AutoCloseable) storage).close();
-                    EcsLogger.info("com.artipie.settings")
+                    EcsLogger.info("com.auto1.pantera.settings")
                         .message("Closed storage directly (type: " + storage.getClass().getSimpleName() + ")")
                         .eventCategory("configuration")
                         .eventAction("storage_close")
@@ -453,7 +453,7 @@ public final class YamlSettings implements Settings {
                         .log();
                 }
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to close storage")
                     .eventCategory("configuration")
                     .eventAction("storage_close")
@@ -466,14 +466,14 @@ public final class YamlSettings implements Settings {
         if (this.artifactIndex != null && this.artifactIndex != ArtifactIndex.NOP) {
             try {
                 this.artifactIndex.close();
-                EcsLogger.info("com.artipie.settings")
+                EcsLogger.info("com.auto1.pantera.settings")
                     .message("Closed artifact index")
                     .eventCategory("configuration")
                     .eventAction("index_close")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to close artifact index")
                     .eventCategory("configuration")
                     .eventAction("index_close")
@@ -487,7 +487,7 @@ public final class YamlSettings implements Settings {
             try {
                 this.cachePubSub.close();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to close cache invalidation pub/sub")
                     .eventCategory("configuration")
                     .eventAction("pubsub_close")
@@ -502,14 +502,14 @@ public final class YamlSettings implements Settings {
             if (ds instanceof AutoCloseable) {
                 try {
                     ((AutoCloseable) ds).close();
-                    EcsLogger.info("com.artipie.settings")
+                    EcsLogger.info("com.auto1.pantera.settings")
                         .message("Closed artifacts database connection pool")
                         .eventCategory("configuration")
                         .eventAction("database_close")
                         .eventOutcome("success")
                         .log();
                 } catch (final Exception e) {
-                    EcsLogger.error("com.artipie.settings")
+                    EcsLogger.error("com.auto1.pantera.settings")
                         .message("Failed to close artifacts database connection pool")
                         .eventCategory("configuration")
                         .eventAction("database_close")
@@ -523,14 +523,14 @@ public final class YamlSettings implements Settings {
         if (this.valkeyConn != null) {
             try {
                 this.valkeyConn.close();
-                EcsLogger.info("com.artipie.settings")
+                EcsLogger.info("com.auto1.pantera.settings")
                     .message("Closed Valkey connection")
                     .eventCategory("configuration")
                     .eventAction("valkey_close")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to close Valkey connection")
                     .eventCategory("configuration")
                     .eventAction("valkey_close")
@@ -540,7 +540,7 @@ public final class YamlSettings implements Settings {
             }
         }
         this.trackedStorages.clear();
-        EcsLogger.info("com.artipie.settings")
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("YamlSettings cleanup complete")
             .eventCategory("configuration")
             .eventAction("settings_close")
@@ -555,8 +555,8 @@ public final class YamlSettings implements Settings {
      */
     private String detectStorageType(final Storage storage) {
         Storage target = storage;
-        if (target instanceof com.artipie.http.misc.DispatchedStorage) {
-            target = ((com.artipie.http.misc.DispatchedStorage) target).unwrap();
+        if (target instanceof com.auto1.pantera.http.misc.DispatchedStorage) {
+            target = ((com.auto1.pantera.http.misc.DispatchedStorage) target).unwrap();
         }
         final String className = target.getClass().getSimpleName().toLowerCase();
         if (className.contains("s3")) {
@@ -624,7 +624,7 @@ public final class YamlSettings implements Settings {
     private static Optional<ValkeyConnection> initValkey(final YamlMapping settings) {
         final YamlMapping caches = settings.yamlMapping("caches");
         if (caches == null) {
-            EcsLogger.debug("com.artipie.settings")
+            EcsLogger.debug("com.auto1.pantera.settings")
                 .message("No caches configuration found")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
@@ -633,7 +633,7 @@ public final class YamlSettings implements Settings {
         }
         final YamlMapping valkeyConfig = caches.yamlMapping("valkey");
         if (valkeyConfig == null) {
-            EcsLogger.debug("com.artipie.settings")
+            EcsLogger.debug("com.auto1.pantera.settings")
                 .message("No valkey configuration found in caches")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
@@ -644,7 +644,7 @@ public final class YamlSettings implements Settings {
             .map(Boolean::parseBoolean)
             .orElse(false);
         if (!enabled) {
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Valkey is disabled in configuration (enabled: false)")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
@@ -669,7 +669,7 @@ public final class YamlSettings implements Settings {
             })
             .orElse(Duration.ofMillis(100));
 
-        EcsLogger.info("com.artipie.settings")
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Initializing Valkey connection (timeout: " + timeout.toMillis() + "ms)")
             .eventCategory("configuration")
             .eventAction("valkey_init")
@@ -679,7 +679,7 @@ public final class YamlSettings implements Settings {
         try {
             return Optional.of(new ValkeyConnection(host, port, timeout));
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.settings")
+            EcsLogger.error("com.auto1.pantera.settings")
                 .message("Failed to initialize Valkey connection")
                 .eventCategory("configuration")
                 .eventAction("valkey_init")
@@ -711,7 +711,7 @@ public final class YamlSettings implements Settings {
         if (dataSource != null) {
             // Database is the primary source of truth for user credentials
             res = new AuthFromDb(dataSource);
-            EcsLogger.info("com.artipie.security")
+            EcsLogger.info("com.auto1.pantera.security")
                 .message("Using AuthFromDb as primary authenticator")
                 .eventCategory("authentication")
                 .eventAction("auth_init")
@@ -734,7 +734,7 @@ public final class YamlSettings implements Settings {
                     final Authentication auth = loader.newObject(type, settings);
                     res = new Authentication.Joined(res, auth);
                 } catch (final Exception ex) {
-                    EcsLogger.warn("com.artipie.security")
+                    EcsLogger.warn("com.auto1.pantera.security")
                         .message("Failed to load auth provider: " + type)
                         .eventCategory("authentication")
                         .eventAction("auth_init")
@@ -746,7 +746,7 @@ public final class YamlSettings implements Settings {
         }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message(String.format("Initializing auth cache with Valkey L2 cache and JWT TTL cap: expires=%s, expirySeconds=%d", jwtSettings.expires(), jwtSettings.expirySeconds()))
                 .eventCategory("authentication")
                 .eventAction("auth_cache_init")

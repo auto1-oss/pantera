@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.cache;
+package com.auto1.pantera.http.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -305,7 +305,7 @@ final class BaseCachedProxySliceContentEncodingTest {
          * @param cacheable Whether isCacheable returns true
          */
         MinimalProxySlice(
-            final com.artipie.http.Slice upstream,
+            final com.auto1.pantera.http.Slice upstream,
             final boolean cacheable
         ) {
             super(
@@ -328,13 +328,13 @@ final class BaseCachedProxySliceContentEncodingTest {
          * @param storage Backing storage
          */
         MinimalProxySlice(
-            final com.artipie.http.Slice upstream,
+            final com.auto1.pantera.http.Slice upstream,
             final boolean cacheable,
-            final com.artipie.asto.Storage storage
+            final com.auto1.pantera.asto.Storage storage
         ) {
             super(
                 upstream,
-                new com.artipie.asto.cache.FromStorageCache(storage),
+                new com.auto1.pantera.asto.cache.FromStorageCache(storage),
                 "test-repo",
                 "test",
                 "http://upstream",
@@ -353,9 +353,9 @@ final class BaseCachedProxySliceContentEncodingTest {
          * @param cache Custom cache (to inject pre-stored content)
          */
         MinimalProxySlice(
-            final com.artipie.http.Slice upstream,
+            final com.auto1.pantera.http.Slice upstream,
             final boolean cacheable,
-            final com.artipie.asto.Storage storage,
+            final com.auto1.pantera.asto.Storage storage,
             final Cache cache
         ) {
             super(

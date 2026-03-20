@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.perms;
+package com.auto1.pantera.api.perms;
 
 import java.util.Set;
 import org.hamcrest.MatcherAssert;
@@ -13,7 +13,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * Test for {@link com.artipie.api.perms.RestApiPermission.RestApiPermissionCollection}.
+ * Test for {@link com.auto1.pantera.api.perms.RestApiPermission.RestApiPermissionCollection}.
  * @since 0.30
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")

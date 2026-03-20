@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 
-import com.artipie.rpm.pkg.InvalidPackageException;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.rpm.pkg.InvalidPackageException;
+import com.auto1.pantera.rpm.pkg.Package;
 import java.io.IOException;
 import java.util.Collection;
 

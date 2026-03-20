@@ -3,19 +3,19 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.http.slice.TrimPathSlice;
-import com.artipie.npm.Publish;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.TrimPathSlice;
+import com.auto1.pantera.npm.Publish;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -78,8 +78,8 @@ public final class UploadSliceTest {
         );
         
         // Generate meta.json from per-version files
-        final com.artipie.asto.Key packageKey = new KeyFromPath("package");
-        new com.artipie.npm.PerVersionLayout(this.storage).generateMetaJson(packageKey)
+        final com.auto1.pantera.asto.Key packageKey = new KeyFromPath("package");
+        new com.auto1.pantera.npm.PerVersionLayout(this.storage).generateMetaJson(packageKey)
             .thenCompose(meta -> this.storage.save(
                 new KeyFromPath("package/meta.json"),
                 new Content.From(meta.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))

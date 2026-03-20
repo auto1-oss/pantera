@@ -6,4 +6,4 @@
  * Tests for filters.
  * @since 1.2
  */
-package com.artipie.http.filter;
+package com.auto1.pantera.http.filter;

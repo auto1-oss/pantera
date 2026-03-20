@@ -10,5 +10,5 @@
  * @version $Id$
  * @since 0.1
  */
-package com.artipie.goproxy;
+package com.auto1.pantera.goproxy;
 

@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.proxy;
+package com.auto1.pantera.docker.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Digest;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Repo;
-import com.artipie.docker.Tags;
-import com.artipie.docker.http.DigestHeader;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.http.Headers;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 
@@ -77,7 +77,7 @@ public final class ProxyManifests implements Manifests {
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
-        EcsLogger.info("com.artipie.docker.proxy")
+        EcsLogger.info("com.auto1.pantera.docker.proxy")
             .message("ProxyManifests upstream request")
             .eventCategory("repository")
             .eventAction("proxy_manifest_get")
@@ -94,7 +94,7 @@ public final class ProxyManifests implements Manifests {
             ),
             response -> {
                 final long duration = System.currentTimeMillis() - start;
-                EcsLogger.info("com.artipie.docker.proxy")
+                EcsLogger.info("com.auto1.pantera.docker.proxy")
                     .message("ProxyManifests upstream response")
                     .eventCategory("repository")
                     .eventAction("proxy_manifest_get")

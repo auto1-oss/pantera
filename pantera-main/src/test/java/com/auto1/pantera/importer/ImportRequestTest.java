@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseException;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.importer.api.ChecksumPolicy;
-import com.artipie.importer.api.ImportHeaders;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.importer.api.ChecksumPolicy;
+import com.auto1.pantera.importer.api.ImportHeaders;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 

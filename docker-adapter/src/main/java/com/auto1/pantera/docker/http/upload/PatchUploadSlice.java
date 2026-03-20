@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.upload;
+package com.auto1.pantera.docker.http.upload;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Docker;
-import com.artipie.docker.error.UploadUnknownError;
-import com.artipie.docker.perms.DockerActions;
-import com.artipie.docker.perms.DockerRepositoryPermission;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.ContentWithSize;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.error.UploadUnknownError;
+import com.auto1.pantera.docker.perms.DockerActions;
+import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.ContentWithSize;
 
 import java.security.Permission;
 import java.util.concurrent.CompletableFuture;

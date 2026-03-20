@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -93,7 +93,7 @@ public final class TempFileCleanupJob implements Job {
      */
     static void cleanup(final Path dir, final long maxAgeMinutes) {
         if (dir == null) {
-            EcsLogger.warn("com.artipie.scheduling")
+            EcsLogger.warn("com.auto1.pantera.scheduling")
                 .message("TempFileCleanupJob: no cleanupDir configured, skipping")
                 .eventCategory("scheduling")
                 .eventAction("temp_cleanup")
@@ -102,7 +102,7 @@ public final class TempFileCleanupJob implements Job {
             return;
         }
         if (!Files.isDirectory(dir)) {
-            EcsLogger.debug("com.artipie.scheduling")
+            EcsLogger.debug("com.auto1.pantera.scheduling")
                 .message(
                     String.format(
                         "TempFileCleanupJob: directory does not exist: %s", dir
@@ -129,7 +129,7 @@ public final class TempFileCleanupJob implements Job {
                         try {
                             Files.deleteIfExists(file);
                             deleted.incrementAndGet();
-                            EcsLogger.debug("com.artipie.scheduling")
+                            EcsLogger.debug("com.auto1.pantera.scheduling")
                                 .message(
                                     String.format(
                                         "TempFileCleanupJob: deleted stale temp file: %s",
@@ -142,7 +142,7 @@ public final class TempFileCleanupJob implements Job {
                                 .log();
                         } catch (final IOException ex) {
                             failed.incrementAndGet();
-                            EcsLogger.warn("com.artipie.scheduling")
+                            EcsLogger.warn("com.auto1.pantera.scheduling")
                                 .message(
                                     String.format(
                                         "TempFileCleanupJob: failed to delete: %s", file
@@ -162,7 +162,7 @@ public final class TempFileCleanupJob implements Job {
                 public FileVisitResult visitFileFailed(
                     final Path file, final IOException exc
                 ) {
-                    EcsLogger.warn("com.artipie.scheduling")
+                    EcsLogger.warn("com.auto1.pantera.scheduling")
                         .message(
                             String.format(
                                 "TempFileCleanupJob: cannot access file: %s", file
@@ -177,7 +177,7 @@ public final class TempFileCleanupJob implements Job {
                 }
             });
         } catch (final IOException ex) {
-            EcsLogger.error("com.artipie.scheduling")
+            EcsLogger.error("com.auto1.pantera.scheduling")
                 .message(
                     String.format(
                         "TempFileCleanupJob: error walking directory: %s", dir
@@ -189,7 +189,7 @@ public final class TempFileCleanupJob implements Job {
                 .error(ex)
                 .log();
         }
-        EcsLogger.info("com.artipie.scheduling")
+        EcsLogger.info("com.auto1.pantera.scheduling")
             .message(
                 String.format(
                     "TempFileCleanupJob: completed scan of %s, deleted %d stale temp files, %d failures",

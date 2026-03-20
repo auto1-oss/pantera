@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.vertx;
+package com.auto1.pantera.vertx;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
 import io.reactivex.Flowable;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.reactivex.core.Vertx;
@@ -542,7 +542,7 @@ final class VertxSliceServerRobustnessTest {
             this.vertx,
             (line, headers, body) -> {
                 // Consume body then delay — simulates slow storage write
-                final CompletableFuture<com.artipie.http.Response> fut = new CompletableFuture<>();
+                final CompletableFuture<com.auto1.pantera.http.Response> fut = new CompletableFuture<>();
                 io.reactivex.Flowable.fromPublisher(body)
                     .toList()
                     .delay(2, TimeUnit.SECONDS)

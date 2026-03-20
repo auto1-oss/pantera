@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.events;
+package com.auto1.pantera.asto.events;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.function.Consumer;
 import org.quartz.Job;
 import org.quartz.JobExecutionContext;
@@ -72,7 +72,7 @@ public final class EventsProcessor<T> implements Job {
     private void stopJob(final JobExecutionContext context) {
         final JobKey key = context.getJobDetail().getKey();
         try {
-            EcsLogger.error("com.artipie.asto")
+            EcsLogger.error("com.auto1.pantera.asto")
                 .message("Events queue or action is null, processing failed. Stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
@@ -80,7 +80,7 @@ public final class EventsProcessor<T> implements Job {
                 .field("process.name", key.toString())
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
-            EcsLogger.error("com.artipie.asto")
+            EcsLogger.error("com.auto1.pantera.asto")
                 .message("Job stopped")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
@@ -88,7 +88,7 @@ public final class EventsProcessor<T> implements Job {
                 .field("process.name", key.toString())
                 .log();
         } catch (final SchedulerException error) {
-            EcsLogger.error("com.artipie.asto")
+            EcsLogger.error("com.auto1.pantera.asto")
                 .message("Error while stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")

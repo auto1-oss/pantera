@@ -9,4 +9,4 @@
  *
  * @since 0.2
  */
-package com.artipie.nuget.http.index;
+package com.auto1.pantera.nuget.http.index;

@@ -8,4 +8,4 @@
  *
  * @since 0.12
  */
-package com.artipie.test;
+package com.auto1.pantera.test;

@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie;
+package com.auto1.pantera;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.DbConsumer;
-import com.artipie.db.PostgreSQLTestConfig;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.QuartzService;
+import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.DbConsumer;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzService;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -28,7 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Test for {@link QuartzService} and
- * {@link com.artipie.db.DbConsumer}.
+ * {@link com.auto1.pantera.db.DbConsumer}.
  * @since 0.31
  */
 @SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})

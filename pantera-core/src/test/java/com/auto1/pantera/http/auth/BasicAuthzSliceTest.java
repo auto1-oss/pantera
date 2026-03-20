@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.auth;
+package com.auto1.pantera.http.auth;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.headers.Header;
-import com.artipie.http.hm.ResponseAssert;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.perms.EmptyPermissions;
-import com.artipie.security.policy.Policy;
-import com.artipie.security.policy.PolicyByUsername;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.ResponseAssert;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.EmptyPermissions;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.security.policy.PolicyByUsername;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Assertions;

@@ -7,4 +7,4 @@
  * Debian adapter metadata.
  * @since 0.1
  */
-package com.artipie.debian.metadata;
+package com.auto1.pantera.debian.metadata;

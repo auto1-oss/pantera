@@ -3,17 +3,17 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.misc.RandomFreePort;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.nuget.http.NuGet;
-import com.artipie.nuget.http.TestAuthentication;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.policy.Policy;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.nuget.http.NuGet;
+import com.auto1.pantera.nuget.http.TestAuthentication;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import java.io.IOException;
 import java.net.URI;

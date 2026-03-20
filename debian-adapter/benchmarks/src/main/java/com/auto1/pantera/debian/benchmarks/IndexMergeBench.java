@@ -3,10 +3,10 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.debian.benchmarks;
+package com.auto1.pantera.debian.benchmarks;
 
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.debian.MultiPackages;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.debian.MultiPackages;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -32,7 +32,7 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 /**
- * Benchmark for {@link com.artipie.debian.MultiPackages.Unique}.
+ * Benchmark for {@link com.auto1.pantera.debian.MultiPackages.Unique}.
  * @since 0.8
  */
 @BenchmarkMode(Mode.AverageTime)

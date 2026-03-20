@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.misc.ByteBufferTokenizer;
-import com.artipie.http.misc.Pipeline;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.misc.ByteBufferTokenizer;
+import com.auto1.pantera.http.misc.Pipeline;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;

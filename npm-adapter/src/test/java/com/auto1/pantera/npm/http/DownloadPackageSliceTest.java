@@ -3,15 +3,15 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.http.slice.TrimPathSlice;
-import com.artipie.npm.RandomFreePort;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.slice.TrimPathSlice;
+import com.auto1.pantera.npm.RandomFreePort;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.ext.web.client.WebClient;

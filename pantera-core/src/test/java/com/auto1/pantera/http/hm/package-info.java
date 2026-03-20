@@ -7,5 +7,5 @@
  * Tests for matchers.
  * @since 0.1
  */
-package com.artipie.http.hm;
+package com.auto1.pantera.http.hm;
 

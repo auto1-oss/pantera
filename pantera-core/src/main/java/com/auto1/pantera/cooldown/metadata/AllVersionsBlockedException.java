@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;
 
 import java.util.Collections;
 import java.util.Set;

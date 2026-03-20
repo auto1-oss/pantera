@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
-import com.artipie.http.headers.Header;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 
@@ -95,7 +95,7 @@ final class GoCooldownInspector implements CooldownInspector {
             }
             return parseGoModDependencies(gomod.get());
         }).exceptionally(throwable -> {
-            EcsLogger.error("com.artipie.go")
+            EcsLogger.error("com.auto1.pantera.go")
                 .message("Failed to read dependencies")
                 .eventCategory("repository")
                 .eventAction("cooldown_inspector")
@@ -116,7 +116,7 @@ final class GoCooldownInspector implements CooldownInspector {
             Content.EMPTY
         ).thenCompose(response -> {
             if (!response.status().success()) {
-                EcsLogger.warn("com.artipie.go")
+                EcsLogger.warn("com.auto1.pantera.go")
                     .message("Failed to fetch go.mod")
                     .eventCategory("repository")
                     .eventAction("cooldown_inspector")
@@ -153,7 +153,7 @@ final class GoCooldownInspector implements CooldownInspector {
                     DateTimeFormatter.ofPattern("EEE, dd MMM yyyy H:mm:ss z", Locale.US);
                 return Optional.of(Instant.from(relaxed.parse(val)));
             } catch (final DateTimeParseException ex2) {
-                EcsLogger.warn("com.artipie.go")
+                EcsLogger.warn("com.auto1.pantera.go")
                     .message(String.format("Invalid Last-Modified header: %s", raw))
                     .eventCategory("repository")
                     .eventAction("cooldown_inspector")

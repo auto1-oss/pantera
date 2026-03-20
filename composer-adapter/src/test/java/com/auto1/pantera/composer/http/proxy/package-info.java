@@ -7,4 +7,4 @@
  * Test for Composer HTTP proxy classes.
  * @since 0.4
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;

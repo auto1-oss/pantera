@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.ArtipieException;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.http.auth.ArtipieAuthFactory;
-import com.artipie.http.auth.AuthFactory;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.DomainFilteredAuth;
-import com.artipie.settings.YamlSettings;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.http.auth.ArtipieAuthFactory;
+import com.auto1.pantera.http.auth.AuthFactory;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.DomainFilteredAuth;
+import com.auto1.pantera.settings.YamlSettings;
 import java.util.ArrayList;
 import java.util.List;
 

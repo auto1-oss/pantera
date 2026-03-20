@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.cache;
+package com.auto1.pantera.asto.cache;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.log.EcsLogger;
 import io.reactivex.Flowable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -102,7 +102,7 @@ public final class StreamThroughCache implements Cache {
                 StandardOpenOption.TRUNCATE_EXISTING
             );
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: temp file creation failed for key '%s', using in-memory fallback", key.string()))
                 .eventCategory("cache")
                 .eventAction("stream_through")
@@ -128,7 +128,7 @@ public final class StreamThroughCache implements Cache {
             .doOnError(err -> {
                 closeQuietly(channel);
                 deleteTempFileQuietly(tempFile);
-                EcsLogger.debug("com.artipie.asto.cache")
+                EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message(String.format("Stream-through: remote stream error for key '%s', not caching", key.string()))
                     .eventCategory("cache")
                     .eventAction("stream_through")
@@ -163,7 +163,7 @@ public final class StreamThroughCache implements Cache {
                 }
             })
             .doOnError(err -> {
-                EcsLogger.debug("com.artipie.asto.cache")
+                EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message(String.format("Stream-through: remote stream error for key '%s', not caching (in-memory)", key.string()))
                     .eventCategory("cache")
                     .eventAction("stream_through")
@@ -204,7 +204,7 @@ public final class StreamThroughCache implements Cache {
                 .whenComplete((ignored, err) -> {
                     deleteTempFileQuietly(tempFile);
                     if (err != null) {
-                        EcsLogger.warn("com.artipie.asto.cache")
+                        EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: failed to save to cache from temp file for key '%s'", key.string()))
                             .eventCategory("cache")
                             .eventAction("stream_through_save")
@@ -213,7 +213,7 @@ public final class StreamThroughCache implements Cache {
                             .error(err)
                             .log();
                     } else {
-                        EcsLogger.debug("com.artipie.asto.cache")
+                        EcsLogger.debug("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: saved to cache from temp file for key '%s'", key.string()))
                             .eventCategory("cache")
                             .eventAction("stream_through_save")
@@ -224,7 +224,7 @@ public final class StreamThroughCache implements Cache {
                 });
         } catch (final Exception ex) {
             deleteTempFileQuietly(tempFile);
-            EcsLogger.warn("com.artipie.asto.cache")
+            EcsLogger.warn("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: exception initiating save from temp file for key '%s'", key.string()))
                 .eventCategory("cache")
                 .eventAction("stream_through_save")
@@ -246,7 +246,7 @@ public final class StreamThroughCache implements Cache {
             this.storage.save(key, new Content.From(bytes))
                 .whenComplete((ignored, err) -> {
                     if (err != null) {
-                        EcsLogger.warn("com.artipie.asto.cache")
+                        EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: failed to save to cache for key '%s'", key.string()))
                             .eventCategory("cache")
                             .eventAction("stream_through_save")
@@ -255,7 +255,7 @@ public final class StreamThroughCache implements Cache {
                             .error(err)
                             .log();
                     } else {
-                        EcsLogger.debug("com.artipie.asto.cache")
+                        EcsLogger.debug("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: saved to cache for key '%s'", key.string()))
                             .eventCategory("cache")
                             .eventAction("stream_through_save")
@@ -265,7 +265,7 @@ public final class StreamThroughCache implements Cache {
                     }
                 });
         } catch (final Exception ex) {
-            EcsLogger.warn("com.artipie.asto.cache")
+            EcsLogger.warn("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: exception initiating save for key '%s'", key.string()))
                 .eventCategory("cache")
                 .eventAction("stream_through_save")
@@ -286,7 +286,7 @@ public final class StreamThroughCache implements Cache {
                 channel.close();
             }
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to close file channel")
                 .error(ex)
                 .log();
@@ -302,7 +302,7 @@ public final class StreamThroughCache implements Cache {
         try {
             Files.deleteIfExists(tempFile);
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.asto.cache")
+            EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message("Failed to delete temp file")
                 .error(ex)
                 .log();

@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.hex.tarball;
+package com.auto1.pantera.hex.tarball;
 
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

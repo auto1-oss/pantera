@@ -6,4 +6,4 @@
  * Docker reference links test.
  * @since 0.1
  */
-package com.artipie.docker.ref;
+package com.auto1.pantera.docker.ref;

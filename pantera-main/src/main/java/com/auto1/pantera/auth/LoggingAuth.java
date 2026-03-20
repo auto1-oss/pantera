@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 
 /**
@@ -33,7 +33,7 @@ public final class LoggingAuth implements Authentication {
     public Optional<AuthUser> user(final String username, final String password) {
         final Optional<AuthUser> res = this.origin.user(username, password);
         if (res.isEmpty()) {
-            EcsLogger.warn("com.artipie.auth")
+            EcsLogger.warn("com.auto1.pantera.auth")
                 .message("Failed to authenticate user")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -42,7 +42,7 @@ public final class LoggingAuth implements Authentication {
                 .field("event.provider", this.origin.toString())
                 .log();
         } else {
-            EcsLogger.info("com.artipie.auth")
+            EcsLogger.info("com.auto1.pantera.auth")
                 .message("Successfully authenticated user")
                 .eventCategory("authentication")
                 .eventAction("login")

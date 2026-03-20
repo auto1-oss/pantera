@@ -8,4 +8,4 @@
  *
  * @since 0.13
  */
-package com.artipie.helm;
+package com.auto1.pantera.helm;

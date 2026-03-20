@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;

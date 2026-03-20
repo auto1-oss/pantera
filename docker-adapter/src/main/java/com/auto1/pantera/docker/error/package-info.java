@@ -8,4 +8,4 @@
  *
  * @since 0.5
  */
-package com.artipie.docker.error;
+package com.auto1.pantera.docker.error;

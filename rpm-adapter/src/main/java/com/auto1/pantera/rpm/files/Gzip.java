@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.files;
+package com.auto1.pantera.rpm.files;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -59,7 +59,7 @@ public final class Gzip {
                 }
             }
         }
-        EcsLogger.debug("com.artipie.rpm")
+        EcsLogger.debug("com.auto1.pantera.rpm")
             .message("Unpacked tar.gz")
             .eventCategory("repository")
             .eventAction("archive_extraction")
@@ -79,7 +79,7 @@ public final class Gzip {
             GZIPInputStream input = new GZIPInputStream(Files.newInputStream(this.file))) {
             IOUtils.copy(input, out);
         }
-        EcsLogger.debug("com.artipie.rpm")
+        EcsLogger.debug("com.auto1.pantera.rpm")
             .message("Unpacked gz")
             .eventCategory("repository")
             .eventAction("archive_extraction")

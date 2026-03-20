@@ -8,4 +8,4 @@
  *
  * @since 0.5
  */
-package com.artipie.maven.asto;
+package com.auto1.pantera.maven.asto;

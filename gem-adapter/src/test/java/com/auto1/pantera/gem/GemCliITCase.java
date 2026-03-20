@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem;
+package com.auto1.pantera.gem;
 
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.gem.http.GemSlice;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.security.policy.Policy;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.gem.http.GemSlice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;

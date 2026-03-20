@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.JobDataRegistry;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.scheduling.QuartzJob;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.JobDataRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzJob;
 
 import java.util.Queue;
 import org.quartz.JobExecutionContext;
@@ -48,7 +48,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Composer proxy processor not initialized properly - stopping job")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -56,7 +56,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 .log();
             super.stopJob(context);
         } else {
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Composer proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -65,7 +65,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 final ProxyArtifactEvent event = this.packages.poll();
                 if (event != null) {
                     final Key key = event.artifactKey();
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Processing Composer proxy event")
                         .eventCategory("repository")
                         .eventAction("proxy_processor")
@@ -76,7 +76,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         // Extract package name and version from key
                         final String[] parts = key.string().split("/");
                         if (parts.length < 3) {
-                            EcsLogger.warn("com.artipie.composer")
+                            EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("Invalid event key format (expected vendor/package/version)")
                                 .eventCategory("repository")
                                 .eventAction("proxy_processor")
@@ -108,7 +108,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             if (this.asto.exists(distKey).join()) {
                                 final var sizeOpt = this.asto.metadata(distKey)
                                     .join()
-                                    .read(com.artipie.asto.Meta.OP_SIZE);
+                                    .read(com.auto1.pantera.asto.Meta.OP_SIZE);
                             if (sizeOpt.isPresent()) {
                                 artifactSize = sizeOpt.get();
                             }
@@ -134,7 +134,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             )
                         );
 
-                        EcsLogger.info("com.artipie.composer")
+                        EcsLogger.info("com.auto1.pantera.composer")
                             .message("Recorded Composer proxy download")
                             .eventCategory("repository")
                             .eventAction("proxy_processor")
@@ -152,7 +152,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         }
 
                     } catch (final Exception err) {
-                        EcsLogger.error("com.artipie.composer")
+                        EcsLogger.error("com.auto1.pantera.composer")
                             .message("Failed to process composer proxy package")
                             .eventCategory("repository")
                             .eventAction("proxy_processor")
@@ -249,10 +249,10 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
     private Long extractReleaseDate(final String packageName, final String version) {
         try {
             // Metadata is stored at: vendor/package.json
-            final com.artipie.asto.Key metadataKey = new com.artipie.asto.Key.From(packageName + ".json");
+            final com.auto1.pantera.asto.Key metadataKey = new com.auto1.pantera.asto.Key.From(packageName + ".json");
 
             if (!this.asto.exists(metadataKey).join()) {
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Metadata not found, cannot extract release date")
                     .eventCategory("repository")
                     .eventAction("proxy_processor")
@@ -262,9 +262,9 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
             }
 
             // Read and parse metadata
-            final com.artipie.asto.Content content = this.asto.value(metadataKey).join();
+            final com.auto1.pantera.asto.Content content = this.asto.value(metadataKey).join();
             final String jsonStr = new String(
-                new com.artipie.asto.Content.From(content).asBytesFuture().join(),
+                new com.auto1.pantera.asto.Content.From(content).asBytesFuture().join(),
                 java.nio.charset.StandardCharsets.UTF_8
             );
             
@@ -293,7 +293,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
             if (timeStr != null) {
                 final java.time.Instant instant = java.time.Instant.parse(timeStr);
                 final long releaseMillis = instant.toEpochMilli();
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Extracted release date from metadata")
                     .eventCategory("repository")
                     .eventAction("proxy_processor")
@@ -306,7 +306,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
 
             return null;
         } catch (final Exception err) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to extract release date")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")

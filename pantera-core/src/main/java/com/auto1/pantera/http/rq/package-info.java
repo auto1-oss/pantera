@@ -7,5 +7,5 @@
  * Request objects.
  * @since 0.1
  */
-package com.artipie.http.rq;
+package com.auto1.pantera.http.rq;
 

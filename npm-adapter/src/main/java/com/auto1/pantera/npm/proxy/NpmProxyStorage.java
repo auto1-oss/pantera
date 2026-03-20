@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy;
+package com.auto1.pantera.npm.proxy;
 
-import com.artipie.npm.proxy.model.NpmAsset;
-import com.artipie.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.npm.proxy.model.NpmAsset;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
 
@@ -55,7 +55,7 @@ public interface NpmProxyStorage {
      * @param name Package name
      * @return Package content as reactive Content or empty
      */
-    Maybe<com.artipie.asto.Content> getPackageContent(String name);
+    Maybe<com.auto1.pantera.asto.Content> getPackageContent(String name);
 
     /**
      * Retrieve pre-computed abbreviated package content as reactive stream.
@@ -64,7 +64,7 @@ public interface NpmProxyStorage {
      * @param name Package name
      * @return Abbreviated package content as reactive Content or empty
      */
-    Maybe<com.artipie.asto.Content> getAbbreviatedContent(String name);
+    Maybe<com.auto1.pantera.asto.Content> getAbbreviatedContent(String name);
 
     /**
      * Check if abbreviated metadata exists for a package.

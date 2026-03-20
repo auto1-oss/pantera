@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
-import com.artipie.asto.s3.S3Storage;
-import com.artipie.asto.test.StorageWhiteboxVerification;
+import com.auto1.pantera.asto.s3.S3Storage;
+import com.auto1.pantera.asto.test.StorageWhiteboxVerification;
 import java.net.URI;
 import java.util.UUID;
 import org.junit.jupiter.api.condition.DisabledOnOs;

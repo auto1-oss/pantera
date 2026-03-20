@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.client.jetty;
+package com.auto1.pantera.http.client.jetty;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.client.HttpServer;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.client.HttpServer;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import org.eclipse.jetty.client.HttpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -214,7 +214,7 @@ final class JettyClientSliceGzipTest {
     private static String firstHeader(final Headers headers, final String name) {
         return StreamSupport.stream(headers.spliterator(), false)
             .filter(h -> name.equalsIgnoreCase(h.getKey()))
-            .map(com.artipie.http.headers.Header::getValue)
+            .map(com.auto1.pantera.http.headers.Header::getValue)
             .findFirst()
             .orElse(null);
     }

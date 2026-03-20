@@ -8,4 +8,4 @@
  *
  * @since 0.4
  */
-package com.artipie.http.client.misc;
+package com.auto1.pantera.http.client.misc;

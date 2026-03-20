@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -116,7 +116,7 @@ public final class QuartzService {
             // fail, and loop indefinitely if not cleaned up.
             this.scheduler.clear();
             this.addShutdownHook();
-            EcsLogger.info("com.artipie.scheduling")
+            EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC clustering enabled (scheduler: "
                     + QuartzService.SCHED_NAME + ")")
                 .eventCategory("scheduling")
@@ -271,7 +271,7 @@ public final class QuartzService {
         try {
             this.scheduler.deleteJob(key);
         } catch (final SchedulerException err) {
-            EcsLogger.error("com.artipie.scheduling")
+            EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Error while deleting quartz job")
                 .eventCategory("scheduling")
                 .eventAction("job_delete")
@@ -318,7 +318,7 @@ public final class QuartzService {
                         try {
                             QuartzService.this.scheduler.shutdown();
                         } catch (final SchedulerException error) {
-                            EcsLogger.error("com.artipie.scheduling")
+                            EcsLogger.error("com.auto1.pantera.scheduling")
                                 .message("Failed to shutdown Quartz scheduler")
                                 .eventCategory("scheduling")
                                 .eventAction("scheduler_shutdown")
@@ -397,7 +397,7 @@ public final class QuartzService {
             this.scheduler.getMetaData().getThreadPoolSize(), requested
         );
         if (requested > count) {
-            EcsLogger.warn("com.artipie.scheduling")
+            EcsLogger.warn("com.auto1.pantera.scheduling")
                 .message("Parallel quartz jobs amount limited to thread pool size (" + count + " threads, " + requested + " jobs requested)")
                 .eventCategory("scheduling")
                 .eventAction("job_limit")
@@ -413,7 +413,7 @@ public final class QuartzService {
      * @param seconds Scheduled interval
      */
     private void log(final int count, final String clazz, final int seconds) {
-        EcsLogger.debug("com.artipie.scheduling")
+        EcsLogger.debug("com.auto1.pantera.scheduling")
             .message("Parallel jobs scheduled (" + count + " instances of " + clazz + ", interval: " + seconds + "s)")
             .eventCategory("scheduling")
             .eventAction("job_schedule")

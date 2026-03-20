@@ -8,4 +8,4 @@
  *
  * @since 0.31
  */
-package com.artipie.jetty.http3;
+package com.auto1.pantera.jetty.http3;

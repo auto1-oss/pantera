@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.debian;
+package com.auto1.pantera.debian;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.rx.RxStorageWrapper;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.debian.metadata.Control;
-import com.artipie.debian.metadata.InRelease;
-import com.artipie.debian.metadata.PackagesItem;
-import com.artipie.debian.metadata.Release;
-import com.artipie.debian.metadata.UniquePackage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.rx.RxStorageWrapper;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.debian.metadata.Control;
+import com.auto1.pantera.debian.metadata.InRelease;
+import com.auto1.pantera.debian.metadata.PackagesItem;
+import com.auto1.pantera.debian.metadata.Release;
+import com.auto1.pantera.debian.metadata.UniquePackage;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Observable;
 import io.reactivex.Single;
@@ -99,7 +99,7 @@ public interface Debian {
                 .flatMapSingle(
                     // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
                     key -> bsto.value(key).flatMap(
-                        val -> com.artipie.asto.rx.RxFuture.single(
+                        val -> com.auto1.pantera.asto.rx.RxFuture.single(
                             new ContentAsStream<String>(val)
                                 .process(input -> new Control.FromInputStream(input).asString())
                                 .toCompletableFuture()
@@ -108,7 +108,7 @@ public interface Debian {
                 )
                 .flatMapSingle(
                     // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
-                    pair -> com.artipie.asto.rx.RxFuture.single(
+                    pair -> com.auto1.pantera.asto.rx.RxFuture.single(
                         new PackagesItem.Asto(this.asto).format(pair.getValue(), pair.getKey())
                             .toCompletableFuture()
                     )

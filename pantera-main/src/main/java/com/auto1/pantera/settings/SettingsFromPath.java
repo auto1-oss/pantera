@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.VertxMain;
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.misc.JavaResource;
-import com.artipie.scheduling.QuartzService;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.VertxMain;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.misc.JavaResource;
+import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -86,7 +86,7 @@ public final class SettingsFromPath {
                 );
             }
             bsto.save(init, "true".getBytes());
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message(String.join(
                     "\n",
                     "", "", "\t+===============================================================+",

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.cooldown;
+package com.auto1.pantera.npm.cooldown;
 
-import com.artipie.cooldown.metadata.MetadataParseException;
-import com.artipie.cooldown.metadata.MetadataParser;
-import com.artipie.cooldown.metadata.ReleaseDateProvider;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.cooldown.metadata.MetadataParseException;
+import com.auto1.pantera.cooldown.metadata.MetadataParser;
+import com.auto1.pantera.cooldown.metadata.ReleaseDateProvider;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -120,7 +120,7 @@ public final class NpmMetadataParser implements MetadataParser<JsonNode>, Releas
                     final Instant instant = Instant.parse(value.asText());
                     result.put(key, instant);
                 } catch (final DateTimeParseException ex) {
-                    EcsLogger.debug("com.artipie.npm")
+                    EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Failed to parse NPM version timestamp")
                         .error(ex)
                         .log();

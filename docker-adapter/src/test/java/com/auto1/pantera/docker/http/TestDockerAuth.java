@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.docker.Docker;
-import com.artipie.http.Headers;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.BasicAuthScheme;
-import com.artipie.http.headers.Authorization;
-import com.artipie.http.headers.Header;
-import com.artipie.security.policy.Policy;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.BasicAuthScheme;
+import com.auto1.pantera.http.headers.Authorization;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.util.Optional;
 import java.util.Queue;

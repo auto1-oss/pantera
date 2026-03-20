@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.repo;
+package com.auto1.pantera.settings.repo;
 
 import com.amihaiemil.eoyaml.Scalar;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.cache.StoragesCache;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.RemoteConfig;
-import com.artipie.settings.StorageByAlias;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.settings.StorageByAlias;
 import com.google.common.base.Strings;
 
 import java.net.MalformedURLException;
@@ -263,12 +263,12 @@ public final class RepoConfig {
      *
      * @return List of routing rules or empty list if not specified.
      */
-    public List<com.artipie.group.RoutingRule> routingRules() {
+    public List<com.auto1.pantera.group.RoutingRule> routingRules() {
         final YamlSequence seq = this.repoYaml.yamlSequence("routing");
         if (seq == null) {
             return Collections.emptyList();
         }
-        final List<com.artipie.group.RoutingRule> rules = new ArrayList<>(seq.size());
+        final List<com.auto1.pantera.group.RoutingRule> rules = new ArrayList<>(seq.size());
         seq.forEach(node -> {
             if (node instanceof YamlMapping mapping) {
                 final String member = mapping.string("member");
@@ -278,9 +278,9 @@ public final class RepoConfig {
                 final String prefix = mapping.string("prefix");
                 final String pattern = mapping.string("pattern");
                 if (prefix != null && !prefix.isEmpty()) {
-                    rules.add(new com.artipie.group.RoutingRule.PathPrefix(member, prefix));
+                    rules.add(new com.auto1.pantera.group.RoutingRule.PathPrefix(member, prefix));
                 } else if (pattern != null && !pattern.isEmpty()) {
-                    rules.add(new com.artipie.group.RoutingRule.PathPattern(member, pattern));
+                    rules.add(new com.auto1.pantera.group.RoutingRule.PathPattern(member, pattern));
                 } else {
                     throw new IllegalStateException(
                         "routing rule for member '" + member

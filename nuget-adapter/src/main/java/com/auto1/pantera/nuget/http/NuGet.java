@@ -2,27 +2,27 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http;
+package com.auto1.pantera.nuget.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.TokenAuthentication;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.nuget.Repository;
-import com.artipie.nuget.http.content.PackageContent;
-import com.artipie.nuget.http.index.ServiceIndex;
-import com.artipie.nuget.http.metadata.PackageMetadata;
-import com.artipie.nuget.http.publish.PackagePublish;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.nuget.Repository;
+import com.auto1.pantera.nuget.http.content.PackageContent;
+import com.auto1.pantera.nuget.http.index.ServiceIndex;
+import com.auto1.pantera.nuget.http.metadata.PackageMetadata;
+import com.auto1.pantera.nuget.http.publish.PackagePublish;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
 
 import java.net.URL;
 import java.util.Arrays;

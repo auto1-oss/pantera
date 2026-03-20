@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
 import com.amihaiemil.eoyaml.Yaml;
-import com.artipie.db.ArtifactDbFactory;
-import com.artipie.db.PostgreSQLTestConfig;
+import com.auto1.pantera.db.ArtifactDbFactory;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;

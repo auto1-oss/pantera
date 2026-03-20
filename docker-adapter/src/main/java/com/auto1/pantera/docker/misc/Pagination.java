@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.misc;
+package com.auto1.pantera.docker.misc;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.rq.RqParams;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.rq.RqParams;
 import org.apache.hc.core5.net.URIBuilder;
 
 import javax.json.Json;

@@ -2,32 +2,32 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.log.LogSanitizer;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.cache.Remote;
-import com.artipie.composer.JsonPackages;
-import com.artipie.composer.Packages;
-import com.artipie.composer.Repository;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.LogSanitizer;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.composer.JsonPackages;
+import com.auto1.pantera.composer.Packages;
+import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownResult;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -112,7 +112,7 @@ final class CachedProxySlice implements Slice {
      */
     CachedProxySlice(Slice remote, Repository repo, Cache cache) {
         this(remote, repo, cache, Optional.empty(), "composer", "php",
-            com.artipie.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080",
             "unknown"
@@ -192,7 +192,7 @@ final class CachedProxySlice implements Slice {
         // GET requests should have empty body, but we must consume it to complete the request
         return body.asBytesFuture().thenCompose(ignored -> {
             final String path = line.uri().getPath();
-            EcsLogger.info("com.artipie.composer")
+            EcsLogger.info("com.auto1.pantera.composer")
                 .message("Composer proxy request")
                 .eventCategory("repository")
                 .eventAction("proxy_request")
@@ -232,7 +232,7 @@ final class CachedProxySlice implements Slice {
             CacheControl.Standard.ALWAYS
         ).thenCompose(cached -> {
             if (cached.isPresent()) {
-                EcsLogger.info("com.artipie.composer")
+                EcsLogger.info("com.auto1.pantera.composer")
                     .message("Cache hit, serving cached metadata (offline-safe)")
                     .eventCategory("repository")
                     .eventAction("proxy_request")
@@ -273,7 +273,7 @@ final class CachedProxySlice implements Slice {
         return this.evaluateMetadataCooldown(name, headers, bytes)
             .thenApply(result -> {
                 if (result.blocked()) {
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cooldown blocked cached metadata request")
                         .eventCategory("repository")
                         .eventAction("cooldown_check")
@@ -310,7 +310,7 @@ final class CachedProxySlice implements Slice {
         final Optional<CooldownRequest> cooldownReq = this.parseCooldownRequest(path, headers);
 
         if (cooldownReq.isPresent()) {
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Evaluating cooldown for package")
                 .eventCategory("repository")
                 .eventAction("cooldown_check")
@@ -339,7 +339,7 @@ final class CachedProxySlice implements Slice {
         final Headers headers
     ) {
         if (result.blocked()) {
-            EcsLogger.info("com.artipie.composer")
+            EcsLogger.info("com.auto1.pantera.composer")
                 .message("Cooldown blocked request")
                 .eventCategory("repository")
                 .eventAction("cooldown_check")
@@ -351,7 +351,7 @@ final class CachedProxySlice implements Slice {
                 CooldownResponses.forbidden(result.block().orElseThrow())
             );
         }
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Cooldown allowed request")
             .eventCategory("repository")
             .eventAction("cooldown_check")
@@ -379,7 +379,7 @@ final class CachedProxySlice implements Slice {
             CompletableFuture.runAsync(() -> {
                 try {
                     this.fetchThroughCache(line, name, headers).join();
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Background refresh completed")
                         .eventCategory("cache")
                         .eventAction("stale_while_revalidate")
@@ -387,7 +387,7 @@ final class CachedProxySlice implements Slice {
                         .field("package.name", name)
                         .log();
                 } catch (final Exception err) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Background refresh failed")
                         .eventCategory("cache")
                         .eventAction("stale_while_revalidate")
@@ -432,7 +432,7 @@ final class CachedProxySlice implements Slice {
                         if (contentOpt.isPresent()) {
                             return contentOpt.get().asBytesFuture().thenApply(bytes -> {
                                 final byte[] rewritten = this.rewriteMetadata(bytes);
-                                EcsLogger.debug("com.artipie.composer")
+                                EcsLogger.debug("com.auto1.pantera.composer")
                                     .message("Pre-rewrote metadata URLs at write time")
                                     .eventCategory("repository")
                                     .eventAction("metadata_rewrite")
@@ -443,7 +443,7 @@ final class CachedProxySlice implements Slice {
                                 );
                             });
                         }
-                        EcsLogger.debug("com.artipie.composer")
+                        EcsLogger.debug("com.auto1.pantera.composer")
                             .message("No content from remote for package")
                             .eventCategory("repository")
                             .eventAction("metadata_fetch")
@@ -464,7 +464,7 @@ final class CachedProxySlice implements Slice {
                 this.evaluateMetadataCooldown(name, headers, bytes)
                     .thenCompose(result -> {
                         if (result.blocked()) {
-                            EcsLogger.info("com.artipie.composer")
+                            EcsLogger.info("com.auto1.pantera.composer")
                                 .message("Cooldown blocked metadata request")
                                 .eventCategory("repository")
                                 .eventAction("cooldown_check")
@@ -479,7 +479,7 @@ final class CachedProxySlice implements Slice {
                         final Key metadataKey = new Key.From(name + ".json");
                         return this.repo.storage().save(metadataKey, new Content.From(bytes))
                             .thenApply(ignored -> {
-                                EcsLogger.debug("com.artipie.composer")
+                                EcsLogger.debug("com.auto1.pantera.composer")
                                     .message("Saved metadata to storage")
                                     .eventCategory("repository")
                                     .eventAction("metadata_save")
@@ -493,7 +493,7 @@ final class CachedProxySlice implements Slice {
                     })
             );
         }).exceptionally(throwable -> {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to read cached item")
                 .eventCategory("repository")
                 .eventAction("cache_read")
@@ -519,7 +519,7 @@ final class CachedProxySlice implements Slice {
             // If packages is an array (Satis format), skip cooldown check
             // Satis format has empty packages array and uses provider-includes instead
             if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Satis format detected (packages is array), skipping cooldown check")
                     .eventCategory("repository")
                     .eventAction("cooldown_check")
@@ -542,7 +542,7 @@ final class CachedProxySlice implements Slice {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
             final String owner = new Login(headers).getValue();
-            final com.artipie.cooldown.CooldownRequest req = new com.artipie.cooldown.CooldownRequest(
+            final com.auto1.pantera.cooldown.CooldownRequest req = new com.auto1.pantera.cooldown.CooldownRequest(
                 this.rtype,
                 this.rname,
                 name,
@@ -552,7 +552,7 @@ final class CachedProxySlice implements Slice {
             );
             return this.cooldown.evaluate(req, this.inspector);
         } catch (Exception e) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to parse metadata for cooldown check")
                 .eventCategory("repository")
                 .eventAction("cooldown_check")
@@ -581,7 +581,7 @@ final class CachedProxySlice implements Slice {
                             bestVer = ver;
                         }
                     } catch (final Exception ex) {
-                        EcsLogger.debug("com.artipie.composer")
+                        EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Failed to parse Composer version time")
                             .error(ex)
                             .log();
@@ -608,7 +608,7 @@ final class CachedProxySlice implements Slice {
                             bestVer = key;
                         }
                     } catch (final Exception ex) {
-                        EcsLogger.debug("com.artipie.composer")
+                        EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Failed to parse Composer version time")
                             .error(ex)
                             .log();
@@ -632,7 +632,7 @@ final class CachedProxySlice implements Slice {
             final MetadataUrlRewriter rewriter = new MetadataUrlRewriter(this.baseUrl);
             return rewriter.rewrite(json);
         } catch (Exception ex) {
-            EcsLogger.error("com.artipie.composer")
+            EcsLogger.error("com.auto1.pantera.composer")
                 .message("Failed to rewrite metadata")
                 .eventCategory("repository")
                 .eventAction("metadata_rewrite")
@@ -667,7 +667,7 @@ final class CachedProxySlice implements Slice {
      */
     private void emitEvent(final String name, final Headers headers, final Optional<? extends Content> content) {
         if (this.events.isEmpty()) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Events queue is empty, cannot emit event")
                 .eventCategory("repository")
                 .eventAction("event_creation")
@@ -677,7 +677,7 @@ final class CachedProxySlice implements Slice {
             return;
         }
         if (content.isEmpty()) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Content is empty, cannot emit event")
                 .eventCategory("repository")
                 .eventAction("event_creation")
@@ -696,7 +696,7 @@ final class CachedProxySlice implements Slice {
                 Optional.ofNullable(release)
             )
         );
-        EcsLogger.info("com.artipie.composer")
+        EcsLogger.info("com.auto1.pantera.composer")
             .message("Added Composer proxy event (queue size: " + this.events.get().size() + ")")
             .eventCategory("repository")
             .eventAction("event_creation")
@@ -721,7 +721,7 @@ final class CachedProxySlice implements Slice {
                 .map(val -> Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)).toEpochMilli())
                 .orElse(null);
         } catch (final DateTimeParseException ex) {
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Failed to parse Last-Modified header for release date")
                 .error(ex)
                 .log();
@@ -747,7 +747,7 @@ final class CachedProxySlice implements Slice {
                     return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
                         .thenCompose(response -> {
                             final long duration = System.currentTimeMillis() - startTime;
-                            EcsLogger.debug("com.artipie.composer")
+                            EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Remote response received")
                                 .eventCategory("repository")
                                 .eventAction("remote_fetch")
@@ -773,7 +773,7 @@ final class CachedProxySlice implements Slice {
                                 if (response.status().code() >= 500) {
                                     this.recordUpstreamErrorMetric(new RuntimeException("HTTP " + response.status().code()));
                                 }
-                                EcsLogger.warn("com.artipie.composer")
+                                EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")
                                     .eventCategory("repository")
                                     .eventAction("remote_fetch")
@@ -799,8 +799,8 @@ final class CachedProxySlice implements Slice {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
             }
         });
@@ -811,14 +811,14 @@ final class CachedProxySlice implements Slice {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
             }
         });
@@ -830,11 +830,11 @@ final class CachedProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

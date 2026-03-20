@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.cache;
+package com.auto1.pantera.http.cache;
 
-import com.artipie.http.Headers;
-import com.artipie.http.headers.Header;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -59,7 +59,7 @@ public final class ConditionalRequest {
         return headers.stream()
             .filter(h -> "ETag".equalsIgnoreCase(h.getKey()))
             .findFirst()
-            .map(com.artipie.http.headers.Header::getValue);
+            .map(com.auto1.pantera.http.headers.Header::getValue);
     }
 
     /**
@@ -72,6 +72,6 @@ public final class ConditionalRequest {
         return headers.stream()
             .filter(h -> "Last-Modified".equalsIgnoreCase(h.getKey()))
             .findFirst()
-            .map(com.artipie.http.headers.Header::getValue);
+            .map(com.auto1.pantera.http.headers.Header::getValue);
     }
 }

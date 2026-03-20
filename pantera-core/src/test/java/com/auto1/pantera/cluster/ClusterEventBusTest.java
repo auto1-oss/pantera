@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cluster;
+package com.auto1.pantera.cluster;
 
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.cache.ValkeyConnection;
 import java.time.Duration;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;

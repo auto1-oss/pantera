@@ -8,5 +8,5 @@
  *
  * @since 1.0
  */
-package com.artipie;
+package com.auto1.pantera;
 

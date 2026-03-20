@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.lock;
+package com.auto1.pantera.asto.lock;
 
-import com.artipie.asto.FailedCompletionStage;
+import com.auto1.pantera.asto.FailedCompletionStage;
 import com.google.common.base.Stopwatch;
 import java.util.ArrayList;
 import java.util.List;

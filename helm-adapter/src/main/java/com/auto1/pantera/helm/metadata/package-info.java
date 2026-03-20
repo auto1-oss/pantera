@@ -8,4 +8,4 @@
  *
  * @since 0.2
  */
-package com.artipie.helm.metadata;
+package com.auto1.pantera.helm.metadata;

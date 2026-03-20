@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings;
+package com.auto1.pantera.settings;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.io.IOException;
 import java.nio.file.ClosedWatchServiceException;
@@ -111,7 +111,7 @@ public final class ConfigWatchService implements AutoCloseable {
                     StandardWatchEventKinds.ENTRY_MODIFY,
                     StandardWatchEventKinds.ENTRY_CREATE
                 );
-                EcsLogger.info("com.artipie.settings")
+                EcsLogger.info("com.auto1.pantera.settings")
                     .message("Started watching config file")
                     .eventCategory("configuration")
                     .eventAction("config_watch_start")
@@ -123,7 +123,7 @@ public final class ConfigWatchService implements AutoCloseable {
                 this.watchThread.setDaemon(true);
                 this.watchThread.start();
             } catch (final IOException ex) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Failed to start config watch service")
                     .eventCategory("configuration")
                     .eventAction("config_watch_start")
@@ -163,7 +163,7 @@ public final class ConfigWatchService implements AutoCloseable {
             } catch (final ClosedWatchServiceException ex) {
                 break;
             } catch (final Exception ex) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Error in config watch loop")
                     .eventCategory("configuration")
                     .eventAction("config_watch")
@@ -196,14 +196,14 @@ public final class ConfigWatchService implements AutoCloseable {
         try {
             final List<String> newPrefixes = this.readPrefixes();
             this.prefixesConfig.update(newPrefixes);
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Reloaded global_prefixes from config (prefixes: " + newPrefixes.toString() + ", version: " + this.prefixesConfig.version() + ")")
                 .eventCategory("configuration")
                 .eventAction("config_reload")
                 .eventOutcome("success")
                 .log();
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.settings")
+            EcsLogger.error("com.auto1.pantera.settings")
                 .message("Failed to reload config file")
                 .eventCategory("configuration")
                 .eventAction("config_reload")
@@ -252,7 +252,7 @@ public final class ConfigWatchService implements AutoCloseable {
             try {
                 this.watcher.close();
             } catch (final IOException ex) {
-                EcsLogger.error("com.artipie.settings")
+                EcsLogger.error("com.auto1.pantera.settings")
                     .message("Error closing watch service")
                     .eventCategory("configuration")
                     .eventAction("config_watch_stop")
@@ -272,7 +272,7 @@ public final class ConfigWatchService implements AutoCloseable {
             if (this.watchThread != null) {
                 this.watchThread.interrupt();
             }
-            EcsLogger.info("com.artipie.settings")
+            EcsLogger.info("com.auto1.pantera.settings")
                 .message("Config watch service stopped")
                 .eventCategory("configuration")
                 .eventAction("config_watch_stop")

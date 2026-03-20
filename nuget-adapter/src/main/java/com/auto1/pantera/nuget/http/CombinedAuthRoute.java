@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http;
+package com.auto1.pantera.nuget.http;
 
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.auth.CombinedAuthzSlice;
-import com.artipie.http.auth.OperationControl;
-import com.artipie.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.CombinedAuthzSlice;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 
 /**
  * Route supporting combined basic and bearer token authentication.

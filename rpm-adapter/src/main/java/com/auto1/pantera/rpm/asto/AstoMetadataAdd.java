@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.asto.misc.UncheckedScalar;
-import com.artipie.asto.streams.StorageValuePipeline;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.meta.MergedXml;
-import com.artipie.rpm.meta.MergedXmlPackage;
-import com.artipie.rpm.meta.MergedXmlPrimary;
-import com.artipie.rpm.meta.XmlAlter;
-import com.artipie.rpm.meta.XmlEvent;
-import com.artipie.rpm.meta.XmlEventPrimary;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.asto.misc.UncheckedScalar;
+import com.auto1.pantera.asto.streams.StorageValuePipeline;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.meta.MergedXml;
+import com.auto1.pantera.rpm.meta.MergedXmlPackage;
+import com.auto1.pantera.rpm.meta.MergedXmlPrimary;
+import com.auto1.pantera.rpm.meta.XmlAlter;
+import com.auto1.pantera.rpm.meta.XmlEvent;
+import com.auto1.pantera.rpm.meta.XmlEventPrimary;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.pkg.Package;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.util.Collection;

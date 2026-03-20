@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http.proxy;
+package com.auto1.pantera.composer.http.proxy;
 
-import com.artipie.asto.Content;
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.http.Headers;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 
 import javax.json.Json;
 import javax.json.JsonObject;
@@ -51,7 +51,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
         final String artifact,
         final String version
     ) {
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Checking release date for package")
             .eventCategory("repository")
             .eventAction("cooldown_release_date")
@@ -60,7 +60,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             .log();
         return this.fetchMetadata(artifact).thenApply(metadata -> {
             if (metadata.isEmpty()) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No metadata found for package")
                     .eventCategory("repository")
                     .eventAction("cooldown_release_date")
@@ -72,7 +72,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             final JsonObject json = metadata.get();
             final JsonObject packages = json.getJsonObject("packages");
             if (packages == null) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No 'packages' object in metadata")
                     .eventCategory("repository")
                     .eventAction("cooldown_release_date")
@@ -83,7 +83,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             }
             final JsonObject versionData = findVersionData(packages, artifact, version);
             if (versionData == null) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Version not found for package")
                     .eventCategory("repository")
                     .eventAction("cooldown_release_date")
@@ -98,7 +98,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 try {
                     final java.time.OffsetDateTime odt = java.time.OffsetDateTime.parse(timeStr);
                     final Instant instant = odt.toInstant();
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Found release date for package")
                         .eventCategory("repository")
                         .eventAction("cooldown_release_date")
@@ -109,7 +109,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                         .log();
                     return Optional.of(instant);
                 } catch (final DateTimeParseException e) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to parse time field: " + timeStr)
                         .eventCategory("repository")
                         .eventAction("cooldown_release_date")
@@ -119,7 +119,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                         .log();
                 }
             }
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("No 'time' field found in metadata")
                 .eventCategory("repository")
                 .eventAction("cooldown_release_date")
@@ -136,7 +136,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
         final String artifact,
         final String version
     ) {
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Fetching dependencies for package")
             .eventCategory("repository")
             .eventAction("cooldown_dependencies")
@@ -145,7 +145,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             .log();
         return this.fetchMetadata(artifact).thenApply(metadata -> {
             if (metadata.isEmpty()) {
-                EcsLogger.warn("com.artipie.composer")
+                EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No metadata found for package")
                     .eventCategory("repository")
                     .eventAction("cooldown_dependencies")
@@ -165,7 +165,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             }
             final JsonObject require = versionData.getJsonObject("require");
             if (require == null || require.isEmpty()) {
-                EcsLogger.debug("com.artipie.composer")
+                EcsLogger.debug("com.auto1.pantera.composer")
                     .message("No dependencies found for package")
                     .eventCategory("repository")
                     .eventAction("cooldown_dependencies")
@@ -182,7 +182,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 final String versionConstraint = require.getString(depName);
                 deps.add(new CooldownDependency(depName, versionConstraint));
             }
-            EcsLogger.debug("com.artipie.composer")
+            EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Found " + deps.size() + " dependencies for package")
                 .eventCategory("repository")
                 .eventAction("cooldown_dependencies")
@@ -236,7 +236,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
     private CompletableFuture<Optional<JsonObject>> fetchMetadata(final String packageName) {
         // Packagist v2 API: /p2/{vendor}/{package}.json
         final String path = String.format("/p2/%s.json", packageName);
-        EcsLogger.debug("com.artipie.composer")
+        EcsLogger.debug("com.auto1.pantera.composer")
             .message("Fetching metadata from remote")
             .eventCategory("repository")
             .eventAction("metadata_fetch")
@@ -251,7 +251,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             // CRITICAL: Always consume body to prevent Vert.x request leak
             return new Content.From(response.body()).asStringFuture().thenApply(content -> {
                 if (!response.status().success()) {
-                    EcsLogger.warn("com.artipie.composer")
+                    EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to fetch metadata from remote")
                         .eventCategory("repository")
                         .eventAction("metadata_fetch")
@@ -265,7 +265,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                     final JsonObject json = Json.createReader(new StringReader(content)).readObject();
                     return Optional.of(json);
                 } catch (final Exception e) {
-                    EcsLogger.error("com.artipie.composer")
+                    EcsLogger.error("com.auto1.pantera.composer")
                         .message("Failed to parse JSON metadata")
                         .eventCategory("repository")
                         .eventAction("metadata_fetch")

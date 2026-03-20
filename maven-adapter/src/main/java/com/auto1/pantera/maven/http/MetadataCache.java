@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.cache.ValkeyConnection;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cache.ValkeyConnection;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
@@ -136,7 +136,7 @@ public class MetadataCache {
     private ValkeyConnection resolveValkeyConnection(final ValkeyConnection valkey) {
         return (valkey != null) 
             ? valkey 
-            : com.artipie.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
+            : com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().orElse(null);
     }
 
     @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")

@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.cache;
+package com.auto1.pantera.settings.cache;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.http.filter.Filters;
+import com.auto1.pantera.http.filter.Filters;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Optional;

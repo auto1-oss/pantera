@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.docker.ref;
+package com.auto1.pantera.docker.ref;
 
-import com.artipie.docker.Digest;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.error.InvalidTagNameException;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.error.InvalidTagNameException;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.AllOf;

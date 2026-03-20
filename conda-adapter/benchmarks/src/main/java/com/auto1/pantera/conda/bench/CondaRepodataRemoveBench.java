@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conda.bench;
+package com.auto1.pantera.conda.bench;
 
-import com.artipie.asto.misc.UncheckedIOFunc;
-import com.artipie.conda.CondaRepodata;
+import com.auto1.pantera.asto.misc.UncheckedIOFunc;
+import com.auto1.pantera.conda.CondaRepodata;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

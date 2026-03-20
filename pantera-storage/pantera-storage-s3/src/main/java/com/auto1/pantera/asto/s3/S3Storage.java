@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.s3;
+package com.auto1.pantera.asto.s3;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Content;
-import com.artipie.asto.FailedCompletionStage;
-import com.artipie.asto.Key;
-import com.artipie.asto.ListResult;
-import com.artipie.asto.ManagedStorage;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.UnderLockOperation;
-import com.artipie.asto.ValueNotFoundException;
-import com.artipie.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.FailedCompletionStage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ListResult;
+import com.auto1.pantera.asto.ManagedStorage;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.UnderLockOperation;
+import com.auto1.pantera.asto.ValueNotFoundException;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;

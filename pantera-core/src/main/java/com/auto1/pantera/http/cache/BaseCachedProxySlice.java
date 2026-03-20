@@ -2,30 +2,30 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.cache;
+package com.auto1.pantera.http.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.Cache;
-import com.artipie.asto.cache.CacheControl;
-import com.artipie.asto.cache.Remote;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.cooldown.CooldownRequest;
-import com.artipie.cooldown.CooldownResponses;
-import com.artipie.cooldown.CooldownResult;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.Cache;
+import com.auto1.pantera.asto.cache.CacheControl;
+import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.CooldownRequest;
+import com.auto1.pantera.cooldown.CooldownResponses;
+import com.auto1.pantera.cooldown.CooldownResult;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import io.reactivex.Flowable;
 import java.io.IOException;
@@ -494,7 +494,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.artipie." + this.repoType)
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Upstream request failed with exception")
                     .eventCategory("repository")
                     .eventAction("proxy_upstream")
@@ -573,7 +573,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 StandardOpenOption.TRUNCATE_EXISTING
             );
         } catch (final IOException ex) {
-            EcsLogger.warn("com.artipie." + this.repoType)
+            EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to create temp file for cache streaming")
                 .eventCategory("repository")
                 .eventAction("proxy_cache")
@@ -662,7 +662,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 });
         }).exceptionally(err -> {
             deleteTempQuietly(tempFile);
-            EcsLogger.warn("com.artipie." + this.repoType)
+            EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
                 .eventCategory("repository")
                 .eventAction("proxy_cache")
@@ -739,7 +739,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 channel.close();
             }
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to close file channel")
                 .error(ex)
                 .log();
@@ -754,7 +754,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         try {
             Files.deleteIfExists(path);
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to delete temp file")
                 .error(ex)
                 .log();
@@ -807,7 +807,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.artipie." + this.repoType)
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Direct upstream request failed with exception")
                     .eventCategory("repository")
                     .eventAction("proxy_upstream")
@@ -903,15 +903,15 @@ public abstract class BaseCachedProxySlice implements Slice {
             errorType = "unknown";
         }
         this.recordMetric(() ->
-            com.artipie.metrics.ArtipieMetrics.instance()
+            com.auto1.pantera.metrics.ArtipieMetrics.instance()
                 .upstreamFailure(this.repoName, this.upstreamUrl, errorType)
         );
     }
 
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.repoName, this.upstreamUrl, result, duration);
             }
         });
@@ -920,11 +920,11 @@ public abstract class BaseCachedProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();
@@ -932,7 +932,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     }
 
     private void logDebug(final String message, final String path) {
-        EcsLogger.debug("com.artipie." + this.repoType)
+        EcsLogger.debug("com.auto1.pantera." + this.repoType)
             .message(message)
             .eventCategory("repository")
             .eventAction("proxy_request")
@@ -989,7 +989,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     DateTimeFormatter.RFC_1123_DATE_TIME.parse(val)
                 ).toEpochMilli());
         } catch (final DateTimeParseException ex) {
-            EcsLogger.debug("com.artipie.cache")
+            EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Failed to parse Last-Modified header")
                 .error(ex)
                 .log();

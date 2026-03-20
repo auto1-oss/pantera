@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.misc;
+package com.auto1.pantera.docker.misc;
 
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RequestLine;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;

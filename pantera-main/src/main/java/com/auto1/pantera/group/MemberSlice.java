@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.group;
+package com.auto1.pantera.group;
 
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.timeout.AutoBlockRegistry;
-import com.artipie.http.timeout.AutoBlockSettings;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.timeout.AutoBlockRegistry;
+import com.auto1.pantera.http.timeout.AutoBlockSettings;
 
 import java.net.URI;
 import java.util.Locale;
@@ -186,7 +186,7 @@ public final class MemberSlice {
             original.version()
         );
 
-        EcsLogger.info("com.artipie.group")
+        EcsLogger.info("com.auto1.pantera.group")
             .message(String.format("MemberSlice rewritePath: %s to %s", raw, result.uri().getPath()))
             .eventCategory("repository")
             .eventAction("path_rewrite")

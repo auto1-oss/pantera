@@ -2,17 +2,17 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.auth;
+package com.auto1.pantera.http.auth;
 
-import com.artipie.asto.Content;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Header;
-import com.artipie.http.headers.WwwAuthenticate;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.headers.WwwAuthenticate;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
 
 import java.util.concurrent.CompletableFuture;
@@ -89,7 +89,7 @@ public final class AuthzSlice implements Slice {
                                     .completedFuture();
                             }
                         } catch (final UnsupportedOperationException ex) {
-                            EcsLogger.debug("com.artipie.http.auth")
+                            EcsLogger.debug("com.auto1.pantera.http.auth")
                                 .message("Auth scheme does not provide challenge")
                                 .error(ex)
                                 .log();

@@ -7,4 +7,4 @@
  * Tests for JRuby implementation of API interfaces.
  * @since 2.0
  */
-package com.artipie.gem.ruby;
+package com.auto1.pantera.gem.ruby;

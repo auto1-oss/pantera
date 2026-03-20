@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi;
+package com.auto1.pantera.pypi;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.KeyLastPart;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.pypi.NormalizedProjectName;
-import com.artipie.pypi.meta.Metadata;
-import com.artipie.pypi.meta.PackageInfo;
-import com.artipie.pypi.meta.ValidFilename;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.JobDataRegistry;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.scheduling.QuartzJob;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.KeyLastPart;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.meta.Metadata;
+import com.auto1.pantera.pypi.meta.PackageInfo;
+import com.auto1.pantera.pypi.meta.ValidFilename;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.JobDataRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzJob;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -80,7 +80,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         }
 
         final long startTime = System.currentTimeMillis();
-        EcsLogger.info("com.artipie.pypi")
+        EcsLogger.info("com.auto1.pantera.pypi")
             .message("Processing PyPI batch (size: " + batch.size() + ")")
             .eventCategory("repository")
             .eventAction("batch_processing")
@@ -95,7 +95,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.info("com.artipie.pypi")
+            EcsLogger.info("com.auto1.pantera.pypi")
                 .message("PyPI batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -104,7 +104,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                 .log();
         } catch (Exception err) {
             final long duration = System.currentTimeMillis() - startTime;
-            EcsLogger.error("com.artipie.pypi")
+            EcsLogger.error("com.auto1.pantera.pypi")
                 .message("PyPI batch processing failed (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("batch_processing")
@@ -126,7 +126,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
 
         return this.asto.exists(key).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.debug("com.artipie.pypi")
+                EcsLogger.debug("com.auto1.pantera.pypi")
                     .message("Artifact not yet cached, re-queuing for retry")
                     .eventCategory("repository")
                     .eventAction("package_processing")
@@ -168,7 +168,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 )
                             );
 
-                            EcsLogger.info("com.artipie.pypi")
+                            EcsLogger.info("com.auto1.pantera.pypi")
                                 .message("Recorded PyPI proxy release")
                                 .eventCategory("repository")
                                 .eventAction("package_processing")
@@ -181,7 +181,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     : Instant.ofEpochMilli(release).toString())
                                 .log();
                         } else {
-                            EcsLogger.error("com.artipie.pypi")
+                            EcsLogger.error("com.auto1.pantera.pypi")
                                 .message("Python proxy package is not valid")
                                 .eventCategory("repository")
                                 .eventAction("package_processing")
@@ -190,7 +190,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 .log();
                         }
                     } catch (final Exception err) {
-                        EcsLogger.error("com.artipie.pypi")
+                        EcsLogger.error("com.auto1.pantera.pypi")
                             .message("Failed to parse/check python proxy package")
                             .eventCategory("repository")
                             .eventAction("package_processing")
@@ -201,7 +201,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                     }
                 });
         }).exceptionally(err -> {
-            EcsLogger.error("com.artipie.pypi")
+            EcsLogger.error("com.auto1.pantera.pypi")
                 .message("Failed to process PyPI package")
                 .eventCategory("repository")
                 .eventAction("package_processing")

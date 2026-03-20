@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.asto.misc.UncheckedFunc;
-import com.artipie.asto.misc.UncheckedSupplier;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.security.perms.EmptyPermissions;
-import com.artipie.security.perms.PermissionConfig;
-import com.artipie.security.perms.PermissionsLoader;
-import com.artipie.security.perms.User;
-import com.artipie.security.perms.UserPermissions;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.asto.misc.UncheckedFunc;
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.security.perms.EmptyPermissions;
+import com.auto1.pantera.security.perms.PermissionConfig;
+import com.auto1.pantera.security.perms.PermissionsLoader;
+import com.auto1.pantera.security.perms.User;
+import com.auto1.pantera.security.perms.UserPermissions;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.io.StringReader;
@@ -123,7 +123,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             try {
                 return this.createUserPermissions(user).call();
             } catch (final Exception err) {
-                EcsLogger.error("com.artipie.security")
+                EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to get user permissions from DB")
                     .eventCategory("security")
                     .eventAction("permissions_get")
@@ -197,7 +197,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 Json.createReader(new StringReader(permsJson)).readObject()
             );
         } catch (final Exception ex) {
-            EcsLogger.error("com.artipie.security")
+            EcsLogger.error("com.auto1.pantera.security")
                 .message("Failed to read role permissions from DB")
                 .eventCategory("security")
                 .eventAction("role_permissions_read")
@@ -312,7 +312,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 ps.setString(1, username);
                 final ResultSet rs = ps.executeQuery();
                 if (!rs.next()) {
-                    EcsLogger.warn("com.artipie.security")
+                    EcsLogger.warn("com.auto1.pantera.security")
                         .message("User not found in DB for policy lookup")
                         .eventCategory("security")
                         .eventAction("user_lookup")
@@ -334,7 +334,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 }
                 return new UserRecord(!enabled, roles);
             } catch (final Exception ex) {
-                EcsLogger.error("com.artipie.security")
+                EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to load user from DB for policy")
                     .eventCategory("security")
                     .eventAction("user_lookup")

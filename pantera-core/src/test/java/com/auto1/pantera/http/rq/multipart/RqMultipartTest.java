@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.headers.ContentDisposition;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.headers.ContentDisposition;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RqHeaders;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
 import org.hamcrest.MatcherAssert;
@@ -66,7 +66,7 @@ final class RqMultipartTest {
                 new Content.From(simple.getBytes(StandardCharsets.US_ASCII))
             ).parts()
         ).concatMapSingle(
-            part -> com.artipie.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
+            part -> com.auto1.pantera.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
         ).toList().blockingGet();
         MatcherAssert.assertThat(
             parsed,
@@ -99,7 +99,7 @@ final class RqMultipartTest {
                 new Content.From(payload.getBytes(StandardCharsets.US_ASCII))
             ).parts()
         ).flatMapSingle(
-            part -> com.artipie.asto.rx.RxFuture.single(
+            part -> com.auto1.pantera.asto.rx.RxFuture.single(
                 new Content.From(part).asStringFuture()
             ).map(body -> String.format("%s: %s", new ContentDisposition(part.headers()).fieldName(), body))
         ).toList().blockingGet();
@@ -247,7 +247,7 @@ final class RqMultipartTest {
                 }
             )
         ).flatMapSingle(
-            part -> com.artipie.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
+            part -> com.auto1.pantera.asto.rx.RxFuture.single(new Content.From(part).asStringFuture())
         ).toList().blockingGet();
         MatcherAssert.assertThat("parts must have one element", parts, Matchers.hasSize(1));
         MatcherAssert.assertThat(

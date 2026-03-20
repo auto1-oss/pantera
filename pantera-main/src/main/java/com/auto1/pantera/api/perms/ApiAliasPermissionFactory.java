@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.perms;
+package com.auto1.pantera.api.perms;
 
-import com.artipie.security.perms.ArtipiePermissionFactory;
-import com.artipie.security.perms.PermissionConfig;
-import com.artipie.security.perms.PermissionFactory;
+import com.auto1.pantera.security.perms.ArtipiePermissionFactory;
+import com.auto1.pantera.security.perms.PermissionConfig;
+import com.auto1.pantera.security.perms.PermissionFactory;
 
 /**
  * Factory for {@link ApiAliasPermission}.

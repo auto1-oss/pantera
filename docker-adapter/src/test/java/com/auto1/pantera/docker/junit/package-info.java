@@ -8,4 +8,4 @@
  *
  * @since 0.3
  */
-package com.artipie.docker.junit;
+package com.auto1.pantera.docker.junit;

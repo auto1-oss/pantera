@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.ext.ContentDigest;
-import com.artipie.asto.ext.Digests;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.ContentWithSize;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.maven.metadata.Version;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.ContentWithSize;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.maven.metadata.Version;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.jcabi.xml.XMLDocument;
 
 import java.nio.charset.StandardCharsets;
@@ -98,7 +98,7 @@ public final class UploadSlice implements Slice {
         final int semicolonIndex = path.indexOf(';');
         if (semicolonIndex > 0) {
             sanitizedPath = path.substring(0, semicolonIndex);
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Stripped metadata properties from path: " + path + " -> " + sanitizedPath)
                 .eventCategory("repository")
                 .eventAction("path_sanitization")
@@ -119,13 +119,13 @@ public final class UploadSlice implements Slice {
         
         // Track upload metric
         this.recordMetric(() ->
-            com.artipie.metrics.ArtipieMetrics.instance().upload(this.rname, "maven")
+            com.auto1.pantera.metrics.ArtipieMetrics.instance().upload(this.rname, "maven")
         );
 
         // Track bandwidth (upload)
         if (size > 0) {
             this.recordMetric(() ->
-                com.artipie.metrics.ArtipieMetrics.instance().bandwidth(this.rname, "maven", "upload", size)
+                com.auto1.pantera.metrics.ArtipieMetrics.instance().bandwidth(this.rname, "maven", "upload", size)
             );
         }
         
@@ -133,7 +133,7 @@ public final class UploadSlice implements Slice {
         
         // Special handling for maven-metadata.xml - fix it BEFORE saving
         if (keyPath.contains("maven-metadata.xml") && !keyPath.endsWith(".sha1") && !keyPath.endsWith(".md5")) {
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Intercepting maven-metadata.xml upload for fixing")
                 .eventCategory("repository")
                 .eventAction("metadata_upload")
@@ -145,7 +145,7 @@ public final class UploadSlice implements Slice {
                         // Save the FIXED metadata
                         return this.storage.save(key, new Content.From(fixedBytes)).thenCompose(
                             nothing -> {
-                                EcsLogger.debug("com.artipie.maven")
+                                EcsLogger.debug("com.auto1.pantera.maven")
                                     .message("Saved fixed maven-metadata.xml, generating checksums")
                                     .eventCategory("repository")
                                     .eventAction("metadata_upload")
@@ -164,7 +164,7 @@ public final class UploadSlice implements Slice {
                 }
             ).exceptionally(
                 throwable -> {
-                    EcsLogger.error("com.artipie.maven")
+                    EcsLogger.error("com.auto1.pantera.maven")
                         .message("Failed to save artifact")
                         .eventCategory("repository")
                         .eventAction("artifact_upload")
@@ -179,7 +179,7 @@ public final class UploadSlice implements Slice {
         
         // For maven-metadata.xml checksums, SKIP them - we generated our own
         if (keyPath.contains("maven-metadata.xml") && (keyPath.endsWith(".sha1") || keyPath.endsWith(".md5") || keyPath.endsWith(".sha256") || keyPath.endsWith(".sha512"))) {
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping Maven-uploaded checksum for metadata (using generated checksums)")
                 .eventCategory("repository")
                 .eventAction("checksum_upload")
@@ -192,7 +192,7 @@ public final class UploadSlice implements Slice {
         // Save file first (normal flow for non-metadata files)
         return this.storage.save(key, new ContentWithSize(body, headers)).thenCompose(
             nothing -> {
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Saved artifact file")
                     .eventCategory("repository")
                     .eventAction("artifact_upload")
@@ -214,7 +214,7 @@ public final class UploadSlice implements Slice {
             }
         ).exceptionally(
             throwable -> {
-                EcsLogger.error("com.artipie.maven")
+                EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to save artifact")
                     .eventCategory("repository")
                     .eventAction("artifact_upload")
@@ -237,7 +237,7 @@ public final class UploadSlice implements Slice {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 final String xml = new String(bytes, StandardCharsets.UTF_8);
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Fixing maven-metadata.xml (" + xml.length() + " bytes)")
                     .eventCategory("repository")
                     .eventAction("metadata_fix")
@@ -245,7 +245,7 @@ public final class UploadSlice implements Slice {
 
                 final XMLDocument doc = new XMLDocument(xml);
                 final List<String> versions = doc.xpath("//version/text()");
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Found " + versions.size() + " versions in metadata")
                     .eventCategory("repository")
                     .eventAction("metadata_fix")
@@ -277,7 +277,7 @@ public final class UploadSlice implements Slice {
                 
                 // Check if we need to update
                 if (newLatest.equals(existingLatest)) {
-                    EcsLogger.debug("com.artipie.maven")
+                    EcsLogger.debug("com.auto1.pantera.maven")
                         .message("Latest version already correct, no update needed")
                         .eventCategory("repository")
                         .eventAction("metadata_fix")
@@ -292,7 +292,7 @@ public final class UploadSlice implements Slice {
                     "<latest>" + newLatest + "</latest>"
                 );
 
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Fixed maven-metadata.xml latest tag: " + existingLatest + " -> " + newLatest)
                     .eventCategory("repository")
                     .eventAction("metadata_fix")
@@ -300,7 +300,7 @@ public final class UploadSlice implements Slice {
                     .log();
                 return updated.getBytes(StandardCharsets.UTF_8);
             } catch (IllegalArgumentException ex) {
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to parse metadata XML, using original")
                     .eventCategory("repository")
                     .eventAction("metadata_fix")
@@ -363,7 +363,7 @@ public final class UploadSlice implements Slice {
         
         // Skip metadata and checksum files
         if (this.isMetadataOrChecksum(path)) {
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping metadata/checksum file for event")
                 .eventCategory("repository")
                 .eventAction("event_creation")
@@ -425,7 +425,7 @@ public final class UploadSlice implements Slice {
                 (Long) null  // No release date for uploads
             )
         );
-        EcsLogger.debug("com.artipie.maven")
+        EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")
             .eventCategory("repository")
             .eventAction("event_creation")
@@ -443,11 +443,11 @@ public final class UploadSlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.maven")
+            EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown.metadata;
+package com.auto1.pantera.cooldown.metadata;
 
 import java.time.Instant;
 import java.util.Map;
 
 /**
- * Extension interface for {@link com.artipie.cooldown.CooldownInspector} implementations
+ * Extension interface for {@link com.auto1.pantera.cooldown.CooldownInspector} implementations
  * that can accept preloaded release dates from metadata.
  *
  * <p>When metadata contains release timestamps (e.g., NPM's {@code time} object),

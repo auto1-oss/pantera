@@ -2,28 +2,28 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.manifest;
+package com.auto1.pantera.docker.http.manifest;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Docker;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Repo;
-import com.artipie.docker.http.DigestHeader;
-import com.artipie.docker.http.DockerActionSlice;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.manifest.ManifestLayer;
-import com.artipie.docker.misc.ImageTag;
-import com.artipie.docker.perms.DockerActions;
-import com.artipie.docker.perms.DockerRepositoryPermission;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.headers.Location;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.http.DockerActionSlice;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.misc.ImageTag;
+import com.auto1.pantera.docker.perms.DockerActions;
+import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.headers.Location;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.security.Permission;
 import java.util.Collection;

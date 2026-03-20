@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
 import java.io.IOException;
 import java.net.ServerSocket;

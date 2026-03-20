@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.filter;
+package com.auto1.pantera.http.filter;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

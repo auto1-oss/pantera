@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.perms;
+package com.auto1.pantera.api.perms;
 
-import com.artipie.security.perms.Action;
-import com.artipie.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import io.vertx.core.impl.ConcurrentHashSet;
 import java.security.Permission;
 import java.security.PermissionCollection;

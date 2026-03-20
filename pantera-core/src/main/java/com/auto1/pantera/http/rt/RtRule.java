@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rt;
+package com.auto1.pantera.http.rt;
 
-import com.artipie.http.Headers;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqHeaders;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqHeaders;
 
 import java.util.Arrays;
 import java.util.regex.Pattern;
@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  * <p>
  * A rule which is applied to the request metadata such as request line and
  * headers. If rule matched, then routing slice {@link SliceRoute} will
- * redirect request to target {@link com.artipie.http.Slice}.
+ * redirect request to target {@link com.auto1.pantera.http.Slice}.
  */
 public interface RtRule {
 

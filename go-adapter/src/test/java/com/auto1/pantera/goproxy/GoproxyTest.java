@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.goproxy;
+package com.auto1.pantera.goproxy;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Remaining;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Remaining;
 import io.reactivex.Single;
 import java.nio.ByteBuffer;
 import java.time.Instant;

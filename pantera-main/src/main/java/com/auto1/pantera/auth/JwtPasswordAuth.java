@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
-import com.artipie.api.AuthTokenRest;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.PubSecKeyOptions;
@@ -111,7 +111,7 @@ public final class JwtPasswordAuth implements Authentication {
             // Extract subject from token
             final String tokenSubject = principal.getString(AuthTokenRest.SUB);
             if (tokenSubject == null || tokenSubject.isEmpty()) {
-                EcsLogger.warn("com.artipie.auth")
+                EcsLogger.warn("com.auto1.pantera.auth")
                     .message("JWT token missing 'sub' claim")
                     .eventCategory("authentication")
                     .eventAction("jwt_password_auth")
@@ -122,7 +122,7 @@ public final class JwtPasswordAuth implements Authentication {
             }
             // Security: Verify username matches token subject if required
             if (this.requireUsernameMatch && !username.equals(tokenSubject)) {
-                EcsLogger.warn("com.artipie.auth")
+                EcsLogger.warn("com.auto1.pantera.auth")
                     .message(String.format("JWT token subject does not match provided username (subject=%s)", tokenSubject))
                     .eventCategory("authentication")
                     .eventAction("jwt_password_auth")
@@ -135,7 +135,7 @@ public final class JwtPasswordAuth implements Authentication {
             final String context = principal.getString(AuthTokenRest.CONTEXT, "jwt-password");
             return Optional.of(new AuthUser(tokenSubject, context));
         } catch (final java.util.concurrent.TimeoutException timeout) {
-            EcsLogger.warn("com.artipie.auth")
+            EcsLogger.warn("com.auto1.pantera.auth")
                 .message("JWT validation timed out")
                 .eventCategory("authentication")
                 .eventAction("jwt_password_auth")

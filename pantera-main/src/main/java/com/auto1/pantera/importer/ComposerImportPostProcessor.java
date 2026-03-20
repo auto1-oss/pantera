@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
-import com.artipie.asto.Storage;
-import com.artipie.composer.ComposerImportMerge;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.composer.ComposerImportMerge;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -68,7 +68,7 @@ public final class ComposerImportPostProcessor {
      * @return Completion stage with merge result
      */
     public CompletionStage<ComposerImportMerge.MergeResult> process() {
-        EcsLogger.info("com.artipie.importer")
+        EcsLogger.info("com.auto1.pantera.importer")
             .message("Starting Composer import post-processing")
             .eventCategory("repository")
             .eventAction("import_post_process")
@@ -83,7 +83,7 @@ public final class ComposerImportPostProcessor {
         return merge.mergeAll()
             .whenComplete((result, error) -> {
                 if (error != null) {
-                    EcsLogger.error("com.artipie.importer")
+                    EcsLogger.error("com.auto1.pantera.importer")
                         .message("Composer import merge failed")
                         .eventCategory("repository")
                         .eventAction("import_post_process")
@@ -92,7 +92,7 @@ public final class ComposerImportPostProcessor {
                         .error(error)
                         .log();
                 } else if (result.failedPackages > 0) {
-                    EcsLogger.warn("com.artipie.importer")
+                    EcsLogger.warn("com.auto1.pantera.importer")
                         .message("Composer import merge completed with errors (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged, " + result.failedPackages + " failed)")
                         .eventCategory("repository")
                         .eventAction("import_post_process")
@@ -100,7 +100,7 @@ public final class ComposerImportPostProcessor {
                         .field("repository.name", this.repoName)
                         .log();
                 } else {
-                    EcsLogger.info("com.artipie.importer")
+                    EcsLogger.info("com.auto1.pantera.importer")
                         .message("Composer import merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged)")
                         .eventCategory("repository")
                         .eventAction("import_post_process")

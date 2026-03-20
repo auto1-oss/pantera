@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie;
+package com.auto1.pantera;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentDisposition;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.multipart.RqMultipart;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentDisposition;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.multipart.RqMultipart;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -181,7 +181,7 @@ final class MultipartITCase {
                         }
                     )
                 ).flatMapSingle(
-                    part -> com.artipie.asto.rx.RxFuture.single(
+                    part -> com.auto1.pantera.asto.rx.RxFuture.single(
                         new FileStorage(path).save(
                             new Key.From(new ContentDisposition(part.headers()).fileName()),
                             new Content.From(part)

@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.FromStorageCache;
-import com.artipie.asto.cache.StreamThroughCache;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.NoopCooldownService;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.UriClientSlice;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.rt.MethodRule;
-import com.artipie.http.rt.RtRule;
-import com.artipie.http.rt.RtRulePath;
-import com.artipie.http.rt.SliceRoute;
-import com.artipie.http.slice.SliceSimple;
-import com.artipie.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.FromStorageCache;
+import com.auto1.pantera.asto.cache.StreamThroughCache;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import java.net.URI;
 import java.util.Optional;
@@ -167,7 +167,7 @@ public final class PyProxySlice extends Slice.Wrap {
         final String rname,
         final PyProxyCooldownInspector inspector
     ) {
-        com.artipie.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
             .register(rtype, rname, inspector);
         return inspector;
     }

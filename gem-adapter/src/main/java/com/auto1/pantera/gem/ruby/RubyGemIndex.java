@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.ruby;
+package com.auto1.pantera.gem.ruby;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.gem.GemIndex;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.gem.GemIndex;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;

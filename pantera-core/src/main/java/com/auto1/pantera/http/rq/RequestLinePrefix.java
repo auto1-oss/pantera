@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.rq;
+package com.auto1.pantera.http.rq;
 
-import com.artipie.http.Headers;
+import com.auto1.pantera.http.Headers;
 
 /**
  * Path prefix obtained from X-FullPath header and request line.

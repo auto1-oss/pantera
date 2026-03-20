@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
-import com.artipie.ArtipieException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -44,7 +44,7 @@ public final class QuartzSchema {
             Statement stmt = conn.createStatement()) {
             QuartzSchema.createTables(stmt);
             QuartzSchema.createIndexes(stmt);
-            EcsLogger.info("com.artipie.scheduling")
+            EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC schema created or verified")
                 .eventCategory("scheduling")
                 .eventAction("schema_create")

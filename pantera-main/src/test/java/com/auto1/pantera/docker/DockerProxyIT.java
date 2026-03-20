@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
-import com.artipie.docker.proxy.ProxyDocker;
-import com.artipie.test.TestDockerClient;
-import com.artipie.test.vertxmain.TestVertxMain;
-import com.artipie.test.vertxmain.TestVertxMainBuilder;
+import com.auto1.pantera.docker.proxy.ProxyDocker;
+import com.auto1.pantera.test.TestDockerClient;
+import com.auto1.pantera.test.vertxmain.TestVertxMain;
+import com.auto1.pantera.test.vertxmain.TestVertxMainBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

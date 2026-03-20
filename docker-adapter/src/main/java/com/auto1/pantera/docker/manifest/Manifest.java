@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.manifest;
+package com.auto1.pantera.docker.manifest;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Digest;
-import com.artipie.docker.error.InvalidManifestException;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.Json;
@@ -206,7 +206,7 @@ public final class Manifest {
      */
     public long size() {
         long size = this.source.length;
-        EcsLogger.debug("com.artipie.docker")
+        EcsLogger.debug("com.auto1.pantera.docker")
             .message("Manifest size calculated")
             .eventCategory("repository")
             .eventAction("manifest_size")

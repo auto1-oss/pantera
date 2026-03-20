@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.npm.PerVersionLayout;
-import com.artipie.npm.Publish;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.npm.PerVersionLayout;
+import com.auto1.pantera.npm.Publish;
 import java.nio.charset.StandardCharsets;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
@@ -32,7 +32,7 @@ final class CurlPublishTest {
         new PerVersionLayout(asto).generateMetaJson(prefix)
             .thenCompose(meta -> asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();
@@ -59,7 +59,7 @@ final class CurlPublishTest {
         new PerVersionLayout(asto).generateMetaJson(prefix)
             .thenCompose(meta -> asto.save(
                 new Key.From(prefix, "meta.json"),
-                new com.artipie.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
+                new com.auto1.pantera.asto.Content.From(meta.toString().getBytes(StandardCharsets.UTF_8))
             ))
             .toCompletableFuture()
             .join();

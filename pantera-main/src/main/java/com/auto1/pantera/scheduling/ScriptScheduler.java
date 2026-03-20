@@ -3,17 +3,17 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.scheduling;
+package com.auto1.pantera.scheduling;
 
 import com.amihaiemil.eoyaml.YamlNode;
-import com.artipie.ArtipieException;
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.scripting.ScriptContext;
-import com.artipie.scripting.ScriptRunner;
-import com.artipie.settings.Settings;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.scripting.ScriptContext;
+import com.auto1.pantera.scripting.ScriptRunner;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.repo.Repositories;
 import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
@@ -101,7 +101,7 @@ public final class ScriptScheduler {
                                     parser.parse(cronexp).validate();
                                     valid = true;
                                 } catch (final IllegalArgumentException exc) {
-                                    EcsLogger.error("com.artipie.scheduling")
+                                    EcsLogger.error("com.auto1.pantera.scheduling")
                                         .message("Invalid cron expression: " + cronexp)
                                         .eventCategory("scheduling")
                                         .eventAction("crontab_load")

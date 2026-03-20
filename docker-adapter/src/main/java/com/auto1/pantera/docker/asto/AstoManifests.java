@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.asto;
+package com.auto1.pantera.docker.asto;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.docker.Digest;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Tags;
-import com.artipie.docker.error.InvalidManifestException;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.manifest.ManifestLayer;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.google.common.base.Strings;
 
 import javax.json.JsonException;
@@ -85,7 +85,7 @@ public final class AstoManifests implements Manifests {
 
     @Override
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
-        EcsLogger.debug("com.artipie.docker")
+        EcsLogger.debug("com.auto1.pantera.docker")
             .message("AstoManifests.get() called")
             .eventCategory("repository")
             .eventAction("manifest_get")
@@ -94,7 +94,7 @@ public final class AstoManifests implements Manifests {
         return this.readLink(ref).thenCompose(
             digestOpt -> digestOpt.map(
                 digest -> {
-                    EcsLogger.debug("com.artipie.docker")
+                    EcsLogger.debug("com.auto1.pantera.docker")
                         .message("Found link for manifest reference")
                         .eventCategory("repository")
                         .eventAction("manifest_get")
@@ -108,7 +108,7 @@ public final class AstoManifests implements Manifests {
                                     blob -> blob.content()
                                         .thenCompose(Content::asBytesFuture)
                                         .thenApply(bytes -> {
-                                            EcsLogger.info("com.artipie.docker")
+                                            EcsLogger.info("com.auto1.pantera.docker")
                                                 .message("Creating Manifest from bytes")
                                                 .eventCategory("repository")
                                                 .eventAction("manifest_get")
@@ -120,7 +120,7 @@ public final class AstoManifests implements Manifests {
                                         })
                                 )
                                 .orElseGet(() -> {
-                                    EcsLogger.warn("com.artipie.docker")
+                                    EcsLogger.warn("com.auto1.pantera.docker")
                                         .message("Blob not found for digest")
                                         .eventCategory("repository")
                                         .eventAction("manifest_get")
@@ -132,7 +132,7 @@ public final class AstoManifests implements Manifests {
                         );
                 }
             ).orElseGet(() -> {
-                EcsLogger.warn("com.artipie.docker")
+                EcsLogger.warn("com.auto1.pantera.docker")
                     .message("No link found for manifest reference")
                     .eventCategory("repository")
                     .eventAction("manifest_get")

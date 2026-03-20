@@ -3,35 +3,35 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie;
+package com.auto1.pantera;
 
-import com.artipie.api.RepositoryEvents;
-import com.artipie.api.v1.AsyncApiVerticle;
-import com.artipie.asto.Key;
-import com.artipie.auth.JwtTokens;
-import com.artipie.http.BaseSlice;
-import com.artipie.http.MainSlice;
-import com.artipie.http.Slice;
-import com.artipie.http.misc.ConfigDefaults;
-import com.artipie.http.misc.RepoNameMeterFilter;
-import com.artipie.http.misc.StorageExecutors;
-import com.artipie.http.slice.LoggingSlice;
-import com.artipie.jetty.http3.Http3Server;
-import com.artipie.jetty.http3.SslFactoryFromYaml;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.scheduling.QuartzService;
-import com.artipie.scheduling.ScriptScheduler;
-import com.artipie.settings.ConfigFile;
-import com.artipie.settings.MetricsContext;
-import com.artipie.settings.Settings;
-import com.artipie.settings.SettingsFromPath;
-import com.artipie.settings.repo.MapRepositories;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.settings.repo.Repositories;
-import com.artipie.db.DbManager;
-import com.artipie.db.migration.YamlToDbMigrator;
-import com.artipie.vertx.VertxSliceServer;
+import com.auto1.pantera.api.RepositoryEvents;
+import com.auto1.pantera.api.v1.AsyncApiVerticle;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.http.BaseSlice;
+import com.auto1.pantera.http.MainSlice;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.misc.RepoNameMeterFilter;
+import com.auto1.pantera.http.misc.StorageExecutors;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.jetty.http3.Http3Server;
+import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.scheduling.ScriptScheduler;
+import com.auto1.pantera.settings.ConfigFile;
+import com.auto1.pantera.settings.MetricsContext;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.SettingsFromPath;
+import com.auto1.pantera.settings.repo.MapRepositories;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.repo.Repositories;
+import com.auto1.pantera.db.DbManager;
+import com.auto1.pantera.db.migration.YamlToDbMigrator;
+import com.auto1.pantera.vertx.VertxSliceServer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics;
 import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
@@ -56,7 +56,7 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
 import org.apache.commons.lang3.tuple.Pair;
-import com.artipie.diagnostics.BlockedThreadDiagnostics;
+import com.auto1.pantera.diagnostics.BlockedThreadDiagnostics;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -108,7 +108,7 @@ public final class VertxMain {
     /**
      * Config watch service for hot reload.
      */
-    private com.artipie.settings.ConfigWatchService configWatch;
+    private com.auto1.pantera.settings.ConfigWatchService configWatch;
 
     /**
      * Vert.x instance - must be closed on shutdown to release event loops and worker threads.
@@ -143,7 +143,7 @@ public final class VertxMain {
         final Optional<javax.sql.DataSource> sharedDs;
         if (meta != null && meta.yamlMapping("artifacts_database") != null) {
             final javax.sql.DataSource ds =
-                new com.artipie.db.ArtifactDbFactory(meta, "artifacts").initialize();
+                new com.auto1.pantera.db.ArtifactDbFactory(meta, "artifacts").initialize();
             sharedDs = Optional.of(ds);
             DbManager.migrate(ds);
             // Resolve repos and security dirs from YAML config, not relative to config file.
@@ -163,7 +163,7 @@ public final class VertxMain {
                 ds, securityDir, reposDir, this.config.toAbsolutePath()
             ).migrate();
             quartz = new QuartzService(ds);
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("Quartz JDBC clustering enabled with shared DataSource")
                 .eventCategory("scheduling")
                 .eventAction("quartz_jdbc_init")
@@ -177,7 +177,7 @@ public final class VertxMain {
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("Applied logging configuration from YAML settings")
                 .eventCategory("configuration")
                 .eventAction("logging_configure")
@@ -188,7 +188,7 @@ public final class VertxMain {
 
 
         this.vertx = VertxMain.vertx(settings.metrics());
-        final com.artipie.settings.JwtSettings jwtSettings = settings.jwtSettings();
+        final com.auto1.pantera.settings.JwtSettings jwtSettings = settings.jwtSettings();
         final JWTAuth jwt = JWTAuth.create(
             this.vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
                 new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
@@ -200,7 +200,7 @@ public final class VertxMain {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());
             } catch (final IllegalStateException ex) {
-                EcsLogger.warn("com.artipie")
+                EcsLogger.warn("com.auto1.pantera")
                     .message("HTTP metrics enabled but MeterRegistry unavailable")
                     .eventCategory("configuration")
                     .eventAction("metrics_configure")
@@ -223,7 +223,7 @@ public final class VertxMain {
                             repos.refreshAsync().whenComplete(
                                 (ignored, err) -> {
                                     if (err != null) {
-                                        EcsLogger.error("com.artipie")
+                                        EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after UPSERT event")
                                             .eventCategory("repository")
                                             .eventAction("event_process")
@@ -273,7 +273,7 @@ public final class VertxMain {
                             repos.refreshAsync().whenComplete(
                                 (ignored, err) -> {
                                     if (err != null) {
-                                        EcsLogger.error("com.artipie")
+                                        EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after REMOVE event")
                                             .eventCategory("repository")
                                             .eventAction("event_process")
@@ -292,7 +292,7 @@ public final class VertxMain {
                             repos.refreshAsync().whenComplete(
                                 (ignored, err) -> {
                                     if (err != null) {
-                                        EcsLogger.error("com.artipie")
+                                        EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after MOVE event")
                                             .eventCategory("repository")
                                             .eventAction("event_process")
@@ -312,7 +312,7 @@ public final class VertxMain {
                         }
                     }
                 } catch (final Throwable err) {
-                    EcsLogger.error("com.artipie")
+                    EcsLogger.error("com.auto1.pantera")
                         .message("Failed to process repository event")
                         .eventCategory("repository")
                         .eventAction("event_process")
@@ -329,7 +329,7 @@ public final class VertxMain {
             settings.metrics(),
             settings.httpServerRequestTimeout()
         );
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Artipie was started on port")
             .eventCategory("server")
             .eventAction("server_start")
@@ -348,14 +348,14 @@ public final class VertxMain {
             deployOpts,
             result -> {
                 if (result.succeeded()) {
-                    EcsLogger.info("com.artipie.api")
+                    EcsLogger.info("com.auto1.pantera.api")
                         .message("AsyncApiVerticle deployed with " + apiInstances + " instances")
                         .eventCategory("api")
                         .eventAction("api_deploy")
                         .eventOutcome("success")
                         .log();
                 } else {
-                    EcsLogger.error("com.artipie.api")
+                    EcsLogger.error("com.auto1.pantera.api")
                         .message("Failed to deploy AsyncApiVerticle")
                         .eventCategory("api")
                         .eventAction("api_deploy")
@@ -396,13 +396,13 @@ public final class VertxMain {
                     .setWorkerPoolSize(2);
                 
                 this.vertx.deployVerticle(
-                    () -> new com.artipie.metrics.AsyncMetricsVerticle(
+                    () -> new com.auto1.pantera.metrics.AsyncMetricsVerticle(
                         metricsRegistry, metricsPort, metricsPath, metricsCacheTtlMs
                     ),
                     metricsOpts,
                     metricsResult -> {
                         if (metricsResult.succeeded()) {
-                            EcsLogger.info("com.artipie.metrics")
+                            EcsLogger.info("com.auto1.pantera.metrics")
                                 .message(String.format("AsyncMetricsVerticle deployed as worker verticle with cache TTL %dms", metricsCacheTtlMs))
                                 .eventCategory("metrics")
                                 .eventAction("metrics_verticle_deploy")
@@ -411,7 +411,7 @@ public final class VertxMain {
                                 .field("url.path", metricsPath)
                                 .log();
                         } else {
-                            EcsLogger.error("com.artipie.metrics")
+                            EcsLogger.error("com.auto1.pantera.metrics")
                                 .message("Failed to deploy AsyncMetricsVerticle")
                                 .eventCategory("metrics")
                                 .eventAction("metrics_verticle_deploy")
@@ -426,18 +426,18 @@ public final class VertxMain {
 
         // Start config watch service for hot reload
         try {
-            this.configWatch = new com.artipie.settings.ConfigWatchService(
+            this.configWatch = new com.auto1.pantera.settings.ConfigWatchService(
                 this.config, settings.prefixes()
             );
             this.configWatch.start();
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("Config watch service started for hot reload")
                 .eventCategory("configuration")
                 .eventAction("config_watch_start")
                 .eventOutcome("success")
                 .log();
         } catch (final IOException ex) {
-            EcsLogger.error("com.artipie")
+            EcsLogger.error("com.auto1.pantera")
                 .message("Failed to start config watch service")
                 .eventCategory("configuration")
                 .eventAction("config_watch_start")
@@ -450,7 +450,7 @@ public final class VertxMain {
     }
 
     public void stop() {
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Stopping Artipie and cleaning up resources")
             .eventCategory("server")
             .eventAction("server_stop")
@@ -460,7 +460,7 @@ public final class VertxMain {
         this.http3.forEach((port, server) -> {
             try {
                 server.stop();
-                EcsLogger.info("com.artipie")
+                EcsLogger.info("com.auto1.pantera")
                     .message("HTTP/3 server on port stopped")
                     .eventCategory("server")
                     .eventAction("http3_stop")
@@ -468,7 +468,7 @@ public final class VertxMain {
                     .field("destination.port", port)
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop HTTP/3 server")
                     .eventCategory("server")
                     .eventAction("http3_stop")
@@ -482,7 +482,7 @@ public final class VertxMain {
         this.servers.forEach(s -> {
             try {
                 s.stop();
-                EcsLogger.info("com.artipie")
+                EcsLogger.info("com.auto1.pantera")
                     .message("Artipie's server on port was stopped")
                     .eventCategory("server")
                     .eventAction("server_stop")
@@ -490,7 +490,7 @@ public final class VertxMain {
                     .field("destination.port", s.port())
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop server")
                     .eventCategory("server")
                     .eventAction("server_stop")
@@ -504,7 +504,7 @@ public final class VertxMain {
             try {
                 quartz.stop();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop QuartzService")
                     .eventCategory("server")
                     .eventAction("quartz_stop")
@@ -518,7 +518,7 @@ public final class VertxMain {
             try {
                 this.configWatch.close();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close ConfigWatchService")
                     .eventCategory("server")
                     .eventAction("config_watch_stop")
@@ -530,14 +530,14 @@ public final class VertxMain {
         // 5. Shutdown BlockedThreadDiagnostics
         try {
             BlockedThreadDiagnostics.shutdownInstance();
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("BlockedThreadDiagnostics shut down")
                 .eventCategory("server")
                 .eventAction("diagnostics_shutdown")
                 .eventOutcome("success")
                 .log();
         } catch (final Exception e) {
-            EcsLogger.error("com.artipie")
+            EcsLogger.error("com.auto1.pantera")
                 .message("Failed to shutdown BlockedThreadDiagnostics")
                 .eventCategory("server")
                 .eventAction("diagnostics_shutdown")
@@ -549,14 +549,14 @@ public final class VertxMain {
         if (this.settings != null) {
             try {
                 this.settings.close();
-                EcsLogger.info("com.artipie")
+                EcsLogger.info("com.auto1.pantera")
                     .message("Settings and storage resources closed successfully")
                     .eventCategory("server")
                     .eventAction("resource_cleanup")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close settings")
                     .eventCategory("server")
                     .eventAction("resource_cleanup")
@@ -567,15 +567,15 @@ public final class VertxMain {
         }
         // 7. Shutdown storage executor pools
         try {
-            com.artipie.http.misc.StorageExecutors.shutdown();
-            EcsLogger.info("com.artipie")
+            com.auto1.pantera.http.misc.StorageExecutors.shutdown();
+            EcsLogger.info("com.auto1.pantera")
                 .message("Storage executor pools shut down")
                 .eventCategory("server")
                 .eventAction("executor_shutdown")
                 .eventOutcome("success")
                 .log();
         } catch (final Exception e) {
-            EcsLogger.error("com.artipie")
+            EcsLogger.error("com.auto1.pantera")
                 .message("Failed to shutdown storage executor pools")
                 .eventCategory("server")
                 .eventAction("executor_shutdown")
@@ -587,14 +587,14 @@ public final class VertxMain {
         if (this.vertx != null) {
             try {
                 this.vertx.close();
-                EcsLogger.info("com.artipie")
+                EcsLogger.info("com.auto1.pantera")
                     .message("Vert.x instance closed")
                     .eventCategory("server")
                     .eventAction("vertx_close")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close Vert.x instance")
                     .eventCategory("server")
                     .eventAction("vertx_close")
@@ -603,7 +603,7 @@ public final class VertxMain {
                     .log();
             }
         }
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Artipie shutdown complete")
             .eventCategory("server")
             .eventAction("server_shutdown")
@@ -633,7 +633,7 @@ public final class VertxMain {
         if (cmd.hasOption(popt)) {
             port = Integer.parseInt(cmd.getOptionValue(popt));
         } else {
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("Using default port")
                 .eventCategory("configuration")
                 .eventAction("port_configure")
@@ -647,7 +647,7 @@ public final class VertxMain {
         } else {
             throw new IllegalStateException("Storage is not configured");
         }
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Used version of Artipie")
             .eventCategory("server")
             .eventAction("server_start")
@@ -658,7 +658,7 @@ public final class VertxMain {
 
         // Register shutdown hook to ensure proper cleanup on JVM exit
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            EcsLogger.info("com.artipie")
+            EcsLogger.info("com.auto1.pantera")
                 .message("Shutdown hook triggered - cleaning up resources")
                 .eventCategory("server")
                 .eventAction("shutdown_hook")
@@ -668,7 +668,7 @@ public final class VertxMain {
         }, "artipie-shutdown-hook"));
 
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Artipie started successfully. Press Ctrl+C to shutdown.")
             .eventCategory("server")
             .eventAction("server_start")
@@ -717,7 +717,7 @@ public final class VertxMain {
                                 settings.httpServerRequestTimeout()
                             );
                         }
-                        EcsLogger.info("com.artipie")
+                        EcsLogger.info("com.auto1.pantera")
                             .message("Artipie repo was started on port")
                             .eventCategory("repository")
                             .eventAction("repo_start")
@@ -726,7 +726,7 @@ public final class VertxMain {
                             .field("destination.port", prt)
                             .log();
                     },
-                    () -> EcsLogger.info("com.artipie")
+                    () -> EcsLogger.info("com.auto1.pantera")
                         .message("Artipie repo was started on port")
                         .eventCategory("repository")
                         .eventAction("repo_start")
@@ -736,7 +736,7 @@ public final class VertxMain {
                         .log()
                 );
             } catch (final IllegalStateException err) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Invalid repo config file")
                     .eventCategory("repository")
                     .eventAction("repo_start")
@@ -745,7 +745,7 @@ public final class VertxMain {
                     .error(err)
                     .log();
             } catch (final ArtipieException err) {
-                EcsLogger.error("com.artipie")
+                EcsLogger.error("com.auto1.pantera")
                     .message("Failed to start repo")
                     .eventCategory("repository")
                     .eventAction("repo_start")
@@ -891,10 +891,10 @@ public final class VertxMain {
             }
 
             // Initialize MicrometerMetrics with the registry
-            com.artipie.metrics.MicrometerMetrics.initialize(registry);
+            com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
 
             // Initialize storage metrics recorder
-            com.artipie.metrics.StorageMetricsRecorder.initialize();
+            com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
 
             if (mctx.jvm()) {
                 new ClassLoaderMetrics().bindTo(registry);
@@ -904,7 +904,7 @@ public final class VertxMain {
                 new JvmThreadMetrics().bindTo(registry);
             }
             if (endpoint.isPresent()) {
-                EcsLogger.info("com.artipie")
+                EcsLogger.info("com.auto1.pantera")
                     .message("Micrometer metrics (JVM, Vert.x, Storage, Cache, Repository) enabled on port " + endpoint.get().getValue())
                     .eventCategory("configuration")
                     .eventAction("metrics_configure")
@@ -917,7 +917,7 @@ public final class VertxMain {
             res = Vertx.vertx(options);
         }
 
-        EcsLogger.info("com.artipie")
+        EcsLogger.info("com.auto1.pantera")
             .message("Vert.x configured with " + options.getEventLoopPoolSize() + " event loop threads and " + options.getWorkerPoolSize() + " worker threads")
             .eventCategory("configuration")
             .eventAction("vertx_configure")

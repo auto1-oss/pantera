@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.asto.test.TestResource;
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import java.util.Map;
 import org.cactoos.map.MapEntry;
 import org.hamcrest.core.IsEqual;
@@ -18,7 +18,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.BindMode;
 
 /**
- * Integration test for {@link com.artipie.maven.http.MavenProxySlice}.
+ * Integration test for {@link com.auto1.pantera.maven.http.MavenProxySlice}.
  *
  * @since 0.11
  */
@@ -72,7 +72,7 @@ final class MavenProxyAuthIT {
                 new StringContains("BUILD SUCCESS")
             ),
             "mvn", "-s", "settings.xml",
-            "dependency:get", "-Dartifact=com.artipie:helloworld:0.1:jar"
+            "dependency:get", "-Dartifact=com.auto1.pantera:helloworld:0.1:jar"
         );
         this.containers.assertArtipieContent(
             "artipie-proxy",

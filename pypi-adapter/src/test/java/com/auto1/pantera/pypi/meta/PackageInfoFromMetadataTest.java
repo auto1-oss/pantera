@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.pypi.meta;
+package com.auto1.pantera.pypi.meta;
 
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.Assertions;
@@ -11,7 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * Test for {@link com.artipie.pypi.meta.PackageInfo.FromMetadata}.
+ * Test for {@link com.auto1.pantera.pypi.meta.PackageInfo.FromMetadata}.
  * @since 0.6
  */
 class PackageInfoFromMetadataTest {

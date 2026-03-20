@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven;
+package com.auto1.pantera.maven;
 
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import org.cactoos.map.MapEntry;
 import org.cactoos.map.MapOf;
 import org.hamcrest.core.IsEqual;
@@ -78,7 +78,7 @@ final class MavenMultiProxyIT {
                 new IsEqual<>(0), new StringContains("BUILD SUCCESS")
             ),
             "mvn", "-s", "settings.xml", "dependency:get",
-            "-Dartifact=com.artipie:helloworld:0.1:jar"
+            "-Dartifact=com.auto1.pantera:helloworld:0.1:jar"
         );
     }
 

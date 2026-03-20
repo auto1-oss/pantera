@@ -2,14 +2,14 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.perms.ApiRolePermission;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.users.CrudRoles;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.perms.ApiRolePermission;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.users.CrudRoles;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.RouterBuilder;
 import java.io.StringReader;
@@ -125,7 +125,7 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.remove(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to remove role")
                 .eventCategory("api")
                 .eventAction("role_remove")
@@ -149,7 +149,7 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.enable(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to enable role")
                 .eventCategory("api")
                 .eventAction("role_enable")
@@ -173,7 +173,7 @@ public final class RolesRest extends BaseRest {
         try {
             this.roles.disable(uname);
         } catch (final IllegalStateException err) {
-            EcsLogger.error("com.artipie.api")
+            EcsLogger.error("com.auto1.pantera.api")
                 .message("Failed to disable role")
                 .eventCategory("api")
                 .eventAction("role_disable")

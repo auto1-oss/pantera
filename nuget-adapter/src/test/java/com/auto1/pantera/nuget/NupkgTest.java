@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.nuget.metadata.Nuspec;
+import com.auto1.pantera.nuget.metadata.Nuspec;
 import java.io.ByteArrayInputStream;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;

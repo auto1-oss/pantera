@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown;
+package com.auto1.pantera.cooldown;
 
-import com.artipie.cache.CacheConfig;
+import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
@@ -125,28 +125,28 @@ public final class CachedCooldownInspector implements CooldownInspector {
 
         if (cached != null) {
             // Cache HIT
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheHit("cooldown_inspector", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
             }
             return CompletableFuture.completedFuture(cached);
         }
 
         // Cache MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheMiss("cooldown_inspector", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
         }
 
         // Deduplication: check if already fetching
         final CompletableFuture<Optional<Instant>> existing = this.inflightReleases.get(key);
         if (existing != null) {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheDeduplication("cooldown_inspector", "l1");
             }
             return existing;
@@ -161,8 +161,8 @@ public final class CachedCooldownInspector implements CooldownInspector {
                     this.releaseDates.put(key, result);
                     final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
 
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
                     }
                 }
@@ -186,28 +186,28 @@ public final class CachedCooldownInspector implements CooldownInspector {
 
         if (cached != null) {
             // Cache HIT
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheHit("cooldown_inspector", "l1");
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
             }
             return CompletableFuture.completedFuture(cached);
         }
 
         // Cache MISS
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheMiss("cooldown_inspector", "l1");
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheOperationDuration("cooldown_inspector", "l1", "get", getDurationMs);
         }
 
         // Deduplication: check if already fetching
         final CompletableFuture<List<CooldownDependency>> existing = this.inflightDeps.get(key);
         if (existing != null) {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordCacheDeduplication("cooldown_inspector", "l1");
             }
             return existing;
@@ -222,8 +222,8 @@ public final class CachedCooldownInspector implements CooldownInspector {
                     this.dependencies.put(key, result);
                     final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
 
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
                     }
                 }
@@ -249,8 +249,8 @@ public final class CachedCooldownInspector implements CooldownInspector {
                     });
                     final long putDurationMs = (System.nanoTime() - putStartNanos) / 1_000_000;
 
-                    if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                        com.artipie.metrics.MicrometerMetrics.getInstance()
+                    if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                        com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                             .recordCacheOperationDuration("cooldown_inspector", "l1", "put", putDurationMs);
                     }
                 }
@@ -296,8 +296,8 @@ public final class CachedCooldownInspector implements CooldownInspector {
         final Object value,
         final com.github.benmanes.caffeine.cache.RemovalCause cause
     ) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordCacheEviction("cooldown_inspector", "l1", cause.toString().toLowerCase());
         }
     }

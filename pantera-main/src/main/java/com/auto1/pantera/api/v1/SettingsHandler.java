@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.AuthzHandler;
-import com.artipie.api.ManageRepoSettings;
-import com.artipie.api.perms.ApiRolePermission;
-import com.artipie.cooldown.CooldownSettings;
-import com.artipie.db.dao.AuthProviderDao;
-import com.artipie.db.dao.SettingsDao;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.misc.ArtipieProperties;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.JwtSettings;
-import com.artipie.settings.MetricsContext;
-import com.artipie.settings.PrefixesPersistence;
-import com.artipie.settings.Settings;
+import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.ManageRepoSettings;
+import com.auto1.pantera.api.perms.ApiRolePermission;
+import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.misc.ArtipieProperties;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.JwtSettings;
+import com.auto1.pantera.settings.MetricsContext;
+import com.auto1.pantera.settings.PrefixesPersistence;
+import com.auto1.pantera.settings.Settings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;

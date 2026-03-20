@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.events;
+package com.auto1.pantera.asto.events;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.log.EcsLogger;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -43,7 +43,7 @@ public final class QuartsService {
                         try {
                             QuartsService.this.scheduler.shutdown();
                         } catch (final SchedulerException error) {
-                            EcsLogger.error("com.artipie.asto")
+                            EcsLogger.error("com.auto1.pantera.asto")
                                 .message("Scheduler shutdown failed")
                                 .eventCategory("scheduling")
                                 .eventAction("scheduler_shutdown")
@@ -85,7 +85,7 @@ public final class QuartsService {
         final JobBuilder job = JobBuilder.newJob(EventsProcessor.class).setJobData(data);
         final int count = Math.min(this.scheduler.getMetaData().getThreadPoolSize(), parallel);
         if (parallel > count) {
-            EcsLogger.warn("com.artipie.asto")
+            EcsLogger.warn("com.auto1.pantera.asto")
                 .message("Parallel quartz jobs amount limited to thread pool size (requested: " + parallel + ", actual: " + count + ", pool size: " + count + ")")
                 .eventCategory("scheduling")
                 .eventAction("job_schedule")

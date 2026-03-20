@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.RepositorySlices;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.composer.ComposerImportMerge;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.maven.metadata.MavenMetadata;
-import com.artipie.maven.metadata.MavenTimestamp;
-import com.artipie.helm.metadata.IndexYaml;
-import com.artipie.helm.metadata.IndexYamlMapping;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.helm.misc.DateTimeNow;
+import com.auto1.pantera.RepositorySlices;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.composer.ComposerImportMerge;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.maven.metadata.MavenMetadata;
+import com.auto1.pantera.maven.metadata.MavenTimestamp;
+import com.auto1.pantera.helm.metadata.IndexYaml;
+import com.auto1.pantera.helm.metadata.IndexYamlMapping;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.helm.misc.DateTimeNow;
 import org.yaml.snakeyaml.Yaml;
 
 import javax.json.Json;
@@ -217,7 +217,7 @@ public final class MergeShardsSlice implements Slice {
                 .completedFuture();
         }
 
-        EcsLogger.info("com.artipie.http")
+        EcsLogger.info("com.auto1.pantera.http")
             .message("Triggering metadata merge for repository")
             .eventCategory("repository")
             .eventAction("metadata_merge")
@@ -307,7 +307,7 @@ public final class MergeShardsSlice implements Slice {
                 .body(responseBytes)
                 .build();
         }).exceptionally(error -> {
-            EcsLogger.error("com.artipie.http")
+            EcsLogger.error("com.auto1.pantera.http")
                 .message("Metadata merge failed")
                 .eventCategory("repository")
                 .eventAction("metadata_merge")
@@ -317,7 +317,7 @@ public final class MergeShardsSlice implements Slice {
                 .log();
             // Clean up even on failure
             cleanupTempFolders(storage).exceptionally(e -> {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to cleanup after merge failure")
                     .eventCategory("repository")
                     .eventAction("cleanup")
@@ -391,7 +391,7 @@ public final class MergeShardsSlice implements Slice {
                                 }
                             }
                         } catch (Exception e) {
-                            EcsLogger.warn("com.artipie.http")
+                            EcsLogger.warn("com.auto1.pantera.http")
                                 .message("Failed to parse version from shard")
                                 .eventCategory("repository")
                                 .eventAction("shard_parse")
@@ -402,7 +402,7 @@ public final class MergeShardsSlice implements Slice {
                         }
                     })
                     .exceptionally(e -> {
-                        EcsLogger.warn("com.artipie.http")
+                        EcsLogger.warn("com.auto1.pantera.http")
                             .message("Failed to read shard")
                             .eventCategory("repository")
                             .eventAction("shard_read")
@@ -447,11 +447,11 @@ public final class MergeShardsSlice implements Slice {
                                 .add("artifactId").set(artifactId).up()
                                 .add("versioning");
                             // latest = max version
-                            versions.stream().max((a, b) -> new com.artipie.maven.metadata.Version(a).compareTo(new com.artipie.maven.metadata.Version(b)))
+                            versions.stream().max((a, b) -> new com.auto1.pantera.maven.metadata.Version(a).compareTo(new com.auto1.pantera.maven.metadata.Version(b)))
                                 .ifPresent(lat -> d.add("latest").set(lat).up());
                             // release = max non-SNAPSHOT
                             versions.stream().filter(ver -> !ver.endsWith("SNAPSHOT"))
-                                .max((a, b) -> new com.artipie.maven.metadata.Version(a).compareTo(new com.artipie.maven.metadata.Version(b)))
+                                .max((a, b) -> new com.auto1.pantera.maven.metadata.Version(a).compareTo(new com.auto1.pantera.maven.metadata.Version(b)))
                                 .ifPresent(rel -> d.add("release").set(rel).up());
                             d.add("versions");
                             versions.forEach(ver -> d.add("version").set(ver).up());
@@ -603,7 +603,7 @@ public final class MergeShardsSlice implements Slice {
                                 }
                             }
                         }).exceptionally(err -> {
-                            com.artipie.http.log.EcsLogger.warn("com.artipie.http")
+                            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.http")
                                 .message("MergeShardsSlice: async operation failed")
                                 .eventCategory("merge_shards")
                                 .eventAction("async_error")
@@ -623,7 +623,7 @@ public final class MergeShardsSlice implements Slice {
                                 }
                             }
                         }).exceptionally(err -> {
-                            com.artipie.http.log.EcsLogger.warn("com.artipie.http")
+                            com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.http")
                                 .message("MergeShardsSlice: async operation failed")
                                 .eventCategory("merge_shards")
                                 .eventAction("async_error")
@@ -678,7 +678,7 @@ public final class MergeShardsSlice implements Slice {
      * Deletes .import and .meta folders and all their contents.
      */
     private static CompletionStage<Void> cleanupTempFolders(final Storage storage) {
-        EcsLogger.info("com.artipie.http")
+        EcsLogger.info("com.auto1.pantera.http")
             .message("Starting cleanup of temporary folders after merge")
             .eventCategory("repository")
             .eventAction("cleanup")
@@ -686,14 +686,14 @@ public final class MergeShardsSlice implements Slice {
         final List<CompletionStage<Void>> deletions = new ArrayList<>();
 
         // Delete .import folder completely
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Deleting .import folder")
             .eventCategory("repository")
             .eventAction("cleanup")
             .field("file.directory", ".import")
             .log();
         deletions.add(storage.delete(new Key.From(".import"))
-            .thenRun(() -> EcsLogger.debug("com.artipie.http")
+            .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
                 .message(".import folder deleted successfully")
                 .eventCategory("repository")
                 .eventAction("cleanup")
@@ -701,7 +701,7 @@ public final class MergeShardsSlice implements Slice {
                 .field("file.directory", ".import")
                 .log())
             .exceptionally(e -> {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to delete .import folder")
                     .eventCategory("repository")
                     .eventAction("cleanup")
@@ -713,14 +713,14 @@ public final class MergeShardsSlice implements Slice {
             }));
 
         // Delete .meta folder completely
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Deleting .meta folder")
             .eventCategory("repository")
             .eventAction("cleanup")
             .field("file.directory", ".meta")
             .log();
         deletions.add(storage.delete(new Key.From(".meta"))
-            .thenRun(() -> EcsLogger.debug("com.artipie.http")
+            .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
                 .message(".meta folder deleted successfully")
                 .eventCategory("repository")
                 .eventAction("cleanup")
@@ -728,7 +728,7 @@ public final class MergeShardsSlice implements Slice {
                 .field("file.directory", ".meta")
                 .log())
             .exceptionally(e -> {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to delete .meta folder")
                     .eventCategory("repository")
                     .eventAction("cleanup")
@@ -740,14 +740,14 @@ public final class MergeShardsSlice implements Slice {
             }));
 
         return CompletableFuture.allOf(deletions.toArray(new CompletableFuture[0]))
-            .thenRun(() -> EcsLogger.info("com.artipie.http")
+            .thenRun(() -> EcsLogger.info("com.auto1.pantera.http")
                 .message("Temporary folders cleanup completed")
                 .eventCategory("repository")
                 .eventAction("cleanup")
                 .eventOutcome("success")
                 .log())
             .exceptionally(e -> {
-                EcsLogger.warn("com.artipie.http")
+                EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to cleanup temporary folders")
                     .eventCategory("repository")
                     .eventAction("cleanup")

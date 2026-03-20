@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.composer.http;
+package com.auto1.pantera.composer.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Meta;
-import com.artipie.composer.Repository;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.composer.Repository;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -79,7 +79,7 @@ final class AddArchiveSlice implements Slice {
         
         // Validate path doesn't contain directory traversal
         if (uri.contains("..")) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Rejected archive path with directory traversal")
                 .eventCategory("repository")
                 .eventAction("archive_upload")
@@ -97,7 +97,7 @@ final class AddArchiveSlice implements Slice {
         final boolean isTarGz = lowerUri.endsWith(".tar.gz") || lowerUri.endsWith(".tgz");
 
         if (!isZip && !isTarGz) {
-            EcsLogger.warn("com.artipie.composer")
+            EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Rejected unsupported archive format")
                 .eventCategory("repository")
                 .eventAction("archive_upload")
@@ -124,7 +124,7 @@ final class AddArchiveSlice implements Slice {
                     // Extract name and version from composer.json (source of truth)
                     final String packageName = composerJson.getString("name", null);
                     if (packageName == null || packageName.trim().isEmpty()) {
-                        EcsLogger.warn("com.artipie.composer")
+                        EcsLogger.warn("com.auto1.pantera.composer")
                             .message("Missing or empty 'name' in composer.json")
                             .eventCategory("repository")
                             .eventAction("archive_upload")
@@ -149,7 +149,7 @@ final class AddArchiveSlice implements Slice {
                     } else {
                         // Try to extract version from filename
                         version = extractVersionFromFilename(filename).orElse("dev-master");
-                        EcsLogger.debug("com.artipie.composer")
+                        EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Version not found in composer.json, extracted from filename")
                             .eventCategory("repository")
                             .eventAction("archive_upload")
@@ -161,7 +161,7 @@ final class AddArchiveSlice implements Slice {
                     // Validate package name format (must be vendor/package)
                     final String[] parts = packageName.split("/");
                     if (parts.length != 2) {
-                        EcsLogger.warn("com.artipie.composer")
+                        EcsLogger.warn("com.auto1.pantera.composer")
                             .message("Invalid package name format, expected 'vendor/package'")
                             .eventCategory("repository")
                             .eventAction("archive_upload")
@@ -195,7 +195,7 @@ final class AddArchiveSlice implements Slice {
                         final java.util.regex.Matcher matcher = devPattern.matcher(filename);
                         if (matcher.find()) {
                             uniqueSuffix = "-" + matcher.group(1);
-                            EcsLogger.debug("com.artipie.composer")
+                            EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Dev version detected, preserving unique identifier: " + uniqueSuffix)
                                 .eventCategory("repository")
                                 .eventAction("archive_upload")
@@ -223,7 +223,7 @@ final class AddArchiveSlice implements Slice {
                         artifactFilename
                     );
                     
-                    EcsLogger.info("com.artipie.composer")
+                    EcsLogger.info("com.auto1.pantera.composer")
                         .message("Processing Composer package upload")
                         .eventCategory("repository")
                         .eventAction("archive_upload")
@@ -258,7 +258,7 @@ final class AddArchiveSlice implements Slice {
                                         .map(Long::longValue)
                                         .orElse(0L);
                                 } catch (final Exception e) {
-                                    EcsLogger.warn("com.artipie.composer")
+                                    EcsLogger.warn("com.auto1.pantera.composer")
                                         .message("Failed to get file size for event")
                                         .eventCategory("repository")
                                         .eventAction("event_creation")
@@ -280,7 +280,7 @@ final class AddArchiveSlice implements Slice {
                                         (Long) null  // No release date for local uploads
                                     )
                                 );
-                                EcsLogger.info("com.artipie.composer")
+                                EcsLogger.info("com.auto1.pantera.composer")
                                     .message("Recorded Composer package upload event")
                                     .eventCategory("repository")
                                     .eventAction("event_creation")
@@ -297,7 +297,7 @@ final class AddArchiveSlice implements Slice {
                     return res.thenApply(nothing -> ResponseBuilder.created().build());
                 })
                 .exceptionally(error -> {
-                    EcsLogger.error("com.artipie.composer")
+                    EcsLogger.error("com.auto1.pantera.composer")
                         .message("Failed to process Composer package")
                         .eventCategory("repository")
                         .eventAction("archive_upload")

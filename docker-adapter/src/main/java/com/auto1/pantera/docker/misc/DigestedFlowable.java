@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.misc;
+package com.auto1.pantera.docker.misc;
 
-import com.artipie.asto.Remaining;
-import com.artipie.asto.ext.Digests;
-import com.artipie.docker.Digest;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.asto.ext.Digests;
+import com.auto1.pantera.docker.Digest;
 import io.reactivex.Flowable;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;

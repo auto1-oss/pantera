@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.hex.tarball;
+package com.auto1.pantera.hex.tarball;
 
-import com.artipie.hex.ResourceUtil;
+import com.auto1.pantera.hex.ResourceUtil;
 import java.io.IOException;
 import java.nio.file.Files;
 import org.hamcrest.MatcherAssert;

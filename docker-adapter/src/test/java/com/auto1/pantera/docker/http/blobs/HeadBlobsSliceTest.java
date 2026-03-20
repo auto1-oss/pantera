@@ -2,26 +2,26 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http.blobs;
+package com.auto1.pantera.docker.http.blobs;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Catalog;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Docker;
-import com.artipie.docker.Layers;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Repo;
-import com.artipie.docker.Tags;
-import com.artipie.docker.asto.Uploads;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.headers.ContentLength;
-import com.artipie.http.headers.Header;
-import com.artipie.http.rq.RequestLine;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.asto.Uploads;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
@@ -79,7 +79,7 @@ final class HeadBlobsSliceTest {
                 public Layers layers() {
                     return new Layers() {
                         @Override
-                        public CompletableFuture<Digest> put(com.artipie.docker.asto.BlobSource source) {
+                        public CompletableFuture<Digest> put(com.auto1.pantera.docker.asto.BlobSource source) {
                             throw new UnsupportedOperationException();
                         }
 
@@ -106,7 +106,7 @@ final class HeadBlobsSliceTest {
                         }
 
                         @Override
-                        public CompletableFuture<Optional<com.artipie.docker.manifest.Manifest>> get(ManifestReference ref) {
+                        public CompletableFuture<Optional<com.auto1.pantera.docker.manifest.Manifest>> get(ManifestReference ref) {
                             return CompletableFuture.completedFuture(Optional.empty());
                         }
 

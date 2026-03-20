@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.Remaining;
-import com.artipie.http.headers.Login;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.http.slice.ContentWithSize;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Headers;
-import com.artipie.http.Slice;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.ContentWithSize;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 
@@ -99,7 +99,7 @@ final class GoUploadSlice implements Slice {
         final int semicolonIndex = path.indexOf(';');
         if (semicolonIndex > 0) {
             sanitizedPath = path.substring(0, semicolonIndex);
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Stripped metadata properties from path")
                 .eventCategory("repository")
                 .eventAction("upload")

@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.settings.PrefixesPersistence;
-import com.artipie.settings.Settings;
+import com.auto1.pantera.settings.PrefixesPersistence;
+import com.auto1.pantera.settings.Settings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
@@ -82,7 +82,7 @@ public final class SettingsRest extends BaseRest {
     private void getDashboard(final RoutingContext context) {
         final JsonObject dashboard = new JsonObject()
             .put("port", this.port)
-            .put("version", new com.artipie.misc.ArtipieProperties().version());
+            .put("version", new com.auto1.pantera.misc.ArtipieProperties().version());
         this.crs.ifPresent(
             manage -> dashboard.put("repositories", manage.listAll().size())
         );
@@ -142,7 +142,7 @@ public final class SettingsRest extends BaseRest {
             }
             // Validate: check for conflicts with existing repository names
             final java.util.Collection<String> existingRepos =
-                this.settings.repoConfigsStorage().list(com.artipie.asto.Key.ROOT)
+                this.settings.repoConfigsStorage().list(com.auto1.pantera.asto.Key.ROOT)
                     .join().stream()
                     .map(key -> key.string().replaceAll("\\.yaml|\\.yml$", ""))
                     .collect(java.util.stream.Collectors.toList());

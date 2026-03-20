@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cluster;
+package com.auto1.pantera.cluster;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -34,7 +34,7 @@ public final class DbNodeRegistry {
     /**
      * Logger name for this class.
      */
-    private static final String LOGGER = "com.artipie.cluster.DbNodeRegistry";
+    private static final String LOGGER = "com.auto1.pantera.cluster.DbNodeRegistry";
 
     /**
      * Node status: active.

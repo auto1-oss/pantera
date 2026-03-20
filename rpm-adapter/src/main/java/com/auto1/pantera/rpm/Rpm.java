@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm;
+package com.auto1.pantera.rpm;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.asto.Copy;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.SubStorage;
-import com.artipie.asto.lock.Lock;
-import com.artipie.asto.lock.storage.StorageLock;
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.rpm.asto.AstoChecksumAndName;
-import com.artipie.rpm.asto.AstoRepoAdd;
-import com.artipie.rpm.asto.AstoRepoRemove;
-import com.artipie.rpm.http.RpmUpload;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.meta.XmlPrimaryChecksums;
-import com.artipie.rpm.misc.PackagesDiff;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.asto.Copy;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.asto.lock.Lock;
+import com.auto1.pantera.asto.lock.storage.StorageLock;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.rpm.asto.AstoChecksumAndName;
+import com.auto1.pantera.rpm.asto.AstoRepoAdd;
+import com.auto1.pantera.rpm.asto.AstoRepoRemove;
+import com.auto1.pantera.rpm.http.RpmUpload;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.meta.XmlPrimaryChecksums;
+import com.auto1.pantera.rpm.misc.PackagesDiff;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import java.time.Duration;

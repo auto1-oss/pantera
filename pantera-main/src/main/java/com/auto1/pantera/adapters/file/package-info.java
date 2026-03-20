@@ -8,4 +8,4 @@
  *
  * @since 0.12
  */
-package com.artipie.adapters.file;
+package com.auto1.pantera.adapters.file;

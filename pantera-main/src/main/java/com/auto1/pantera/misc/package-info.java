@@ -7,4 +7,4 @@
  * Artipie misc helper objects.
  * @since 0.23
  */
-package com.artipie.misc;
+package com.auto1.pantera.misc;

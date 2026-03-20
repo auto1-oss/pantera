@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.cache;
+package com.auto1.pantera.asto.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.log.EcsLogger;
 import org.reactivestreams.Publisher;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -233,7 +233,7 @@ public final class OptimizedStorageCache {
                         } catch (final IllegalStateException ex) {
                             // Response already written - client disconnected or response ended
                             // This is expected during client cancellation, log and stop streaming
-                            EcsLogger.debug("com.artipie.asto.cache")
+                            EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Subscriber rejected chunk - response already written")
                                 .eventCategory("cache")
                                 .eventAction("stream_file")
@@ -311,7 +311,7 @@ public final class OptimizedStorageCache {
                     }
                 } catch (Exception ex) {
                     // Last resort: let GC handle it eventually
-                    EcsLogger.warn("com.artipie.asto.cache")
+                    EcsLogger.warn("com.auto1.pantera.asto.cache")
                         .message("Failed to explicitly clean direct buffer, relying on GC")
                         .eventCategory("memory")
                         .eventAction("buffer_cleanup")

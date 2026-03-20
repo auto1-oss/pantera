@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm.proxy.http;
+package com.auto1.pantera.npm.proxy.http;
 
-import com.artipie.cooldown.CooldownDependency;
-import com.artipie.cooldown.CooldownInspector;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.npm.proxy.NpmRemote;
-import com.artipie.npm.proxy.model.NpmPackage;
+import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.npm.proxy.NpmRemote;
+import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import com.vdurmont.semver4j.Semver;
 import com.vdurmont.semver4j.SemverException;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
@@ -39,7 +39,7 @@ import javax.json.JsonObject;
  * </ul>
  */
 final class NpmCooldownInspector implements CooldownInspector,
-    com.artipie.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
 
     private final NpmRemote remote;
 
@@ -215,7 +215,7 @@ final class NpmCooldownInspector implements CooldownInspector,
                         .map(v -> {
                             try {
                                 // Use shared Semver cache from DescSortedVersions
-                                return com.artipie.npm.misc.DescSortedVersions.parseSemver(v);
+                                return com.auto1.pantera.npm.misc.DescSortedVersions.parseSemver(v);
                             } catch (final SemverException e) {
                                 return null;
                             }
@@ -233,7 +233,7 @@ final class NpmCooldownInspector implements CooldownInspector,
                             return Optional.of(new CooldownDependency(name, candidate.getValue()));
                         }
                     } catch (final SemverException ex) {
-                        EcsLogger.debug("com.artipie.npm")
+                        EcsLogger.debug("com.auto1.pantera.npm")
                             .message("Failed to evaluate semver range")
                             .error(ex)
                             .log();

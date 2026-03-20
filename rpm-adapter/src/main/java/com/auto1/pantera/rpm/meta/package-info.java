@@ -8,5 +8,5 @@
  *
  * @since 0.6
  */
-package com.artipie.rpm.meta;
+package com.auto1.pantera.rpm.meta;
 

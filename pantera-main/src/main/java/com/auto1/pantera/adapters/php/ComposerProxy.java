@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.php;
+package com.auto1.pantera.adapters.php;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Storage;
-import com.artipie.composer.AstoRepository;
-import com.artipie.composer.http.proxy.ComposerProxySlice;
-import com.artipie.composer.http.proxy.ComposerStorageCache;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.client.ClientSlices;
-import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.group.GroupSlice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.settings.repo.RepoConfig;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.composer.AstoRepository;
+import com.auto1.pantera.composer.http.proxy.ComposerProxySlice;
+import com.auto1.pantera.composer.http.proxy.ComposerStorageCache;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.settings.repo.RepoConfig;
 
 import java.util.Optional;
 import java.util.Queue;
@@ -36,7 +36,7 @@ public final class ComposerProxy implements Slice {
      * @param cfg Repository configuration
      */
     public ComposerProxy(ClientSlices client, RepoConfig cfg) {
-        this(client, cfg, Optional.empty(), com.artipie.cooldown.NoopCooldownService.INSTANCE);
+        this(client, cfg, Optional.empty(), com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -49,8 +49,8 @@ public final class ComposerProxy implements Slice {
     public ComposerProxy(
         ClientSlices client,
         RepoConfig cfg,
-        Optional<Queue<com.artipie.scheduling.ProxyArtifactEvent>> events,
-        com.artipie.cooldown.CooldownService cooldown
+        Optional<Queue<com.auto1.pantera.scheduling.ProxyArtifactEvent>> events,
+        com.auto1.pantera.cooldown.CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         final String baseUrl = cfg.url().toString();
@@ -60,10 +60,10 @@ public final class ComposerProxy implements Slice {
         this.slice = new GroupSlice(
             cfg.remotes().stream().map(
                 remote -> {
-                    final com.artipie.http.client.auth.Authenticator auth = 
+                    final com.auto1.pantera.http.client.auth.Authenticator auth = 
                         GenericAuthenticator.create(client, remote.username(), remote.pwd());
-                    final Slice remoteSlice = new com.artipie.http.client.auth.AuthClientSlice(
-                        new com.artipie.http.client.UriClientSlice(client, remote.uri()),
+                    final Slice remoteSlice = new com.auto1.pantera.http.client.auth.AuthClientSlice(
+                        new com.auto1.pantera.http.client.UriClientSlice(client, remote.uri()),
                         auth
                     );
                     
@@ -78,7 +78,7 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
                             baseUrl,
                             remote.uri().toString()
                         )
@@ -93,7 +93,7 @@ public final class ComposerProxy implements Slice {
                             cfg.name(),
                             cfg.type(),
                             cooldown,
-                            new com.artipie.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
+                            new com.auto1.pantera.composer.http.proxy.ComposerCooldownInspector(remoteSlice),
                             baseUrl,
                             remote.uri().toString()
                         )

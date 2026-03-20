@@ -2,24 +2,24 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.error.InvalidDigestException;
-import com.artipie.docker.error.InvalidManifestException;
-import com.artipie.docker.error.InvalidRepoNameException;
-import com.artipie.docker.error.InvalidTagNameException;
-import com.artipie.docker.error.UnsupportedError;
-import com.artipie.http.Headers;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.Authenticator;
-import com.artipie.http.headers.Header;
-import com.artipie.http.hm.ResponseAssert;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.RqMethod;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.error.InvalidDigestException;
+import com.auto1.pantera.docker.error.InvalidManifestException;
+import com.auto1.pantera.docker.error.InvalidRepoNameException;
+import com.auto1.pantera.docker.error.InvalidTagNameException;
+import com.auto1.pantera.docker.error.UnsupportedError;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.Authenticator;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.ResponseAssert;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsEqual;

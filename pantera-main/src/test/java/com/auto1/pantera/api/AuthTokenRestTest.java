@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.asto.Storage;
-import com.artipie.http.auth.Authentication;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;

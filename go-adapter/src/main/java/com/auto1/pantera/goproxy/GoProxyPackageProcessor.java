@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.goproxy;
+package com.auto1.pantera.goproxy;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.scheduling.JobDataRegistry;
-import com.artipie.scheduling.ProxyArtifactEvent;
-import com.artipie.scheduling.QuartzJob;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.JobDataRegistry;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.scheduling.QuartzJob;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -64,7 +64,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
     public void execute(final JobExecutionContext context) {
         this.resolveFromRegistry(context);
         if (this.asto == null || this.packages == null || this.events == null) {
-            EcsLogger.error("com.artipie.go")
+            EcsLogger.error("com.auto1.pantera.go")
                 .message("Go proxy processor not initialized properly")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -72,7 +72,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .log();
             super.stopJob(context);
         } else {
-            EcsLogger.debug("com.artipie.go")
+            EcsLogger.debug("com.auto1.pantera.go")
                 .message("Go proxy processor running (queue size: " + this.packages.size() + ")")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -95,7 +95,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             return;
         }
 
-        EcsLogger.info("com.artipie.go")
+        EcsLogger.info("com.auto1.pantera.go")
             .message("Processing Go batch (size: " + batch.size() + ")")
             .eventCategory("repository")
             .eventAction("proxy_processor")
@@ -109,14 +109,14 @@ public final class GoProxyPackageProcessor extends QuartzJob {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
                 .orTimeout(30, TimeUnit.SECONDS)
                 .join();
-            EcsLogger.info("com.artipie.go")
+            EcsLogger.info("com.auto1.pantera.go")
                 .message("Go batch processing complete (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
                 .eventOutcome("success")
                 .log();
         } catch (Exception err) {
-            EcsLogger.error("com.artipie.go")
+            EcsLogger.error("com.auto1.pantera.go")
                 .message("Go batch processing failed (size: " + batch.size() + ")")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -133,7 +133,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
      */
     private CompletableFuture<Void> processGoPackageAsync(final ProxyArtifactEvent event) {
         final Key key = event.artifactKey();
-        EcsLogger.debug("com.artipie.go")
+        EcsLogger.debug("com.auto1.pantera.go")
             .message("Processing Go proxy event")
             .eventCategory("repository")
             .eventAction("proxy_processor")
@@ -143,7 +143,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Parse module coordinates from event key
         final ModuleCoordinates coords = parseCoordinates(key);
         if (coords == null) {
-            EcsLogger.warn("com.artipie.go")
+            EcsLogger.warn("com.auto1.pantera.go")
                 .message("Could not parse coordinates, skipping")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")
@@ -161,7 +161,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
         // Check existence and get metadata asynchronously
         return this.asto.exists(zipKey).thenCompose(exists -> {
             if (!exists) {
-                EcsLogger.warn("com.artipie.go")
+                EcsLogger.warn("com.auto1.pantera.go")
                     .message("No .zip file found, re-queuing for retry")
                     .eventCategory("repository")
                     .eventAction("proxy_processor")
@@ -179,7 +179,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                 .thenApply(sizeOpt -> sizeOpt.map(Long::longValue))
                 .thenAccept(size -> {
                     if (size.isEmpty()) {
-                        EcsLogger.warn("com.artipie.go")
+                        EcsLogger.warn("com.auto1.pantera.go")
                             .message("Missing size metadata, skipping")
                             .eventCategory("repository")
                             .eventAction("proxy_processor")
@@ -209,7 +209,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         )
                     );
 
-                    EcsLogger.info("com.artipie.go")
+                    EcsLogger.info("com.auto1.pantera.go")
                         .message("Recorded Go proxy module")
                         .eventCategory("repository")
                         .eventAction("proxy_processor")
@@ -223,7 +223,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .log();
                 });
         }).exceptionally(err -> {
-            EcsLogger.error("com.artipie.go")
+            EcsLogger.error("com.auto1.pantera.go")
                 .message("Failed to process Go package")
                 .eventCategory("repository")
                 .eventAction("proxy_processor")

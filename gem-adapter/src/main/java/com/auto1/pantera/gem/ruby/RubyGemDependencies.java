@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.gem.ruby;
+package com.auto1.pantera.gem.ruby;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.gem.GemDependencies;
-import com.artipie.gem.ruby.SharedRuntime.RubyPlugin;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.gem.GemDependencies;
+import com.auto1.pantera.gem.ruby.SharedRuntime.RubyPlugin;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;

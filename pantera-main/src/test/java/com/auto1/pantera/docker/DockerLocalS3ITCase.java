@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.factory.Config;
-import com.artipie.asto.factory.StoragesLoader;
-import com.artipie.test.TestDeployment;
-import com.artipie.test.TestDockerClient;
-import com.artipie.test.vertxmain.TestVertxMain;
-import com.artipie.test.vertxmain.TestVertxMainBuilder;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.factory.Config;
+import com.auto1.pantera.asto.factory.StoragesLoader;
+import com.auto1.pantera.test.TestDeployment;
+import com.auto1.pantera.test.TestDockerClient;
+import com.auto1.pantera.test.vertxmain.TestVertxMain;
+import com.auto1.pantera.test.vertxmain.TestVertxMainBuilder;
 import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

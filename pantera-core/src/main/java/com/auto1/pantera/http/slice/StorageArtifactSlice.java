@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.slice;
+package com.auto1.pantera.http.slice;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.cache.OptimizedStorageCache;
-import com.artipie.asto.fs.FileStorage;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.cache.OptimizedStorageCache;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -103,7 +103,7 @@ public final class StorageArtifactSlice implements Slice {
         // IMPORTANT: Pass original storage (with SubStorage prefix) to maintain repo scoping
         // Wrap with RangeSlice to support multi-connection downloads (Chrome, download managers, Maven)
         if (unwrapped instanceof FileStorage) {
-            EcsLogger.debug("com.artipie.http")
+            EcsLogger.debug("com.auto1.pantera.http")
                 .message("Using FileSystemArtifactSlice for direct NIO access (detected: " + unwrapped.getClass().getSimpleName() + ", wrapper: " + this.storage.getClass().getSimpleName() + ")")
                 .eventCategory("storage")
                 .eventAction("artifact_slice_select")
@@ -117,7 +117,7 @@ public final class StorageArtifactSlice implements Slice {
         // S3 and other storage types: Use generic abstraction
         // Note: S3-specific optimizations require S3Storage class which is in asto-s3 module
         // TODO: Add S3ArtifactSlice when needed (requires refactoring module dependencies)
-        EcsLogger.debug("com.artipie.http")
+        EcsLogger.debug("com.auto1.pantera.http")
             .message("Using generic storage abstraction (type: " + unwrapped.getClass().getSimpleName() + ")")
             .eventCategory("storage")
             .eventAction("artifact_slice_select")
@@ -249,7 +249,7 @@ public final class StorageArtifactSlice implements Slice {
                     return builder.build();
                 });
             }).exceptionally(throwable -> {
-                EcsLogger.error("com.artipie.http")
+                EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to serve artifact at key: " + key.string())
                     .eventCategory("storage")
                     .eventAction("artifact_serve")

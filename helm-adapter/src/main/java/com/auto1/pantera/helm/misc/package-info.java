@@ -7,4 +7,4 @@
  * Misc classes.
  * @since 0.3
  */
-package com.artipie.helm.misc;
+package com.auto1.pantera.helm.misc;

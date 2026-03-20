@@ -8,4 +8,4 @@
  *
  * @since 0.28
  */
-package com.artipie.tools;
+package com.auto1.pantera.tools;

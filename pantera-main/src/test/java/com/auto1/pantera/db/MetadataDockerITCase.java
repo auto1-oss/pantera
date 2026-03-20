@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.db;
+package com.auto1.pantera.db;
 
-import com.artipie.asto.misc.UncheckedSupplier;
-import com.artipie.docker.Image;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.docker.Image;
+import com.auto1.pantera.test.TestDeployment;
 import java.nio.file.Path;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.scripting;
+package com.auto1.pantera.scripting;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.Key;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.util.HashMap;
 import java.util.Map;
 import javax.script.ScriptException;
@@ -41,7 +41,7 @@ public final class ScriptRunner implements Job {
                 vars.put("_repositories", scontext.getRepositories());
                 script.call(vars);
             } catch (final ScriptException exc) {
-                EcsLogger.error("com.artipie.scripting")
+                EcsLogger.error("com.auto1.pantera.scripting")
                     .message("Execution error in script: " + key.toString())
                     .eventCategory("scripting")
                     .eventAction("script_execute")
@@ -50,7 +50,7 @@ public final class ScriptRunner implements Job {
                     .log();
             }
         } else {
-            EcsLogger.warn("com.artipie.scripting")
+            EcsLogger.warn("com.auto1.pantera.scripting")
                 .message("Cannot find script: " + key.toString())
                 .eventCategory("scripting")
                 .eventAction("script_execute")
@@ -66,14 +66,14 @@ public final class ScriptRunner implements Job {
     private void stopJob(final JobExecutionContext context) {
         final JobKey key = context.getJobDetail().getKey();
         try {
-            EcsLogger.error("com.artipie.scripting")
+            EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Force stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
                 .field("process.name", key.toString())
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
-            EcsLogger.error("com.artipie.scripting")
+            EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Job stopped")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")
@@ -81,7 +81,7 @@ public final class ScriptRunner implements Job {
                 .field("process.name", key.toString())
                 .log();
         } catch (final SchedulerException error) {
-            EcsLogger.error("com.artipie.scripting")
+            EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Error while stopping job")
                 .eventCategory("scheduling")
                 .eventAction("job_stop")

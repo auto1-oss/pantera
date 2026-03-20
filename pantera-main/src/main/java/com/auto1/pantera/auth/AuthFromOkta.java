@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.auth;
+package com.auto1.pantera.auth;
 
-import com.artipie.http.auth.AuthUser;
-import com.artipie.http.auth.Authentication;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.util.Optional;
 
@@ -39,7 +39,7 @@ public final class AuthFromOkta implements Authentication {
             }
         } catch (final InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication interrupted")
                 .eventCategory("authentication")
                 .eventAction("login")
@@ -48,7 +48,7 @@ public final class AuthFromOkta implements Authentication {
                 .error(interrupted)
                 .log();
         } catch (final IOException err) {
-            EcsLogger.error("com.artipie.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Okta authentication failed")
                 .eventCategory("authentication")
                 .eventAction("login")

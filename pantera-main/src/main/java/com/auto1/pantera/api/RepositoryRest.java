@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.perms.ApiRepositoryPermission;
-import com.artipie.api.verifier.ExistenceVerifier;
-import com.artipie.api.verifier.ReservedNamesVerifier;
-import com.artipie.api.verifier.SettingsDuplicatesVerifier;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.RepoData;
-import com.artipie.settings.cache.FiltersCache;
-import com.artipie.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.api.verifier.ExistenceVerifier;
+import com.auto1.pantera.api.verifier.ReservedNamesVerifier;
+import com.auto1.pantera.api.verifier.SettingsDuplicatesVerifier;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.settings.cache.FiltersCache;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.RoutingContext;
@@ -23,7 +23,7 @@ import java.security.PermissionCollection;
 import java.util.Optional;
 import javax.json.JsonObject;
 import org.eclipse.jetty.http.HttpStatus;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 
 /**
  * Rest-api operations for repositories settings CRUD
@@ -126,7 +126,7 @@ public final class RepositoryRest extends BaseRest {
             this.data.deletePackageFolder(rname, path)
                 .whenComplete((deleted, error) -> {
                     if (error != null) {
-                        EcsLogger.error("com.artipie.api")
+                        EcsLogger.error("com.auto1.pantera.api")
                             .message("Failed to delete package folder")
                             .eventCategory("api")
                             .eventAction("package_delete")
@@ -138,7 +138,7 @@ public final class RepositoryRest extends BaseRest {
                             .log();
                         sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                     } else if (deleted) {
-                        EcsLogger.info("com.artipie.api")
+                        EcsLogger.info("com.auto1.pantera.api")
                             .message("Package folder deleted via API")
                             .eventCategory("api")
                             .eventAction("package_delete")
@@ -397,7 +397,7 @@ public final class RepositoryRest extends BaseRest {
                 if (error == null) {
                     context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                 } else {
-                    EcsLogger.error("com.artipie.api")
+                    EcsLogger.error("com.auto1.pantera.api")
                         .message("Failed to unblock artifact from cooldown")
                         .eventCategory("api")
                         .eventAction("cooldown_unblock")
@@ -437,7 +437,7 @@ public final class RepositoryRest extends BaseRest {
             this.data.deleteArtifact(rname, path)
                 .whenComplete((deleted, error) -> {
                     if (error != null) {
-                        EcsLogger.error("com.artipie.api")
+                        EcsLogger.error("com.auto1.pantera.api")
                             .message("Failed to delete artifact")
                             .eventCategory("api")
                             .eventAction("artifact_delete")
@@ -449,7 +449,7 @@ public final class RepositoryRest extends BaseRest {
                             .log();
                         sendError(context, HttpStatus.INTERNAL_SERVER_ERROR_500, error.getMessage());
                     } else if (deleted) {
-                        EcsLogger.info("com.artipie.api")
+                        EcsLogger.info("com.auto1.pantera.api")
                             .message("Artifact deleted via API")
                             .eventCategory("api")
                             .eventAction("artifact_delete")
@@ -485,7 +485,7 @@ public final class RepositoryRest extends BaseRest {
                 if (error == null) {
                     context.response().setStatusCode(HttpStatus.NO_CONTENT_204).end();
                 } else {
-                    EcsLogger.error("com.artipie.api")
+                    EcsLogger.error("com.auto1.pantera.api")
                         .message("Failed to unblock all artifacts from cooldown")
                         .eventCategory("api")
                         .eventAction("cooldown_unblock_all")

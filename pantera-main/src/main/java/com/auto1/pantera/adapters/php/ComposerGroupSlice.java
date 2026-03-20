@@ -2,18 +2,18 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.adapters.php;
+package com.auto1.pantera.adapters.php;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.group.SliceResolver;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.RsStatus;
-import com.artipie.http.Slice;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.group.SliceResolver;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsLogger;
 import javax.json.Json;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
@@ -191,7 +191,7 @@ public final class ComposerGroupSlice implements Slice {
                     final RequestLine rewritten = rewritePath(line, member);
                     final Headers sanitized = dropFullPathHeader(headers);
 
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Fetching packages.json from member")
                         .eventCategory("repository")
                         .eventAction("packages_fetch")
@@ -220,7 +220,7 @@ public final class ComposerGroupSlice implements Slice {
                                             }
                                         }
 
-                                        EcsLogger.debug("com.artipie.composer")
+                                        EcsLogger.debug("com.auto1.pantera.composer")
                                             .message("Member '" + member + "' returned packages.json (" + packageCount + " packages)")
                                             .eventCategory("repository")
                                             .eventAction("packages_fetch")
@@ -229,7 +229,7 @@ public final class ComposerGroupSlice implements Slice {
                                             .log();
                                         return json;
                                     } catch (Exception e) {
-                                        EcsLogger.warn("com.artipie.composer")
+                                        EcsLogger.warn("com.auto1.pantera.composer")
                                             .message("Failed to parse packages.json from member")
                                             .eventCategory("repository")
                                             .eventAction("packages_parse")
@@ -241,7 +241,7 @@ public final class ComposerGroupSlice implements Slice {
                                     }
                                 });
                         } else {
-                            EcsLogger.debug("com.artipie.composer")
+                            EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Member returned non-OK status for packages.json")
                                 .eventCategory("repository")
                                 .eventAction("packages_fetch")
@@ -255,7 +255,7 @@ public final class ComposerGroupSlice implements Slice {
                         }
                     })
                     .exceptionally(ex -> {
-                        EcsLogger.warn("com.artipie.composer")
+                        EcsLogger.warn("com.auto1.pantera.composer")
                             .message("Error fetching packages.json from member")
                             .eventCategory("repository")
                             .eventAction("packages_fetch")
@@ -289,7 +289,7 @@ public final class ComposerGroupSlice implements Slice {
                         providers.forEach((key, value) -> {
                             providersBuilder.add(key, value);
                         });
-                        EcsLogger.debug("com.artipie.composer")
+                        EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Member returned Satis format (" + providers.size() + " providers)")
                             .eventCategory("repository")
                             .eventAction("packages_merge")
@@ -339,7 +339,7 @@ public final class ComposerGroupSlice implements Slice {
                     merged.add("packages", Json.createObjectBuilder()); // Empty object
                     merged.add("providers-url", this.basePath + "/p2/%package%.json");
                     merged.add("providers", providersBuilder.build());
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Using Satis format for group (" + providersBuilder.build().size() + " providers)")
                         .eventCategory("repository")
                         .eventAction("packages_merge")
@@ -351,7 +351,7 @@ public final class ComposerGroupSlice implements Slice {
                     // Composer (especially v1) needs absolute paths, not relative.
                     merged.add("metadata-url", this.basePath + "/p2/%package%.json");
                     merged.add("packages", packagesBuilder.build());
-                    EcsLogger.debug("com.artipie.composer")
+                    EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Using traditional format for group (" + packagesBuilder.build().size() + " packages)")
                         .eventCategory("repository")
                         .eventAction("packages_merge")

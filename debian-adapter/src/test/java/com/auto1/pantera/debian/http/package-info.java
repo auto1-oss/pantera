@@ -7,4 +7,4 @@
  * Debian http tests.
  * @since 0.1
  */
-package com.artipie.debian.http;
+package com.auto1.pantera.debian.http;

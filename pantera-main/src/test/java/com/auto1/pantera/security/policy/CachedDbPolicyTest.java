@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
-import com.artipie.api.perms.ApiRepositoryPermission;
-import com.artipie.api.perms.ApiSearchPermission;
-import com.artipie.db.DbManager;
-import com.artipie.db.PostgreSQLTestConfig;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.security.perms.AdapterBasicPermission;
-import com.artipie.security.perms.UserPermissions;
+import com.auto1.pantera.api.perms.ApiRepositoryPermission;
+import com.auto1.pantera.api.perms.ApiSearchPermission;
+import com.auto1.pantera.db.DbManager;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.UserPermissions;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;

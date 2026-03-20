@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.misc.Json2Yaml;
-import com.artipie.misc.Yaml2Json;
-import com.artipie.settings.users.CrudRoles;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.misc.Json2Yaml;
+import com.auto1.pantera.misc.Yaml2Json;
+import com.auto1.pantera.settings.users.CrudRoles;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import javax.json.Json;

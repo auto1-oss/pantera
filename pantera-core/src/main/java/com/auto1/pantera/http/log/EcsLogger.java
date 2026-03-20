@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.log;
+package com.auto1.pantera.http.log;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;
@@ -21,21 +21,21 @@ import java.util.Map;
  * <p>Usage examples:
  * <pre>{@code
  * // Simple message
- * EcsLogger.info("com.artipie.maven")
+ * EcsLogger.info("com.auto1.pantera.maven")
  *     .message("Metadata rebuild queued")
  *     .field("package.group", "com.example")
  *     .field("package.name", "my-artifact")
  *     .log();
  * 
  * // With error
- * EcsLogger.error("com.artipie.npm")
+ * EcsLogger.error("com.auto1.pantera.npm")
  *     .message("Package processing failed")
  *     .error(exception)
  *     .field("package.name", packageName)
  *     .log();
  * 
  * // With event metadata
- * EcsLogger.warn("com.artipie.docker")
+ * EcsLogger.warn("com.auto1.pantera.docker")
  *     .message("Slow cache operation")
  *     .eventCategory("storage")
  *     .eventAction("cache_read")

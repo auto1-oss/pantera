@@ -7,4 +7,4 @@
  * Gem repository HTTP layer.
  * @since 1.0
  */
-package com.artipie.gem.http;
+package com.auto1.pantera.gem.http;

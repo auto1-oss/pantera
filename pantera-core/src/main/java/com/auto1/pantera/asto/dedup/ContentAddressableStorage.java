@@ -2,10 +2,10 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.dedup;
+package com.auto1.pantera.asto.dedup;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -74,7 +74,7 @@ public final class ContentAddressableStorage {
             if (exists) {
                 return CompletableFuture.completedFuture(null);
             }
-            return this.storage.save(blobKey, new com.artipie.asto.Content.From(content))
+            return this.storage.save(blobKey, new com.auto1.pantera.asto.Content.From(content))
                 .toCompletableFuture();
         });
     }

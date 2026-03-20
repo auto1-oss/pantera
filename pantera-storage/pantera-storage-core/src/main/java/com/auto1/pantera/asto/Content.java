@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto;
+package com.auto1.pantera.asto;
 
-import com.artipie.asto.log.EcsLogger;
+import com.auto1.pantera.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -161,7 +161,7 @@ public interface Content extends Publisher<ByteBuffer> {
                     try {
                         output.close();
                     } catch (final java.io.IOException ex) {
-                        EcsLogger.debug("com.artipie.asto")
+                        EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on error")
                             .error(ex)
                             .log();
@@ -172,7 +172,7 @@ public interface Content extends Publisher<ByteBuffer> {
                         output.close();
                         completed.set(true);
                     } catch (final java.io.IOException ex) {
-                        EcsLogger.debug("com.artipie.asto")
+                        EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Failed to close piped output stream on completion")
                             .error(ex)
                             .log();

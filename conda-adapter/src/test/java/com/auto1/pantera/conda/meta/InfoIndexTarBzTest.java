@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.conda.meta;
+package com.auto1.pantera.conda.meta;
 
-import com.artipie.asto.test.TestResource;
+import com.auto1.pantera.asto.test.TestResource;
 import java.io.IOException;
 import org.json.JSONException;
 import org.junit.jupiter.api.Test;

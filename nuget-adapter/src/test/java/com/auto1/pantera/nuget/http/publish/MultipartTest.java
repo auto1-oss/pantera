@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http.publish;
+package com.auto1.pantera.nuget.http.publish;
 
-import com.artipie.asto.Concatenation;
-import com.artipie.asto.Remaining;
-import com.artipie.http.Headers;
+import com.auto1.pantera.asto.Concatenation;
+import com.auto1.pantera.asto.Remaining;
+import com.auto1.pantera.http.Headers;
 import io.reactivex.Flowable;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;

@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api;
+package com.auto1.pantera.api;
 
-import com.artipie.api.perms.ApiSearchPermission;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.security.policy.Policy;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.api.perms.ApiSearchPermission;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.http.log.EcsLogger;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
@@ -172,7 +172,7 @@ public final class SearchRest extends BaseRest {
      * @param ctx Routing context
      */
     private void reindex(final RoutingContext ctx) {
-        EcsLogger.info("com.artipie.api")
+        EcsLogger.info("com.auto1.pantera.api")
             .message("Full reindex triggered via API")
             .eventCategory("search")
             .eventAction("reindex")

@@ -8,5 +8,5 @@
  *
  * @since 0.13
  */
-package com.artipie.http.headers;
+package com.auto1.pantera.http.headers;
 

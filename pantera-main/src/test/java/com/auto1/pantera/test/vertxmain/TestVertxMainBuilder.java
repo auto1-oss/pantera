@@ -2,15 +2,15 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.test.vertxmain;
+package com.auto1.pantera.test.vertxmain;
 
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlSequence;
 import com.amihaiemil.eoyaml.YamlSequenceBuilder;
-import com.artipie.VertxMain;
-import com.artipie.asto.test.TestResource;
-import com.artipie.http.client.RemoteConfig;
+import com.auto1.pantera.VertxMain;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.client.RemoteConfig;
 import org.junit.jupiter.api.Assertions;
 
 import java.io.IOException;

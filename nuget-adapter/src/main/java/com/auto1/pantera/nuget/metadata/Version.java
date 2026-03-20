@@ -3,7 +3,7 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget.metadata;
+package com.auto1.pantera.nuget.metadata;
 
 import java.util.Comparator;
 import java.util.Optional;

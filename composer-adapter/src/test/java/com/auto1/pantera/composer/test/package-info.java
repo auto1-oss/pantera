@@ -7,4 +7,4 @@
  * Package for auxiliary classes in test scope.
  * @since 0.4
  */
-package com.artipie.composer.test;
+package com.auto1.pantera.composer.test;

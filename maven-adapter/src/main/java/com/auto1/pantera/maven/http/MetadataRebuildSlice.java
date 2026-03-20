@@ -2,16 +2,16 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.maven.http;
+package com.auto1.pantera.maven.http;
 
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.http.Headers;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.trace.TraceContextExecutor;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -124,7 +124,7 @@ public final class MetadataRebuildSlice implements Slice {
      * @param uploadPath Path that was uploaded
      */
     private void rebuildMetadataAsync(final MavenCoords coords, final String uploadPath) {
-        EcsLogger.debug("com.artipie.maven")
+        EcsLogger.debug("com.auto1.pantera.maven")
             .message("Triggering metadata rebuild")
             .eventCategory("repository")
             .eventAction("metadata_rebuild_trigger")
@@ -147,7 +147,7 @@ public final class MetadataRebuildSlice implements Slice {
             try {
                 // Here you would call your metadata generator
                 // For now, just log the intention
-                EcsLogger.debug("com.artipie.maven")
+                EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Metadata rebuild queued")
                     .eventCategory("repository")
                     .eventAction("metadata_rebuild")
@@ -166,7 +166,7 @@ public final class MetadataRebuildSlice implements Slice {
 
             } catch (RuntimeException e) {  // NOPMD - Best-effort async, catch all
                 final long duration = System.currentTimeMillis() - startTime;
-                EcsLogger.warn("com.artipie.maven")
+                EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Metadata rebuild failed")
                     .eventCategory("repository")
                     .eventAction("metadata_rebuild")
@@ -184,10 +184,10 @@ public final class MetadataRebuildSlice implements Slice {
     }
 
     private void recordMetadataOperation(final String operation, final long duration) {
-        if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataOperation(this.repoName, "maven", operation);
-            com.artipie.metrics.MicrometerMetrics.getInstance()
+            com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordMetadataGenerationDuration(this.repoName, "maven", duration);
         }
     }

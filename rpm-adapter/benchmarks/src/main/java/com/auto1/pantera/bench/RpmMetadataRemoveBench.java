@@ -3,11 +3,11 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.bench;
+package com.auto1.pantera.bench;
 
-import com.artipie.asto.misc.UncheckedIOScalar;
-import com.artipie.rpm.RpmMetadata;
-import com.artipie.rpm.meta.XmlPackage;
+import com.auto1.pantera.asto.misc.UncheckedIOScalar;
+import com.auto1.pantera.rpm.RpmMetadata;
+import com.auto1.pantera.rpm.meta.XmlPackage;
 import com.google.common.collect.Lists;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -37,7 +37,7 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 /**
- * Benchmark for {@link com.artipie.rpm.RpmMetadata.Remove}.
+ * Benchmark for {@link com.auto1.pantera.rpm.RpmMetadata.Remove}.
  * @since 1.4
  */
 @BenchmarkMode(Mode.AverageTime)

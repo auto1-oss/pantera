@@ -3,13 +3,13 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.http.rq.multipart;
+package com.auto1.pantera.http.rq.multipart;
 
-import com.artipie.http.ArtipieHttpException;
-import com.artipie.http.Headers;
-import com.artipie.http.headers.ContentType;
-import com.artipie.http.headers.Header;
-import com.artipie.http.RsStatus;
+import com.auto1.pantera.http.ArtipieHttpException;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.RsStatus;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
 import io.reactivex.Single;

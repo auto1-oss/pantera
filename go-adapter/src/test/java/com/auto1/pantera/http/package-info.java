@@ -7,5 +7,5 @@
  * Go http layer tests.
  * @since 0.3
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 

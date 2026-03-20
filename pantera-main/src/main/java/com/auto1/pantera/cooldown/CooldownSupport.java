@@ -2,19 +2,19 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown;
+package com.auto1.pantera.cooldown;
 
-import com.artipie.cooldown.NoopCooldownService;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.metadata.CooldownMetadataService;
-import com.artipie.cooldown.metadata.CooldownMetadataServiceImpl;
-import com.artipie.cooldown.metadata.FilteredMetadataCache;
-import com.artipie.cooldown.metadata.FilteredMetadataCacheConfig;
-import com.artipie.cooldown.metadata.NoopCooldownMetadataService;
-import com.artipie.db.dao.SettingsDao;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.trace.TraceContextExecutor;
-import com.artipie.settings.Settings;
+import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
+import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
+import com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService;
+import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.settings.Settings;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -86,7 +86,7 @@ public final class CooldownSupport {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
                 // This ensures overrides saved via the UI survive container restarts.
                 loadDbCooldownSettings(settings.cooldown(), ds);
-                EcsLogger.info("com.artipie.cooldown")
+                EcsLogger.info("com.auto1.pantera.cooldown")
                     .message("Creating JdbcCooldownService (enabled: " + settings.cooldown().enabled() + ", min age: " + settings.cooldown().minimumAllowedAge().toString() + ")")
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
@@ -102,7 +102,7 @@ public final class CooldownSupport {
                 return (CooldownService) service;
             })
             .orElseGet(() -> {
-                EcsLogger.warn("com.artipie.cooldown")
+                EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("No artifacts database configured - using NoopCooldownService (cooldown disabled)")
                     .eventCategory("configuration")
                     .eventAction("cooldown_init")
@@ -135,13 +135,13 @@ public final class CooldownSupport {
         // Create metadata cache with configuration and Valkey L2 if available
         final FilteredMetadataCacheConfig cacheConfig = FilteredMetadataCacheConfig.getInstance();
         final FilteredMetadataCache metadataCache = 
-            com.artipie.cache.GlobalCacheConfig.valkeyConnection()
+            com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection()
                 .map(valkey -> new FilteredMetadataCache(cacheConfig, valkey))
                 .orElseGet(() -> new FilteredMetadataCache(cacheConfig, null));
         
-        EcsLogger.info("com.artipie.cooldown")
+        EcsLogger.info("com.auto1.pantera.cooldown")
             .message("Created CooldownMetadataService with config=" + cacheConfig + 
-                ", L2=" + (com.artipie.cache.GlobalCacheConfig.valkeyConnection().isPresent() ? "Valkey" : "none") +
+                ", L2=" + (com.auto1.pantera.cache.GlobalCacheConfig.valkeyConnection().isPresent() ? "Valkey" : "none") +
                 ", L2OnlyMode=" + metadataCache.isL2OnlyMode())
             .eventCategory("configuration")
             .eventAction("metadata_service_init")
@@ -196,14 +196,14 @@ public final class CooldownSupport {
                 }
             }
             csettings.update(enabled, minAge, overrides);
-            EcsLogger.info("com.artipie.cooldown")
+            EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Loaded cooldown settings from database (enabled: "
                     + enabled + ", overrides: " + overrides.size() + ")")
                 .eventCategory("configuration")
                 .eventAction("cooldown_db_load")
                 .log();
         } catch (final Exception ex) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to load cooldown settings from DB, using YAML defaults: "
                     + ex.getMessage())
                 .eventCategory("configuration")

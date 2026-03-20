@@ -3,31 +3,31 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.pypi.http;
+package com.auto1.pantera.pypi.http;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.asto.streams.ContentAsStream;
-import com.artipie.http.Headers;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.Response;
-import com.artipie.http.Slice;
-import com.artipie.http.headers.ContentDisposition;
-import com.artipie.http.headers.Login;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.http.rq.multipart.RqMultipart;
-import com.artipie.http.RsStatus;
-import com.artipie.http.slice.KeyFromPath;
-import com.artipie.pypi.NormalizedProjectName;
-import com.artipie.pypi.meta.Metadata;
-import com.artipie.pypi.meta.PackageInfo;
-import com.artipie.pypi.meta.ValidFilename;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.asto.rx.RxFuture;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.streams.ContentAsStream;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.ContentDisposition;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.multipart.RqMultipart;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.pypi.NormalizedProjectName;
+import com.auto1.pantera.pypi.meta.Metadata;
+import com.auto1.pantera.pypi.meta.PackageInfo;
+import com.auto1.pantera.pypi.meta.ValidFilename;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.rx.RxFuture;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
@@ -162,7 +162,7 @@ final class WheelSlice implements Slice {
                 }
             )
         ).doOnNext(
-            part -> EcsLogger.debug("com.artipie.pypi")
+            part -> EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("WS: multipart request body parsed, part found: " + part.toString())
                 .eventCategory("repository")
                 .eventAction("upload")
@@ -171,7 +171,7 @@ final class WheelSlice implements Slice {
             // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
             part -> RxFuture.single(
                 this.storage.save(temp, new Content.From(part))
-                    .thenRun(() -> EcsLogger.debug("com.artipie.pypi")
+                    .thenRun(() -> EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("WS: content saved to temp file")
                         .eventCategory("repository")
                         .eventAction("upload")

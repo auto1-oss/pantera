@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.proxy;
+package com.auto1.pantera.docker.proxy;
 
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.core.IsEqual;
 import org.junit.jupiter.api.AfterEach;

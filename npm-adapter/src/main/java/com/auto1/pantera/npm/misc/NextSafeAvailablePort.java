@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.npm.misc;
+package com.auto1.pantera.npm.misc;
 
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
@@ -90,7 +90,7 @@ public class NextSafeAvailablePort {
             dgrmsock.setReuseAddress(true);
             return true;
         } catch (final IOException ex) {
-            EcsLogger.debug("com.artipie.npm")
+            EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Port not available")
                 .error(ex)
                 .log();

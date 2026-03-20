@@ -8,4 +8,4 @@
  *
  * @since 0.3
  */
-package com.artipie.npm.http;
+package com.auto1.pantera.npm.http;

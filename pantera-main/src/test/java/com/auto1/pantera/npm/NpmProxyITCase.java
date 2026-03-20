@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.npm;
+package com.auto1.pantera.npm;
 
-import com.artipie.asto.test.TestResource;
-import com.artipie.test.ContainerResultMatcher;
-import com.artipie.test.TestDeployment;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
 import java.util.Arrays;
 import java.util.Map;
 import org.cactoos.map.MapEntry;
@@ -19,7 +19,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * Integration test for {@link com.artipie.npm.proxy.http.NpmProxySlice}.
+ * Integration test for {@link com.auto1.pantera.npm.proxy.http.NpmProxySlice}.
  * @since 0.13
  */
 @SuppressWarnings("PMD.AvoidDuplicateLiterals")

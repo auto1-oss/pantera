@@ -2,9 +2,9 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.nuget.http;
+package com.auto1.pantera.nuget.http;
 
-import com.artipie.nuget.http.index.Service;
+import com.auto1.pantera.nuget.http.index.Service;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Optional;

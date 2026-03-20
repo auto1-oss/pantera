@@ -8,4 +8,4 @@
  *
  * @since 0.15
  */
-package com.artipie.conda;
+package com.auto1.pantera.conda;

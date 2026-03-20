@@ -8,5 +8,5 @@
  *
  * @since 0.15
  */
-package com.artipie.asto.memory;
+package com.auto1.pantera.asto.memory;
 

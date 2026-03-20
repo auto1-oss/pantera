@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.importer;
+package com.auto1.pantera.importer;
 
-import com.artipie.ArtipieException;
-import com.artipie.asto.Content;
-import com.artipie.asto.Key;
-import com.artipie.asto.Meta;
-import com.artipie.asto.Storage;
-import com.artipie.importer.DigestingContent.DigestResult;
-import com.artipie.importer.api.ChecksumPolicy;
-import com.artipie.importer.api.DigestType;
-import com.artipie.http.ResponseBuilder;
-import com.artipie.http.ResponseException;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
-import com.artipie.settings.repo.RepoConfig;
-import com.artipie.settings.repo.Repositories;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.importer.DigestingContent.DigestResult;
+import com.auto1.pantera.importer.api.ChecksumPolicy;
+import com.auto1.pantera.importer.api.DigestType;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.ResponseException;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.settings.repo.Repositories;
 import com.amihaiemil.eoyaml.YamlMapping;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumMap;
@@ -163,7 +163,7 @@ public final class ImportService {
                 // Remove the duplicate scope
                 final String correctedTarball = scope + tarballPath.substring(duplicatePattern.length());
                 final String normalized = packagePrefix + "/-/" + correctedTarball;
-                EcsLogger.debug("com.artipie.importer")
+                EcsLogger.debug("com.auto1.pantera.importer")
                     .message("Normalized NPM path (removed duplicate)")
                     .eventCategory("repository")
                     .eventAction("import_normalize")
@@ -177,7 +177,7 @@ public final class ImportService {
             // Tarball is missing scope prefix, add it
             final String correctedTarball = scope + tarballPath;
             final String normalized = packagePrefix + "/-/" + correctedTarball;
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Normalized NPM path (added scope)")
                 .eventCategory("repository")
                 .eventAction("import_normalize")
@@ -233,7 +233,7 @@ public final class ImportService {
 
         if (session.status() == ImportSessionStatus.COMPLETED
             || session.status() == ImportSessionStatus.SKIPPED) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Import skipped (already completed, session: " + session.key() + ")")
                 .eventCategory("repository")
                 .eventAction("import_artifact")
@@ -251,7 +251,7 @@ public final class ImportService {
         }
 
         if (request.metadataOnly()) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Metadata-only import")
                 .eventCategory("repository")
                 .eventAction("import_artifact")
@@ -308,7 +308,7 @@ public final class ImportService {
                 // Configurable import timeout (default: 30 minutes)
                 .orTimeout(Long.getLong("artipie.import.timeout.seconds", 1800L), TimeUnit.SECONDS)
         ).toCompletableFuture().exceptionally(err -> {
-            EcsLogger.error("com.artipie.importer")
+            EcsLogger.error("com.auto1.pantera.importer")
                 .message("Import failed")
                 .eventCategory("repository")
                 .eventAction("import_artifact")
@@ -355,7 +355,7 @@ public final class ImportService {
 
         final Optional<String> mismatch = validate(request, size, computed, expected);
         if (mismatch.isPresent()) {
-            EcsLogger.warn("com.artipie.importer")
+            EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Checksum mismatch")
                 .eventCategory("repository")
                 .eventAction("import_artifact")
@@ -410,7 +410,7 @@ public final class ImportService {
                 // Always attempt cleanup regardless of move success/failure
                 cleanupStagingDir(storage, staging)
                     .exceptionally(cleanupErr -> {
-                        EcsLogger.debug("com.artipie.importer")
+                        EcsLogger.debug("com.auto1.pantera.importer")
                             .message("Post-import cleanup error (non-critical)")
                             .eventCategory("repository")
                             .eventAction("import_cleanup")
@@ -429,7 +429,7 @@ public final class ImportService {
                         final String type = request.repoType();
                         if (shards && isShardEligible(type)) {
                             if (MERGE_HINT_WARNED.compareAndSet(false, true)) {
-                                EcsLogger.warn("com.artipie.importer")
+                                EcsLogger.warn("com.auto1.pantera.importer")
                                     .message("Import shard mode enabled: remember to trigger metadata merge via POST /.merge/{repo} after imports")
                                     .eventCategory("repository")
                                     .eventAction("import_artifact")
@@ -438,7 +438,7 @@ public final class ImportService {
                             }
                             return writeShardsForImport(storage, target, request, size, toPersist, baseUrl)
                                 .exceptionally(err -> {
-                                    EcsLogger.warn("com.artipie.importer")
+                                    EcsLogger.warn("com.auto1.pantera.importer")
                                         .message("Shard write failed for repository '" + request.repo() + "' at key: " + target.string())
                                         .eventCategory("repository")
                                         .eventAction("import_shard_write")
@@ -468,7 +468,7 @@ public final class ImportService {
                             );
                             return regenerator.regenerate(target, request)
                                 .exceptionally(err -> {
-                                    EcsLogger.warn("com.artipie.importer")
+                                    EcsLogger.warn("com.auto1.pantera.importer")
                                         .message("Metadata regeneration failed for repository '" + request.repo() + "' at key: " + target.string())
                                         .eventCategory("repository")
                                         .eventAction("import_metadata_regenerate")
@@ -544,7 +544,7 @@ public final class ImportService {
         );
         final Key shardKey = new Key.From(".meta", "pypi", "shards", pkg, ver, file + ".json");
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+            .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [pypi]")
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -677,7 +677,7 @@ public final class ImportService {
             return storage.delete(parent)
                 .exceptionally(err -> {
                     // Ignore errors - directory might not be empty or already deleted
-                    EcsLogger.debug("com.artipie.importer")
+                    EcsLogger.debug("com.auto1.pantera.importer")
                         .message("Could not cleanup staging directory at key: " + parent.string())
                         .eventCategory("repository")
                         .eventAction("import_cleanup")
@@ -691,7 +691,7 @@ public final class ImportService {
                     if (stagingParent != null && ".import/staging".equals(stagingParent.string())) {
                         return storage.delete(stagingParent)
                             .exceptionally(err -> {
-                                EcsLogger.debug("com.artipie.importer")
+                                EcsLogger.debug("com.auto1.pantera.importer")
                                     .message("Could not cleanup .import/staging")
                                     .eventCategory("repository")
                                     .eventAction("import_cleanup")
@@ -705,7 +705,7 @@ public final class ImportService {
                                 if (importParent != null && ".import".equals(importParent.string())) {
                                     return storage.delete(importParent)
                                         .exceptionally(err -> {
-                                            EcsLogger.debug("com.artipie.importer")
+                                            EcsLogger.debug("com.auto1.pantera.importer")
                                                 .message("Could not cleanup .import")
                                                 .eventCategory("repository")
                                                 .eventAction("import_cleanup")
@@ -752,7 +752,7 @@ public final class ImportService {
      */
     private static Optional<Storage> rootStorage(final Storage storage) {
         try {
-            final Class<?> sub = Class.forName("com.artipie.asto.SubStorage");
+            final Class<?> sub = Class.forName("com.auto1.pantera.asto.SubStorage");
             if (sub.isInstance(storage)) {
                 final java.lang.reflect.Field origin = sub.getDeclaredField("origin");
                 origin.setAccessible(true);
@@ -792,7 +792,7 @@ public final class ImportService {
                 }
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Could not read metadata_merge_mode from settings")
                 .eventCategory("configuration")
                 .eventAction("settings_read")
@@ -904,7 +904,7 @@ public final class ImportService {
         final String path = target.string();
         // Skip maven-metadata.xml files - they should not be imported as artifacts
         if (path.contains("maven-metadata.xml")) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Skipping maven-metadata.xml file at path: " + path)
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -913,7 +913,7 @@ public final class ImportService {
         }
         final MavenCoords coords = inferMavenCoords(path, request.artifact().orElse(null), request.version().orElse(null));
         if (coords == null) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Could not infer Maven coords from path: " + path)
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -922,7 +922,7 @@ public final class ImportService {
                 .log();
             return CompletableFuture.completedFuture(null);
         }
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Inferred Maven coords")
             .eventCategory("repository")
             .eventAction("import_shard_write")
@@ -945,7 +945,7 @@ public final class ImportService {
         );
         // Include filename in shard path to avoid overwrites when multiple artifacts have same version
         final String filename = path.substring(path.lastIndexOf('/') + 1);
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Extracted filename '" + filename + "' from path: " + path)
             .eventCategory("repository")
             .eventAction("import_shard_write")
@@ -970,14 +970,14 @@ public final class ImportService {
         // Remove any empty parts that might have been added
         keyParts.removeIf(String::isEmpty);
         // Debug logging to identify empty parts
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Creating shard key (parts: " + keyParts.toString() + ")")
             .eventCategory("repository")
             .eventAction("import_shard_write")
             .log();
         final Key shardKey = new Key.From(keyParts.toArray(new String[0]));
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+            .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [maven]")
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -1024,7 +1024,7 @@ public final class ImportService {
             }
         }
         if (versionStart <= 0) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Could not parse Helm name/version")
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -1051,7 +1051,7 @@ public final class ImportService {
             name, version + ".json"
         );
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
-            .thenRun(() -> EcsLogger.info("com.artipie.importer")
+            .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [helm]")
                 .eventCategory("repository")
                 .eventAction("import_shard_write")
@@ -1069,7 +1069,7 @@ public final class ImportService {
         final String hdrArtifact,
         final String hdrVersion
     ) {
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("inferMavenCoords called")
             .eventCategory("repository")
             .eventAction("maven_coords_infer")
@@ -1081,7 +1081,7 @@ public final class ImportService {
         String normalizedPath = path;
         if (path.startsWith("/")) {
             normalizedPath = path.substring(1);
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Normalized path")
                 .eventCategory("repository")
                 .eventAction("maven_coords_infer")
@@ -1090,7 +1090,7 @@ public final class ImportService {
                 .log();
         }
         if (hdrArtifact != null && hdrVersion != null && !hdrVersion.isEmpty()) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Using headers for coordinates")
                 .eventCategory("repository")
                 .eventAction("maven_coords_infer")
@@ -1106,21 +1106,21 @@ public final class ImportService {
                 }
             }
         }
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Using path parsing fallback")
             .eventCategory("repository")
             .eventAction("maven_coords_infer")
             .log();
         // Fallback: .../{artifactId}/{version}/{file}
         final String[] segs = normalizedPath.split("/");
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Path segments")
             .eventCategory("repository")
             .eventAction("maven_coords_infer")
             .field("url.path", normalizedPath)
             .log();
         if (segs.length < 3) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Path has less than 3 segments, returning null")
                 .eventCategory("repository")
                 .eventAction("maven_coords_infer")
@@ -1136,7 +1136,7 @@ public final class ImportService {
         final String version = segs[segs.length - 2];
         final String artifactId = segs[segs.length - 3];
         final String groupPath = String.join("/", java.util.Arrays.copyOf(segs, segs.length - 3));
-        EcsLogger.debug("com.artipie.importer")
+        EcsLogger.debug("com.auto1.pantera.importer")
             .message("Parsed from path")
             .eventCategory("repository")
             .eventAction("maven_coords_infer")
@@ -1217,7 +1217,7 @@ public final class ImportService {
             }
             return Optional.of(raw);
         } catch (final IllegalArgumentException ex) {
-            EcsLogger.debug("com.artipie.importer")
+            EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Repository has no valid base URL")
                 .eventCategory("configuration")
                 .eventAction("base_url_resolve")

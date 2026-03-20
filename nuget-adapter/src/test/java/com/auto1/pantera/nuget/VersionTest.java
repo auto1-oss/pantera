@@ -3,9 +3,9 @@
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
 
-package com.artipie.nuget;
+package com.auto1.pantera.nuget;
 
-import com.artipie.nuget.metadata.Version;
+import com.auto1.pantera.nuget.metadata.Version;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;

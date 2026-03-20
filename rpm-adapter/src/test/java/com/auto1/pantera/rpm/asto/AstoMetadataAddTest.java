@@ -2,22 +2,22 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm.asto;
+package com.auto1.pantera.rpm.asto;
 
-import com.artipie.asto.Key;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.asto.test.TestResource;
-import com.artipie.rpm.Digest;
-import com.artipie.rpm.RepoConfig;
-import com.artipie.rpm.StandardNamingPolicy;
-import com.artipie.rpm.TestRpm;
-import com.artipie.rpm.hm.IsXmlEqual;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.pkg.FilePackage;
-import com.artipie.rpm.pkg.FilePackageHeader;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.RepoConfig;
+import com.auto1.pantera.rpm.StandardNamingPolicy;
+import com.auto1.pantera.rpm.TestRpm;
+import com.auto1.pantera.rpm.hm.IsXmlEqual;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.pkg.FilePackage;
+import com.auto1.pantera.rpm.pkg.FilePackageHeader;
+import com.auto1.pantera.rpm.pkg.Package;
 import com.jcabi.matchers.XhtmlMatchers;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

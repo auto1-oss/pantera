@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http;
+package com.auto1.pantera.http;
 
-import com.artipie.asto.Content;
-import com.artipie.http.rq.RequestLine;
-import com.artipie.misc.ArtipieProperties;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.misc.ArtipieProperties;
 
 import javax.json.Json;
 import java.util.concurrent.CompletableFuture;

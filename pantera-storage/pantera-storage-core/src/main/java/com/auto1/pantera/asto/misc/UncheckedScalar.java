@@ -2,12 +2,12 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.asto.misc;
+package com.auto1.pantera.asto.misc;
 
-import com.artipie.ArtipieException;
+import com.auto1.pantera.ArtipieException;
 
 /**
- * Scalar that throws {@link com.artipie.ArtipieException} on error.
+ * Scalar that throws {@link com.auto1.pantera.ArtipieException} on error.
  * @param <T> Return value type
  * @param <E> Error type
  * @since 1.3

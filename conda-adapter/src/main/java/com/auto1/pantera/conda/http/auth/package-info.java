@@ -8,4 +8,4 @@
  *
  * @since 0.5
  */
-package com.artipie.conda.http.auth;
+package com.auto1.pantera.conda.http.auth;

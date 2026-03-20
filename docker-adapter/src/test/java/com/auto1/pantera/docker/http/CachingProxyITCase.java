@@ -2,25 +2,25 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.http;
+package com.auto1.pantera.docker.http;
 
-import com.artipie.asto.memory.InMemoryStorage;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Docker;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.asto.AstoDocker;
-import com.artipie.docker.cache.CacheDocker;
-import com.artipie.docker.composite.MultiReadDocker;
-import com.artipie.docker.composite.ReadWriteDocker;
-import com.artipie.docker.junit.DockerClient;
-import com.artipie.docker.junit.DockerClientSupport;
-import com.artipie.docker.junit.DockerRepository;
-import com.artipie.docker.proxy.ProxyDocker;
-import com.artipie.http.client.HttpClientSettings;
-import com.artipie.http.client.auth.AuthClientSlice;
-import com.artipie.http.client.auth.GenericAuthenticator;
-import com.artipie.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.asto.AstoDocker;
+import com.auto1.pantera.docker.cache.CacheDocker;
+import com.auto1.pantera.docker.composite.MultiReadDocker;
+import com.auto1.pantera.docker.composite.ReadWriteDocker;
+import com.auto1.pantera.docker.junit.DockerClient;
+import com.auto1.pantera.docker.junit.DockerClientSupport;
+import com.auto1.pantera.docker.junit.DockerRepository;
+import com.auto1.pantera.docker.proxy.ProxyDocker;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
 import com.google.common.base.Stopwatch;
 import org.hamcrest.Matcher;
 import org.hamcrest.MatcherAssert;

@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker;
+package com.auto1.pantera.docker;
 
-import com.artipie.http.client.RemoteConfig;
-import com.artipie.http.misc.RandomFreePort;
-import com.artipie.test.TestDockerClient;
-import com.artipie.test.vertxmain.TestVertxMain;
-import com.artipie.test.vertxmain.TestVertxMainBuilder;
+import com.auto1.pantera.http.client.RemoteConfig;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.test.TestDockerClient;
+import com.auto1.pantera.test.vertxmain.TestVertxMain;
+import com.auto1.pantera.test.vertxmain.TestVertxMainBuilder;
 import io.vertx.core.Handler;
 import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.http.HttpServerRequest;

@@ -2,35 +2,35 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.api.v1;
+package com.auto1.pantera.api.v1;
 
-import com.artipie.api.ManageRepoSettings;
-import com.artipie.api.ManageRoles;
-import com.artipie.api.ManageUsers;
-import com.artipie.api.ssl.KeyStore;
-import com.artipie.asto.Storage;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.auth.JwtTokens;
-import com.artipie.cooldown.CooldownService;
-import com.artipie.cooldown.CooldownSupport;
-import com.artipie.db.dao.AuthProviderDao;
-import com.artipie.db.dao.RoleDao;
-import com.artipie.db.dao.RepositoryDao;
-import com.artipie.db.dao.StorageAliasDao;
-import com.artipie.db.dao.UserDao;
-import com.artipie.db.dao.UserTokenDao;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.index.ArtifactIndex;
-import com.artipie.scheduling.MetadataEventQueues;
-import com.artipie.security.policy.Policy;
-import com.artipie.settings.ArtipieSecurity;
-import com.artipie.settings.RepoData;
-import com.artipie.settings.Settings;
-import com.artipie.settings.cache.ArtipieCaches;
-import com.artipie.settings.repo.CrudRepoSettings;
-import com.artipie.settings.repo.DualCrudRepoSettings;
-import com.artipie.settings.users.CrudRoles;
-import com.artipie.settings.users.CrudUsers;
+import com.auto1.pantera.api.ManageRepoSettings;
+import com.auto1.pantera.api.ManageRoles;
+import com.auto1.pantera.api.ManageUsers;
+import com.auto1.pantera.api.ssl.KeyStore;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.auth.JwtTokens;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.RoleDao;
+import com.auto1.pantera.db.dao.RepositoryDao;
+import com.auto1.pantera.db.dao.StorageAliasDao;
+import com.auto1.pantera.db.dao.UserDao;
+import com.auto1.pantera.db.dao.UserTokenDao;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.scheduling.MetadataEventQueues;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.settings.ArtipieSecurity;
+import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.settings.Settings;
+import com.auto1.pantera.settings.cache.ArtipieCaches;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
+import com.auto1.pantera.settings.repo.DualCrudRepoSettings;
+import com.auto1.pantera.settings.users.CrudRoles;
+import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.WorkerExecutor;
 import io.vertx.core.http.HttpServer;
@@ -298,7 +298,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         server.requestHandler(router)
             .listen(this.port)
             .onComplete(
-                res -> EcsLogger.info("com.artipie.api.v1")
+                res -> EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("AsyncApiVerticle started")
                     .eventCategory("api")
                     .eventAction("server_start")
@@ -308,7 +308,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .log()
             )
             .onFailure(
-                err -> EcsLogger.error("com.artipie.api.v1")
+                err -> EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("Failed to start AsyncApiVerticle")
                     .eventCategory("api")
                     .eventAction("server_start")

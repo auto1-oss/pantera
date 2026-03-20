@@ -8,4 +8,4 @@
  *
  * @since 0.1
  */
-package com.artipie.asto.rx;
+package com.auto1.pantera.asto.rx;

@@ -2,30 +2,30 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.security.policy;
+package com.auto1.pantera.security.policy;
 
 import com.amihaiemil.eoyaml.Node;
 import com.amihaiemil.eoyaml.Yaml;
 import com.amihaiemil.eoyaml.YamlMapping;
 import com.amihaiemil.eoyaml.YamlNode;
 import com.amihaiemil.eoyaml.YamlSequence;
-import com.artipie.ArtipieException;
-import com.artipie.asto.Key;
-import com.artipie.asto.ValueNotFoundException;
-import com.artipie.asto.blocking.BlockingStorage;
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.asto.misc.UncheckedFunc;
-import com.artipie.asto.misc.UncheckedSupplier;
-import com.artipie.http.auth.AuthUser;
-import com.artipie.security.perms.EmptyPermissions;
-import com.artipie.security.perms.PermissionConfig;
-import com.artipie.security.perms.PermissionsLoader;
-import com.artipie.security.perms.User;
-import com.artipie.security.perms.UserPermissions;
-import com.artipie.cache.CacheConfig;
+import com.auto1.pantera.ArtipieException;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.ValueNotFoundException;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.asto.misc.UncheckedFunc;
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.security.perms.EmptyPermissions;
+import com.auto1.pantera.security.perms.PermissionConfig;
+import com.auto1.pantera.security.perms.PermissionsLoader;
+import com.auto1.pantera.security.perms.User;
+import com.auto1.pantera.security.perms.UserPermissions;
+import com.auto1.pantera.cache.CacheConfig;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.PermissionCollection;
@@ -213,7 +213,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             try {
                 return this.createUserPermissions(user).call();
             } catch (Exception err) {
-                EcsLogger.error("com.artipie.security")
+                EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to get user permissions")
                     .eventCategory("security")
                     .eventAction("permissions_get")
@@ -263,7 +263,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
                 res = CachedYamlPolicy.readPermissionsFromYaml(mapping);
             }
         } catch (final IOException | ValueNotFoundException err) {
-            EcsLogger.error("com.artipie.security")
+            EcsLogger.error("com.auto1.pantera.security")
                 .message("Failed to read/parse role permissions file")
                 .eventCategory("security")
                 .eventAction("role_permissions_read")
@@ -464,7 +464,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             try {
                 res = CachedYamlPolicy.readFile(asto, filename);
             } catch (final IOException | ValueNotFoundException err) {
-                EcsLogger.error("com.artipie.security")
+                EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to read or parse user file")
                     .eventCategory("security")
                     .eventAction("user_file_read")

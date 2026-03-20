@@ -2,11 +2,11 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.http.log;
+package com.auto1.pantera.http.log;
 
-import com.artipie.http.Headers;
-import com.artipie.http.RsStatus;
-import com.artipie.http.headers.Header;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.Header;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;
 import org.slf4j.MDC;

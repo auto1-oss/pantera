@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Blob;
-import com.artipie.docker.Digest;
-import com.artipie.docker.Layers;
-import com.artipie.docker.asto.BlobSource;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.Layers;
+import com.auto1.pantera.docker.asto.BlobSource;
 import io.reactivex.Flowable;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -251,9 +251,9 @@ final class CachingBlobTest {
      * using an InMemoryStorage.
      */
     private static final class CapturingLayers implements Layers {
-        final com.artipie.asto.memory.InMemoryStorage storage =
-            new com.artipie.asto.memory.InMemoryStorage();
-        final com.artipie.asto.Key key = new com.artipie.asto.Key.From("test");
+        final com.auto1.pantera.asto.memory.InMemoryStorage storage =
+            new com.auto1.pantera.asto.memory.InMemoryStorage();
+        final com.auto1.pantera.asto.Key key = new com.auto1.pantera.asto.Key.From("test");
         final AtomicReference<Content> savedContent = new AtomicReference<>();
 
         @Override

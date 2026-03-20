@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.cache;
+package com.auto1.pantera.docker.cache;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.Digest;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Repo;
-import com.artipie.docker.Tags;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.manifest.ManifestLayer;
-import com.artipie.docker.misc.ImageTag;
-import com.artipie.docker.misc.JoinedTagsSource;
-import com.artipie.docker.misc.Pagination;
-import com.artipie.http.log.EcsLogger;
-import com.artipie.scheduling.ArtifactEvent;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.manifest.ManifestLayer;
+import com.auto1.pantera.docker.misc.ImageTag;
+import com.auto1.pantera.docker.misc.JoinedTagsSource;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.scheduling.ArtifactEvent;
 import org.slf4j.MDC;
 
 import javax.json.Json;
@@ -128,7 +128,7 @@ public final class CacheManifests implements Manifests {
                 if (throwable == null) {
                     if (original.isPresent()) {
                         this.recordProxyMetric("success", duration);
-                        EcsLogger.info("com.artipie.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.proxy")
                             .message("CacheManifests origin returned manifest")
                             .eventCategory("repository")
                             .eventAction("cache_manifest_get")
@@ -147,7 +147,7 @@ public final class CacheManifests implements Manifests {
                             this.copy(ref, requestOwner);
                             result = CompletableFuture.completedFuture(original);
                         } else {
-                            EcsLogger.warn("com.artipie.docker")
+                            EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Cannot add manifest to cache")
                                 .eventCategory("repository")
                                 .eventAction("manifest_cache")
@@ -161,7 +161,7 @@ public final class CacheManifests implements Manifests {
                         }
                     } else {
                         this.recordProxyMetric("not_found", duration);
-                        EcsLogger.info("com.artipie.docker.proxy")
+                        EcsLogger.info("com.auto1.pantera.docker.proxy")
                             .message("CacheManifests origin returned empty, falling back to cache")
                             .eventCategory("repository")
                             .eventAction("cache_manifest_get")
@@ -177,7 +177,7 @@ public final class CacheManifests implements Manifests {
                 } else {
                     this.recordProxyMetric("exception", duration);
                     this.recordUpstreamErrorMetric(throwable);
-                    EcsLogger.error("com.artipie.docker")
+                    EcsLogger.error("com.auto1.pantera.docker")
                         .message("Failed getting manifest")
                         .eventCategory("repository")
                         .eventAction("manifest_get")
@@ -216,7 +216,7 @@ public final class CacheManifests implements Manifests {
             .handle(
                 (ignored, ex) -> {
                     if (ex != null) {
-                        EcsLogger.error("com.artipie.docker")
+                        EcsLogger.error("com.auto1.pantera.docker")
                             .message("Failed to cache manifest")
                             .eventCategory("repository")
                             .eventAction("manifest_cache")
@@ -250,7 +250,7 @@ public final class CacheManifests implements Manifests {
         final CompletionStage<Optional<Long>> release = needRelease
             ? this.releaseTimestamp(manifest)
                 .exceptionally(ex -> {
-                    EcsLogger.warn("com.artipie.docker")
+                    EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Failed to extract release timestamp")
                         .eventCategory("repository")
                         .eventAction("manifest_cache")
@@ -365,7 +365,7 @@ public final class CacheManifests implements Manifests {
                 return Optional.of(Instant.parse(created).toEpochMilli());
             }
         } catch (final DateTimeParseException | JsonException ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Unable to parse manifest config `created` field")
                 .eventCategory("repository")
                 .eventAction("manifest_cache")
@@ -415,8 +415,8 @@ public final class CacheManifests implements Manifests {
      */
     private void recordProxyMetric(final String result, final long duration) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordProxyRequest(this.rname, this.upstreamUrl, result, duration);
             }
         });
@@ -427,14 +427,14 @@ public final class CacheManifests implements Manifests {
      */
     private void recordUpstreamErrorMetric(final Throwable error) {
         this.recordMetric(() -> {
-            if (com.artipie.metrics.MicrometerMetrics.isInitialized()) {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
                 String errorType = "unknown";
                 if (error instanceof java.util.concurrent.TimeoutException) {
                     errorType = "timeout";
                 } else if (error instanceof java.net.ConnectException) {
                     errorType = "connection";
                 }
-                com.artipie.metrics.MicrometerMetrics.getInstance()
+                com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                     .recordUpstreamError(this.rname, this.upstreamUrl, errorType);
             }
         });
@@ -446,11 +446,11 @@ public final class CacheManifests implements Manifests {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void recordMetric(final Runnable metric) {
         try {
-            if (com.artipie.metrics.ArtipieMetrics.isEnabled()) {
+            if (com.auto1.pantera.metrics.ArtipieMetrics.isEnabled()) {
                 metric.run();
             }
         } catch (final Exception ex) {
-            EcsLogger.debug("com.artipie.docker")
+            EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to record metric")
                 .error(ex)
                 .log();

@@ -2,13 +2,13 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.settings.cache;
+package com.auto1.pantera.settings.cache;
 
-import com.artipie.asto.misc.Cleanable;
-import com.artipie.cache.StoragesCache;
-import com.artipie.security.policy.CachedDbPolicy;
-import com.artipie.security.policy.CachedYamlPolicy;
-import com.artipie.security.policy.Policy;
+import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.cache.StoragesCache;
+import com.auto1.pantera.security.policy.CachedDbPolicy;
+import com.auto1.pantera.security.policy.CachedYamlPolicy;
+import com.auto1.pantera.security.policy.Policy;
 
 /**
  * Encapsulates caches which are possible to use in settings of Artipie server.

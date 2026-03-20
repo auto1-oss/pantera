@@ -2,21 +2,21 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.rpm;
+package com.auto1.pantera.rpm;
 
-import com.artipie.asto.ArtipieIOException;
-import com.artipie.rpm.meta.MergedXml;
-import com.artipie.rpm.meta.MergedXmlPackage;
-import com.artipie.rpm.meta.MergedXmlPrimary;
-import com.artipie.rpm.meta.XmlAlter;
-import com.artipie.rpm.meta.XmlEvent;
-import com.artipie.rpm.meta.XmlEventPrimary;
-import com.artipie.rpm.meta.XmlMaid;
-import com.artipie.rpm.meta.XmlPackage;
-import com.artipie.rpm.meta.XmlPrimaryMaid;
-import com.artipie.rpm.pkg.Checksum;
-import com.artipie.rpm.pkg.FilePackage;
-import com.artipie.rpm.pkg.Package;
+import com.auto1.pantera.asto.ArtipieIOException;
+import com.auto1.pantera.rpm.meta.MergedXml;
+import com.auto1.pantera.rpm.meta.MergedXmlPackage;
+import com.auto1.pantera.rpm.meta.MergedXmlPrimary;
+import com.auto1.pantera.rpm.meta.XmlAlter;
+import com.auto1.pantera.rpm.meta.XmlEvent;
+import com.auto1.pantera.rpm.meta.XmlEventPrimary;
+import com.auto1.pantera.rpm.meta.XmlMaid;
+import com.auto1.pantera.rpm.meta.XmlPackage;
+import com.auto1.pantera.rpm.meta.XmlPrimaryMaid;
+import com.auto1.pantera.rpm.pkg.Checksum;
+import com.auto1.pantera.rpm.pkg.FilePackage;
+import com.auto1.pantera.rpm.pkg.Package;
 import com.fasterxml.aalto.AsyncXMLInputFactory;
 import com.fasterxml.aalto.stax.InputFactoryImpl;
 import com.fasterxml.aalto.stax.OutputFactoryImpl;

@@ -2,20 +2,20 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.docker.fake;
+package com.auto1.pantera.docker.fake;
 
-import com.artipie.asto.Content;
-import com.artipie.docker.ManifestReference;
-import com.artipie.docker.Manifests;
-import com.artipie.docker.Tags;
-import com.artipie.docker.manifest.Manifest;
-import com.artipie.docker.misc.Pagination;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Auxiliary class for tests for {@link com.artipie.docker.cache.CacheManifests}.
+ * Auxiliary class for tests for {@link com.auto1.pantera.docker.cache.CacheManifests}.
  */
 public final class FakeManifests implements Manifests {
 

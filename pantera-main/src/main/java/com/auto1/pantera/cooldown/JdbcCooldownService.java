@@ -2,7 +2,7 @@
  * The MIT License (MIT) Copyright (c) 2020-2023 artipie.com
  * https://github.com/artipie/artipie/blob/master/LICENSE.txt
  */
-package com.artipie.cooldown;
+package com.auto1.pantera.cooldown;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -15,8 +15,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-import com.artipie.cooldown.metrics.CooldownMetrics;
-import com.artipie.http.log.EcsLogger;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.log.EcsLogger;
 
 final class JdbcCooldownService implements CooldownService {
 
@@ -79,7 +79,7 @@ final class JdbcCooldownService implements CooldownService {
      */
     public void initializeMetrics() {
         if (!CooldownMetrics.isAvailable()) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("CooldownMetrics not available - metrics will not be initialized")
                 .eventCategory("cooldown")
                 .eventAction("metrics_init")
@@ -89,7 +89,7 @@ final class JdbcCooldownService implements CooldownService {
         // Eagerly get instance to ensure global gauges are registered even with 0 blocks
         final CooldownMetrics metrics = CooldownMetrics.getInstance();
         if (metrics == null) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("CooldownMetrics instance is null - metrics will not be initialized")
                 .eventCategory("cooldown")
                 .eventAction("metrics_init")
@@ -112,7 +112,7 @@ final class JdbcCooldownService implements CooldownService {
                 final long allBlocked = this.repository.countAllBlockedPackages();
                 metrics.setAllBlockedPackages(allBlocked);
 
-                EcsLogger.info("com.artipie.cooldown")
+                EcsLogger.info("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Initialized cooldown metrics from database: %d repositories, %d total blocks, %d all-blocked packages",
                         counts.size(), total, allBlocked))
@@ -120,7 +120,7 @@ final class JdbcCooldownService implements CooldownService {
                     .eventAction("metrics_init")
                     .log();
             } catch (Exception e) {
-                EcsLogger.error("com.artipie.cooldown")
+                EcsLogger.error("com.auto1.pantera.cooldown")
                     .message("Failed to initialize cooldown metrics")
                     .eventCategory("cooldown")
                     .eventAction("metrics_init")
@@ -173,7 +173,7 @@ final class JdbcCooldownService implements CooldownService {
     ) {
         // Check if cooldown is enabled for this repository type
         if (!this.settings.enabledFor(request.repoType())) {
-            EcsLogger.debug("com.artipie.cooldown")
+            EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("Cooldown disabled for repo type - allowing")
                 .eventCategory("cooldown")
                 .eventAction("evaluate")
@@ -187,7 +187,7 @@ final class JdbcCooldownService implements CooldownService {
         
         // Circuit breaker: Auto-allow if service is degraded
         if (!this.circuitBreaker.shouldEvaluate()) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Circuit breaker OPEN - auto-allowing artifact")
                 .eventCategory("cooldown")
                 .eventAction("evaluate")
@@ -198,7 +198,7 @@ final class JdbcCooldownService implements CooldownService {
             return CompletableFuture.completedFuture(CooldownResult.allowed());
         }
         
-        EcsLogger.debug("com.artipie.cooldown")
+        EcsLogger.debug("com.auto1.pantera.cooldown")
             .message("Evaluating cooldown for artifact")
             .eventCategory("cooldown")
             .eventAction("evaluate")
@@ -216,7 +216,7 @@ final class JdbcCooldownService implements CooldownService {
             () -> this.evaluateFromDatabase(request, inspector)
         ).thenCompose(blocked -> {
             if (blocked) {
-                EcsLogger.info("com.artipie.cooldown")
+                EcsLogger.info("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
                     .eventCategory("cooldown")
                     .eventAction("evaluate")
@@ -229,7 +229,7 @@ final class JdbcCooldownService implements CooldownService {
                 // Blocked: Fetch full block details from database (async)
                 return this.getBlockResult(request);
             } else {
-                EcsLogger.debug("com.artipie.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Artifact ALLOWED by cooldown")
                     .eventCategory("cooldown")
                     .eventAction("evaluate")
@@ -244,7 +244,7 @@ final class JdbcCooldownService implements CooldownService {
         }).whenComplete((result, error) -> {
             if (error != null) {
                 this.circuitBreaker.recordFailure();
-                EcsLogger.error("com.artipie.cooldown")
+                EcsLogger.error("com.auto1.pantera.cooldown")
                     .message("Cooldown evaluation failed")
                     .eventCategory("cooldown")
                     .eventAction("evaluate")
@@ -336,7 +336,7 @@ final class JdbcCooldownService implements CooldownService {
         }, this.executor).thenCompose(result -> {
             if (result.isPresent()) {
                 final BlockCacheEntry entry = result.get();
-                EcsLogger.debug("com.artipie.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message((entry.blocked ? "Database block found" : "Database no block") + " (blocked: " + entry.blocked + ")")
                     .eventCategory("cooldown")
                     .eventAction("db_check")
@@ -372,7 +372,7 @@ final class JdbcCooldownService implements CooldownService {
             );
             if (record.isPresent()) {
                 final DbBlockRecord rec = record.get();
-                EcsLogger.info("com.artipie.cooldown")
+                EcsLogger.info("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Block record found in database: status=%s, reason=%s, blockedAt=%s, blockedUntil=%s",
                         rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))
@@ -386,7 +386,7 @@ final class JdbcCooldownService implements CooldownService {
                     // Check if block has expired
                     final Instant now = Instant.now();
                     if (rec.blockedUntil().isBefore(now)) {
-                        EcsLogger.info("com.artipie.cooldown")
+                        EcsLogger.info("com.auto1.pantera.cooldown")
                             .message(String.format(
                                 "Block has EXPIRED - allowing artifact (blockedUntil=%s)",
                                 rec.blockedUntil()))
@@ -404,7 +404,7 @@ final class JdbcCooldownService implements CooldownService {
                     return CooldownResult.blocked(this.toCooldownBlock(rec));
                 }
             } else {
-                EcsLogger.warn("com.artipie.cooldown")
+                EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Cache said blocked but no DB record found - allowing")
                     .eventCategory("cooldown")
                     .eventAction("block_lookup")
@@ -474,7 +474,7 @@ final class JdbcCooldownService implements CooldownService {
         return inspector.releaseDate(request.artifact(), request.version())
             .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
             .exceptionally(error -> {
-                EcsLogger.warn("com.artipie.cooldown")
+                EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
                     .eventCategory("cooldown")
                     .eventAction("release_date_fetch")
@@ -506,7 +506,7 @@ final class JdbcCooldownService implements CooldownService {
         final Instant now = request.requestedAt();
         
         if (release.isEmpty()) {
-            EcsLogger.debug("com.artipie.cooldown")
+            EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("No release date found - allowing")
                 .eventCategory("cooldown")
                 .eventAction("evaluate")
@@ -525,7 +525,7 @@ final class JdbcCooldownService implements CooldownService {
         final Instant date = release.get();
         
         // Debug logging to diagnose blocking decisions
-        EcsLogger.info("com.artipie.cooldown")
+        EcsLogger.info("com.auto1.pantera.cooldown")
             .message(String.format(
                 "Evaluating freshness: cooldown=%s, release+cooldown=%s, requestTime=%s, isFresh=%s",
                 fresh, date.plus(fresh), now, date.plus(fresh).isAfter(now)))
@@ -539,7 +539,7 @@ final class JdbcCooldownService implements CooldownService {
         if (date.plus(fresh).isAfter(now)
             && !fresh.isZero() && !fresh.isNegative()) {
             final Instant until = date.plus(fresh);
-            EcsLogger.info("com.artipie.cooldown")
+            EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("BLOCKING artifact - too fresh (released: " + date.toString() + ", blocked until: " + until.toString() + ")")
                 .eventCategory("cooldown")
                 .eventAction("evaluate")
@@ -557,7 +557,7 @@ final class JdbcCooldownService implements CooldownService {
                     return true;
                 })
                 .exceptionally(error -> {
-                    EcsLogger.error("com.artipie.cooldown")
+                    EcsLogger.error("com.auto1.pantera.cooldown")
                         .message("Failed to create block (blocking anyway)")
                         .eventCategory("cooldown")
                         .eventAction("block_create")
@@ -573,7 +573,7 @@ final class JdbcCooldownService implements CooldownService {
                 });
         }
 
-        EcsLogger.debug("com.artipie.cooldown")
+        EcsLogger.debug("com.auto1.pantera.cooldown")
             .message("ALLOWING artifact - old enough")
             .eventCategory("cooldown")
             .eventAction("evaluate")
@@ -624,7 +624,7 @@ final class JdbcCooldownService implements CooldownService {
     }
 
     private void expire(final DbBlockRecord record, final Instant when) {
-        EcsLogger.info("com.artipie.cooldown")
+        EcsLogger.info("com.auto1.pantera.cooldown")
             .message("Deleting expired cooldown block")
             .eventCategory("cooldown")
             .eventAction("block_expired_delete")
@@ -654,7 +654,7 @@ final class JdbcCooldownService implements CooldownService {
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
         
         // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.artipie.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
             .invalidate(repoType, repoName, artifact, version);
     }
 
@@ -667,7 +667,7 @@ final class JdbcCooldownService implements CooldownService {
         // Log each active block before bulk delete
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         for (final DbBlockRecord record : blocks) {
-            EcsLogger.info("com.artipie.cooldown")
+            EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("Deleting unblocked cooldown block (bulk unblock-all)")
                 .eventCategory("cooldown")
                 .eventAction("block_unblocked_delete")
@@ -686,13 +686,13 @@ final class JdbcCooldownService implements CooldownService {
         // Single bulk DELETE instead of N individual updates
         final int count = this.repository.deleteActiveBlocksForRepo(repoType, repoName);
         // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.artipie.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
             .clearAll(repoType, repoName);
         return count;
     }
 
     private void release(final DbBlockRecord record, final String actor, final Instant when) {
-        EcsLogger.info("com.artipie.cooldown")
+        EcsLogger.info("com.auto1.pantera.cooldown")
             .message("Deleting unblocked cooldown block")
             .eventCategory("cooldown")
             .eventAction("block_unblocked_delete")
@@ -730,7 +730,7 @@ final class JdbcCooldownService implements CooldownService {
                 final boolean inserted = this.repository.markAllBlocked(repoType, repoName, artifact);
                 if (inserted && CooldownMetrics.isAvailable()) {
                     CooldownMetrics.getInstance().incrementAllBlocked();
-                    EcsLogger.debug("com.artipie.cooldown")
+                    EcsLogger.debug("com.auto1.pantera.cooldown")
                         .message("Marked package as all-blocked")
                         .eventCategory("cooldown")
                         .eventAction("all_blocked_mark")
@@ -740,7 +740,7 @@ final class JdbcCooldownService implements CooldownService {
                         .log();
                 }
             } catch (Exception e) {
-                EcsLogger.warn("com.artipie.cooldown")
+                EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to mark package as all-blocked")
                     .eventCategory("cooldown")
                     .eventAction("all_blocked_mark")
@@ -760,7 +760,7 @@ final class JdbcCooldownService implements CooldownService {
             final boolean wasBlocked = this.repository.unmarkAllBlocked(repoType, repoName, artifact);
             if (wasBlocked && CooldownMetrics.isAvailable()) {
                 CooldownMetrics.getInstance().decrementAllBlocked();
-                EcsLogger.debug("com.artipie.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Unmarked package as all-blocked")
                     .eventCategory("cooldown")
                     .eventAction("all_blocked_unmark")
@@ -770,7 +770,7 @@ final class JdbcCooldownService implements CooldownService {
                     .log();
             }
         } catch (Exception e) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to unmark package as all-blocked")
                 .eventCategory("cooldown")
                 .eventAction("all_blocked_unmark")
@@ -791,7 +791,7 @@ final class JdbcCooldownService implements CooldownService {
                 // Reload from database to ensure accuracy
                 final long newTotal = this.repository.countAllBlockedPackages();
                 CooldownMetrics.getInstance().setAllBlockedPackages(newTotal);
-                EcsLogger.debug("com.artipie.cooldown")
+                EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Unmarked all-blocked packages for repo: %d packages unmarked", count))
                     .eventCategory("cooldown")
@@ -801,7 +801,7 @@ final class JdbcCooldownService implements CooldownService {
                     .log();
             }
         } catch (Exception e) {
-            EcsLogger.warn("com.artipie.cooldown")
+            EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to unmark all-blocked packages for repo")
                 .eventCategory("cooldown")
                 .eventAction("all_blocked_unmark_all")

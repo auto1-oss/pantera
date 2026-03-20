@@ -8,4 +8,4 @@
  *
  * @since 0.2
  */
-package com.artipie.nuget.http.content;
+package com.auto1.pantera.nuget.http.content;
