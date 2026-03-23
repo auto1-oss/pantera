@@ -30,13 +30,7 @@ Covers the Vert.x HTTP layer, Slice pipeline, adapter modules, database schema, 
 
 ## Reference Documentation
 
-- [Configuration Reference](reference/configuration-reference.md) -- All YAML config keys, storage options, and repository settings.
-- [REST API Reference](reference/rest-api-reference.md) -- All API endpoints with request/response formats and curl examples.
+- [Configuration Reference](configuration-reference.md) -- All YAML config keys, storage options, and repository settings.
+- [REST API Reference](rest-api-reference.md) -- All API endpoints with request/response formats and curl examples.
 - [Environment Variables](admin-guide/environment-variables.md) -- Runtime configuration via environment variables.
-- [URL Routing Patterns](reference/url-routing.md) -- URL pattern support per repository type.
-- [npm CLI Compatibility](reference/npm-cli-compatibility.md) -- npm command support matrix across local, proxy, and group modes.
-
-## Additional Resources
-
-- [Changelog](reference/changelog.md)
-- [Release Notes](reference/release-notes/)
+- [Changelog](CHANGELOG.md) -- All releases with highlights, breaking changes, and migration notes.
