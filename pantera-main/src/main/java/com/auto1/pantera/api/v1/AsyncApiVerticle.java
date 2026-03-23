@@ -34,7 +34,6 @@ import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.cache.PanteraCaches;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
-import com.auto1.pantera.settings.repo.DualCrudRepoSettings;
 import com.auto1.pantera.settings.users.CrudRoles;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.AbstractVerticle;
@@ -69,6 +68,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
      * Application port.
      */
     private final int port;
+
+    /**
+     * Actual port the server is listening on (set after listen succeeds).
+     */
+    private volatile int actualPort = -1;
 
     /**
      * Pantera security.
@@ -171,6 +175,15 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         );
     }
 
+    /**
+     * Returns the actual port the server is listening on.
+     * Returns -1 if the server has not started yet.
+     * @return Actual port or -1
+     */
+    public int actualPort() {
+        return this.actualPort;
+    }
+
     @Override
     public void start() {
         final Router router = Router.router(this.vertx);
@@ -212,13 +225,13 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         );
         // Resolve DAO implementations
         final BlockingStorage asto = new BlockingStorage(this.configsStorage);
-        final ManageRepoSettings manageRepo = new ManageRepoSettings(asto);
         final CrudRepoSettings crs;
+        final ManageRepoSettings manageRepo;
         if (this.dataSource != null) {
-            crs = new DualCrudRepoSettings(
-                new RepositoryDao(this.dataSource), manageRepo
-            );
+            crs = new RepositoryDao(this.dataSource);
+            manageRepo = null;
         } else {
+            manageRepo = new ManageRepoSettings(asto);
             crs = manageRepo;
         }
         final CrudUsers users;
@@ -245,8 +258,17 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.dataSource != null ? new UserTokenDao(this.dataSource) : null
         );
         authHandler.register(router);
-        // JWT auth for all remaining /api/v1/* routes
-        router.route("/api/v1/*").handler(JWTAuthHandler.create(this.jwt));
+        // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth)
+        final io.vertx.ext.web.handler.AuthenticationHandler jwtHandler =
+            JWTAuthHandler.create(this.jwt);
+        router.route("/api/v1/*").handler(ctx -> {
+            // Skip JWT for download-direct — it authenticates via HMAC token in query param
+            if (ctx.request().path().contains("/artifact/download-direct")) {
+                ctx.next();
+            } else {
+                jwtHandler.handle(ctx);
+            }
+        });
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
         // Register all handler groups
@@ -289,7 +311,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
             final HttpServerOptions sslOptions = this.keystore.get()
                 .secureOptions(this.vertx, this.configsStorage);
-            sslOptions.setTcpNoDelay(true).setTcpKeepAlive(true).setIdleTimeout(60);
+            sslOptions
+                .setTcpNoDelay(true)
+                .setTcpKeepAlive(true)
+                .setIdleTimeout(60)
+                .setUseAlpn(true);
             server = this.vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
@@ -298,21 +324,26 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                     .setTcpNoDelay(true)
                     .setTcpKeepAlive(true)
                     .setIdleTimeout(60)
+                    .setUseAlpn(true)
+                    .setHttp2ClearTextEnabled(true)
             );
             schema = "http";
         }
         server.requestHandler(router)
             .listen(this.port)
-            .onComplete(
-                res -> EcsLogger.info("com.auto1.pantera.api.v1")
+            .onComplete(res -> {
+                if (res.succeeded()) {
+                    this.actualPort = res.result().actualPort();
+                }
+                EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("AsyncApiVerticle started")
                     .eventCategory("api")
                     .eventAction("server_start")
                     .eventOutcome("success")
-                    .field("url.port", this.port)
+                    .field("url.port", this.actualPort)
                     .field("url.scheme", schema)
-                    .log()
-            )
+                    .log();
+            })
             .onFailure(
                 err -> EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("Failed to start AsyncApiVerticle")

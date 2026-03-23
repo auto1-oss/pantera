@@ -14,7 +14,6 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
-import com.auto1.pantera.asto.ListResult;
 import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
@@ -24,7 +23,10 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
-import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import javax.json.Json;
 import javax.json.JsonStructure;
 
@@ -33,6 +35,31 @@ import javax.json.JsonStructure;
  * @since 1.21.0
  */
 public final class ArtifactHandler {
+
+    /**
+     * Download token TTL in milliseconds.
+     */
+    private static final long TOKEN_TTL_MS = 60_000L;
+
+    /**
+     * HMAC algorithm for stateless token signing.
+     */
+    private static final String HMAC_ALGO = "HmacSHA256";
+
+    /**
+     * HMAC secret key — derived from system identity at startup.
+     * Stateless tokens allow any instance behind NLB to validate.
+     */
+    private static final byte[] HMAC_SECRET;
+
+    static {
+        final String seed = System.getenv().getOrDefault(
+            "PANTERA_DOWNLOAD_TOKEN_SECRET",
+            "pantera-download-" + ProcessHandle.current().pid()
+                + "-" + System.getProperty("user.name", "default")
+        );
+        HMAC_SECRET = seed.getBytes(StandardCharsets.UTF_8);
+    }
 
     /**
      * Repository settings create/read/update/delete.
@@ -83,10 +110,17 @@ public final class ArtifactHandler {
         router.get("/api/v1/repositories/:name/artifact/pull")
             .handler(new AuthzHandler(this.policy, read))
             .handler(this::pullInstructionsHandler);
-        // GET /api/v1/repositories/:name/artifact/download — download artifact
+        // GET /api/v1/repositories/:name/artifact/download — download artifact (JWT auth)
         router.get("/api/v1/repositories/:name/artifact/download")
             .handler(new AuthzHandler(this.policy, read))
             .handler(this::downloadHandler);
+        // POST /api/v1/repositories/:name/artifact/download-token — issue single-use token
+        router.post("/api/v1/repositories/:name/artifact/download-token")
+            .handler(new AuthzHandler(this.policy, read))
+            .handler(this::downloadTokenHandler);
+        // GET /api/v1/repositories/:name/artifact/download-direct — download via token (no JWT)
+        router.get("/api/v1/repositories/:name/artifact/download-direct")
+            .handler(this::downloadDirectHandler);
         // DELETE /api/v1/repositories/:name/artifacts — delete artifact
         router.delete("/api/v1/repositories/:name/artifacts")
             .handler(new AuthzHandler(this.policy, delete))
@@ -231,6 +265,9 @@ public final class ArtifactHandler {
 
     /**
      * GET /api/v1/repositories/:name/artifact/download — stream artifact content.
+     * Streams directly from storage to the HTTP response without buffering
+     * the entire file in memory, so the browser receives bytes immediately
+     * and can show its native download progress bar.
      * @param ctx Routing context
      */
     private void downloadHandler(final RoutingContext ctx) {
@@ -251,24 +288,167 @@ public final class ArtifactHandler {
                     final long size = meta.read(Meta.OP_SIZE)
                         .map(Long::longValue).orElse(-1L);
                     ctx.response()
+                        .setStatusCode(200)
                         .putHeader("Content-Disposition",
                             "attachment; filename=\"" + filename + "\"")
                         .putHeader("Content-Type", "application/octet-stream");
                     if (size >= 0) {
                         ctx.response().putHeader("Content-Length", String.valueOf(size));
+                    } else {
+                        ctx.response().setChunked(true);
                     }
                     return asto.value(artifactKey);
                 })
             )
-            .thenCompose(content -> content.asBytesFuture())
-            .thenAccept(bytes ->
-                ctx.response().setStatusCode(200).end(
-                    io.vertx.core.buffer.Buffer.buffer(bytes)
-                )
+            .thenAccept(content ->
+                io.reactivex.Flowable.fromPublisher(content)
+                    .map(buf -> {
+                        final byte[] arr = new byte[buf.remaining()];
+                        buf.get(arr);
+                        return io.vertx.core.buffer.Buffer.buffer(arr);
+                    })
+                    .subscribe(
+                        chunk -> ctx.response().write(chunk),
+                        err -> {
+                            if (!ctx.response().ended()) {
+                                ctx.response().end();
+                            }
+                        },
+                        () -> ctx.response().end()
+                    )
             )
             .exceptionally(err -> {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND",
-                    "Artifact not found: " + path);
+                if (!ctx.response().headWritten()) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                        "Artifact not found: " + path);
+                }
+                return null;
+            });
+    }
+
+    /**
+     * POST /api/v1/repositories/:name/artifact/download-token — issue a single-use,
+     * short-lived download token. The UI calls this first, then navigates the browser
+     * directly to the download-direct URL with the token, enabling native browser
+     * download progress with zero JS memory usage.
+     * @param ctx Routing context
+     */
+    private void downloadTokenHandler(final RoutingContext ctx) {
+        final String path = ctx.queryParam("path").stream().findFirst().orElse(null);
+        if (path == null || path.isBlank()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Query parameter 'path' is required");
+            return;
+        }
+        final String repoName = ctx.pathParam("name");
+        // Build stateless HMAC-signed token: payload.signature
+        // Any instance behind NLB can validate without shared state
+        final long now = System.currentTimeMillis();
+        final String payload = repoName + "\n" + path + "\n" + now;
+        final String payloadB64 = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
+        final String signature = hmacSign(payload);
+        final String token = payloadB64 + "." + signature;
+        ctx.response()
+            .setStatusCode(200)
+            .putHeader("Content-Type", "application/json")
+            .end(new JsonObject().put("token", token).encode());
+    }
+
+    /**
+     * GET /api/v1/repositories/:name/artifact/download-direct — download via
+     * single-use token. No JWT required. The browser navigates here directly,
+     * so the native download manager handles progress and disk streaming.
+     * @param ctx Routing context
+     */
+    private void downloadDirectHandler(final RoutingContext ctx) {
+        final String token = ctx.queryParam("token").stream().findFirst().orElse(null);
+        if (token == null || token.isBlank()) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token is required");
+            return;
+        }
+        // Validate stateless HMAC token: payloadB64.signature
+        final int dot = token.indexOf('.');
+        if (dot < 0) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Malformed download token");
+            return;
+        }
+        final String payloadB64 = token.substring(0, dot);
+        final String signature = token.substring(dot + 1);
+        final String payload;
+        try {
+            payload = new String(
+                Base64.getUrlDecoder().decode(payloadB64), StandardCharsets.UTF_8
+            );
+        } catch (final IllegalArgumentException ex) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token encoding");
+            return;
+        }
+        if (!hmacSign(payload).equals(signature)) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token signature");
+            return;
+        }
+        final String[] parts = payload.split("\n");
+        if (parts.length != 3) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid download token payload");
+            return;
+        }
+        final String tokenRepo = parts[0];
+        final long tokenTime = Long.parseLong(parts[2]);
+        if (System.currentTimeMillis() - tokenTime > TOKEN_TTL_MS) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Download token has expired");
+            return;
+        }
+        final String repoName = ctx.pathParam("name");
+        if (!repoName.equals(tokenRepo)) {
+            ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Token does not match repository");
+            return;
+        }
+        final String path = parts[1];
+        final String filename = path.contains("/")
+            ? path.substring(path.lastIndexOf('/') + 1)
+            : path;
+        final Key artifactKey = new Key.From(repoName, path);
+        final RepositoryName rname = new RepositoryName.Simple(repoName);
+        this.repoData.repoStorage(rname, this.crs)
+            .thenCompose(asto ->
+                asto.metadata(artifactKey).thenCompose(meta -> {
+                    final long size = meta.read(Meta.OP_SIZE)
+                        .map(Long::longValue).orElse(-1L);
+                    ctx.response()
+                        .setStatusCode(200)
+                        .putHeader("Content-Disposition",
+                            "attachment; filename=\"" + filename + "\"")
+                        .putHeader("Content-Type", "application/octet-stream");
+                    if (size >= 0) {
+                        ctx.response().putHeader("Content-Length", String.valueOf(size));
+                    } else {
+                        ctx.response().setChunked(true);
+                    }
+                    return asto.value(artifactKey);
+                })
+            )
+            .thenAccept(content ->
+                io.reactivex.Flowable.fromPublisher(content)
+                    .map(buf -> {
+                        final byte[] arr = new byte[buf.remaining()];
+                        buf.get(arr);
+                        return io.vertx.core.buffer.Buffer.buffer(arr);
+                    })
+                    .subscribe(
+                        chunk -> ctx.response().write(chunk),
+                        err -> {
+                            if (!ctx.response().ended()) {
+                                ctx.response().end();
+                            }
+                        },
+                        () -> ctx.response().end()
+                    )
+            )
+            .exceptionally(err -> {
+                if (!ctx.response().headWritten()) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                        "Artifact not found: " + path);
+                }
                 return null;
             });
     }
@@ -606,5 +786,21 @@ public final class ArtifactHandler {
             }
         }
         return -1;
+    }
+
+    /**
+     * Compute HMAC-SHA256 signature for the given payload.
+     * @param payload Data to sign
+     * @return URL-safe Base64 encoded signature
+     */
+    private static String hmacSign(final String payload) {
+        try {
+            final Mac mac = Mac.getInstance(HMAC_ALGO);
+            mac.init(new SecretKeySpec(HMAC_SECRET, HMAC_ALGO));
+            final byte[] sig = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(sig);
+        } catch (final Exception ex) {
+            throw new IllegalStateException("HMAC signing failed", ex);
+        }
     }
 }

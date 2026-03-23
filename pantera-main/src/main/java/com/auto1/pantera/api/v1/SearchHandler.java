@@ -15,6 +15,7 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiSearchPermission;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -40,6 +41,33 @@ import org.eclipse.jetty.http.HttpStatus;
  * @since 1.21.0
  */
 public final class SearchHandler {
+
+    /**
+     * Maximum page number allowed for search pagination.
+     * Configurable via PANTERA_SEARCH_MAX_PAGE env var or settings API.
+     * Deep pagination with OFFSET is O(n) in PostgreSQL — capping prevents abuse.
+     */
+    private static final int MAX_PAGE = ConfigDefaults.getInt("PANTERA_SEARCH_MAX_PAGE", 500);
+
+    /**
+     * Maximum results per page.
+     */
+    private static final int MAX_SIZE = ConfigDefaults.getInt("PANTERA_SEARCH_MAX_SIZE", 100);
+
+    /**
+     * Default results per page.
+     */
+    private static final int DEFAULT_SIZE = 20;
+
+    /**
+     * Over-fetch multiplier for permission-filtered search. The DB query fetches
+     * {@code size * OVERFETCH_MULTIPLIER} rows so that after dropping rows the user
+     * has no access to, the requested page size can still be filled.
+     * Without this, a user with access to only one repo may see zero results when
+     * the top-ranked rows all belong to repos they cannot read.
+     */
+    private static final int OVERFETCH_MULTIPLIER =
+        ConfigDefaults.getInt("PANTERA_SEARCH_OVERFETCH", 10);
 
     /**
      * Artifact index.
@@ -87,6 +115,10 @@ public final class SearchHandler {
 
     /**
      * Paginated full-text search handler.
+     * Over-fetches from the index to compensate for post-query permission
+     * filtering. Without over-fetching, users with access to a small subset
+     * of repos may see empty results when the top-ranked rows all belong to
+     * repos they cannot read.
      * @param ctx Routing context
      */
     private void search(final RoutingContext ctx) {
@@ -101,16 +133,17 @@ public final class SearchHandler {
                     .encode());
             return;
         }
-        final int page = SearchHandler.intParam(ctx, "page", 0);
-        final int size = SearchHandler.intParam(ctx, "size", 20);
-        final int offset = page * size;
+        final int page = Math.min(SearchHandler.intParam(ctx, "page", 0), MAX_PAGE);
+        final int size = Math.min(SearchHandler.intParam(ctx, "size", DEFAULT_SIZE), MAX_SIZE);
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
                 ctx.user().principal().getString(AuthTokenRest.SUB),
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        this.index.search(query, size, offset).whenComplete((result, error) -> {
+        final int fetchSize = size * OVERFETCH_MULTIPLIER;
+        final int skip = page * size;
+        this.index.search(query, fetchSize, 0).whenComplete((result, error) -> {
             if (error != null) {
                 ctx.response()
                     .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
@@ -120,7 +153,7 @@ public final class SearchHandler {
                         .put("message", error.getMessage())
                         .encode());
             } else {
-                final JsonArray items = new JsonArray();
+                final java.util.List<JsonObject> allowed = new java.util.ArrayList<>();
                 result.documents().forEach(doc -> {
                     if (!perms.implies(
                         new AdapterBasicPermission(doc.repoName(), "read"))) {
@@ -143,8 +176,15 @@ public final class SearchHandler {
                     if (doc.owner() != null) {
                         obj.put("owner", doc.owner());
                     }
-                    items.add(obj);
+                    allowed.add(obj);
                 });
+                final int total = allowed.size();
+                final boolean hasMore = total > skip + size;
+                final JsonArray items = new JsonArray();
+                allowed.stream()
+                    .skip(skip)
+                    .limit(size)
+                    .forEach(items::add);
                 ctx.response()
                     .setStatusCode(HttpStatus.OK_200)
                     .putHeader("Content-Type", "application/json")
@@ -152,8 +192,8 @@ public final class SearchHandler {
                         .put("items", items)
                         .put("page", page)
                         .put("size", size)
-                        .put("total", items.size())
-                        .put("hasMore", false)
+                        .put("total", total)
+                        .put("hasMore", hasMore)
                         .encode());
             }
         });
