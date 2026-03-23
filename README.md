@@ -6,80 +6,35 @@
 
 <p align="center"><strong>Universal multi-format artifact registry built for enterprise teams.</strong></p>
 
+<p align="center">
+  <a href="docs/user-guide.md">User Guide</a> |
+  <a href="docs/developer-guide.md">Developer Guide</a> |
+  <a href="docs/configuration-reference.md">Configuration</a> |
+  <a href="docs/rest-api-reference.md">REST API</a> |
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
+
 Pantera is based on [Artipie](https://github.com/artipie/artipie), an open-source binary artifact management tool. The core repository patterns, adapter architecture, and storage abstractions originate from Artipie and its contributors. Pantera builds on this foundation with significant enhancements in security, caching, operational tooling, and a complete management UI.
 
-We gratefully acknowledge the Artipie project and community for their foundational work.
+## Key Features
 
----
-
-## Key Capabilities
-
-### Architecture & Infrastructure
-- **Comprehensive REST API** — 15+ endpoint handlers providing full programmatic access to all registry operations
-- **Enterprise management UI** — Vue.js application with dark theme, repository file browser, artifact search, operational dashboards, and permission-aware views
-- **PostgreSQL-backed persistence** — Settings, authorization policies, cooldown state, and artifact metadata stored in a unified relational model replacing file-based storage
-- **Valkey/Redis cache invalidation** — Distributed pub/sub layer for cache coherence across nodes
-- **Cluster event bus** — Multi-node state coordination and configuration propagation
-- **ECS-structured logging** — JSON logging with full request tracing and audit trail
-- **HTTP/2 support** — Via Vert.x server
-- **Backfill CLI** — Bulk re-indexing tool for existing repository artifacts into PostgreSQL
-- **Import CLI** — Migration tool for moving artifacts from external registries
-
-### Cooldown System
-- **Artifact freshness enforcement** — Blocks serving of recently-published proxy artifacts until a configurable age threshold is met
-- **Per-repository-type configuration** — Configurable durations with global defaults and override hierarchy
-- **Metadata-aware filtering** — Rewrites upstream package index responses (Maven `metadata.xml`, npm packument, PyPI simple API, Go module list, Helm `index.yaml`, Composer `packages.json`) to exclude blocked versions
-- **Automatic unblock** — All affected artifacts unblocked when cooldown is disabled globally or per repository type
-- **Circuit breaker** — Cooldown evaluation failures do not block artifact delivery
-- **Hot-reloadable configuration** — Changes via REST API take immediate effect without restart
-
-### Security & Authentication
-- **SSO/Okta integration** — OpenID Connect with group-to-role mapping
-- **JWT-based API tokens** — Configurable expiry and revocation
-- **Granular RBAC** — Separate read/create/update/delete/move permissions per resource type (repositories, users, roles, storage, cooldown, search)
-- **Domain-filtered authentication** — Different auth providers for different user domains
-- **Per-repository access scoping** — Users only see repositories and search results they have permissions for
-
-### Proxy & Caching
-- **Full OCI-compatible Docker proxy** — Proper authentication for ghcr.io, Docker Hub, and private registries with atomic blob caching (compare-and-set to prevent race conditions)
-- **Stream-through-cache** — Artifacts streamed directly to client while simultaneously written to cache, replacing save-then-serve for reduced first-request latency
-- **Content-encoding normalization** — Gzip/deflate/br stripping after Jetty auto-decode prevents corruption in cached responses
-- **Negative caching** — Configurable TTL for upstream failures
-- **Content-addressable deduplication** — Blob-level dedup across repositories
-- **Request retry** — Exponential backoff with jitter
-- **Request tracing** — Blocked-thread diagnostics
-
-### Group Repositories
-- **Maven group** — Intelligent `maven-metadata.xml` merging across members
-- **npm group** — Cross-member security audit aggregation
-- **Composer/PHP group** — Provider URL routing
-- **Docker group** — Manifest resolution across members
-- **Smart routing** — Group requests resolved using PostgreSQL artifact index rather than probing each member sequentially
-- **Configurable timeouts** — Per-member timeout for group resolution
-
-### Search & Discovery
-- **Full-text artifact search** — Across all repositories via PostgreSQL indexing
-- **Permission-scoped results** — Users only see artifacts from repositories they have access to
-- **Faceted filtering** — By repository type and repository name with result counts
-- **Artifact location API** — Find which repositories contain a specific artifact path
-- **Reindex API** — Trigger full or incremental index rebuilds
-- **Index statistics** — Monitoring endpoint for index health and coverage
-
-### Package Format Enhancements
-- **npm proxy** — Cooldown-aware packument filtering with security audit passthrough
-- **PyPI proxy** — Simple API metadata rewriting for version filtering
-- **Go proxy** — Module zip and version list filtering
-- **Composer proxy** — Per-package metadata processing with artifact size tracking
-- **Docker proxy** — Owner tracking fix with MDC context propagation across async boundaries
-
----
+- **15 package formats** in a single deployment with local, proxy, and group repository modes
+- **Enterprise management UI** with Vue.js dark-theme dashboard, file browser, and artifact search
+- **PostgreSQL-backed persistence** for settings, RBAC policies, artifact metadata, and full-text search
+- **Supply chain security** via configurable cooldown system that blocks freshly-published artifacts
+- **SSO integration** with Okta OIDC (MFA support) and Keycloak, plus JWT-as-Password for high-performance auth
+- **HA clustering** with Valkey pub/sub cache invalidation, PostgreSQL node registry, and shared S3 storage
+- **Stream-through caching** with request deduplication, negative cache (L1 Caffeine + L2 Valkey), and disk cache with LRU/LFU eviction
+- **Prometheus metrics** and ECS-structured JSON logging with Grafana dashboards
+- **REST API** with 15+ endpoint handlers for full programmatic access
 
 ## Supported Repository Types
 
 | Format | Local | Proxy | Group |
 |--------|:-----:|:-----:|:-----:|
 | Maven | x | x | x |
-| Gradle | x | x | x |
 | Docker (OCI) | x | x | x |
 | npm | x | x | x |
 | PyPI | x | x | x |
@@ -95,9 +50,12 @@ We gratefully acknowledge the Artipie project and community for their foundation
 | Conan | x | - | - |
 | Hex | x | - | - |
 
----
-
 ## Quick Start
+
+### Prerequisites
+
+- JDK 21+ and Maven 3.4+ (for building from source)
+- Docker and Docker Compose (for running)
 
 ### Build from source
 
@@ -111,6 +69,7 @@ mvn clean install -DskipTests
 
 ```bash
 cd pantera-main/docker-compose
+cp .env.example .env   # Edit with your settings
 docker compose up -d
 ```
 
@@ -118,17 +77,22 @@ This starts the full stack:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Nginx | `8081` (HTTP/HTTPS) | Reverse proxy for artifact access |
-| Pantera | `8080` (container) | Artifact repository port |
+| Nginx | `8081` / `8443` | Reverse proxy (HTTP/HTTPS) |
+| Pantera | `8088` (mapped from 8080) | Artifact repository |
 | API | `8086` | REST API |
 | UI | `8090` | Management interface |
 | PostgreSQL | `5432` | Metadata & settings database |
-| Valkey | `6379` | Distributed cache |
+| Valkey | `6379` | Distributed cache & pub/sub |
 | Keycloak | `8080` | Identity provider (SSO) |
 | Prometheus | `9090` | Metrics collection |
 | Grafana | `3000` | Monitoring dashboards |
 
----
+### Verify
+
+```bash
+curl http://localhost:8088/.health    # Health check
+curl http://localhost:8088/.version   # Version info
+```
 
 ## Configuration
 
@@ -140,23 +104,57 @@ meta:
     type: fs
     path: /var/pantera/data
   credentials:
-    - type: artipie
-      priority: 1
-  database:
-    url: jdbc:postgresql://localhost:5432/artifacts
-    username: pantera
-    password: secret
+    - type: local
+      storage:
+        type: fs
+        path: /var/pantera/security
+  policy:
+    type: pantera
+    storage:
+      type: fs
+      path: /var/pantera/security
+  artifacts_database:
+    postgres_host: localhost
+    postgres_port: 5432
+    postgres_database: artifacts
+    postgres_user: pantera
+    postgres_password: ${POSTGRES_PASSWORD}
+  jwt:
+    secret: ${JWT_SECRET}
+    expires: true
+    expiry-seconds: 86400
 ```
 
-See the [documentation](docs/) for complete configuration reference.
+See the [Configuration Reference](docs/configuration-reference.md) for all options.
 
----
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [User Guide](docs/user-guide.md) | Installation, configuration, repository setup, auth, monitoring, troubleshooting |
+| [Developer Guide](docs/developer-guide.md) | Architecture, codebase map, adding features, testing, debugging |
+| [Configuration Reference](docs/configuration-reference.md) | Complete reference for all YAML config, environment variables, and CLI options |
+| [REST API Reference](docs/rest-api-reference.md) | All API endpoints with examples |
+| [Contributing](CONTRIBUTING.md) | How to contribute, build, test, and submit PRs |
+| [Code Standards](CODE_STANDARDS.md) | Coding conventions, style rules, testing patterns |
+| [Release Notes v1.21.0](docs/RELEASE-NOTES-v1.21.0.md) | Major release with performance improvements and HA clustering |
+| [Changelog](docs/CHANGELOG-AUTO1.md) | Auto1 fork changelog |
+
+### Additional References
+
+| Document | Description |
+|----------|-------------|
+| [Okta OIDC Integration](docs/OKTA_OIDC_INTEGRATION.md) | Okta SSO setup with MFA support |
+| [NPM CLI Compatibility](docs/NPM_CLI_COMPATIBILITY.md) | NPM command support matrix across repository types |
+| [S3 Storage Tuning](docs/s3-optimizations/README.md) | S3 multipart, parallel download, disk cache configuration |
+| [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain security cooldown architecture |
+| [Import API](docs/global-import-api.md) | Bulk artifact import endpoint |
+| [API Routing](docs/API_ROUTING.md) | URL pattern support per repository type |
+| [Logging Configuration](docs/LOGGING_CONFIGURATION.md) | Log4j2 external configuration and hot-reload |
 
 ## Attribution
 
 Pantera is based on [Artipie](https://github.com/artipie/artipie) by the Artipie contributors, originally licensed under the MIT License. The core repository adapter patterns, storage abstraction layer, and HTTP slice architecture originate from the Artipie project. We thank the Artipie community for building the foundation that Pantera extends.
-
----
 
 ## License
 

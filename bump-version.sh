@@ -3,6 +3,15 @@
 
 set -e
 
+# Platform-aware sed -i (macOS requires '' arg, GNU/Linux does not)
+sedi() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
 if [ -z "$1" ]; then
     echo "Usage: ./bump-version.sh <new-version>"
     echo "Example: ./bump-version.sh 1.1.0"
@@ -37,42 +46,28 @@ fi
 
 # 1b. Manually update build-tools (standalone module without parent)
 echo "   Updating build-tools (standalone module)..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|<version>$OLD_VERSION</version>|<version>$NEW_VERSION</version>|" build-tools/pom.xml
-else
-    sed -i "s|<version>$OLD_VERSION</version>|<version>$NEW_VERSION</version>|" build-tools/pom.xml
-fi
-
+sedi "s|<version>$OLD_VERSION</version>|<version>$NEW_VERSION</version>|" build-tools/pom.xml
 echo "   ✅ Updated all Maven modules"
 
 # 2. Update docker-compose image tag
 echo "2. Updating docker-compose.yaml (image tag)..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|auto1-pantera:$OLD_VERSION|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
-else
-    sed -i "s|auto1-pantera:$OLD_VERSION|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
-fi
+sedi "s|auto1-pantera:$OLD_VERSION|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
 
 # 3. Update docker-compose environment variable (now in .env file)
 echo "3. Updating .env and .env.example (PANTERA_VERSION)..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
-    sed -i '' "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
-else
-    sed -i "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
-    sed -i "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
-fi
-
+sedi "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
+sedi "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
 echo "   ✅ Updated .env and .env.example"
 
 # 4. Update Dockerfile PANTERA_VERSION
 echo "4. Updating Dockerfile (PANTERA_VERSION)..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s|ENV PANTERA_VERSION=$OLD_VERSION|ENV PANTERA_VERSION=$NEW_VERSION|" pantera-main/Dockerfile
-else
-    sed -i "s|ENV PANTERA_VERSION=$OLD_VERSION|ENV PANTERA_VERSION=$NEW_VERSION|" pantera-main/Dockerfile
-fi
+sedi "s|ENV PANTERA_VERSION=$OLD_VERSION|ENV PANTERA_VERSION=$NEW_VERSION|" pantera-main/Dockerfile
 echo "   ✅ Updated Dockerfile"
+
+# 5. Update pantera-ui package.json version
+echo "5. Updating pantera-ui/package.json..."
+sedi "s|\"version\": \"$OLD_VERSION\"|\"version\": \"$NEW_VERSION\"|" pantera-ui/package.json
+echo "   ✅ Updated pantera-ui"
 
 echo ""
 echo "✅ Version bumped successfully!"
@@ -83,11 +78,14 @@ echo "  - docker-compose.yaml: image tag updated"
 echo "  - .env: PANTERA_VERSION updated"
 echo "  - .env.example: PANTERA_VERSION updated"
 echo "  - Dockerfile: PANTERA_VERSION updated"
+echo "  - pantera-ui/package.json: version updated"
 echo ""
 echo "Verification:"
 echo "  - Parent version:  $(grep -m 1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
 echo "  - Build-tools:     $(grep -m 1 '<version>' build-tools/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
 echo "  - Pantera-main:    $(grep -m 1 '<version>' pantera-main/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
+echo "  - Pantera-ui:      $(grep '\"version\"' pantera-ui/package.json | sed 's/.*\"\([0-9].*\)\".*/\1/')"
+echo "  - Dockerfile:      $(grep 'PANTERA_VERSION=' pantera-main/Dockerfile | sed 's/.*=//')"
 echo ""
 echo "Next steps:"
 echo "  1. Review changes:  git diff pom.xml */pom.xml"

@@ -1,11 +1,12 @@
 FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE
-ARG APM_VERSION=1.55.3
+ARG APM_VERSION=1.55.4
 
 # Install curl for downloading Elastic APM agent + jattach for programmatic attachment (jmap + jstack + jcmd + jinfo)
 RUN apk add --no-cache curl jattach
 
-ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
+ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=300 \
+  -XX:G1HeapRegionSize=16m \
   -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled \
   -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 \
   -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError \
@@ -13,6 +14,7 @@ ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=200 \
   -Xlog:gc*:file=/var/pantera/logs/gc.log:time,uptime:filecount=5,filesize=100m \
   -Djava.io.tmpdir=/var/pantera/cache/tmp \
   -Dvertx.cacheDirBase=/var/pantera/cache/tmp \
+  -Dio.netty.allocator.maxOrder=11 \
   -Dio.netty.leakDetection.level=simple"
 
 
@@ -25,7 +27,7 @@ RUN addgroup -g 2020 -S pantera && \
     chown pantera:pantera /opt/apm/elastic-apm-agent.jar
 
 ENV TMPDIR=/var/pantera/cache/tmp
-ENV PANTERA_VERSION=1.22.0
+ENV PANTERA_VERSION=2.0.0
 
 USER 2021:2020
 

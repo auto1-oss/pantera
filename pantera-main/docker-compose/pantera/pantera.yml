@@ -33,9 +33,10 @@ meta:
       scope: "openid email profile groups"
       groups-claim: "groups"
       group-roles:
-        "pantera_readers": "reader"
+         - pantera_readers: "reader"
+         - pantera_admins: "admin"
       user-domains:
-        - "@test.local"
+        - "@auto1.local"
   
   policy:
     type: pantera
@@ -56,7 +57,7 @@ meta:
   artifacts_database:
     postgres_host: "pantera-db"
     postgres_port: 5432
-    postgres_database: artifacts
+    postgres_database: pantera
     postgres_user: ${POSTGRES_USER}
     postgres_password: ${POSTGRES_PASSWORD}
     pool_max_size: 50

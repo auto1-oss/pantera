@@ -18,16 +18,16 @@ classes/
 .settings/
 .storage/data/**
 .storage/data/test/**
-artipie-main/docker-compose/artipie/data/**
-artipie-main/docker-compose/artipie/prod_repo/**
-artipie-main/docker-compose/artipie/artifacts/npm/node_modules/**
-artipie-main/docker-compose/artipie/cache/**
-artipie-main/docker-compose/artipie/artifacts/php/vendor/**
+pantera-main/docker-compose/pantera/data/**
+pantera-main/docker-compose/pantera/prod_repo/**
+pantera-main/docker-compose/pantera/artifacts/npm/node_modules/**
+pantera-main/docker-compose/pantera/cache/**
+pantera-main/docker-compose/pantera/artifacts/php/vendor/**
 
 # Environment files with secrets - never commit these!
 .env
 !.env.example
-artipie-main/docker-compose/.env
+pantera-main/docker-compose/.env
 
 # AI agent task/analysis documents - not part of product documentation
 agents/
@@ -41,5 +41,10 @@ agents/
 *.csv
 *.png
 /.superpowers
-/artipie-ui/mockups
-artipie-backfill/dependency-reduced-pom.xml
+/pantera-ui/mockups
+pantera-backfill/dependency-reduced-pom.xml
+/benchmark/isolated/results
+pantera-main/docker-compose/pantera/artifacts/npm/package-lock.json
+pantera-main/docker-compose/pantera/artifacts/php/composer.lock
+/pantera-main/docker-compose/pantera/security
+/pantera-main/docker-compose/pantera/security

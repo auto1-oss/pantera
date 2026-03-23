@@ -1,185 +1,246 @@
-To contribute to Artipie project you need JDK-11 and Maven 3.2+.
-Some integration tests requires Docker to be installed.
+# Contributing to Pantera
 
+Thank you for your interest in contributing to **Pantera Artifact Registry** by Auto1 Group.
+This document covers everything you need to get started, from environment setup through
+submitting a pull request.
 
-## How to contribute
+---
 
-Fork the repository, make changes, and send us a
-[pull request (PR)](#pull-request-style). We will review
-your changes and apply them to the `master` branch shortly, provided
-they don't violate our quality standards. To avoid frustration, before
-sending us your pull request please run full Maven build:
+## Prerequisites
 
+| Tool   | Minimum Version | Notes                                              |
+|--------|----------------:|------------------------------------------------------|
+| JDK    |            21+  | OpenJDK or Eclipse Temurin recommended               |
+| Maven  |           3.4+  | Enforced by `maven-enforcer-plugin`                  |
+| Docker |        latest   | Required for integration tests (TestContainers)      |
+| Git    |        latest   | For version control                                  |
+
+---
+
+## Project Setup
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/auto1-oss/pantera.git
+cd pantera
 ```
+
+### 2. Build the project
+
+```bash
 mvn clean verify
 ```
 
-After submitting pull-request check CI status checks. If any check with "required" label fails,
-pull-request will not be merged.
+### 3. IDE setup
 
+**IntelliJ IDEA (recommended)**
 
-## How to run it locally
+- Import as a Maven project (`File > Open > pom.xml`).
+- Set Project SDK to JDK 21.
+- Enable annotation processing if prompted.
+- The multi-module structure will be auto-detected from the root `pom.xml`.
 
-If you want to run Artipie locally from IntelliJ Idea directly:
-- check `example` directory with example configuration in main resources folder, change paths in the configuration 
-in accordance with your local environment; 
-- add `--config-file` parameter into run configuration pointing to `<local-full-path>/example/artipie.yaml`
+**VS Code**
 
-See logs to check running repositories, Swagger Rest API documentation URL and test user credentials.
+- Install the "Extension Pack for Java" and "Maven for Java" extensions.
+- Open the project root folder.
 
-Also, you can run [Artipie from fat jar](https://github.com/artipie/artipie/wiki#how-to-start-artipie-service-with-a-maven-proxy-repository) 
-and [docker container](https://github.com/artipie/artipie#quickstart).
+---
 
+## Development Workflow
 
-### Testing
+1. **Fork** the repository on GitHub.
+2. **Create a feature branch** from `master`.
+3. **Make changes** -- write code, add tests.
+4. **Run tests** locally (see [Testing Requirements](#testing-requirements)).
+5. **Commit** using [Conventional Commits](#commit-messages).
+6. **Push** your branch and open a **Pull Request**.
 
-This is a build and test pipeline for artipie main assembly verification:
- 1. Unit testing (can be run with `mvn test`): it runs all unit tests. The unit test should not depend on any external component. The testing framework is a Junit5, Maven plugin is Surefire.
- 2. Packaging (`mvn package`) - copy all dependencies into `target/dependency` directory and produce `artipie.jav` file. Then create Docker image based on dependencies and jar file, docker reuses cached layers if dependencies didn't change. It uses `docker-build` Maven profile activated by default if `/var/run/docker.sock` file exists.
- 3. Integration testing (`mvn verify`) - it runs all integration tests against actual docker image of artipie. Maven ensures that the image is up to date and can be accessed by `artipie/artipie:1.0-SNAPSHOT` tag. We use Junit5 as a test framework, Failsafe maven plugin and Testcontainers for running Dockers.
- 4. Smoke tests (`examples/run.sh`) - start preconfigured Artipie Docker container, attach data volumes and connect test network, then run small Docker-based test scripts withing same network against Artipie server. The server could be accessed via `artipie.artipie:8080` address.
- 5. Deploy (`mvn deploy`) - uploading Docker image to registry.
+---
 
-## Code style
+## Building
 
-Code style is enforced by "pmd-maven-plugin" Maven plugin which applies project PMD rule set.
+### Full build (compile + test + static analysis + license check)
 
-There are some additional recommendation for code style which are not covered by automatic checks:
+```bash
+mvn clean verify
+```
 
-1. Prefer Hamcrest matchers objects instead of static methods in unit tests:
+### Fast build (skip tests and PMD)
+
+```bash
+mvn install -DskipTests -Dpmd.skip=true
+```
+
+### Multi-threaded build
+
+```bash
+mvn clean install -U -DskipTests -T 1C
+```
+
+### Single module build
+
+Build a single module (and its dependencies) from the project root:
+
+```bash
+mvn install -pl maven-adapter -am -DskipTests
+```
+
+Replace `maven-adapter` with the target module name.
+
+---
+
+## Running Locally
+
+### Docker Compose
+
+The full local stack (Pantera, PostgreSQL, Keycloak, Valkey, Prometheus, Grafana, Nginx) can
+be started with Docker Compose:
+
+```bash
+cd pantera-main/docker-compose
+docker compose up -d
+```
+
+Default ports:
+
+| Service      | Port  |
+|--------------|------:|
+| Pantera API  | 8086  |
+| Pantera UI   | 8090  |
+| Keycloak     | 8080  |
+| PostgreSQL   | 5432  |
+| Valkey       | 6379  |
+| Prometheus   | 9090  |
+| Grafana      | 3000  |
+| Nginx (HTTP) | 8081  |
+| Nginx (HTTPS)| 8443  |
+
+### Direct execution
+
+For running Pantera directly from IntelliJ IDEA or the command line:
+
+1. Review the example configuration in `pantera-main/examples/pantera.yml` and adjust
+   paths for your local environment.
+2. Add the `--config-file` parameter pointing to your configuration file.
+
+```bash
+java -cp pantera.jar:lib/* \
+  com.auto1.pantera.VertxMain \
+  --config-file=/path/to/pantera.yml \
+  --port=8080 \
+  --api-port=8086
+```
+
+Check the logs for running repositories, REST API URL, and test user credentials.
+
+---
+
+## Testing Requirements
+
+### Unit tests
+
+```bash
+mvn test
+```
+
+- Run by **maven-surefire-plugin**.
+- Must not depend on any external component (no Docker, no network, no database).
+- Test classes must be named `*Test.java`.
+
+### Integration tests
+
+```bash
+mvn verify -Pitcase
+```
+
+- Run by **maven-failsafe-plugin** under the `itcase` profile.
+- Require Docker (tests use TestContainers).
+- Test classes must be named `*IT.java` or `*ITCase.java`.
+
+### Database tests
+
+- Automatically provision a PostgreSQL instance via TestContainers.
+- No manual database setup is required.
+
+### Valkey tests
+
+- Gated by the `VALKEY_HOST` environment variable.
+- Tests are annotated with `@EnabledIfEnvironmentVariable(named = "VALKEY_HOST", matches = ".+")`.
+- To run locally, set `VALKEY_HOST` to point to a running Valkey instance:
+
+```bash
+VALKEY_HOST=localhost mvn test -pl pantera-core
+```
+
+### Test naming conventions
+
+| Pattern          | Plugin     | Purpose             |
+|------------------|------------|---------------------|
+| `*Test.java`     | Surefire   | Unit tests          |
+| `*IT.java`       | Failsafe   | Integration tests   |
+| `*ITCase.java`   | Failsafe   | Integration tests   |
+
+---
+
+## Code Style
+
+### PMD static analysis
+
+Code style is enforced by `maven-pmd-plugin` using the project ruleset at
+`build-tools/src/main/resources/pmd-ruleset.xml`. The build fails on any PMD violation.
+
+Key PMD rules include:
+
+- Cyclomatic complexity limit per method: 15.
+- Cognitive complexity limit: 17.
+- Public static methods are prohibited (except `main`).
+- Only one constructor should perform field initialization; others must delegate.
+
+### License header
+
+Every Java source file must include the GPL-3.0 license header defined in `LICENSE.header`.
+The `license-maven-plugin` checks this during the `verify` phase. To add missing headers:
+
+```bash
+mvn license:format
+```
+
+### Hamcrest matchers
+
+Prefer matcher **objects** over static factory methods:
+
 ```java
-// use
+// Preferred
 MatcherAssert.assertThat(target, new IsEquals<>(expected));
 
-// don't use
-MatcherAssert.assertThat(target, Matchers.isEquals(expected));
+// Avoid
+MatcherAssert.assertThat(target, Matchers.equalTo(expected));
 ```
 
-2. Avoid adding reason to assertions in unit tests with single assertion:
+### Assertion reasons
+
+- **Single assertion** in a test method: no reason string needed.
+
 ```java
-// use
 MatcherAssert.assertThat(target, matcher);
-
-// don't use
-MatcherAssert.assertThat("Some reason", target, matcher);
 ```
 
+- **Multiple assertions** in a test method: add a reason string to each.
 
-3. Add reason to assertions in unit tests with multiple assertion. Prefer single assertion styles for unit tests where possible:
 ```java
-MatcherAssert.assertThat("Reasone one", target1, matcher1);
+MatcherAssert.assertThat("Reason one", target1, matcher1);
 MatcherAssert.assertThat("Reason two", target2, matcher2);
 ```
 
-## Pull request style
+---
 
-Primary PR rule: it's the responsibility of PR author to bring the changes to the master branch.
+## Commit Messages
 
-Other important mandatory rule - it should refer to some ticket. The only exception is a minor fixes.
+We follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+specification:
 
-Pull request should follow [conventionalcommits.org](https://www.conventionalcommits.org/en/v1.0.0/) specificaction
-to be ready for squasing as single commit: 
-
-Pull request should consist of two mandatory parts:
- - "Title" - says **what** is the change, it should be one small and full enough sentence with only necessary information
- - "Description" - says **how** this pull request fixes a problem or implements a new feature
-
-### Title
-
-Title format: `<type>[optional scope]: <description>`, where type is one of `conventionalcommits` type, optional scope
-could be added as a context, and description should be as small as possible but provide full enough information to
-understand what was done (not a process).
-
-According to [git standards](https://git-scm.com/book/en/v2), commit messages uses present simple tence.
-
-Title should not include links or references.
-
-Good PR titles examples:
- - fix: maven artifact upload - describes what was done: fix(ed), the what was the fixed: artifact upload, and where: Maven
- - feat: GET blobs API for Docker - feat: new feature implemented, what: GET blobs API, where: Docker
- - test: add integration test for Maven deploy - done: add(ed), what: integration test for deploy, where: Maven
-
-Bad PR titles:
- - Fixed NPE - not clear WHAT was the problem, and where; good title could be: "Fixed NPE on Maven artifact download"
- - Added more tests - too vague; good: "Added unit tests for Foo and Bar classes"
- - Implementing Docker registry - the process, not the result; good: "Implemented cache layer for Docker proxy"
-
-### Description
-
-Description provides information about **how** the problem from title was fixed.
-It should be a short summary of all changes to increase readability of changes before looking to code,
-and provide some context.
-
-Description may contain a footers separated by blank line:
-```
-<body>
-
-<footers>
-```
-Footer is a colon-separated key-value pair in standard form. It's supposed to be both: human-readable and machine parserable.
-Common footers are:
-```
-Close: #1
-Fix: #2
-Reviewer: @github
-Ref: https://external-tracker/issues/1
-```
-
-Each pull-request must include ticket reference (either `Close`, `Fix` or `Ticket`).
-
-Example:
-```
-Check if the file exists before accessing it and return 404 code if doesn't
-
-Fix: #123
-```
-
-Good description describes the solution provided and may have technical details, it isn't just a copy of the title.
-Examples of good descriptions:
- - Added a new class as storage implementation over S3 blob-storage, implemented `value()` method, throw exceptions on other methods, created unit test for value
- - Fixed FileNotFoundException on reading blob content by checking if file exists before reading it. Return 404 code if doesn't exist
-
-### Merging
-
-We merge PR only if all required CI checks passed and after approval of repository maintainers.
-If commit messages are not well-formatted or PR consists of many (greater than 3) commits, then
-we merge using squash merge, where commit messages consists of two parts:
-```
-<PR title> (#<PR number>)
-
-<PR description>
-[PR: <PR number>]
-```
-
-GitHub usually automatically inserts title and description as commit messages.
-
-If PR consists of small amount of well-formatted commits (commit messages follows all the rules of PR best practices),
-then PR could be merged with merge commit.
-
-### Review
-
-It's recommended to request review from `@artipie/maintainers` if possible.
-When the reviewers starts the review it should assign the PR to themselves,
-when the review is completed and some changes are requested, then it should be assigned back to the author.
-On approve: if reviewer and repository maintainer are two different persons,
-then the PR should be assigned to maintainer, and maintainer can merge it or ask for more comments. 
-
-The workflow:
-```
-<required> (optional)
-        PR created |   Review   | Request changes | Fixed changes | Approves changes | Merge |
-assignee: <none>  -> <reviewer> ->    (author)    ->  (reviewer)  ->   <maintainer>  -> <none>
-```
-
-When addressing review changes, two possible strategies could be used:
- - `git commit --ammend` + `git push --force` - in case of changes are minor or obvious, both sides agree
- - new commit - in case if author wants to describe review changes and keep it for history,
- e.g. if author doesn't agree with reviewer or maintainer, he|she may want to point that this changes was
- asked by a reviewer. This commit is not going to the master branch, but it will be linked into PR history.
-
-### Commit style
-
-We use https://www.conventionalcommits.org/en/v1.0.0/ for commit messages, it is:
 ```
 <type>[optional scope]: <description>
 
@@ -188,32 +249,136 @@ We use https://www.conventionalcommits.org/en/v1.0.0/ for commit messages, it is
 [optional footer(s)]
 ```
 
-Commit styles are similar to PR, PR could be created from commit message: first line goes to the title,
-other lines to description:
+Common types: `feat`, `fix`, `test`, `refactor`, `docs`, `chore`, `perf`, `ci`.
+
+Use present-tense, imperative mood (e.g., "add", not "added" or "adds").
+
+Examples:
+
 ```
-type(some-context): short title
-
-Description of the commit goes
-to PR description. It could be multiline `and` include
-*markdown* formatting.
-
-Close: #234
-Ref: #123
+feat(docker): add blob GET endpoint
+fix(maven): resolve NPE on artifact download
+test(npm): add integration tests for publish
 ```
 
-## Repository maintaining
+---
 
-Each repository in Artipie has one responsible maintainer person. Maintainer responsibilities are:
- 1. Discuss requirements with customers and open-source users via internal and public channels. Discuss deadlines for important changes, and provide releases for milestones.
- 3. Track all bugs and features via ticket system. Track important changes via pull-requests.
- 4. Maintain the quality of all contributions in repository, as discussed in this document previously; including code, commits, tickets, PRs, wikis.
- 5. Keep CI/CD working in repository. Require build, test runs, minimum test-coverage on PR merge via branch-protection rules. Automate releases.
- 6. Track all changes for release, provide changelogs, release tags and descriptions. Obey [semver](https://semver.org/) convention, update version components properly.
- 7. Keep dependencies up to date.
- 8. Perform review process for pull requests.
+## Pull Request Guidelines
 
-Maintainers are:
- - @g4s8 - artipie/artipie artipie/asto artipie/http artipie/docker-adapter artipy/files-adapter artipie/central artipie/artipie-cli artipie/gem-adapter artipie/helm-charts artipie/ppom artipie/http-client artipie/git-adapter
- - @olenagerasimova - artipie/rpm-adapter artipie/debian-adapter artipie/conda-adapter artipie/go-adapter artipie/management-api artipie/maven-adapter artipie/nuget-adapter artipie/pypi-adapter artipie/cargo-adapter
- - @genryxy - artipie/composer-adapter artipie/benchmarks artipie/helm-adapter artipie/npm-adapter artipie/p2-adapter
- - @chgen - artipie/conan-adapter
+### Title
+
+Format: `<type>[optional scope]: <description>`
+
+- Keep it short and descriptive.
+- Do not include links or ticket references in the title.
+
+Good examples:
+- `fix: maven artifact upload`
+- `feat: GET blobs API for Docker`
+- `test: add integration test for Maven deploy`
+
+Bad examples:
+- `Fixed NPE` (too vague)
+- `Added more tests` (not specific)
+- `Implementing Docker registry` (describes process, not result)
+
+### Description
+
+The description explains **how** the change was made, not just **what** changed.
+Provide a short summary of all changes to give context before the reviewer reads code.
+
+### Footer
+
+Separate footers from the body with a blank line:
+
+```
+Check if the file exists before accessing it and return 404 code if it does not exist.
+
+Fix: #123
+```
+
+Common footers:
+
+| Footer   | Purpose                                |
+|----------|----------------------------------------|
+| `Close:` | Closes the referenced issue on merge   |
+| `Fix:`   | Fixes the referenced issue             |
+| `Ref:`   | References a related issue or tracker  |
+
+### Ticket reference
+
+Every pull request **must** reference a ticket (via `Close:`, `Fix:`, or `Ref:` footer),
+except for truly minor fixes (typos, formatting).
+
+---
+
+## Review Process
+
+It is the **author's responsibility** to bring changes to the `master` branch.
+
+### Workflow
+
+```
+        PR created |   Review   | Request changes | Fixed changes | Approves changes | Merge
+assignee: <none>  -> <reviewer> ->    (author)    ->  (reviewer)  ->   <maintainer>  -> <none>
+```
+
+1. Author creates the PR and requests review.
+2. Reviewer assigns the PR to themselves and begins review.
+3. If changes are requested, the PR is assigned back to the author.
+4. Author addresses feedback (amend + force-push for minor/obvious changes, or new commit
+   for substantive changes the author wants to document).
+5. Reviewer approves. If the reviewer is not the repository maintainer, the PR is assigned
+   to the maintainer.
+6. Maintainer merges the PR.
+
+---
+
+## Merging
+
+PRs are merged only after all required CI checks pass and a maintainer approves.
+
+- **Squash merge**: used when the PR has many commits (more than 3) or commit messages are
+  not well-formatted. GitHub auto-populates the squash message from the PR title and
+  description.
+- **Merge commit**: used when the PR has a small number of well-formatted commits that each
+  follow the Conventional Commits convention.
+
+---
+
+## Branch Strategy
+
+- All feature branches are created from `master`.
+- Branch names should be descriptive (e.g., `feat/docker-blob-api`, `fix/maven-npe`).
+- Use Conventional Commits for all commits on the branch.
+- Keep branches focused: one logical change per branch.
+
+---
+
+## Security Disclosure
+
+If you discover a security vulnerability, **do not** open a public issue. Instead, report
+it through [GitHub Security Advisories](https://github.com/auto1-oss/pantera/security/advisories/new).
+
+We will acknowledge the report within 3 business days and work with you on a fix.
+
+---
+
+## License
+
+Pantera is licensed under [GPL-3.0](LICENSE.txt).
+
+All Java source files must include the license header from `LICENSE.header`. The
+`license-maven-plugin` enforces this during the build. Files missing the header will cause
+the build to fail.
+
+```
+Copyright (c) 2025-2026 Auto1 Group
+Maintainers: Auto1 DevOps Team
+Lead Maintainer: Ayd Asraf
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License v3.0.
+
+Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+```
