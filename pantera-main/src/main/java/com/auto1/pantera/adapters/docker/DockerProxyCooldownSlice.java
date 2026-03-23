@@ -101,16 +101,17 @@ public final class DockerProxyCooldownSlice implements Slice {
                 final String user = new Login(headers).getValue();
                 final Optional<String> digest = this.digest(response.headers());
                 
-                // Read body once, then evaluate cooldown + extract metadata in parallel
+                // Buffer manifest body for cooldown evaluation.
+                // Docker manifests are small JSON (<50KB), not blob layers (which are GB-sized).
+                // This cooldown slice is only mounted on manifest endpoints, so buffering is safe.
                 final CompletableFuture<byte[]> bytesFuture = response.body().asBytesFuture();
                 return bytesFuture.thenCompose(bytes -> {
-                    // Rebuild response immediately with buffered bytes
                     final Response rebuilt = new Response(
                         response.status(),
                         response.headers(),
                         new Content.From(bytes)
                     );
-                    
+
                     // Extract release date from headers first (fast path)
                     final Optional<Instant> headerRelease = this.release(response.headers());
                     

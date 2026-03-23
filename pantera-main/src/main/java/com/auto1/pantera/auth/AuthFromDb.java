@@ -19,6 +19,7 @@ import java.sql.ResultSet;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.apache.commons.codec.digest.DigestUtils;
+import org.mindrot.jbcrypt.BCrypt;
 
 /**
  * Database-backed authentication.
@@ -72,6 +73,10 @@ public final class AuthFromDb implements Authentication {
                 // Only authenticate pantera-managed users (not SSO)
                 if (!AuthFromDb.ARTIPIE.equals(provider)) {
                     return Optional.empty();
+                }
+                // Bcrypt match (password hashed during migration)
+                if (hash.startsWith("$2") && BCrypt.checkpw(pass, hash)) {
+                    return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
                 // Plain-text match (password stored as-is)
                 if (hash.equals(pass)) {

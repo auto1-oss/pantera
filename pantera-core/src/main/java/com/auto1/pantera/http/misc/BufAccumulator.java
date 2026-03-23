@@ -26,6 +26,14 @@ import javax.annotation.concurrent.NotThreadSafe;
 public final class BufAccumulator implements ReadableByteChannel, WritableByteChannel {
 
     /**
+     * Maximum buffer capacity in bytes.
+     * Safety limit to prevent OOM from malformed requests with no boundary delimiter.
+     * This buffer is used for header/multipart parsing, not artifact streaming.
+     */
+    private static final int MAX_CAPACITY =
+        ConfigDefaults.getInt("PANTERA_BUF_ACCUMULATOR_MAX_BYTES", 104_857_600);
+
+    /**
      * Buffer.
      */
     private ByteBuffer buffer;
@@ -120,6 +128,11 @@ public final class BufAccumulator implements ReadableByteChannel, WritableByteCh
             this.buffer.put(src);
         } else {
             final int cap = Math.max(this.buffer.capacity(), src.capacity()) * 2;
+            if (cap > MAX_CAPACITY) {
+                throw new IllegalStateException(
+                    "BufAccumulator exceeded " + MAX_CAPACITY + " byte limit (requested: " + cap + " bytes)"
+                );
+            }
             final ByteBuffer resized = ByteBuffer.allocate(cap);
             final int pos = this.buffer.position();
             final int lim = this.buffer.limit();

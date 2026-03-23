@@ -35,6 +35,13 @@ public final class MavenSettings {
         this.settings = Collections.unmodifiableList(
             new ListOf<String>(
                 "<settings>",
+                "    <mirrors>",
+                "        <mirror>",
+                "            <id>allow-http</id>",
+                "            <mirrorOf>!my-maven,!my-repo</mirrorOf>",
+                "            <url>https://repo.maven.apache.org/maven2</url>",
+                "        </mirror>",
+                "    </mirrors>",
                 "    <profiles>",
                 "        <profile>",
                 "            <id>pantera</id>",

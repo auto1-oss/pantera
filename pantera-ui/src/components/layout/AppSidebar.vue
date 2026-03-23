@@ -14,22 +14,25 @@ interface NavItem {
   to: string
 }
 
-function has(key: string): boolean {
-  const val = auth.user?.permissions?.[key]
-  return Array.isArray(val) && val.length > 0
+function canRead(key: string): boolean {
+  return auth.hasAction(key, 'read')
+}
+
+function canWrite(key: string): boolean {
+  return auth.hasAction(key, 'write')
 }
 
 const userItems = computed<NavItem[]>(() => {
   const items: NavItem[] = [
     { label: 'Dashboard', icon: 'pi pi-th-large', to: '/' },
   ]
-  if (has('api_repository_permissions')) {
+  if (canRead('api_repository_permissions')) {
     items.push({ label: 'Repositories', icon: 'pi pi-box', to: '/repositories' })
   }
-  if (has('api_search_permissions')) {
+  if (canRead('api_search_permissions')) {
     items.push({ label: 'Search', icon: 'pi pi-search', to: '/search' })
   }
-  if (has('api_cooldown_permissions')) {
+  if (canRead('api_cooldown_permissions')) {
     items.push({ label: 'Cooldown', icon: 'pi pi-clock', to: '/admin/cooldown' })
   }
   return items
@@ -37,13 +40,16 @@ const userItems = computed<NavItem[]>(() => {
 
 const adminItems = computed<NavItem[]>(() => {
   const items: NavItem[] = []
-  if (has('api_user_permissions')) {
+  if (canWrite('api_repository_permissions')) {
+    items.push({ label: 'Repository Management', icon: 'pi pi-server', to: '/admin/repositories' })
+  }
+  if (canWrite('api_user_permissions')) {
     items.push({ label: 'User Management', icon: 'pi pi-users', to: '/admin/users' })
   }
-  if (has('api_role_permissions')) {
+  if (canWrite('api_role_permissions')) {
     items.push({ label: 'Roles & Permissions', icon: 'pi pi-shield', to: '/admin/roles' })
   }
-  if (has('api_alias_permissions')) {
+  if (canWrite('api_alias_permissions')) {
     items.push({ label: 'Storage Configuration', icon: 'pi pi-database', to: '/admin/storage' })
   }
   if (auth.isAdmin) {

@@ -65,15 +65,20 @@ async function handleSsoRedirect(providerType: string) {
       </div>
 
       <div class="left-center">
-        <div class="hero-text">
-          Manage every<br>
-          <span class="highlight">artifact</span> in<br>
-          one place.
+        <div class="hero-copy">
+          <div class="hero-text">
+            Manage every<br>
+            <span class="highlight">artifact</span> in<br>
+            one place.
+          </div>
+          <p class="hero-sub">
+            Universal artifact registry supporting Maven, Docker, npm, PyPI,
+            Helm, NuGet and 15+ formats — built for teams that ship fast.
+          </p>
         </div>
-        <p class="hero-sub">
-          Universal artifact registry supporting Maven, Docker, npm, PyPI,
-          Helm, NuGet and 15+ formats — built for teams that ship fast.
-        </p>
+        <div class="hero-banner-wrap">
+          <img src="/pantera-banner.png" alt="Pantera banner" class="hero-banner" />
+        </div>
       </div>
 
       <div class="left-bottom">
@@ -145,7 +150,10 @@ async function handleSsoRedirect(providerType: string) {
 .logo-row { display: flex; align-items: center; gap: 12px; }
 .logo-mark { width: 40px; height: 40px; border-radius: 10px; }
 .logo-name { font-size: 20px; font-weight: 700; color: white; }
-.left-center { max-width: 400px; }
+.left-center { display: flex; align-items: center; gap: 0; }
+.hero-copy { flex-shrink: 0; width: 260px; position: relative; z-index: 1; }
+.hero-banner-wrap { flex: 1; min-width: 0; position: relative; margin-left: -20px; }
+.hero-banner { width: 100%; height: auto; display: block; opacity: 0.7; filter: brightness(1.3); mix-blend-mode: lighten; mask-image: linear-gradient(to right, transparent 0%, black 20%, black 90%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); mask-composite: intersect; -webkit-mask-image: linear-gradient(to right, transparent 0%, black 20%, black 90%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-composite: source-in; }
 .hero-text { font-size: 44px; font-weight: 800; color: white; line-height: 1.15; letter-spacing: -1px; margin-bottom: 20px; }
 .hero-text .highlight { color: #d97b2a; }
 .hero-sub { font-size: 16px; color: #94a3b8; line-height: 1.7; }

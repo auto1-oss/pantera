@@ -1,0 +1,48 @@
+##
+## Isolated Benchmark Infrastructure
+## Runs ONE Pantera/Artipie instance at a time with postgres + valkey.
+## The SUT (system under test) is started separately via the bench script.
+##
+services:
+  postgres:
+    image: postgres:17.8-alpine
+    container_name: bench-iso-postgres
+    environment:
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: pantera
+    volumes:
+      - ../setup/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pantera"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    networks:
+      - bench-iso
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  valkey:
+    image: valkey/valkey:8.1.4
+    container_name: bench-iso-valkey
+    command:
+      - valkey-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bench-iso
+
+networks:
+  bench-iso:
+    driver: bridge

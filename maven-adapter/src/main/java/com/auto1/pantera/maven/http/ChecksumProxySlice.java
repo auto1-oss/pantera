@@ -95,9 +95,12 @@ final class ChecksumProxySlice implements Slice {
         return this.upstream.response(line, headers, Content.EMPTY)
             .thenCompose(checksumResp -> {
                 if (checksumResp.status().success()) {
-                    // Checksum file found in cache or upstream - use it directly!
+                    // Checksum file found in cache or upstream - return with body intact.
+                    // Caller (VertxSliceServer) will subscribe to the body and stream to client.
                     return CompletableFuture.completedFuture(checksumResp);
                 }
+                // Drain non-success response body to release upstream connection
+                return checksumResp.body().asBytesFuture().thenCompose(ignored -> {
                 
                 // Checksum not available - FALLBACK: compute from artifact
                 // This is expensive but ensures we can always provide checksums
@@ -130,6 +133,7 @@ final class ChecksumProxySlice implements Slice {
                             .log();
                         return computeChecksumStreaming(artifactResp.body(), algorithm, artifactPath);
                     });
+                });
             });
     }
 

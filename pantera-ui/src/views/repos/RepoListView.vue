@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRepos } from '@/api/repos'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
@@ -26,6 +26,10 @@ function onSearchInput() {
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => { page.value = 0; fetchRepos() }, 300)
 }
+
+onBeforeUnmount(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+})
 
 function onTypeChange() {
   page.value = 0

@@ -137,9 +137,17 @@ export function createAppRouter() {
     }
     const requiredPerm = to.meta.requiredPermission as string | undefined
     if (requiredPerm) {
-      const val = auth.user?.permissions?.[requiredPerm]
-      if (!Array.isArray(val) || val.length === 0) {
-        return { name: 'dashboard' }
+      // Admin routes (under /admin/) require write access;
+      // read-only views just need any access
+      const needsWrite = to.path.startsWith('/admin/')
+      if (needsWrite) {
+        if (!auth.hasAction(requiredPerm, 'write')) {
+          return { name: 'dashboard' }
+        }
+      } else {
+        if (!auth.hasAction(requiredPerm, 'read')) {
+          return { name: 'dashboard' }
+        }
       }
     }
     return true

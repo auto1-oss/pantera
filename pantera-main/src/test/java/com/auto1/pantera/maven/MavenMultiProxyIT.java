@@ -68,11 +68,11 @@ final class MavenMultiProxyIT {
         this.containers.putClasspathResourceToClient(settings, "/w/settings.xml");
         this.containers.putResourceToPantera(
             "pantera-origin",
-            "com/artipie/helloworld/maven-metadata.xml",
+            "com/auto1/pantera/helloworld/maven-metadata.xml",
             "/var/pantera/data/origin-maven/com/pantera/helloworld/maven-metadata.xml"
         );
-        MavenITCase.getResourceFiles("com/artipie/helloworld/0.1")
-            .stream().map(item -> String.join("/", "com/artipie/helloworld/0.1", item))
+        MavenITCase.getResourceFiles("com/auto1/pantera/helloworld/0.1")
+            .stream().map(item -> String.join("/", "com/auto1/pantera/helloworld/0.1", item))
             .forEach(
                 item -> this.containers.putResourceToPantera(
                     "pantera-origin", item, String.join("/", "/var/pantera/data/origin-maven", item)

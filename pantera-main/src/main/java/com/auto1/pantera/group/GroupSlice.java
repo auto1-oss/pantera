@@ -315,13 +315,13 @@ public final class GroupSlice implements Slice {
         final boolean isNpmAudit = "POST".equals(method) && path.contains("/-/npm/v1/security/");
 
         if (!isReadOperation && !isNpmAudit) {
-            return body.asBytesFuture().thenApply(ignored ->
+            return CompletableFuture.completedFuture(
                 ResponseBuilder.methodNotAllowed().build()
             );
         }
 
         if (this.members.isEmpty()) {
-            return body.asBytesFuture().thenApply(ignored ->
+            return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
         }

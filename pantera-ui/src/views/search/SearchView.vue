@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
 import { search as searchApi } from '@/api/search'
 import { repoTypeIcon, repoTypeColorClass, repoTypeBaseLabel } from '@/utils/repoTypes'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
@@ -27,6 +27,10 @@ watch(query, (val) => {
     return
   }
   debounceTimer = setTimeout(() => { page.value = 0; doSearch() }, 300)
+})
+
+onBeforeUnmount(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
 })
 
 function relevanceScore(item: SearchResult, q: string): number {

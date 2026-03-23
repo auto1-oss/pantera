@@ -1,0 +1,5 @@
+type: plain
+pass: pantera
+enabled: true
+roles:
+  - admin

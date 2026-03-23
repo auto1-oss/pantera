@@ -161,11 +161,13 @@ public final class ComposerGroupSlice implements Slice {
                     final RequestLine rewritten = rewritePath(line, member);
                     final Headers sanitized = dropFullPathHeader(headers);
                     return memberSlice.response(rewritten, sanitized, Content.EMPTY)
-                        .thenApply(resp -> {
+                        .thenCompose(resp -> {
                             if (resp.status() == RsStatus.OK) {
-                                return resp;
+                                return CompletableFuture.completedFuture(resp);
                             }
-                            return prev;
+                            // Drain non-OK response body to release upstream connection
+                            return resp.body().asBytesFuture()
+                                .thenApply(ignored -> prev);
                         })
                         .exceptionally(ex -> prev);
                 });
@@ -255,7 +257,8 @@ public final class ComposerGroupSlice implements Slice {
                                 .field("member.name", member)
                                 .field("http.response.status_code", resp.status().code())
                                 .log();
-                            return CompletableFuture.completedFuture(
+                            // Drain non-OK response body to release upstream connection
+                            return resp.body().asBytesFuture().thenApply(ignored ->
                                 Json.createObjectBuilder().build()
                             );
                         }

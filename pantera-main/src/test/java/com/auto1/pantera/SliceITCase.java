@@ -58,7 +58,7 @@ public final class SliceITCase {
                         .jsonBody(Json.createObjectBuilder().add("any", "any").build())
                         .build()
                 ),
-                (username, password) -> Optional.empty(),
+                (username, password) -> Optional.of(new com.auto1.pantera.http.auth.AuthUser(username, "test")),
                 new OperationControl(Policy.FREE, new AdapterBasicPermission("test", Action.ALL))
             )
         )

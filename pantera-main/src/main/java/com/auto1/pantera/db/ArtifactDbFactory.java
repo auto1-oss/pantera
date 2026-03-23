@@ -229,12 +229,34 @@ public final class ArtifactDbFactory {
 
         // Enable metrics and logging for connection pool monitoring
         hikariConfig.setRegisterMbeans(true); // Enable JMX metrics
+        // Integrate HikariCP with Micrometer/Prometheus for connection pool observability
+        // Exposes: hikaricp_connections_active, hikaricp_connections_idle,
+        // hikaricp_connections_pending, hikaricp_connections_timeout_total, etc.
+        try {
+            final io.micrometer.core.instrument.MeterRegistry registry =
+                io.vertx.micrometer.backends.BackendRegistries.getDefaultNow();
+            if (registry != null) {
+                hikariConfig.setMetricsTrackerFactory(
+                    new com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory(registry)
+                );
+                EcsLogger.info("com.auto1.pantera.db")
+                    .message("HikariCP Micrometer metrics enabled")
+                    .eventCategory("database")
+                    .eventAction("metrics_init")
+                    .log();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.db")
+                .message("Micrometer registry not available for HikariCP metrics")
+                .error(ex)
+                .log();
+        }
 
         final HikariDataSource source = new HikariDataSource(hikariConfig);
 
         // Log connection pool configuration for monitoring
         EcsLogger.info("com.auto1.pantera.db")
-            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: 120000ms)")
+            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: " + hikariConfig.getLeakDetectionThreshold() + "ms)")
             .eventCategory("database")
             .eventAction("connection_pool_init")
             .eventOutcome("success")
@@ -440,6 +462,39 @@ public final class ArtifactDbFactory {
             } catch (final SQLException ex) {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to backfill search_tokens (may have no rows)")
+                    .error(ex)
+                    .log();
+            }
+            // Performance indexes identified by full-stack audit
+            try {
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_name_lower ON artifacts(LOWER(name))"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to create idx_artifacts_name_lower (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            try {
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_repo_latest ON artifacts(repo_name, created_date DESC)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to create idx_artifacts_repo_latest (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            // Trigram index for fuzzy search (requires pg_trgm extension)
+            try {
+                statement.executeUpdate("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_name_trgm ON artifacts USING GIN(name gin_trgm_ops)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to create trigram index (pg_trgm extension may not be available)")
                     .error(ex)
                     .log();
             }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { getCooldownOverview, getCooldownBlocked } from '@/api/settings'
 import { unblockArtifact, unblockAll } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
@@ -35,6 +35,10 @@ watch(search, () => {
     blockedPage.value = 0
     loadBlocked()
   }, 400)
+})
+
+onBeforeUnmount(() => {
+  if (searchTimeout) clearTimeout(searchTimeout)
 })
 
 async function loadOverview() {

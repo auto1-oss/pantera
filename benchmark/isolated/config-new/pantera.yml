@@ -1,0 +1,41 @@
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+
+  credentials:
+    - type: env
+
+  policy:
+    type: local
+    eviction_millis: 180000
+    storage:
+      type: fs
+      path: /var/pantera/security
+
+  artifacts_database:
+    postgres_host: "bench-iso-postgres"
+    postgres_port: 5432
+    postgres_database: artifacts_new
+    postgres_user: pantera
+    postgres_password: pantera
+    pool_max_size: 20
+    pool_min_idle: 5
+
+  http_client:
+    proxy_timeout: 60
+    max_connections_per_destination: 128
+    max_requests_queued_per_destination: 512
+    idle_timeout: 30000
+    connection_timeout: 10000
+    follow_redirects: true
+
+  caches:
+    valkey:
+      enabled: true
+      host: bench-iso-valkey
+      port: 6379
+      timeout: 100ms
+    negative:
+      ttl: 24h
+      maxSize: 5000

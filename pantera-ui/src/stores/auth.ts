@@ -12,9 +12,8 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => {
     if (!user.value) return false
-    const perms = user.value.permissions ?? {}
-    return hasPerm(perms, 'api_user_permissions')
-      || hasPerm(perms, 'api_role_permissions')
+    return hasAction('api_user_permissions', 'write')
+      || hasAction('api_role_permissions', 'write')
   })
   const username = computed(() => user.value?.name ?? '')
 
@@ -85,11 +84,6 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     user.value = null
     sessionStorage.removeItem('jwt')
-  }
-
-  function hasPerm(perms: Record<string, string[]>, key: string): boolean {
-    const val = perms[key]
-    return Array.isArray(val) && val.length > 0
   }
 
   function hasAction(key: string, action: string): boolean {

@@ -256,7 +256,7 @@ public final class MavenGroupSlice implements Slice {
             // Cache MISS - fetch and merge from members
             // CRITICAL: Consume original body to prevent OneTimePublisher errors
             // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
-            return body.asBytesFuture().thenCompose(requestBytes -> {
+            return CompletableFuture.completedFuture((byte[]) null).thenCompose(requestBytes -> {
             // Track fetch duration separately from merge duration
             final long fetchStartTime = System.currentTimeMillis();
 
@@ -281,9 +281,9 @@ public final class MavenGroupSlice implements Slice {
                     if (resp.status() == RsStatus.OK) {
                         return readResponseBody(resp.body());
                     } else {
-                        // CRITICAL: Consume body before returning null to prevent memory leak
-                        // Member doesn't have this metadata - consume body and return null
-                        return resp.body().asBytesFuture().thenApply(ignored -> null);
+                        // Drain non-OK response body to release upstream connection
+                        return resp.body().asBytesFuture()
+                            .thenApply(ignored -> (byte[]) null);
                     }
                 })
                 .exceptionally(err -> {
@@ -307,7 +307,7 @@ public final class MavenGroupSlice implements Slice {
             .thenCompose(v -> {
                 final List<byte[]> metadataList = new ArrayList<>();
                 for (CompletableFuture<byte[]> future : futures) {
-                    final byte[] metadata = future.join();
+                    final byte[] metadata = future.getNow(null);
                     if (metadata != null && metadata.length > 0) {
                         metadataList.add(metadata);
                     }

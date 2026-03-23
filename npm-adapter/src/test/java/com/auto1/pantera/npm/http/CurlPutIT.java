@@ -15,9 +15,12 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.npm.JsonFromMeta;
 import com.auto1.pantera.npm.RandomFreePort;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import io.vertx.reactivex.core.Vertx;
 import java.io.DataOutputStream;
@@ -71,7 +74,12 @@ final class CurlPutIT {
         this.url = String.format("http://localhost:%s", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.storage, new LinkedList<>())),
+            new LoggingSlice(new NpmSlice(
+                URI.create(this.url).toURL(), this.storage, (Policy<?>) Policy.FREE,
+                new Authentication.Single("testuser", "testpassword"),
+                (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
+                "*", java.util.Optional.of(new LinkedList<>())
+            )),
             port
         );
         this.server.start();
@@ -116,6 +124,7 @@ final class CurlPutIT {
             ).toURL().openConnection();
             conn.setRequestMethod("PUT");
             conn.setDoOutput(true);
+            conn.setRequestProperty("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3N3b3Jk");
             try (DataOutputStream dos = new DataOutputStream(conn.getOutputStream())) {
                 dos.write(new TestResource(String.format("binaries/%s", name)).asBytes());
                 dos.flush();

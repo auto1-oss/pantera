@@ -245,30 +245,35 @@ public final class UserDao implements CrudUsers {
                 .field("roles.count", roleNames.size())
                 .log();
             // Auto-create roles that don't exist yet (e.g. SSO default "reader")
+            // Uses batch INSERT instead of N individual round-trips
             try (PreparedStatement ps = conn.prepareStatement(
                 "INSERT INTO roles (name, permissions) VALUES (?, '{}'::jsonb) "
                 + "ON CONFLICT (name) DO NOTHING")) {
                 for (final String roleName : roleNames) {
                     ps.setString(1, roleName);
-                    ps.executeUpdate();
+                    ps.addBatch();
                 }
+                ps.executeBatch();
             }
+            // Batch assign all roles in one round-trip per role
+            // (uses addBatch to minimize network overhead)
             try (PreparedStatement ps = conn.prepareStatement(
                 "INSERT INTO user_roles (user_id, role_id) "
                 + "SELECT ?, id FROM roles WHERE name = ?")) {
                 for (final String roleName : roleNames) {
                     ps.setInt(1, userId);
                     ps.setString(2, roleName);
-                    final int inserted = ps.executeUpdate();
-                    EcsLogger.info("com.auto1.pantera.db")
-                        .message("updateUserRoles: role assignment result")
-                        .eventCategory("user")
-                        .eventAction("role_assignment")
-                        .field("user.name", uname)
-                        .field("role.name", roleName)
-                        .field("rows.inserted", inserted)
-                        .log();
+                    ps.addBatch();
                 }
+                final int[] results = ps.executeBatch();
+                EcsLogger.info("com.auto1.pantera.db")
+                    .message("updateUserRoles: batch role assignment complete")
+                    .eventCategory("user")
+                    .eventAction("role_assignment")
+                    .field("user.name", uname)
+                    .field("roles", String.join(",", roleNames))
+                    .field("batch.size", results.length)
+                    .log();
             }
         } else {
             EcsLogger.warn("com.auto1.pantera.db")

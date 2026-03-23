@@ -770,60 +770,40 @@ public class RepositorySlices {
                 );
                 break;
             case "deb":
-                // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.auto1.pantera.http.slice.BrowsableSlice(
-                        new DebianSlice(
-                            cfg.storage(), securityPolicy(), authentication(),
-                            new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
-                            artifactEvents()
-                        ),
-                        cfg.storage()
+                    new DebianSlice(
+                        cfg.storage(), securityPolicy(), authentication(),
+                        new com.auto1.pantera.debian.Config.FromYaml(cfg.name(), cfg.settings(), settings.configStorage()),
+                        artifactEvents()
                     )
                 );
                 break;
             case "conda":
-                // Use streaming browsing for fast directory listings
-                slice = new com.auto1.pantera.http.slice.BrowsableSlice(
-                    new CondaSlice(
-                        cfg.storage(), securityPolicy(), authentication(), tokens,
-                        cfg.url().toString(), cfg.name(), artifactEvents()
-                    ),
-                    cfg.storage()
+                slice = new CondaSlice(
+                    cfg.storage(), securityPolicy(), authentication(), tokens,
+                    cfg.url().toString(), cfg.name(), artifactEvents()
                 );
                 break;
             case "conan":
-                // Use streaming browsing for fast directory listings
-                slice = new com.auto1.pantera.http.slice.BrowsableSlice(
-                    new ConanSlice(
-                        cfg.storage(), securityPolicy(), authentication(), tokens,
-                        new ItemTokenizer(Vertx.vertx()), cfg.name()
-                    ),
-                    cfg.storage()
+                slice = new ConanSlice(
+                    cfg.storage(), securityPolicy(), authentication(), tokens,
+                    new ItemTokenizer(Vertx.vertx()), cfg.name()
                 );
                 break;
             case "hexpm":
-                // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.auto1.pantera.http.slice.BrowsableSlice(
-                        new HexSlice(cfg.storage(), securityPolicy(), authentication(),
-                            artifactEvents(), cfg.name()),
-                        cfg.storage()
-                    )
+                    new HexSlice(cfg.storage(), securityPolicy(), authentication(),
+                        artifactEvents(), cfg.name())
                 );
                 break;
             case "pypi":
-                // Use streaming browsing for fast directory listings
                 slice = trimPathSlice(
-                    new com.auto1.pantera.http.slice.BrowsableSlice(
-                        new PathPrefixStripSlice(
-                            new com.auto1.pantera.pypi.http.PySlice(
-                                cfg.storage(), securityPolicy(), authentication(),
-                                cfg.name(), artifactEvents()
-                            ),
-                            "simple"
+                    new PathPrefixStripSlice(
+                        new com.auto1.pantera.pypi.http.PySlice(
+                            cfg.storage(), securityPolicy(), authentication(),
+                            cfg.name(), artifactEvents()
                         ),
-                        cfg.storage()
+                        "simple"
                     )
                 );
                 break;
@@ -863,9 +843,21 @@ public class RepositorySlices {
             .filters(cfg.name(), cfg.repoYaml());
         Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
 
+        // Wrap with directory browsing for repos that have their own storage (CI compatibility)
+        // Docker repos use registry protocol; group repos are virtual (no storage).
+        // TODO: Remove once CI pipelines are migrated off directory browsing
+        final String repoType = cfg.type();
+        final Slice browsable;
+        if (!repoType.startsWith("docker") && !repoType.endsWith("-group")
+            && cfg.storageOpt().isPresent()) {
+            browsable = new com.auto1.pantera.http.slice.BrowsableSlice(filtered, cfg.storage());
+        } else {
+            browsable = filtered;
+        }
+
         // Wrap with repository metrics to add repo_name and repo_type labels
         final Slice withMetrics = new com.auto1.pantera.http.slice.RepoMetricsSlice(
-            filtered, cfg.name(), cfg.type()
+            browsable, cfg.name(), cfg.type()
         );
 
         return cfg.contentLengthMax()

@@ -45,6 +45,7 @@ const hasMore = ref(false)
 const detailVisible = ref(false)
 const selectedArtifact = ref<ArtifactDetail | null>(null)
 const deleting = ref(false)
+const downloading = ref(false)
 
 async function loadRepo() {
   repoConfig.value = null
@@ -148,22 +149,27 @@ const breadcrumbItems = computed(() => {
 const breadcrumbHome = { icon: 'pi pi-home', command: () => loadTree('/') }
 
 async function downloadArtifact(path: string) {
-  const filename = path.includes('/') ? path.substring(path.lastIndexOf('/') + 1) : path
+  downloading.value = true
   try {
-    const resp = await getApiClient().get(
-      `/repositories/${props.name}/artifact/download`,
-      { params: { path }, responseType: 'blob' },
+    const client = getApiClient()
+    // Step 1: Get a single-use download token (JWT-auth'd)
+    const resp = await client.post(
+      `/repositories/${props.name}/artifact/download-token`,
+      null,
+      { params: { path } },
     )
-    const url = URL.createObjectURL(resp.data)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    const token = resp.data.token as string
+    // Step 2: Navigate browser directly to the token-based URL.
+    // The browser's native download manager handles progress, disk streaming,
+    // and memory — no JS blob buffering needed.
+    const base = client.defaults.baseURL ?? ''
+    const url = `${base}/repositories/${props.name}/artifact/download-direct`
+      + `?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
+    window.open(url, '_blank')
   } catch {
-    // ignore
+    notify.error('Failed to download artifact')
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -286,6 +292,7 @@ function formatSize(bytes?: number): string {
             <Button
               icon="pi pi-download"
               label="Download"
+              :loading="downloading"
               @click="downloadArtifact(selectedArtifact!.path)"
             />
             <Button

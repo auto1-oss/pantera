@@ -16,9 +16,12 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.npm.http.NpmSlice;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
@@ -100,7 +103,12 @@ public final class Npm8IT {
         this.events = new LinkedList<>();
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.repo, this.events)),
+            new LoggingSlice(new NpmSlice(
+                URI.create(this.url).toURL(), this.repo, (Policy<?>) Policy.FREE,
+                new Authentication.Single("testuser", "testpassword"),
+                (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
+                "*", java.util.Optional.of(this.events)
+            )),
             port
         );
         this.server.start();
@@ -113,7 +121,7 @@ public final class Npm8IT {
         this.data.save(
             new Key.From(".npmrc"),
             new Content.From(
-                String.format("//host.testcontainers.internal:%d/:_authToken=abc123", port)
+                String.format("//host.testcontainers.internal:%d/:_auth=dGVzdHVzZXI6dGVzdHBhc3N3b3Jk", port)
                     .getBytes(StandardCharsets.UTF_8)
             )
         ).join();

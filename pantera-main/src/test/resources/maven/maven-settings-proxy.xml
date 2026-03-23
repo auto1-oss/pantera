@@ -23,6 +23,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
 <settings>
+  <mirrors>
+    <mirror>
+      <id>allow-http</id>
+      <mirrorOf>!my-maven,!my-repo,!my-proxy</mirrorOf>
+      <url>https://repo.maven.apache.org/maven2</url>
+    </mirror>
+  </mirrors>
   <profiles>
     <profile>
       <id>pantera</id>

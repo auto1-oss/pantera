@@ -11,6 +11,7 @@
 package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -115,6 +116,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
         "SELECT COUNT(*) FROM artifacts WHERE LOWER(name) LIKE LOWER(?)";
 
     /**
+     * Statement timeout for LIKE fallback queries.
+     * Configurable via PANTERA_SEARCH_LIKE_TIMEOUT_MS env var.
+     * Prevents runaway full-table scans from consuming the connection pool.
+     */
+    private static final long LIKE_TIMEOUT_MS =
+        ConfigDefaults.getLong("PANTERA_SEARCH_LIKE_TIMEOUT_MS", 3000L);
+
+    /**
      * Locate SQL suffix — exact name match for locally published artifacts.
      * The full query is built dynamically by {@link #buildLocateSql(int)}
      * to include an IN clause with path prefix candidates.
@@ -210,6 +219,22 @@ public final class DbArtifactIndex implements ArtifactIndex {
         this.source = Objects.requireNonNull(source, "DataSource must not be null");
         this.executor = Objects.requireNonNull(executor, "ExecutorService must not be null");
         this.ownedExecutor = ownedExecutor;
+        this.warmUp();
+    }
+
+    /**
+     * Eagerly warm executor threads and JDBC connection so the first real
+     * request doesn't pay the ~100ms cold-start penalty.
+     */
+    private void warmUp() {
+        this.executor.execute(() -> {
+            try (Connection conn = this.source.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement("SELECT 1")) {
+                stmt.executeQuery().close();
+            } catch (final SQLException ex) {
+                // Non-fatal — first real request will pay the cost instead
+            }
+        });
     }
 
     @Override
@@ -437,6 +462,10 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final long totalHits;
         final List<ArtifactDocument> docs = new ArrayList<>();
         try (Connection conn = source.getConnection()) {
+            // Guard against runaway LIKE scans on large tables
+            try (java.sql.Statement guard = conn.createStatement()) {
+                guard.execute("SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'");
+            }
             // Get total count
             try (PreparedStatement countStmt = conn.prepareStatement(LIKE_COUNT_SQL)) {
                 countStmt.setString(1, pattern);

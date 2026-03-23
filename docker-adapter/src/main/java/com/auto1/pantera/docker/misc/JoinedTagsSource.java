@@ -71,8 +71,8 @@ public final class JoinedTagsSource {
         }
         return CompletableFuture.allOf(futs)
             .thenApply(v -> {
-                List<String> names = new ArrayList<>();
-                Arrays.stream(futs).forEach(fut -> names.addAll(fut.join()));
+                final List<String> names = new ArrayList<>();
+                Arrays.stream(futs).forEach(fut -> names.addAll(fut.getNow(List.of())));
                 return new TagsPage(repo, names, pagination);
             });
     }

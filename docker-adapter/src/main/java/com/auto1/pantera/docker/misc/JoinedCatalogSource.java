@@ -64,7 +64,10 @@ public final class JoinedCatalogSource {
                 .exceptionally(err -> Collections.emptyList())
         ).collect(Collectors.toList());
         return CompletableFuture.allOf(all.toArray(new CompletableFuture<?>[0]))
-            .thenApply(nothing -> all.stream().flatMap(stage -> stage.toCompletableFuture().join().stream()).toList())
+            .thenApply(nothing -> all.stream()
+                .map(stage -> stage.toCompletableFuture().getNow(List.of()))
+                .flatMap(List::stream)
+                .toList())
             .thenApply(names -> new CatalogPage(names, pagination));
     }
 }

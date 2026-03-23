@@ -30,6 +30,7 @@ import com.auto1.pantera.settings.ConfigFile;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.Settings;
 import com.auto1.pantera.settings.SettingsFromPath;
+import com.auto1.pantera.settings.repo.DbRepositories;
 import com.auto1.pantera.settings.repo.MapRepositories;
 import com.auto1.pantera.settings.repo.RepoConfig;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -199,7 +200,16 @@ public final class VertxMain {
                 new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
             )
         );
-        final Repositories repos = new MapRepositories(settings);
+        final Repositories repos;
+        if (sharedDs.isPresent()) {
+            repos = new DbRepositories(
+                sharedDs.get(),
+                settings.caches().storagesCache(),
+                settings.metrics().storage()
+            );
+        } else {
+            repos = new MapRepositories(settings);
+        }
         final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt, jwtSettings));
         if (settings.metrics().http()) {
             try {
@@ -373,6 +383,43 @@ public final class VertxMain {
 
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
+
+        // JIT warmup: fire lightweight requests through group code paths so the
+        // first real client request doesn't pay ~140ms JIT compilation penalty.
+        // Runs on a daemon thread to avoid blocking startup.
+        final int warmupPort = main;
+        final Thread warmupThread = new Thread(() -> {
+            try {
+                Thread.sleep(2000); // wait for server to fully bind
+                final java.net.http.HttpClient hc = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(3)).build();
+                // Hit each group repo once to JIT-compile GroupSlice + index lookup
+                for (final com.auto1.pantera.settings.repo.RepoConfig cfg : repos.configs()) {
+                    if (cfg.type().endsWith("-group")) {
+                        try {
+                            final java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                                .uri(java.net.URI.create(
+                                    String.format("http://localhost:%d/%s/", warmupPort, cfg.name())))
+                                .timeout(java.time.Duration.ofSeconds(5))
+                                .GET().build();
+                            hc.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
+                        } catch (final Exception ignored) {
+                            // warmup failure is non-fatal
+                        }
+                    }
+                }
+                EcsLogger.info("com.auto1.pantera")
+                    .message("JIT warmup complete for group repositories")
+                    .eventCategory("server")
+                    .eventAction("jit_warmup")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final Exception ignored) {
+                // warmup failure is non-fatal
+            }
+        }, "pantera-jit-warmup");
+        warmupThread.setDaemon(true);
+        warmupThread.start();
 
         // Deploy AsyncMetricsVerticle as worker verticle to handle Prometheus scraping off event loop
         // This prevents the blocking issue where scrape() takes 2-10s and stalls all HTTP requests

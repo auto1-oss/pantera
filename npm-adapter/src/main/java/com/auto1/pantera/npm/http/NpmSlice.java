@@ -16,7 +16,6 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
-import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.BearerAuthzSlice;
 import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
 import com.auto1.pantera.http.auth.OperationControl;
@@ -65,12 +64,6 @@ import java.util.concurrent.CompletableFuture;
 public final class NpmSlice implements Slice {
 
     /**
-     * Anonymous token auth for test purposes.
-     */
-    static final TokenAuthentication ANONYMOUS = tkn
-        -> CompletableFuture.completedFuture(Optional.of(new AuthUser("anonymous", "anonymity")));
-
-    /**
      * Header name `npm-command`.
      */
     private static final String NPM_COMMAND = "npm-command";
@@ -89,16 +82,6 @@ public final class NpmSlice implements Slice {
      * Token service (optional, used for JWT-only logins).
      */
     private final Tokens tokens;
-
-    /**
-     * Ctor with existing front and default parameters for free access.
-     * @param base Base URL.
-     * @param storage Storage for package
-     * @param events Events queue
-     */
-    public NpmSlice(final URL base, final Storage storage, final Queue<ArtifactEvent> events) {
-        this(base, storage, Policy.FREE, NpmSlice.ANONYMOUS, "*", Optional.of(events));
-    }
 
     /**
      * Ctor.

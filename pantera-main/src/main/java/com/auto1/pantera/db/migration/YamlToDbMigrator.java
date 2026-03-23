@@ -59,7 +59,7 @@ public final class YamlToDbMigrator {
      * is added. The migration re-runs (idempotently) when the stored
      * version is lower than this value.
      */
-    private static final int MIGRATION_VERSION = 3;
+    private static final int MIGRATION_VERSION = 4;
 
     /**
      * DataSource for DB access.
@@ -249,28 +249,46 @@ public final class YamlToDbMigrator {
     }
 
     /**
-     * Migrate role YAML files.
+     * Migrate role YAML files, including subdirectories like {@code default/}.
+     * Subdirectory roles are stored with names like {@code default/github}
+     * to match the convention used by {@code CachedDbPolicy.DbUser}.
      * @param rolesDir Path to security/roles directory
      */
     private void migrateRoles(final Path rolesDir) {
         final RoleDao dao = new RoleDao(this.source);
-        try (DirectoryStream<Path> stream =
-            Files.newDirectoryStream(rolesDir, "*.{yaml,yml}")) {
-            for (final Path file : stream) {
-                try {
-                    final String name = file.getFileName().toString()
-                        .replaceAll("\\.(yaml|yml)$", "");
-                    final YamlMapping yaml = Yaml.createYamlInput(
-                        Files.readString(file)
-                    ).readYamlMapping();
-                    dao.addOrUpdate(yamlToJson(yaml), name);
-                    LOG.info("Migrated role: {}", name);
-                } catch (final Exception ex) {
-                    LOG.error("Failed to migrate role file: {}", file, ex);
+        this.migrateRoleFiles(dao, rolesDir, "");
+    }
+
+    /**
+     * Recursively migrate role YAML files from a directory.
+     * @param dao Role DAO
+     * @param dir Directory to scan
+     * @param prefix Name prefix (e.g. "" for top-level, "default/" for subdirs)
+     */
+    private void migrateRoleFiles(final RoleDao dao, final Path dir, final String prefix) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (final Path entry : stream) {
+                if (Files.isDirectory(entry)) {
+                    this.migrateRoleFiles(
+                        dao, entry,
+                        prefix + entry.getFileName().toString() + "/"
+                    );
+                } else if (entry.toString().matches(".*\\.(yaml|yml)$")) {
+                    try {
+                        final String name = prefix + entry.getFileName().toString()
+                            .replaceAll("\\.(yaml|yml)$", "");
+                        final YamlMapping yaml = Yaml.createYamlInput(
+                            Files.readString(entry)
+                        ).readYamlMapping();
+                        dao.addOrUpdate(yamlToJson(yaml), name);
+                        LOG.info("Migrated role: {}", name);
+                    } catch (final Exception ex) {
+                        LOG.error("Failed to migrate role file: {}", entry, ex);
+                    }
                 }
             }
         } catch (final IOException ex) {
-            LOG.error("Failed to read roles directory: {}", rolesDir, ex);
+            LOG.error("Failed to read roles directory: {}", dir, ex);
         }
     }
 

@@ -15,8 +15,11 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.fs.FileStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.vertx.VertxSliceServer;
 import com.jcabi.log.Logger;
 import io.vertx.reactivex.core.Vertx;
@@ -36,6 +39,8 @@ import wtf.g4s8.hamcrest.json.JsonHas;
 import wtf.g4s8.hamcrest.json.JsonValueIs;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.LinkedList;
@@ -88,11 +93,21 @@ public final class NpmDeprecateIT {
         this.url = String.format("http://host.testcontainers.internal:%d", port);
         this.server = new VertxSliceServer(
             this.vertx,
-            new LoggingSlice(new NpmSlice(URI.create(this.url).toURL(), this.repo, new LinkedList<>())),
+            new LoggingSlice(new NpmSlice(
+                URI.create(this.url).toURL(), this.repo, (Policy<?>) Policy.FREE,
+                new Authentication.Single("testuser", "testpassword"),
+                (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
+                "*", java.util.Optional.of(new LinkedList<>())
+            )),
             port
         );
         this.server.start();
         Testcontainers.exposeHostPorts(port);
+        Files.writeString(
+            this.tmp.resolve(".npmrc"),
+            String.format("//host.testcontainers.internal:%d/:_auth=dGVzdHVzZXI6dGVzdHBhc3N3b3Jk", port),
+            StandardCharsets.UTF_8
+        );
         this.cntn = new GenericContainer<>("node:14-alpine")
             .withCommand("tail", "-f", "/dev/null")
             .withWorkingDirectory("/home/")

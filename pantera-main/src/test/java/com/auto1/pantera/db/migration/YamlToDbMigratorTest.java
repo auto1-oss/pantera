@@ -224,7 +224,7 @@ class YamlToDbMigratorTest {
             "migration_completed",
             Json.createObjectBuilder()
                 .add("completed", true)
-                .add("version", 3)
+                .add("version", 4)
                 .build(),
             "system"
         );
@@ -232,6 +232,31 @@ class YamlToDbMigratorTest {
             ds, this.configDir.resolve("security"), this.configDir.resolve("repo")
         );
         assertFalse(migrator.migrate());
+    }
+
+    @Test
+    void migratesDefaultSubdirectoryRoles() throws Exception {
+        final Path rolesDir = this.configDir.resolve("security").resolve("roles");
+        final Path defaultDir = rolesDir.resolve("default");
+        Files.createDirectories(defaultDir);
+        Files.writeString(
+            defaultDir.resolve("keycloak.yaml"),
+            String.join(
+                "\n",
+                "permissions:",
+                "  adapter_basic_permissions:",
+                "    \"*\":",
+                "      - read"
+            )
+        );
+        final Path repos = this.configDir.resolve("repo");
+        Files.createDirectories(repos);
+        final YamlToDbMigrator migrator = new YamlToDbMigrator(
+            ds, this.configDir.resolve("security"), repos
+        );
+        migrator.migrate();
+        final RoleDao roleDao = new RoleDao(ds);
+        assertTrue(roleDao.get("default/keycloak").isPresent());
     }
 
     @Test
