@@ -40,6 +40,7 @@ agents/
 /docs/superpowers
 *.csv
 *.png
+!docs/pantera-banner.png
 /.superpowers
 /pantera-ui/mockups
 pantera-backfill/dependency-reduced-pom.xml
