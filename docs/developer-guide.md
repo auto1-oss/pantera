@@ -51,6 +51,8 @@ Pantera is a universal binary artifact registry supporting 15+ package formats. 
 
 Maven, Gradle (Maven-layout), Docker, NPM, PyPI, Composer (PHP), Helm, Go, Gem (Ruby), NuGet, Debian, RPM, Conda, Conan, Hex (Erlang/Elixir), and generic files.
 
+> **Frontend development:** For the Vue.js Management UI (`pantera-ui/`), see the [Frontend Developer Guide](frontend-developer-guide.md).
+
 ---
 
 ## 2. Architecture Overview

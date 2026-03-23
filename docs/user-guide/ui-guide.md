@@ -203,3 +203,4 @@ If you do not see the Administration section, you have read-only access. Contact
 - [Getting Started](getting-started.md) -- Obtaining access credentials
 - [Search and Browse](search-and-browse.md) -- API-based search
 - [Cooldown](cooldown.md) -- Understanding cooldown from a user perspective
+- [Admin Guide: UI Deployment](../admin-guide/ui-deployment.md) -- Deploying and configuring the UI (for administrators)

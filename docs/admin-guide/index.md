@@ -30,16 +30,17 @@ This guide covers the installation, configuration, operation, and maintenance of
 8. [Monitoring](monitoring.md) -- Prometheus metrics, Grafana dashboards, health checks, and alerting.
 9. [Logging](logging.md) -- ECS JSON structured logging, external configuration, hot reload, and log filtering.
 10. [Performance Tuning](performance-tuning.md) -- JVM settings, thread pools, S3 tuning, connection pooling, and file descriptors.
+11. [UI Deployment](ui-deployment.md) -- Deploying, configuring, and troubleshooting the Management UI.
 
 ### Architecture
 
-11. [High Availability](high-availability.md) -- Multi-node deployment with PostgreSQL, Valkey, S3, and load balancing.
+12. [High Availability](high-availability.md) -- Multi-node deployment with PostgreSQL, Valkey, S3, and load balancing.
 
 ### Maintenance
 
-12. [Backup and Recovery](backup-and-recovery.md) -- Database, configuration, and artifact backup strategies with disaster recovery procedures.
-13. [Upgrade Procedures](upgrade-procedures.md) -- Pre-upgrade checklist, upgrade steps, database migrations, and rollback.
-14. [Troubleshooting](troubleshooting.md) -- Common issues with diagnostics and resolution steps.
+13. [Backup and Recovery](backup-and-recovery.md) -- Database, configuration, and artifact backup strategies with disaster recovery procedures.
+14. [Upgrade Procedures](upgrade-procedures.md) -- Pre-upgrade checklist, upgrade steps, database migrations, and rollback.
+15. [Troubleshooting](troubleshooting.md) -- Common issues with diagnostics and resolution steps.
 
 ---
 

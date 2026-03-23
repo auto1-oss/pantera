@@ -137,7 +137,6 @@ See the [Configuration Reference](docs/configuration-reference.md) for all optio
 | [REST API Reference](docs/rest-api-reference.md) | All API endpoints with examples |
 | [Contributing](CONTRIBUTING.md) | How to contribute, build, test, and submit PRs |
 | [Code Standards](CODE_STANDARDS.md) | Coding conventions, style rules, testing patterns |
-| [Release Notes v1.21.0](docs/RELEASE-NOTES-v1.21.0.md) | Major release with performance improvements and HA clustering |
 | [Changelog](docs/CHANGELOG-AUTO1.md) | Auto1 fork changelog |
 
 ### Additional References
