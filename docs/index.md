@@ -40,5 +40,3 @@ Covers the Vert.x HTTP layer, Slice pipeline, adapter modules, database schema, 
 
 - [Changelog](reference/changelog.md)
 - [Release Notes](reference/release-notes/)
-- [Contributing Guidelines](../CONTRIBUTING.md)
-- [Code Standards](../CODE_STANDARDS.md)
