@@ -332,7 +332,7 @@ public class RepositorySlices {
         try {
             switch (cfg.type()) {
             case "file":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new FilesSlice(
                         cfg.storage(),
                         securityPolicy(),
@@ -340,7 +340,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents()
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "file-proxy":
@@ -354,14 +355,15 @@ public class RepositorySlices {
                 slice = trimPathSlice(fileProxySlice);
                 break;
             case "npm":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new NpmSlice(
                         cfg.url(), cfg.storage(), securityPolicy(), authentication(), tokens.auth(), tokens, cfg.name(), artifactEvents(), true
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "gem":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new GemSlice(
                         cfg.storage(),
                         securityPolicy(),
@@ -369,20 +371,23 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents()
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "helm":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new HelmSlice(
                         cfg.storage(), cfg.url().toString(), securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "rpm":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new RpmSlice(cfg.storage(), securityPolicy(), authentication(),
-                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty())
+                        tokens.auth(), new com.auto1.pantera.rpm.RepoConfig.FromYaml(cfg.settings(), cfg.name()), Optional.empty()),
+                    cfg.storage()
                 );
                 break;
             case "php":
@@ -402,7 +407,7 @@ public class RepositorySlices {
                     baseUrl = baseUrl + "/" + normalizedRepo;
                 }
                 
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new PathPrefixStripSlice(
                         new PhpComposer(
                             new AstoRepository(
@@ -417,7 +422,8 @@ public class RepositorySlices {
                             artifactEvents()
                         ),
                         "direct-dists"
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "php-proxy":
@@ -439,18 +445,20 @@ public class RepositorySlices {
                 );
                 break;
             case "nuget":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new NuGet(
                         cfg.url(), new com.auto1.pantera.nuget.AstoRepository(cfg.storage()),
                         securityPolicy(), authentication(), tokens.auth(), cfg.name(), artifactEvents()
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "gradle":
             case "maven":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new MavenSlice(cfg.storage(), securityPolicy(),
-                        authentication(), tokens.auth(), cfg.name(), artifactEvents())
+                        authentication(), tokens.auth(), cfg.name(), artifactEvents()),
+                    cfg.storage()
                 );
                 break;
             case "gradle-proxy":
@@ -479,7 +487,7 @@ public class RepositorySlices {
                 slice = trimPathSlice(mavenProxySlice);
                 break;
             case "go":
-                slice = trimPathSlice(
+                slice = browsableTrimPathSlice(
                     new GoSlice(
                         cfg.storage(),
                         securityPolicy(),
@@ -487,7 +495,8 @@ public class RepositorySlices {
                         tokens.auth(),
                         cfg.name(),
                         artifactEvents()
-                    )
+                    ),
+                    cfg.storage()
                 );
                 break;
             case "go-proxy":
@@ -843,21 +852,9 @@ public class RepositorySlices {
             .filters(cfg.name(), cfg.repoYaml());
         Slice filtered = opt.isPresent() ? new FilterSlice(origin, opt.get()) : origin;
 
-        // Wrap with directory browsing for repos that have their own storage (CI compatibility)
-        // Docker repos use registry protocol; group repos are virtual (no storage).
-        // TODO: Remove once CI pipelines are migrated off directory browsing
-        final String repoType = cfg.type();
-        final Slice browsable;
-        if (!repoType.startsWith("docker") && !repoType.endsWith("-group")
-            && cfg.storageOpt().isPresent()) {
-            browsable = new com.auto1.pantera.http.slice.BrowsableSlice(filtered, cfg.storage());
-        } else {
-            browsable = filtered;
-        }
-
         // Wrap with repository metrics to add repo_name and repo_type labels
         final Slice withMetrics = new com.auto1.pantera.http.slice.RepoMetricsSlice(
-            browsable, cfg.name(), cfg.type()
+            filtered, cfg.name(), cfg.type()
         );
 
         return cfg.contentLengthMax()
@@ -881,6 +878,21 @@ public class RepositorySlices {
 
     private static Slice trimPathSlice(final Slice original) {
         return new TrimPathSlice(original, RepositorySlices.PATTERN);
+    }
+
+    /**
+     * Wrap slice with BrowsableSlice inside TrimPathSlice.
+     * BrowsableSlice must be inside TrimPathSlice so it sees the trimmed path
+     * (e.g., "/" instead of "/reponame") when generating directory listings.
+     *
+     * @param origin Origin slice (the adapter slice)
+     * @param storage Repository storage for directory listings
+     * @return Slice chain: TrimPathSlice(BrowsableSlice(origin))
+     */
+    private static Slice browsableTrimPathSlice(final Slice origin, final com.auto1.pantera.asto.Storage storage) {
+        return trimPathSlice(
+            new com.auto1.pantera.http.slice.BrowsableSlice(origin, storage)
+        );
     }
 
     /**

@@ -89,7 +89,14 @@ export const useAuthStore = defineStore('auth', () => {
   function hasAction(key: string, action: string): boolean {
     const perms = user.value?.permissions ?? {}
     const val = perms[key]
-    return Array.isArray(val) && (val.includes(action) || val.includes('*'))
+    if (!Array.isArray(val)) return false
+    if (val.includes('*')) return true
+    if (action === 'write') {
+      // Backend returns granular actions (create, update, delete) rather than
+      // a generic 'write'. Treat 'write' as "has any write-level access".
+      return val.some(a => a !== 'read')
+    }
+    return val.includes(action)
   }
 
   return {

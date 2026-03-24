@@ -187,6 +187,7 @@ services:
       - pantera
 
   pantera-ui:
+    image: pantera-ui:${PANTERA_VERSION}
     build:
       context: ../../pantera-ui
       dockerfile: Dockerfile

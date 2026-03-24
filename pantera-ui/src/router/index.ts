@@ -93,8 +93,8 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiredPermission: 'api_alias_permissions' },
   },
   {
-    path: '/admin/cooldown',
-    name: 'admin-cooldown',
+    path: '/cooldown',
+    name: 'cooldown',
     component: () => import('@/views/admin/CooldownView.vue'),
     meta: { requiredPermission: 'api_cooldown_permissions' },
   },

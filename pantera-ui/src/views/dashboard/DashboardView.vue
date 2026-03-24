@@ -32,8 +32,12 @@ const storageDisplay = computed(() => {
   return `${bytes} B`
 })
 
-const topRepos = computed(() => (stats.value.top_repos ?? []).slice(0, 5))
-const maxArtifactCount = computed(() => topRepos.value.length > 0 ? topRepos.value[0].artifact_count : 1)
+const topRepos = computed(() =>
+  [...(stats.value.top_repos ?? [])]
+    .sort((a, b) => (b.size ?? 0) - (a.size ?? 0) || b.artifact_count - a.artifact_count)
+    .slice(0, 5),
+)
+const maxSize = computed(() => topRepos.value.length > 0 ? (topRepos.value[0].size ?? 1) : 1)
 
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -182,7 +186,7 @@ const statCards = computed(() => [
               <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
                 <div
                   class="h-full rounded-full"
-                  :style="{ width: `${Math.max((repo.artifact_count / maxArtifactCount) * 100, 6)}%`, background: repoTypeColor(repo.type) }"
+                  :style="{ width: `${Math.max(((repo.size ?? 0) / maxSize) * 100, 6)}%`, background: repoTypeColor(repo.type) }"
                 />
               </div>
             </div>

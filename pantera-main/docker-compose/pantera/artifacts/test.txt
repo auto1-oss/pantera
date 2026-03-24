@@ -1,0 +1,3 @@
+Hello World!
+This is a test file for Artipie Generic Repo setup.
+Have a great day!

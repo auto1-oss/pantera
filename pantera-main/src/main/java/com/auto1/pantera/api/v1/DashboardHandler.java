@@ -186,12 +186,12 @@ public final class DashboardHandler {
                         blockedCount = rs.getLong("cnt");
                     }
                 }
-                // Top repos by artifact count (single query, limit 10)
+                // Top repos by size first, then artifact count
                 try (ResultSet rs = stmt.executeQuery(
                     "SELECT repo_name, repo_type, COUNT(*) AS cnt, "
                         + "COALESCE(SUM(size), 0) AS total_size "
                         + "FROM artifacts GROUP BY repo_name, repo_type "
-                        + "ORDER BY cnt DESC LIMIT 5"
+                        + "ORDER BY total_size DESC, cnt DESC LIMIT 5"
                 )) {
                     while (rs.next()) {
                         topRepos.add(new JsonObject()
