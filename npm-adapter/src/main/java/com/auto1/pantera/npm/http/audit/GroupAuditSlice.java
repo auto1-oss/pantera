@@ -210,7 +210,6 @@ public final class GroupAuditSlice implements Slice {
             .message("Querying member for audit: " + member.name)
             .eventCategory("repository")
             .eventAction("group_audit")
-            .field("member.name", member.name)
             .field("url.path", line.uri().getPath())
             .log();
 
@@ -222,10 +221,9 @@ public final class GroupAuditSlice implements Slice {
             // Check status - only parse successful responses
             if (!response.status().success()) {
                 EcsLogger.debug("com.auto1.pantera.npm")
-                    .message("Member audit returned non-success status")
+                    .message("Member audit returned non-success status: " + member.name)
                     .eventCategory("repository")
                     .eventAction("group_audit")
-                    .field("member.name", member.name)
                     .field("http.response.status_code", response.status().code())
                     .log();
                 // Drain body and return empty
@@ -238,20 +236,18 @@ public final class GroupAuditSlice implements Slice {
                         final String json = new String(bytes, StandardCharsets.UTF_8);
                         if (json.isBlank() || json.equals("{}")) {
                             EcsLogger.debug("com.auto1.pantera.npm")
-                                .message("Member returned empty audit response")
+                                .message("Member returned empty audit response: " + member.name)
                                 .eventCategory("repository")
                                 .eventAction("group_audit")
-                                .field("member.name", member.name)
                                 .log();
                             return Json.createObjectBuilder().build();
                         }
                         try (JsonReader reader = Json.createReader(new StringReader(json))) {
                             final JsonObject result = reader.readObject();
                             EcsLogger.debug("com.auto1.pantera.npm")
-                                .message(String.format("Member returned audit data with %d entries", result.size()))
+                                .message(String.format("Member '%s' returned audit data with %d entries", member.name, result.size()))
                                 .eventCategory("repository")
                                 .eventAction("group_audit")
-                                .field("member.name", member.name)
                                 .log();
                             return result;
                         }
@@ -260,7 +256,6 @@ public final class GroupAuditSlice implements Slice {
                             .message("Failed to parse audit response from member: " + member.name)
                             .eventCategory("repository")
                             .eventAction("group_audit")
-                            .field("member.name", member.name)
                             .error(e)
                             .log();
                         return Json.createObjectBuilder().build();
@@ -271,7 +266,6 @@ public final class GroupAuditSlice implements Slice {
                 .message("Member audit query failed: " + member.name)
                 .eventCategory("repository")
                 .eventAction("group_audit")
-                .field("member.name", member.name)
                 .error(err)
                 .log();
             return Json.createObjectBuilder().build();

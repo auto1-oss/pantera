@@ -1,0 +1,2 @@
+//__REGISTRY_HOST__/npm_group/:_auth=__AUTH_TOKEN__
+@bench:registry=http://__REGISTRY_HOST__/npm_group/

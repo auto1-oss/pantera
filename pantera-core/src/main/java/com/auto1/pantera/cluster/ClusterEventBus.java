@@ -123,7 +123,7 @@ public final class ClusterEventBus implements AutoCloseable {
             .message("Event published: " + topic)
             .eventCategory("cluster")
             .eventAction("event_publish")
-            .field("cluster.topic", topic)
+
             .eventOutcome("success")
             .log();
     }
@@ -149,7 +149,7 @@ public final class ClusterEventBus implements AutoCloseable {
                 .message("Subscribed to topic: " + topic)
                 .eventCategory("cluster")
                 .eventAction("topic_subscribe")
-                .field("cluster.topic", topic)
+    
                 .eventOutcome("success")
                 .log();
         }
@@ -223,7 +223,7 @@ public final class ClusterEventBus implements AutoCloseable {
                         .error(ex)
                         .eventCategory("cluster")
                         .eventAction("event_dispatch")
-                        .field("cluster.topic", topic)
+            
                         .eventOutcome("failure")
                         .log();
                 }
@@ -235,7 +235,7 @@ public final class ClusterEventBus implements AutoCloseable {
                 )
                 .eventCategory("cluster")
                 .eventAction("event_dispatch")
-                .field("cluster.topic", topic)
+    
                 .eventOutcome("success")
                 .log();
         }

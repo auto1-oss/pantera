@@ -631,18 +631,17 @@ final class JdbcCooldownService implements CooldownService {
 
     private void expire(final DbBlockRecord record, final Instant when) {
         EcsLogger.info("com.auto1.pantera.cooldown")
-            .message("Deleting expired cooldown block")
+            .message("Deleting expired cooldown block: reason=" + record.reason().name()
+                + " blocked_at=" + record.blockedAt()
+                + " blocked_until=" + record.blockedUntil()
+                + " blocked_by=" + record.blockedBy()
+                + " expired_at=" + when)
             .eventCategory("cooldown")
             .eventAction("block_expired_delete")
             .field("package.name", record.artifact())
             .field("package.version", record.version())
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
-            .field("cooldown.reason", record.reason().name())
-            .field("cooldown.blocked_at", record.blockedAt().toString())
-            .field("cooldown.blocked_until", record.blockedUntil().toString())
-            .field("cooldown.blocked_by", record.blockedBy())
-            .field("cooldown.expired_at", when.toString())
             .log();
         this.repository.deleteBlock(record.id());
         // Decrement active blocks metric (O(1), no DB query)
@@ -674,19 +673,18 @@ final class JdbcCooldownService implements CooldownService {
         final List<DbBlockRecord> blocks = this.repository.findActiveForRepo(repoType, repoName);
         for (final DbBlockRecord record : blocks) {
             EcsLogger.info("com.auto1.pantera.cooldown")
-                .message("Deleting unblocked cooldown block (bulk unblock-all)")
+                .message("Deleting unblocked cooldown block (bulk unblock-all): reason=" + record.reason().name()
+                    + " blocked_at=" + record.blockedAt()
+                    + " blocked_until=" + record.blockedUntil()
+                    + " blocked_by=" + record.blockedBy()
+                    + " unblocked_by=" + actor
+                    + " unblocked_at=" + now)
                 .eventCategory("cooldown")
                 .eventAction("block_unblocked_delete")
                 .field("package.name", record.artifact())
                 .field("package.version", record.version())
                 .field("repository.type", repoType)
                 .field("repository.name", repoName)
-                .field("cooldown.reason", record.reason().name())
-                .field("cooldown.blocked_at", record.blockedAt().toString())
-                .field("cooldown.blocked_until", record.blockedUntil().toString())
-                .field("cooldown.blocked_by", record.blockedBy())
-                .field("cooldown.unblocked_by", actor)
-                .field("cooldown.unblocked_at", now.toString())
                 .log();
         }
         // Single bulk DELETE instead of N individual updates
@@ -699,19 +697,18 @@ final class JdbcCooldownService implements CooldownService {
 
     private void release(final DbBlockRecord record, final String actor, final Instant when) {
         EcsLogger.info("com.auto1.pantera.cooldown")
-            .message("Deleting unblocked cooldown block")
+            .message("Deleting unblocked cooldown block: reason=" + record.reason().name()
+                + " blocked_at=" + record.blockedAt()
+                + " blocked_until=" + record.blockedUntil()
+                + " blocked_by=" + record.blockedBy()
+                + " unblocked_by=" + actor
+                + " unblocked_at=" + when)
             .eventCategory("cooldown")
             .eventAction("block_unblocked_delete")
             .field("package.name", record.artifact())
             .field("package.version", record.version())
             .field("repository.type", record.repoType())
             .field("repository.name", record.repoName())
-            .field("cooldown.reason", record.reason().name())
-            .field("cooldown.blocked_at", record.blockedAt().toString())
-            .field("cooldown.blocked_until", record.blockedUntil().toString())
-            .field("cooldown.blocked_by", record.blockedBy())
-            .field("cooldown.unblocked_by", actor)
-            .field("cooldown.unblocked_at", when.toString())
             .log();
         this.repository.deleteBlock(record.id());
     }

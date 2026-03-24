@@ -49,3 +49,6 @@ pantera-main/docker-compose/pantera/artifacts/npm/package-lock.json
 pantera-main/docker-compose/pantera/artifacts/php/composer.lock
 /pantera-main/docker-compose/pantera/security
 /pantera-main/docker-compose/pantera/security
+/benchmark/setup/repos-old/.system
+/benchmark/setup/repos-old/.tmp
+/pantera-backfill

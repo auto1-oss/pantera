@@ -136,8 +136,6 @@ public final class DbNodeRegistry {
                 .eventCategory("cluster")
                 .eventAction("node_register")
                 .eventOutcome("success")
-                .field("node.id", node.nodeId())
-                .field("node.hostname", node.hostname())
                 .log();
         }
     }
@@ -164,7 +162,6 @@ public final class DbNodeRegistry {
                     .eventCategory("cluster")
                     .eventAction("node_heartbeat")
                     .eventOutcome("failure")
-                    .field("node.id", nodeId)
                     .log();
             } else {
                 EcsLogger.debug(DbNodeRegistry.LOGGER)
@@ -172,7 +169,6 @@ public final class DbNodeRegistry {
                     .eventCategory("cluster")
                     .eventAction("node_heartbeat")
                     .eventOutcome("success")
-                    .field("node.id", nodeId)
                     .log();
             }
         }
@@ -198,7 +194,6 @@ public final class DbNodeRegistry {
                 .eventCategory("cluster")
                 .eventAction("node_deregister")
                 .eventOutcome("success")
-                .field("node.id", nodeId)
                 .log();
         }
     }
@@ -242,12 +237,10 @@ public final class DbNodeRegistry {
             }
         }
         EcsLogger.debug(DbNodeRegistry.LOGGER)
-            .message("Live nodes query returned " + result.size() + " nodes")
+            .message("Live nodes query: " + result.size() + " nodes (timeout=" + heartbeatTimeoutMs + "ms)")
             .eventCategory("cluster")
             .eventAction("live_nodes_query")
             .eventOutcome("success")
-            .field("cluster.live_count", result.size())
-            .field("cluster.heartbeat_timeout_ms", heartbeatTimeoutMs)
             .log();
         return result;
     }
@@ -273,12 +266,10 @@ public final class DbNodeRegistry {
         }
         if (evicted > 0) {
             EcsLogger.info(DbNodeRegistry.LOGGER)
-                .message("Evicted " + evicted + " stale nodes")
+                .message("Evicted " + evicted + " stale nodes (timeout=" + heartbeatTimeoutMs + "ms)")
                 .eventCategory("cluster")
                 .eventAction("node_evict")
                 .eventOutcome("success")
-                .field("cluster.evicted_count", evicted)
-                .field("cluster.heartbeat_timeout_ms", heartbeatTimeoutMs)
                 .log();
         }
         return evicted;

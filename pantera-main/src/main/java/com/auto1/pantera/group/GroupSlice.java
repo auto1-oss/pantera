@@ -524,12 +524,11 @@ public final class GroupSlice implements Slice {
     ) {
         if (member.isCircuitOpen()) {
             ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                .message("Member circuit OPEN, skipping")
+                .message("Member circuit OPEN, skipping: " + member.name())
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("failure")
-                .field("repository.name", this.group)
-                .field("member.name", member.name()))
+                .field("repository.name", this.group))
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.unavailable().build()
@@ -568,12 +567,11 @@ public final class GroupSlice implements Slice {
     ) {
         if (member.isCircuitOpen()) {
             ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                .message("Member circuit OPEN, skipping")
+                .message("Member circuit OPEN, skipping: " + member.name())
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("failure")
-                .field("repository.name", this.group)
-                .field("member.name", member.name()))
+                .field("repository.name", this.group))
                 .log();
             return CompletableFuture.completedFuture(
                 ResponseBuilder.unavailable().build()
@@ -589,11 +587,10 @@ public final class GroupSlice implements Slice {
 
         // Log the path rewriting for troubleshooting
         EcsLogger.info("com.auto1.pantera.group")
-            .message(String.format("Forwarding request to member: rewrote path %s to %s", line.uri().getPath(), rewritten.uri().getPath()))
+            .message(String.format("Forwarding request to member '%s': rewrote path %s to %s", member.name(), line.uri().getPath(), rewritten.uri().getPath()))
             .eventCategory("repository")
             .eventAction("group_forward")
             .field("repository.name", this.group)
-            .field("member.name", member.name())
             .log();
 
         return member.slice().response(
@@ -626,12 +623,11 @@ public final class GroupSlice implements Slice {
                 // Only log slow responses
                 if (latency > 1000) {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                        .message("Slow member response")
+                        .message("Slow member response: " + member.name())
                         .eventCategory("repository")
                         .eventAction("group_query")
                         .eventOutcome("success")
                         .field("repository.name", this.group)
-                        .field("member.name", member.name())
                         .duration(latency))
                         .log();
                 }
@@ -642,11 +638,10 @@ public final class GroupSlice implements Slice {
                 result.complete(resp);
             } else {
                 ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Member returned success but another member already won")
+                    .message("Member '" + member.name() + "' returned success but another member already won")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .field("repository.name", this.group)
-                    .field("member.name", member.name())
                     .field("http.response.status_code", status.code()))
                     .log();
                 drainBody(member.name(), resp.body());
@@ -655,12 +650,11 @@ public final class GroupSlice implements Slice {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
                 ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
-                    .message("Member returned FORBIDDEN (cooldown/blocked)")
+                    .message("Member '" + member.name() + "' returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("repository")
                     .eventAction("group_query")
                     .eventOutcome("success")
                     .field("repository.name", this.group)
-                    .field("member.name", member.name())
                     .field("http.response.status_code", 403))
                     .log();
                 member.recordSuccess(); // Not a failure - valid response
@@ -671,12 +665,11 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member
             ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
-                .message("Member returned 404")
+                .message("Member '" + member.name() + "' returned 404")
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("not_found")
                 .field("repository.name", this.group)
-                .field("member.name", member.name())
                 .field("url.path", pathKey.string()))
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
@@ -685,12 +678,11 @@ public final class GroupSlice implements Slice {
         } else {
             // Server errors (500, 503, etc.): record failure, try next member
             ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                .message("Member returned error status (" + (pending.get() - 1) + " pending)")
+                .message("Member '" + member.name() + "' returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("repository")
                 .eventAction("group_query")
                 .eventOutcome("failure"))
                 .field("repository.name", this.group)
-                .field("member.name", member.name())
                 .field("http.response.status_code", status.code())
                 .log();
             member.recordFailure();
@@ -714,12 +706,11 @@ public final class GroupSlice implements Slice {
         final RequestContext ctx
     ) {
         ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-            .message("Member query failed")
+            .message("Member query failed: " + member.name())
             .eventCategory("repository")
             .eventAction("group_query")
             .eventOutcome("failure")
             .field("repository.name", this.group)
-            .field("member.name", member.name())
             .field("error.message", err.getMessage()))
             .log();
         member.recordFailure();
@@ -773,12 +764,11 @@ public final class GroupSlice implements Slice {
             // Too many concurrent drains — skip to prevent memory pressure
             // The response will eventually be GC'd and the connection cleaned up
             EcsLogger.debug("com.auto1.pantera.group")
-                .message("Skipping body drain (too many concurrent drains)")
+                .message("Skipping body drain (too many concurrent drains): " + memberName)
                 .eventCategory("repository")
                 .eventAction("body_drain")
                 .eventOutcome("skipped")
                 .field("repository.name", GroupSlice.this.group)
-                .field("member.name", memberName)
                 .log();
             return;
         }
@@ -800,12 +790,11 @@ public final class GroupSlice implements Slice {
             public void onError(final Throwable err) {
                 DRAIN_PERMITS.release();
                 EcsLogger.warn("com.auto1.pantera.group")
-                    .message("Failed to drain response body")
+                    .message("Failed to drain response body: " + memberName)
                     .eventCategory("repository")
                     .eventAction("body_drain")
                     .eventOutcome("failure")
                     .field("repository.name", GroupSlice.this.group)
-                    .field("member.name", memberName)
                     .field("error.message", err.getMessage())
                     .log();
             }

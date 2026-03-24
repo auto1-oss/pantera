@@ -200,10 +200,9 @@ public final class ComposerGroupSlice implements Slice {
                     final Headers sanitized = dropFullPathHeader(headers);
 
                     EcsLogger.debug("com.auto1.pantera.composer")
-                        .message("Fetching packages.json from member")
+                        .message("Fetching packages.json from member: " + member)
                         .eventCategory("repository")
                         .eventAction("packages_fetch")
-                        .field("member.name", member)
                         .log();
 
                     return memberSlice.response(rewritten, sanitized, Content.EMPTY)
@@ -233,16 +232,14 @@ public final class ComposerGroupSlice implements Slice {
                                             .eventCategory("repository")
                                             .eventAction("packages_fetch")
                                             .eventOutcome("success")
-                                            .field("member.name", member)
                                             .log();
                                         return json;
                                     } catch (Exception e) {
                                         EcsLogger.warn("com.auto1.pantera.composer")
-                                            .message("Failed to parse packages.json from member")
+                                            .message("Failed to parse packages.json from member: " + member)
                                             .eventCategory("repository")
                                             .eventAction("packages_parse")
                                             .eventOutcome("failure")
-                                            .field("member.name", member)
                                             .field("error.message", e.getMessage())
                                             .log();
                                         return Json.createObjectBuilder().build();
@@ -250,11 +247,10 @@ public final class ComposerGroupSlice implements Slice {
                                 });
                         } else {
                             EcsLogger.debug("com.auto1.pantera.composer")
-                                .message("Member returned non-OK status for packages.json")
+                                .message("Member '" + member + "' returned non-OK status for packages.json")
                                 .eventCategory("repository")
                                 .eventAction("packages_fetch")
                                 .eventOutcome("failure")
-                                .field("member.name", member)
                                 .field("http.response.status_code", resp.status().code())
                                 .log();
                             // Drain non-OK response body to release upstream connection
@@ -265,11 +261,10 @@ public final class ComposerGroupSlice implements Slice {
                     })
                     .exceptionally(ex -> {
                         EcsLogger.warn("com.auto1.pantera.composer")
-                            .message("Error fetching packages.json from member")
+                            .message("Error fetching packages.json from member: " + member)
                             .eventCategory("repository")
                             .eventAction("packages_fetch")
                             .eventOutcome("failure")
-                            .field("member.name", member)
                             .field("error.message", ex.getMessage())
                             .log();
                         return Json.createObjectBuilder().build();

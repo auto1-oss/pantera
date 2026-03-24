@@ -12,7 +12,6 @@ package com.auto1.pantera.asto.log;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;
-import org.slf4j.MDC;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -194,15 +193,9 @@ public final class EcsLogger {
     public void log() {
         final org.apache.logging.log4j.Logger logger = LogManager.getLogger(this.category);
 
-        // Add trace.id from MDC if available
-        final String traceId = MDC.get("trace.id");
-        if (traceId != null && !traceId.isEmpty()) {
-            this.fields.put("trace.id", traceId);
-        }
-
-        // Add data stream fields (ECS data_stream.*)
-        this.fields.put("data_stream.type", "logs");
-        this.fields.put("data_stream.dataset", "pantera.log");
+        // NOTE: trace.id is in MDC (set by EcsLoggingSlice).
+        // EcsLayout automatically includes all MDC entries in JSON output.
+        // Do NOT copy them into MapMessage — that causes duplicate fields in Elastic.
 
         // Add event fields
         if (this.eventCategory != null) {

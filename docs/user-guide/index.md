@@ -31,6 +31,7 @@ Step-by-step instructions for configuring your client and working with each pack
 - [Search and Browse](search-and-browse.md) -- Full-text search, artifact locate, browsing via UI and HTTP.
 - [Cooldown](cooldown.md) -- What gets blocked and why, checking status, requesting unblock.
 - [Import and Migration](import-and-migration.md) -- Bulk import API, backfill CLI, migrating from other registries.
+- [JFrog Artifactory Migration](jfrog-migration.md) -- Step-by-step guide to replace JFrog plugins with standard publishing to Pantera.
 
 ### Interfaces
 

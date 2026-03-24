@@ -1,5 +1,0 @@
-repo:
-  type: maven-group
-  members:
-    - maven
-    - maven_proxy

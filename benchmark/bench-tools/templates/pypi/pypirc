@@ -1,0 +1,7 @@
+[distutils]
+index-servers = pantera
+
+[pantera]
+repository = http://__REGISTRY_HOST__/pypi
+username = __USERNAME__
+password = __PASSWORD__

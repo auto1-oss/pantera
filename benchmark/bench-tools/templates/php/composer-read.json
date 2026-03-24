@@ -1,0 +1,19 @@
+{
+  "name": "bench/reader",
+  "version": "1.0.0",
+  "description": "Benchmark read project",
+  "type": "project",
+  "license": "proprietary",
+  "repositories": [
+    {
+      "type": "composer",
+      "url": "http://__REGISTRY_HOST__/php_group"
+    }
+  ],
+  "require": {
+    "bench/read": "1.0.0"
+  },
+  "config": {
+    "secure-http": false
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@bench/reader",
+  "version": "1.0.0",
+  "description": "Benchmark read project",
+  "dependencies": {
+    "@bench/read": "1.0.0"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@bench/read",
+  "version": "1.0.0",
+  "description": "Benchmark seed package for readers",
+  "main": "index.js",
+  "license": "UNLICENSED"
+}

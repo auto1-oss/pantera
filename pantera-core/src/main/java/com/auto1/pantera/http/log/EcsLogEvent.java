@@ -15,7 +15,6 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;
-import org.slf4j.MDC;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -54,9 +53,6 @@ public final class EcsLogEvent {
         fields.put("event.kind", "event");
         fields.put("event.category", "web");
         fields.put("event.type", "access");
-        // Add data stream fields (ECS data_stream.*)
-        fields.put("data_stream.type", "logs");
-        fields.put("data_stream.dataset", "pantera.log");
     }
 
     /**
@@ -272,11 +268,9 @@ public final class EcsLogEvent {
      * </ul>
      */
     public void log() {
-        // Add trace.id from MDC if available (ECS tracing field)
-        final String traceId = MDC.get("trace.id");
-        if (traceId != null && !traceId.isEmpty()) {
-            fields.put("trace.id", traceId);
-        }
+        // NOTE: trace.id, client.ip, user.name are in MDC (set by EcsLoggingSlice).
+        // EcsLayout automatically includes all MDC entries in JSON output.
+        // Do NOT copy them into MapMessage — that causes duplicate fields in Elastic.
 
         // Determine log level based on status and duration
         final Integer statusCode = (Integer) fields.get("http.response.status_code");

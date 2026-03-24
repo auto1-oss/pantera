@@ -12,8 +12,6 @@ package com.auto1.pantera.http.log;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.message.MapMessage;
-import org.slf4j.MDC;
-
 import java.util.HashMap;
 import java.util.Map;
 
@@ -236,32 +234,9 @@ public final class EcsLogger {
      * Uses Log4j2 MapMessage for proper structured JSON output with ECS fields.
      */
     public void log() {
-        // Add trace context from MDC if available (ECS tracing fields)
-        // These are set by EcsLoggingSlice at request start for request correlation
-        final String traceId = MDC.get("trace.id");
-        if (traceId != null && !traceId.isEmpty()) {
-            this.fields.put("trace.id", traceId);
-        }
-        
-        // Add client.ip from MDC if not already set
-        if (!this.fields.containsKey("client.ip")) {
-            final String clientIp = MDC.get("client.ip");
-            if (clientIp != null && !clientIp.isEmpty()) {
-                this.fields.put("client.ip", clientIp);
-            }
-        }
-        
-        // Add user.name from MDC if not already set
-        if (!this.fields.containsKey("user.name")) {
-            final String userName = MDC.get("user.name");
-            if (userName != null && !userName.isEmpty()) {
-                this.fields.put("user.name", userName);
-            }
-        }
-
-        // Add data stream fields (ECS data_stream.*)
-        this.fields.put("data_stream.type", "logs");
-        this.fields.put("data_stream.dataset", "pantera.log");
+        // NOTE: trace.id, client.ip, user.name are in MDC (set by EcsLoggingSlice).
+        // EcsLayout automatically includes all MDC entries in JSON output.
+        // Do NOT copy them into MapMessage — that causes duplicate fields in Elastic.
 
         // Create MapMessage with all fields for structured JSON output
         final MapMessage mapMessage = new MapMessage(this.fields);

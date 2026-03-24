@@ -336,12 +336,11 @@ public final class AuthHandler {
                 }
                 if (resp.statusCode() / 100 != 2) {
                     EcsLogger.error("com.auto1.pantera.api.v1")
-                        .message("SSO token exchange failed")
+                        .message("SSO token exchange failed via provider=" + provider)
                         .eventCategory("authentication")
                         .eventAction("sso_callback")
                         .eventOutcome("failure")
                         .field("http.response.status_code", resp.statusCode())
-                        .field("provider", provider)
                         .log();
                     throw new IllegalStateException(
                         "Token exchange failed with status " + resp.statusCode()
@@ -391,22 +390,20 @@ public final class AuthHandler {
                     }
                 } else {
                     EcsLogger.warn("com.auto1.pantera.api.v1")
-                        .message("SSO id_token has no groups claim")
+                        .message("SSO id_token has no groups claim, groups_claim=" + groupsClaim
+                            + " claims_keys=[" + String.join(",", claims.keySet()) + "]")
                         .eventCategory("authentication")
                         .eventAction("sso_groups")
                         .field("user.name", username)
-                        .field("groups.claim", groupsClaim)
-                        .field("claims.keys", String.join(",", claims.keySet()))
                         .log();
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("SSO groups extracted from id_token")
+                    .message("SSO groups extracted from id_token: groups_claim=" + groupsClaim
+                        + " groups_found=[" + String.join(",", groups) + "]"
+                        + " groups_count=" + groups.size())
                     .eventCategory("authentication")
                     .eventAction("sso_groups")
                     .field("user.name", username)
-                    .field("groups.claim", groupsClaim)
-                    .field("groups.found", String.join(",", groups))
-                    .field("groups.count", groups.size())
                     .log();
                 // Map Okta/IdP groups to Pantera roles using group-roles config.
                 // Groups with an explicit mapping use the mapped role name.
@@ -443,12 +440,11 @@ public final class AuthHandler {
                 }
                 if (!groupRolesMap.isEmpty()) {
                     EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO group-roles mapping from config")
+                        .message("SSO group-roles mapping from config: group_roles_keys=["
+                            + String.join(",", groupRolesMap.keySet()) + "]")
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
                         .field("user.name", username)
-                        .field("group-roles.keys",
-                            String.join(",", groupRolesMap.keySet()))
                         .log();
                 }
                 for (final String grp : groups) {
@@ -464,14 +460,12 @@ public final class AuthHandler {
                     }
                     roles.add(mapped);
                     EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO group mapped to role")
+                        .message("SSO group mapped to role: group=" + grp
+                            + " role=" + mapped
+                            + " mapping=" + (groupRolesMap.containsKey(grp) ? "explicit" : "auto"))
                         .eventCategory("authentication")
                         .eventAction("sso_role_mapping")
                         .field("user.name", username)
-                        .field("okta.group", grp)
-                        .field("pantera.role", mapped)
-                        .field("mapping",
-                            groupRolesMap.containsKey(grp) ? "explicit" : "auto")
                         .log();
                 }
                 // If no roles mapped, apply default role "reader" if configured
@@ -480,11 +474,10 @@ public final class AuthHandler {
                     if (defaultRole != null && !defaultRole.isEmpty()) {
                         roles.add(defaultRole);
                         EcsLogger.info("com.auto1.pantera.api.v1")
-                            .message("SSO using default role (no group match)")
+                            .message("SSO using default role (no group match): default_role=" + defaultRole)
                             .eventCategory("authentication")
                             .eventAction("sso_role_mapping")
                             .field("user.name", username)
-                            .field("default.role", defaultRole)
                             .log();
                     }
                 }
@@ -501,13 +494,12 @@ public final class AuthHandler {
                         userInfo.add("email", email);
                     }
                     EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO provisioning user with roles")
+                        .message("SSO provisioning user with roles via provider=" + provider
+                            + " roles=[" + String.join(",", roles) + "]"
+                            + " roles_count=" + roles.size())
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
-                        .field("provider", provider)
-                        .field("roles", String.join(",", roles))
-                        .field("roles.count", roles.size())
                         .log();
                     AuthHandler.this.users.addOrUpdate(userInfo.build(), username);
                 } else {
@@ -519,14 +511,13 @@ public final class AuthHandler {
                         .log();
                 }
                 EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("SSO authentication successful")
+                    .message("SSO authentication successful via provider=" + provider
+                        + " groups=[" + String.join(",", groups) + "]"
+                        + " roles=[" + String.join(",", roles) + "]")
                     .eventCategory("authentication")
                     .eventAction("sso_callback")
                     .eventOutcome("success")
                     .field("user.name", username)
-                    .field("provider", provider)
-                    .field("groups", String.join(",", groups))
-                    .field("roles", String.join(",", roles))
                     .log();
                 // Generate Pantera JWT
                 final AuthUser authUser = new AuthUser(username, provider);

@@ -1,11 +1,13 @@
 ##
-## Pantera Benchmark Infrastructure
-## Runs two Pantera instances (v1.20.12 and v1.22.0) side-by-side
-## with shared PostgreSQL and Valkey for fair comparison.
+## Pantera Benchmark v3 Infrastructure
+## Runs ONE Pantera instance at a time with 8 CPU / 16 GB (isolated).
+## bench-tools sidecar runs real client traffic against it.
+##
+## For v1.20.12 (artipie): CONFIG_DIR=/etc/artipie, DATA_DIR=/var/artipie
+## For v2.0.0 (pantera):   CONFIG_DIR=/etc/pantera, DATA_DIR=/var/pantera
 ##
 
 services:
-  # --- Shared Infrastructure ---
   postgres:
     image: postgres:17.8-alpine
     container_name: bench-postgres
@@ -30,7 +32,7 @@ services:
     command:
       - valkey-server
       - --maxmemory
-      - 256mb
+      - 512mb
       - --maxmemory-policy
       - allkeys-lru
       - --save
@@ -45,101 +47,68 @@ services:
     networks:
       - bench-net
 
-  # Upstream Docker registry for proxy tests
-  upstream-registry:
-    image: registry:2
-    container_name: bench-upstream-registry
-    environment:
-      REGISTRY_STORAGE_DELETE_ENABLED: "true"
-    networks:
-      - bench-net
-
-  # Upstream NPM registry (Verdaccio) for proxy tests
-  upstream-npm:
-    image: verdaccio/verdaccio:6
-    container_name: bench-upstream-npm
-    networks:
-      - bench-net
-
-  # --- Pantera OLD (v1.20.12) ---
-  pantera-old:
-    image: ${PANTERA_OLD_IMAGE:-167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.20.12}
-    container_name: bench-pantera-old
-    # Run as root to avoid volume permission issues (benchmark only)
+  pantera:
+    image: ${PANTERA_IMAGE}
+    container_name: bench-pantera
     user: "0:0"
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
         condition: service_healthy
-      upstream-registry:
-        condition: service_started
-      upstream-npm:
-        condition: service_started
-    cpus: 4
-    mem_limit: 8gb
+    cpus: 8
+    mem_limit: 16gb
     environment:
-      - PANTERA_VERSION=1.20.12
       - PANTERA_USER_NAME=${PANTERA_USER_NAME:-pantera}
       - PANTERA_USER_PASS=${PANTERA_USER_PASS:-pantera}
-      - LOG4J_CONFIGURATION_FILE=/etc/pantera/log4j2.xml
+      - ARTIPIE_USER_NAME=${PANTERA_USER_NAME:-pantera}
+      - ARTIPIE_USER_PASS=${PANTERA_USER_PASS:-pantera}
+      - LOG4J_CONFIGURATION_FILE=${CONFIG_DIR:-/etc/pantera}/log4j2.xml
       - ELASTIC_APM_ENABLED=false
-      - JVM_ARGS=-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/var/pantera/cache/tmp
+      - JVM_ARGS=-XX:+UseG1GC -Xms10g -Xmx10g -XX:G1HeapRegionSize=16m -XX:MaxGCPauseMillis=300 -XX:MaxDirectMemorySize=2g -Djava.io.tmpdir=${DATA_DIR:-/var/pantera}/cache/tmp
     volumes:
-      - ./setup/pantera-old.yml:/etc/pantera/pantera.yml
-      - ./setup/repos-old:/var/pantera/repo
-      - ./setup/security:/var/pantera/security
-      - ./setup/log4j2-bench.xml:/etc/pantera/log4j2.xml
-      - pantera-old-data:/var/pantera/data
-      - pantera-old-cache:/var/pantera/cache
+      - ./setup/${PANTERA_CONFIG:-pantera-new.yml}:${CONFIG_DIR:-/etc/pantera}/${CONFIG_FILE:-pantera.yml}
+      - ./setup/${REPOS_DIR:-repos-new}:${DATA_DIR:-/var/pantera}/repo
+      - ./setup/security:${DATA_DIR:-/var/pantera}/security
+      - ./setup/log4j2-bench.xml:${CONFIG_DIR:-/etc/pantera}/log4j2.xml
+      - pantera-data:${DATA_DIR:-/var/pantera}/data
+      - pantera-cache:${DATA_DIR:-/var/pantera}/cache
     ports:
-      - "9081:8080"
-      - "9082:8086"
+      - "9080:8080"
+      - "9086:8086"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/.health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     networks:
       - bench-net
 
-  # --- Pantera NEW (v1.22.0) ---
-  pantera-new:
-    image: ${PANTERA_NEW_IMAGE:-167967495118.dkr.ecr.eu-west-1.amazonaws.com/devops/pantera:1.22.0}
-    container_name: bench-pantera-new
-    # Run as root to avoid volume permission issues (benchmark only)
-    user: "0:0"
+  bench-tools:
+    build:
+      context: ./bench-tools
+      args:
+        NUM_WORKERS: ${BENCH_WRITERS:-100}
+    container_name: bench-tools
     depends_on:
-      postgres:
+      pantera:
         condition: service_healthy
-      valkey:
-        condition: service_healthy
-      upstream-registry:
-        condition: service_started
-      upstream-npm:
-        condition: service_started
-    cpus: 4
-    mem_limit: 8gb
     environment:
-      - PANTERA_VERSION=1.22.0
-      - PANTERA_USER_NAME=${PANTERA_USER_NAME:-pantera}
-      - PANTERA_USER_PASS=${PANTERA_USER_PASS:-pantera}
-      - LOG4J_CONFIGURATION_FILE=/etc/pantera/log4j2.xml
-      - ELASTIC_APM_ENABLED=false
-      - JVM_ARGS=-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/var/pantera/cache/tmp
+      - REGISTRY_HOST=bench-pantera:8080
+      - BENCH_USER=${PANTERA_USER_NAME:-pantera}
+      - BENCH_PASS=${PANTERA_USER_PASS:-pantera}
+      - BENCH_CONCURRENCY=${BENCH_CONCURRENCY:-40}
+      - BENCH_DURATION=${BENCH_DURATION:-60}
+      - BENCH_PROTOCOLS=${BENCH_PROTOCOLS:-maven,npm,docker,php,pypi}
+      - BENCH_SKIP_CORRECTNESS=${BENCH_SKIP_CORRECTNESS:-0}
     volumes:
-      - ./setup/pantera-new.yml:/etc/pantera/pantera.yml
-      - ./setup/repos-new:/var/pantera/repo
-      - ./setup/security:/var/pantera/security
-      - ./setup/log4j2-bench.xml:/etc/pantera/log4j2.xml
-      - pantera-new-data:/var/pantera/data
-      - pantera-new-cache:/var/pantera/cache
-    ports:
-      - "9091:8080"
-      - "9092:8086"
+      - ./results:/results
     networks:
       - bench-net
 
 volumes:
-  pantera-old-data:
-  pantera-old-cache:
-  pantera-new-data:
-  pantera-new-cache:
+  pantera-data:
+  pantera-cache:
 
 networks:
   bench-net:

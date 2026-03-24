@@ -221,12 +221,11 @@ public final class UserDao implements CrudUsers {
             ps.setInt(1, userId);
             final int deleted = ps.executeUpdate();
             EcsLogger.info("com.auto1.pantera.db")
-                .message("updateUserRoles: cleared existing roles")
+                .message("updateUserRoles: cleared existing roles, " + deleted + " records removed")
                 .eventCategory("user")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", userId)
-                .field("deleted.count", deleted)
                 .log();
         }
         // Insert new role assignments
@@ -236,13 +235,11 @@ public final class UserDao implements CrudUsers {
                 roleNames.add(roles.getString(idx));
             }
             EcsLogger.info("com.auto1.pantera.db")
-                .message("updateUserRoles: assigning roles")
+                .message("updateUserRoles: assigning " + roleNames.size() + " roles [" + String.join(",", roleNames) + "]")
                 .eventCategory("user")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", userId)
-                .field("roles", String.join(",", roleNames))
-                .field("roles.count", roleNames.size())
                 .log();
             // Auto-create roles that don't exist yet (e.g. SSO default "reader")
             // Uses batch INSERT instead of N individual round-trips
@@ -267,21 +264,18 @@ public final class UserDao implements CrudUsers {
                 }
                 final int[] results = ps.executeBatch();
                 EcsLogger.info("com.auto1.pantera.db")
-                    .message("updateUserRoles: batch role assignment complete")
+                    .message("updateUserRoles: batch role assignment complete, batch_size=" + results.length + " roles=[" + String.join(",", roleNames) + "]")
                     .eventCategory("user")
                     .eventAction("role_assignment")
                     .field("user.name", uname)
-                    .field("roles", String.join(",", roleNames))
-                    .field("batch.size", results.length)
                     .log();
             }
         } else {
             EcsLogger.warn("com.auto1.pantera.db")
-                .message("updateUserRoles: no roles to assign")
+                .message("updateUserRoles: no roles to assign (roles_null=" + (roles == null) + ")")
                 .eventCategory("user")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
-                .field("roles.null", roles == null)
                 .log();
         }
     }

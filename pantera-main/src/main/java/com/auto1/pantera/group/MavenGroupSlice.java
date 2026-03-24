@@ -288,12 +288,11 @@ public final class MavenGroupSlice implements Slice {
                 })
                 .exceptionally(err -> {
                     EcsLogger.warn("com.auto1.pantera.maven")
-                        .message("Member failed to fetch metadata")
+                        .message("Member failed to fetch metadata: " + member)
                         .eventCategory("repository")
                         .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
-                        .field("member.name", member)
                         .error(err)
                         .log();
                     return null;

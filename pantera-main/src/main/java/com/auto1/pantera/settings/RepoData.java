@@ -109,13 +109,12 @@ public final class RepoData {
                                 return asto.deleteAll(artifactKey)
                                     .thenApply(nothing -> {
                                         EcsLogger.info("com.auto1.pantera.settings")
-                                            .message("Deleted artifact directory from repository")
+                                            .message("Deleted artifact directory from repository, " + keys.size() + " files removed")
                                             .eventCategory("repository")
                                             .eventAction("artifact_delete")
                                             .eventOutcome("success")
                                             .field("repository.name", repo)
                                             .field("file.path", artifactPath)
-                                            .field("files.count", keys.size())
                                             .log();
                                         return true;
                                     });

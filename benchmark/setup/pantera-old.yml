@@ -1,17 +1,17 @@
 meta:
   storage:
     type: fs
-    path: /var/pantera/repo
+    path: /var/artipie/repo
 
   credentials:
     - type: env
 
   policy:
-    type: local
+    type: artipie
     eviction_millis: 180000
     storage:
       type: fs
-      path: /var/pantera/security
+      path: /var/artipie/security
 
   artifacts_database:
     postgres_host: "postgres"

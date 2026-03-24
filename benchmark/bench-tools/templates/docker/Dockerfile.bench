@@ -1,0 +1,3 @@
+FROM alpine:3.20
+LABEL bench=true
+RUN echo "benchmark payload" > /data.txt
