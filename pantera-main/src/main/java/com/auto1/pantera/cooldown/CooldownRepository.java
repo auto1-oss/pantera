@@ -194,14 +194,12 @@ public final class CooldownRepository {
         final String sql =
             "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
                 + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
-                + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?"
-                + " AND blocked_until > ?";
+                + "FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, repoType);
             stmt.setString(2, repoName);
             stmt.setString(3, BlockStatus.ACTIVE.name());
-            stmt.setLong(4, Instant.now().toEpochMilli());
             try (ResultSet rs = stmt.executeQuery()) {
                 final List<DbBlockRecord> result = new ArrayList<>();
                 while (rs.next()) {
@@ -223,14 +221,12 @@ public final class CooldownRepository {
      */
     public long countActiveBlocks(final String repoType, final String repoName) {
         final String sql =
-            "SELECT COUNT(*) FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ?"
-                + " AND status = ? AND blocked_until > ?";
+            "SELECT COUNT(*) FROM artifact_cooldowns WHERE repo_type = ? AND repo_name = ? AND status = ?";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, repoType);
             stmt.setString(2, repoName);
             stmt.setString(3, BlockStatus.ACTIVE.name());
-            stmt.setLong(4, Instant.now().toEpochMilli());
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
                     return rs.getLong(1);
@@ -250,11 +246,10 @@ public final class CooldownRepository {
     java.util.Map<String, Long> countAllActiveBlocks() {
         final String sql =
             "SELECT repo_type, repo_name, COUNT(*) as cnt FROM artifact_cooldowns "
-                + "WHERE status = ? AND blocked_until > ? GROUP BY repo_type, repo_name";
+                + "WHERE status = ? GROUP BY repo_type, repo_name";
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, BlockStatus.ACTIVE.name());
-            stmt.setLong(2, Instant.now().toEpochMilli());
             try (ResultSet rs = stmt.executeQuery()) {
                 final java.util.Map<String, Long> result = new java.util.HashMap<>();
                 while (rs.next()) {
@@ -406,7 +401,7 @@ public final class CooldownRepository {
         final String orderBy = " ORDER BY " + col + " " + dir;
         final String base = "SELECT id, repo_type, repo_name, artifact, version, reason, status,"
             + " blocked_by, blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by"
-            + " FROM artifact_cooldowns WHERE status = ? AND blocked_until > ?";
+            + " FROM artifact_cooldowns WHERE status = ?";
         final String sql;
         if (hasSearch) {
             sql = base + " AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)"
@@ -418,7 +413,6 @@ public final class CooldownRepository {
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             int idx = 1;
             stmt.setString(idx++, BlockStatus.ACTIVE.name());
-            stmt.setLong(idx++, Instant.now().toEpochMilli());
             if (hasSearch) {
                 final String pattern = "%" + search.trim() + "%";
                 stmt.setString(idx++, pattern);
@@ -472,16 +466,15 @@ public final class CooldownRepository {
         final boolean hasSearch = search != null && !search.isBlank();
         final String sql;
         if (hasSearch) {
-            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ? AND blocked_until > ?"
-                + " AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)";
+            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ? "
+                + "AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)";
         } else {
-            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ? AND blocked_until > ?";
+            sql = "SELECT COUNT(*) FROM artifact_cooldowns WHERE status = ?";
         }
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
             int idx = 1;
             stmt.setString(idx++, BlockStatus.ACTIVE.name());
-            stmt.setLong(idx++, Instant.now().toEpochMilli());
             if (hasSearch) {
                 final String pattern = "%" + search.trim() + "%";
                 stmt.setString(idx++, pattern);

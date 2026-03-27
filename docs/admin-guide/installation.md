@@ -311,20 +311,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_totals;
 REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_per_repo;
 ```
 
-### 5. Schedule Cooldown Expiry Cleanup
-
-Expired cooldown blocks (`blocked_until` in the past) are hidden from the UI automatically, but they accumulate in the database. Add a pg_cron job to purge them periodically:
-
-```sql
-SELECT cron.schedule(
-  'cleanup-expired-cooldowns',
-  '0 * * * *',   -- every hour
-  $$DELETE FROM artifact_cooldowns
-    WHERE status = 'ACTIVE' AND blocked_until < EXTRACT(EPOCH FROM NOW()) * 1000$$
-);
-```
-
-### 6. Verify
+### 5. Verify
 
 ```sql
 -- Confirm jobs are registered
