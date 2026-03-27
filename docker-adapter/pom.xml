@@ -25,11 +25,11 @@ SOFTWARE.
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <artifactId>docker-adapter</artifactId>
-  <version>2.0.3</version>
+  <version>2.0.4</version>
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.0.3</version>
+    <version>2.0.4</version>
   </parent>
   <name>docker-adapter</name>
   <properties>
@@ -39,12 +39,12 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>http-client</artifactId>
-      <version>2.0.3</version>
+      <version>2.0.4</version>
     </dependency>
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-storage-core</artifactId>
-      <version>2.0.3</version>
+      <version>2.0.4</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -63,7 +63,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>2.0.3</version>
+      <version>2.0.4</version>
       <scope>test</scope>
     </dependency>
     <!-- s3 mocks deps -->
@@ -82,7 +82,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-storage-s3</artifactId>
-      <version>2.0.3</version>
+      <version>2.0.4</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
