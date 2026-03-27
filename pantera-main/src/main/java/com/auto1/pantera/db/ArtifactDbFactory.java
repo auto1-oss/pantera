@@ -509,28 +509,32 @@ public final class ArtifactDbFactory {
                     .error(ex)
                     .log();
             }
-            // Materialized views for dashboard aggregates — replaces 3 parallel seq scans with
-            // sub-millisecond reads; DashboardHandler.buildDashboard() calls REFRESH CONCURRENTLY
-            // every 270 s on the background thread so the heavy scan cost is off the request path.
+            // Materialized views for dashboard aggregates — sub-millisecond reads vs seq scans.
+            // Refreshed externally by pg_cron; see docs/admin-guide/installation.md.
             try {
                 statement.executeUpdate(
                     "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_artifact_totals AS "
                         + "SELECT COUNT(*) AS artifact_count, "
                         + "COALESCE(SUM(size), 0) AS total_size FROM artifacts"
                 );
-                // Single-row MV: unique index on constant expression — required for CONCURRENTLY
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.db")
+                    .message("Failed to create mv_artifact_totals")
+                    .eventCategory("database").eventAction("mv_create").eventOutcome("failure")
+                    .error(ex).log();
+            }
+            // Single-row MV: unique index on constant expression — required for CONCURRENTLY.
+            // Kept in a separate try so a pre-existing MV without the index still gets it.
+            try {
                 statement.executeUpdate(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_artifact_totals "
                         + "ON mv_artifact_totals ((1))"
                 );
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.db")
-                    .message("Failed to create mv_artifact_totals — dashboard will use direct queries until resolved")
-                    .eventCategory("database")
-                    .eventAction("mv_create")
-                    .eventOutcome("failure")
-                    .error(ex)
-                    .log();
+                    .message("Failed to create uq_mv_artifact_totals — REFRESH CONCURRENTLY will not work")
+                    .eventCategory("database").eventAction("mv_index_create").eventOutcome("failure")
+                    .error(ex).log();
             }
             try {
                 statement.executeUpdate(
@@ -540,6 +544,13 @@ public final class ArtifactDbFactory {
                         + "COALESCE(SUM(size), 0) AS total_size "
                         + "FROM artifacts GROUP BY repo_name, repo_type"
                 );
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.db")
+                    .message("Failed to create mv_artifact_per_repo")
+                    .eventCategory("database").eventAction("mv_create").eventOutcome("failure")
+                    .error(ex).log();
+            }
+            try {
                 statement.executeUpdate(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_artifact_per_repo "
                         + "ON mv_artifact_per_repo (repo_name, repo_type)"
@@ -550,12 +561,9 @@ public final class ArtifactDbFactory {
                 );
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.db")
-                    .message("Failed to create mv_artifact_per_repo — dashboard will use direct queries until resolved")
-                    .eventCategory("database")
-                    .eventAction("mv_create")
-                    .eventOutcome("failure")
-                    .error(ex)
-                    .log();
+                    .message("Failed to create indexes on mv_artifact_per_repo — REFRESH CONCURRENTLY will not work")
+                    .eventCategory("database").eventAction("mv_index_create").eventOutcome("failure")
+                    .error(ex).log();
             }
             statement.executeUpdate(
                 String.join(
