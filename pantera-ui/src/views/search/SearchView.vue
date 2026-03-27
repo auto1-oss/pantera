@@ -233,10 +233,10 @@ function browseUrl(data: SearchResult): string {
             <div class="space-y-0.5">
               <div
                 class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
-                :class="typeFilter === null ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                :class="typeFilter === null ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/5'"
                 @click="selectType(null)"
               >
-                <div class="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0" :class="typeFilter === null ? 'border-blue-500 bg-blue-500 shadow-[inset_0_0_0_2px_#111827]' : 'border-gray-600'" />
+                <div class="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0" :class="typeFilter === null ? 'border-blue-500 bg-blue-500 shadow-[inset_0_0_0_2px_#f9fafb] dark:shadow-[inset_0_0_0_2px_#111827]' : 'border-gray-400 dark:border-gray-600'" />
                 All
                 <span class="ml-auto text-xs text-gray-600">{{ items.length }}</span>
               </div>
@@ -244,10 +244,10 @@ function browseUrl(data: SearchResult): string {
                 v-for="[type, count] in typeCounts"
                 :key="type"
                 class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
-                :class="typeFilter === type ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                :class="typeFilter === type ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/5'"
                 @click="selectType(type)"
               >
-                <div class="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0" :class="typeFilter === type ? 'border-blue-500 bg-blue-500 shadow-[inset_0_0_0_2px_#111827]' : 'border-gray-600'" />
+                <div class="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0" :class="typeFilter === type ? 'border-blue-500 bg-blue-500 shadow-[inset_0_0_0_2px_#f9fafb] dark:shadow-[inset_0_0_0_2px_#111827]' : 'border-gray-400 dark:border-gray-600'" />
                 {{ repoTypeBaseLabel(type) }}
                 <span class="ml-auto text-xs text-gray-600">{{ count }}</span>
               </div>
@@ -260,7 +260,7 @@ function browseUrl(data: SearchResult): string {
             <div class="space-y-0.5">
               <div
                 class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
-                :class="repoFilter === null ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                :class="repoFilter === null ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/5'"
                 @click="selectRepo(null)"
               >
                 <div class="w-3.5 h-3.5 rounded border-2 flex-shrink-0 flex items-center justify-center" :class="repoFilter === null ? 'border-blue-500 bg-blue-500' : 'border-gray-600'">
@@ -273,7 +273,7 @@ function browseUrl(data: SearchResult): string {
                 v-for="[repo, count] in repoCounts"
                 :key="repo"
                 class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
-                :class="repoFilter === repo ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                :class="repoFilter === repo ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/5'"
                 @click="selectRepo(repo)"
               >
                 <div class="w-3.5 h-3.5 rounded border-2 flex-shrink-0 flex items-center justify-center" :class="repoFilter === repo ? 'border-blue-500 bg-blue-500' : 'border-gray-600'">

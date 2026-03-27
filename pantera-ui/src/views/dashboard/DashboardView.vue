@@ -149,7 +149,7 @@ const statCards = computed(() => [
         <div
           v-for="card in statCards"
           :key="card.key"
-          class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 border-t-[3px]"
+          class="rounded-xl border border-gray-200 dark:border-b-gray-700 dark:border-x-gray-700 bg-white dark:bg-gray-800 p-5 border-t-[3px]"
           :class="card.accent"
         >
           <div class="flex items-center justify-between mb-3">
@@ -166,13 +166,13 @@ const statCards = computed(() => [
       </div>
 
       <!-- Top 5 Repositories -->
-      <div v-if="topRepos.length > 0" class="rounded-xl border border-gray-700 bg-gray-800 overflow-hidden">
-        <div class="px-5 py-3.5 border-b border-gray-700 flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-white">Top Repositories</h3>
+      <div v-if="topRepos.length > 0" class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Top Repositories</h3>
           <router-link to="/repositories" class="text-xs text-amber-500 hover:underline">View all</router-link>
         </div>
         <!-- Column headers -->
-        <div class="flex items-center gap-3 px-5 py-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-700/50">
+        <div class="flex items-center gap-3 px-5 py-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-200 dark:border-gray-700/50">
           <span class="w-7" />
           <span class="flex-1">Repository</span>
           <span class="w-36 text-center">Usage</span>
@@ -183,12 +183,12 @@ const statCards = computed(() => [
           <div
             v-for="(repo, idx) in topRepos"
             :key="repo.name"
-            class="flex items-center gap-3 px-5 py-3 border-b border-gray-700/30 last:border-b-0 hover:bg-gray-700/20 transition-colors"
+            class="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-gray-700/30 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors"
           >
             <!-- Rank -->
             <div
               class="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
-              :class="idx < 3 ? 'bg-amber-500/10 text-amber-500' : 'bg-gray-700 text-gray-500'"
+              :class="idx < 3 ? 'bg-amber-500/10 text-amber-500' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'"
             >
               {{ idx + 1 }}
             </div>
@@ -197,7 +197,7 @@ const statCards = computed(() => [
             <div class="flex-1 min-w-0">
               <router-link
                 :to="`/repositories/${repo.name}`"
-                class="text-sm font-semibold text-gray-100 hover:text-amber-500 transition-colors"
+                class="text-sm font-semibold text-gray-900 dark:text-gray-100 hover:text-amber-500 transition-colors"
               >
                 {{ repo.name }}
               </router-link>
@@ -206,7 +206,7 @@ const statCards = computed(() => [
 
             <!-- Bar -->
             <div class="w-36 flex-shrink-0">
-              <div class="h-2 bg-gray-700 rounded-full overflow-hidden">
+              <div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                 <div
                   class="h-full rounded-full"
                   :style="{ width: `${Math.max(((repo.size ?? 0) / maxSize) * 100, 6)}%`, background: repoTypeColor(repo.type) }"
@@ -215,12 +215,12 @@ const statCards = computed(() => [
             </div>
 
             <!-- Artifacts column -->
-            <div class="w-20 text-right flex-shrink-0 tabular-nums text-sm font-semibold text-gray-300">
+            <div class="w-20 text-right flex-shrink-0 tabular-nums text-sm font-semibold text-gray-700 dark:text-gray-300">
               {{ formatCount(repo.artifact_count) }}
             </div>
 
             <!-- Size column -->
-            <div class="w-20 text-right flex-shrink-0 tabular-nums text-sm text-gray-400">
+            <div class="w-20 text-right flex-shrink-0 tabular-nums text-sm text-gray-500 dark:text-gray-400">
               {{ repo.size ? formatSize(repo.size) : '—' }}
             </div>
           </div>

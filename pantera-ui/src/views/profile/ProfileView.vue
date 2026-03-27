@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { useThemeStore } from '@/stores/theme'
+import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
 import { generateTokenForSession, listTokens, revokeToken, type ApiToken } from '@/api/auth'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -13,6 +13,12 @@ import Select from 'primevue/select'
 const auth = useAuthStore()
 const theme = useThemeStore()
 const notify = useNotificationStore()
+
+const themeOptions: { value: ThemeMode; label: string; icon: string }[] = [
+  { value: 'system', label: 'System', icon: 'pi pi-desktop' },
+  { value: 'dark', label: 'Dark', icon: 'pi pi-moon' },
+  { value: 'light', label: 'Light', icon: 'pi pi-sun' },
+]
 
 const permissionEntries = computed(() =>
   Object.entries(auth.user?.permissions ?? {}).filter(([, v]) => v),
@@ -210,13 +216,19 @@ function expirySeverity(token: ApiToken): string {
         <template #content>
           <div class="flex items-center justify-between">
             <span class="text-sm">Theme</span>
-            <Button
-              :label="theme.isDark ? 'Switch to Light' : 'Switch to Dark'"
-              :icon="theme.isDark ? 'pi pi-sun' : 'pi pi-moon'"
-              severity="secondary"
-              text
-              @click="theme.toggle()"
-            />
+            <div class="flex gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
+              <Button
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                :label="opt.label"
+                :icon="opt.icon"
+                :severity="theme.mode === opt.value ? 'secondary' : 'secondary'"
+                size="small"
+                :text="theme.mode !== opt.value"
+                :class="theme.mode === opt.value ? 'bg-gray-100 dark:bg-gray-700 !text-gray-900 dark:!text-white' : '!text-gray-500 dark:!text-gray-400'"
+                @click="theme.setMode(opt.value)"
+              />
+            </div>
           </div>
         </template>
       </Card>

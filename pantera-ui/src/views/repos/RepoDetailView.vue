@@ -272,7 +272,7 @@ function formatSize(bytes?: number): string {
       <!-- Artifact Tree (non-group repos) -->
       <Card v-else class="shadow-sm">
         <template #title>
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between min-h-[32px]">
             <span>Artifacts</span>
             <div class="flex items-center gap-1">
               <Button
@@ -281,7 +281,7 @@ function formatSize(bytes?: number): string {
                 text size="small"
                 @click="sortAsc = !sortAsc"
               />
-              <Button v-if="currentPath !== '/'" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
+              <Button :class="currentPath === '/' ? 'invisible' : ''" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
             </div>
           </div>
         </template>
