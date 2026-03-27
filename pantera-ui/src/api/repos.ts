@@ -6,8 +6,8 @@ import type {
 
 export async function listRepos(params: {
   page?: number; size?: number; type?: string; q?: string
-} = {}): Promise<PaginatedResponse<RepoListItem>> {
-  const { data } = await getApiClient().get('/repositories', { params })
+} = {}, signal?: AbortSignal): Promise<PaginatedResponse<RepoListItem>> {
+  const { data } = await getApiClient().get('/repositories', { params, signal })
   return data
 }
 
@@ -44,8 +44,8 @@ export async function getMembers(name: string): Promise<RepoMember[]> {
 
 export async function getTree(name: string, params: {
   path?: string; limit?: number; marker?: string
-} = {}): Promise<CursorResponse<TreeEntry>> {
-  const { data } = await getApiClient().get(`/repositories/${name}/tree`, { params })
+} = {}, signal?: AbortSignal): Promise<CursorResponse<TreeEntry>> {
+  const { data } = await getApiClient().get(`/repositories/${name}/tree`, { params, signal })
   return data
 }
 

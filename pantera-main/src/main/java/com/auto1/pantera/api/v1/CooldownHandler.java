@@ -339,10 +339,21 @@ public final class CooldownHandler {
     }
 
     /**
+     * Frontend sort field → DB column mapping.
+     * Prevents SQL injection by explicitly mapping known UI fields to DB columns.
+     */
+    private static final Map<String, String> SORT_COL_MAP = Map.of(
+        "package_name", "artifact",
+        "version", "version",
+        "repo", "repo_name",
+        "repo_type", "repo_type",
+        "reason", "reason",
+        "remaining_hours", "blocked_until"
+    );
+
+    /**
      * GET /api/v1/cooldown/blocked — paginated list of actively blocked artifacts.
-     * Supports server-side search via ?search= query parameter to filter by
-     * artifact name, repo name, or version. This avoids loading all 1M+ rows
-     * client-side.
+     * Supports server-side search via ?search= and sort via ?sort_by= / ?sort_dir=.
      * @param ctx Routing context
      */
     private void blocked(final RoutingContext ctx) {
@@ -363,6 +374,15 @@ public final class CooldownHandler {
         );
         final String searchQuery = ctx.queryParam("search").stream()
             .findFirst().orElse(null);
+        final String sortByParam = ctx.queryParam("sort_by").stream()
+            .findFirst().orElse(null);
+        // SORT_COL_MAP is an immutable Map.of() which throws NPE on null key — guard explicitly
+        final String sortDbCol = sortByParam != null
+            ? SORT_COL_MAP.getOrDefault(sortByParam, "blocked_at")
+            : "blocked_at";
+        final boolean sortAsc = "asc".equalsIgnoreCase(
+            ctx.queryParam("sort_dir").stream().findFirst().orElse("desc")
+        );
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
                 ctx.user().principal().getString(AuthTokenRest.SUB),
@@ -373,7 +393,7 @@ public final class CooldownHandler {
             () -> {
                 final List<DbBlockRecord> allBlocks =
                     this.repository.findAllActivePaginated(
-                        0, Integer.MAX_VALUE, searchQuery
+                        0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
                     );
                 final Instant now = Instant.now();
                 final JsonArray items = new JsonArray();

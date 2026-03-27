@@ -115,7 +115,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             .field("package.name", record.artifactName())
             .field("package.version", record.artifactVersion())
             .field("package.size", record.size())
-            .userName(record.owner())
+            .field("user.name", record.owner())
             .log();
     }
 

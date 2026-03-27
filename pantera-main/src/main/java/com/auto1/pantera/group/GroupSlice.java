@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.slice.KeyFromPath;
@@ -25,8 +26,11 @@ import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
 
 import java.util.ArrayList;
-import java.util.concurrent.Semaphore;
 import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -60,20 +64,35 @@ import org.slf4j.MDC;
 public final class GroupSlice implements Slice {
 
     /**
-     * Resolved drain permits from env/system property/default.
+     * Background executor for draining non-winning member response bodies.
+     * Decoupled from the result path: drain failures and backpressure never affect
+     * the winning response delivered to the client.
+     *
+     * <p>4 threads, bounded queue of 200. When full, new drain tasks are logged and dropped.
+     * Each thread is daemon so it does not prevent JVM shutdown.
      */
-    private static final int DRAIN_LIMIT =
-        ConfigDefaults.getInt("PANTERA_GROUP_DRAIN_PERMITS", 20);
-
-    /**
-     * Semaphore limiting concurrent response body drains to prevent memory pressure.
-     * At 30MB per npm metadata response, 20 concurrent drains = 600MB max.
-     */
-    private static final Semaphore DRAIN_PERMITS = new Semaphore(DRAIN_LIMIT);
+    private static final ExecutorService DRAIN_EXECUTOR;
 
     static {
+        final ThreadPoolExecutor pool = new ThreadPoolExecutor(
+            4, 4,
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(200),
+            r -> {
+                final Thread t = new Thread(r, "group-drain-" + System.identityHashCode(r));
+                t.setDaemon(true);
+                return t;
+            },
+            (r, executor) -> EcsLogger.debug("com.auto1.pantera.group")
+                .message("Drain queue full, discarding drain task")
+                .eventCategory("repository")
+                .eventAction("body_drain")
+                .eventOutcome("skipped")
+                .log()
+        );
+        DRAIN_EXECUTOR = pool;
         EcsLogger.info("com.auto1.pantera.group")
-            .message("GroupSlice drain permits configured: " + DRAIN_LIMIT)
+            .message("GroupSlice drain executor initialised (4 threads, queue=200)")
             .eventCategory("configuration")
             .eventAction("group_init")
             .log();
@@ -127,33 +146,27 @@ public final class GroupSlice implements Slice {
          * @return RequestContext with extracted values
          */
         static RequestContext from(final Headers headers, final String path) {
-            final String clientIp = EcsLogEvent.extractClientIp(headers, "unknown");
+            final String clientIp = EcsLogEvent.extractClientIp(headers, null);
             // Try MDC first (set by auth middleware after authentication)
             // then fall back to header extraction (Basic auth only)
             // Don't default to "anonymous" - leave null if no user is authenticated
-            String username = MDC.get("user.name");
+            String username = MDC.get(EcsMdc.USER_NAME);
             if (username == null || username.isEmpty()) {
                 username = EcsLogEvent.extractUsername(headers).orElse(null);
             }
-            final String traceId = MDC.get("trace.id");
+            final String traceId = MDC.get(EcsMdc.TRACE_ID);
             return new RequestContext(clientIp, username, traceId != null ? traceId : "none", path);
         }
 
         /**
          * Add context fields to an EcsLogger builder.
+         * NOTE: client.ip, user.name, trace.id are in MDC (set by EcsLoggingSlice).
+         * EcsLayout includes all MDC entries — do NOT add them here to avoid duplicates.
          * @param logger Logger builder to enhance
          * @return Enhanced logger builder
          */
         EcsLogger addTo(final EcsLogger logger) {
-            EcsLogger result = logger
-                .field("client.ip", this.clientIp)
-                .field("trace.id", this.traceId)
-                .field("package.name", this.packageName);
-            // Only add user.name if authenticated (not null)
-            if (this.username != null) {
-                result = result.field("user.name", this.username);
-            }
-            return result;
+            return logger.field("package.name", this.packageName);
         }
     }
 
@@ -337,16 +350,28 @@ public final class GroupSlice implements Slice {
             // Try adapter-aware name parsing first (indexed, fast)
             final Optional<String> parsedName =
                 ArtifactNameParser.parse(this.repoType, path);
-            final CompletableFuture<List<String>> locateFuture;
-            if (parsedName.isPresent()) {
-                locateFuture = idx.locateByName(parsedName.get());
-            } else {
-                // Fallback to path_prefix matching for unknown adapter types
-                final String locatePath = path.startsWith("/")
-                    ? path.substring(1) : path;
-                locateFuture = idx.locate(locatePath);
+            if (parsedName.isEmpty()) {
+                // Metadata endpoint or unknown adapter type — skip index, direct fanout
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("Name unparseable, using direct fanout")
+                    .eventCategory("repository")
+                    .eventAction("group_direct_fanout")
+                    .field("repository.name", this.group)
+                    .field("url.path", path)
+                    .log();
+                return queryAllMembersInParallel(line, headers, body, ctx)
+                    .whenComplete((resp, err) -> {
+                        final long duration = System.currentTimeMillis() - requestStartTime;
+                        if (err != null) {
+                            recordGroupRequest("error", duration);
+                        } else if (resp.status().success()) {
+                            recordGroupRequest("success", duration);
+                        } else {
+                            recordGroupRequest("not_found", duration);
+                        }
+                    });
             }
-            return locateFuture
+            return idx.locateByName(parsedName.get())
                 .thenCompose(repos -> {
                     if (!repos.isEmpty()) {
                         // Filter to members of this group
@@ -356,9 +381,8 @@ public final class GroupSlice implements Slice {
                             .toList();
                         if (!targeted.isEmpty()) {
                             EcsLogger.debug("com.auto1.pantera.group")
-                                .message("Index hit via "
-                                    + (parsedName.isPresent() ? "name" : "path_prefix")
-                                    + ": targeting " + targeted.size() + " member(s)")
+                                .message("Index hit via name: targeting "
+                                    + targeted.size() + " member(s)")
                                 .eventCategory("repository")
                                 .eventAction("group_index_hit")
                                 .field("repository.name", this.group)
@@ -370,9 +394,7 @@ public final class GroupSlice implements Slice {
                     // Index miss: fall back to querying all members
                     EcsLogger.debug("com.auto1.pantera.group")
                         .message("Index miss: falling back to all members"
-                            + (parsedName.isPresent()
-                                ? " (parsed name: " + parsedName.get() + ")"
-                                : " (name parse failed)"))
+                            + " (name: " + parsedName.get() + ")")
                         .eventCategory("repository")
                         .eventAction("group_index_miss")
                         .field("repository.name", this.group)
@@ -585,8 +607,8 @@ public final class GroupSlice implements Slice {
 
         final RequestLine rewritten = member.rewritePath(line);
 
-        // Log the path rewriting for troubleshooting
-        EcsLogger.info("com.auto1.pantera.group")
+        // Log the path rewriting for troubleshooting (DEBUG: 5000 events/s at 1000 req/s × 5 members)
+        EcsLogger.debug("com.auto1.pantera.group")
             .message(String.format("Forwarding request to member '%s': rewrote path %s to %s", member.name(), line.uri().getPath(), rewritten.uri().getPath()))
             .eventCategory("repository")
             .eventAction("group_forward")
@@ -646,6 +668,11 @@ public final class GroupSlice implements Slice {
                     .log();
                 drainBody(member.name(), resp.body());
             }
+            // Always decrement the global pending counter regardless of win/lose.
+            // Two-phase completion: 502/404 only fires when ALL futures have reported
+            // and !completed — prevents fast-failing proxies from racing ahead of a
+            // slow-but-cached local member and completing the result with 502.
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
@@ -662,6 +689,8 @@ public final class GroupSlice implements Slice {
             } else {
                 drainBody(member.name(), resp.body());
             }
+            // Always decrement (same two-phase logic as 2xx success above)
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx);
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member
             ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
@@ -756,54 +785,45 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * Drain response body to prevent leak.
-     * Uses streaming discard to avoid OOM on large responses (e.g., npm typescript ~30MB).
+     * Drain response body on the background drain executor to prevent connection leak.
+     *
+     * <p>Fully decoupled from the result path: submitted to {@link #DRAIN_EXECUTOR} and
+     * returns immediately. Drain failures and backpressure never block or affect the
+     * winning response delivered to the client. Uses streaming discard to avoid OOM on
+     * large responses (e.g., npm typescript ~30MB).
      */
     private void drainBody(final String memberName, final Content body) {
-        if (!DRAIN_PERMITS.tryAcquire()) {
-            // Too many concurrent drains — skip to prevent memory pressure
-            // The response will eventually be GC'd and the connection cleaned up
-            EcsLogger.debug("com.auto1.pantera.group")
-                .message("Skipping body drain (too many concurrent drains): " + memberName)
-                .eventCategory("repository")
-                .eventAction("body_drain")
-                .eventOutcome("skipped")
-                .field("repository.name", GroupSlice.this.group)
-                .log();
-            return;
-        }
-        body.subscribe(new org.reactivestreams.Subscriber<>() {
-            private org.reactivestreams.Subscription subscription;
+        final String group = this.group;
+        DRAIN_EXECUTOR.execute(() ->
+            body.subscribe(new org.reactivestreams.Subscriber<>() {
+                @Override
+                public void onSubscribe(final org.reactivestreams.Subscription sub) {
+                    sub.request(Long.MAX_VALUE);
+                }
 
-            @Override
-            public void onSubscribe(final org.reactivestreams.Subscription sub) {
-                this.subscription = sub;
-                sub.request(Long.MAX_VALUE);
-            }
+                @Override
+                public void onNext(final java.nio.ByteBuffer item) {
+                    // Discard bytes - do not accumulate
+                }
 
-            @Override
-            public void onNext(final java.nio.ByteBuffer item) {
-                // Discard bytes - don't accumulate
-            }
+                @Override
+                public void onError(final Throwable err) {
+                    EcsLogger.debug("com.auto1.pantera.group")
+                        .message("Failed to drain response body: " + memberName)
+                        .eventCategory("repository")
+                        .eventAction("body_drain")
+                        .eventOutcome("failure")
+                        .field("repository.name", group)
+                        .field("error.message", err.getMessage())
+                        .log();
+                }
 
-            @Override
-            public void onError(final Throwable err) {
-                DRAIN_PERMITS.release();
-                EcsLogger.warn("com.auto1.pantera.group")
-                    .message("Failed to drain response body: " + memberName)
-                    .eventCategory("repository")
-                    .eventAction("body_drain")
-                    .eventOutcome("failure")
-                    .field("repository.name", GroupSlice.this.group)
-                    .field("error.message", err.getMessage())
-                    .log();
-            }
-
-            @Override
-            public void onComplete() {
-                DRAIN_PERMITS.release();
-            }
-        });
+                @Override
+                public void onComplete() {
+                    // Body fully consumed - connection returned to pool
+                }
+            })
+        );
     }
 
     private static Headers dropFullPathHeader(final Headers headers) {

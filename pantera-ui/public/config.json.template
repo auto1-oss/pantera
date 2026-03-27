@@ -2,5 +2,9 @@
   "apiBaseUrl": "$API_BASE_URL",
   "grafanaUrl": "$GRAFANA_URL",
   "appTitle": "$APP_TITLE",
-  "defaultPageSize": $DEFAULT_PAGE_SIZE
+  "defaultPageSize": $DEFAULT_PAGE_SIZE,
+  "apmEnabled": $APM_ENABLED,
+  "apmServerUrl": "$APM_SERVER_URL",
+  "apmServiceName": "$APM_SERVICE_NAME",
+  "apmEnvironment": "$APM_ENVIRONMENT"
 }

@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
@@ -56,7 +57,7 @@ public final class EcsLoggingSlice implements Slice {
      * @param origin Origin slice
      */
     public EcsLoggingSlice(final Slice origin) {
-        this(origin, "unknown");
+        this(origin, null);
     }
 
     /**
@@ -84,7 +85,7 @@ public final class EcsLoggingSlice implements Slice {
         final String userName = EcsLogEvent.extractUsername(headers).orElse(null);
         
         // Generate trace.id if not already set (e.g., from incoming X-Request-ID header)
-        String traceId = MDC.get("trace.id");
+        String traceId = MDC.get(EcsMdc.TRACE_ID);
         if (traceId == null || traceId.isEmpty()) {
             // Check for incoming trace headers
             for (var h : headers.find("x-request-id")) {
@@ -102,11 +103,13 @@ public final class EcsLoggingSlice implements Slice {
             }
         }
         
-        // Set MDC context for this request thread
-        MDC.put("trace.id", traceId);
-        MDC.put("client.ip", clientIp);
+        // Set MDC context for this request thread (constants from EcsMdc — no key drift)
+        MDC.put(EcsMdc.TRACE_ID, traceId);
+        if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
+            MDC.put(EcsMdc.CLIENT_IP, clientIp);
+        }
         if (userName != null) {
-            MDC.put("user.name", userName);
+            MDC.put(EcsMdc.USER_NAME, userName);
         }
 
         return this.origin.response(line, headers, body)
@@ -114,12 +117,14 @@ public final class EcsLoggingSlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
 
                 // Build ECS log event
+                // NOTE: client.ip, user.name, trace.id are already in MDC (set above).
+                // EcsLayout includes all MDC entries in JSON output automatically.
+                // Do NOT add them to MapMessage — that causes duplicate fields in Elastic.
                 final EcsLogEvent logEvent = new EcsLogEvent()
                     .httpMethod(line.method().value())
                     .httpVersion(line.version())
                     .httpStatus(response.status())
                     .urlPath(line.uri().getPath())
-                    .clientIp(clientIp)
                     .userAgent(headers)
                     .duration(duration);
 
@@ -127,11 +132,6 @@ public final class EcsLoggingSlice implements Slice {
                 final String query = line.uri().getQuery();
                 if (query != null && !query.isEmpty()) {
                     logEvent.urlQuery(query);
-                }
-
-                // Add username if available from authentication
-                if (userName != null) {
-                    logEvent.userName(userName);
                 }
 
                 // Log the event (automatically selects log level based on status)
@@ -143,11 +143,11 @@ public final class EcsLoggingSlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
 
                 // Log error with ECS fields
+                // NOTE: client.ip, user.name, trace.id are in MDC — not added here
                 new EcsLogEvent()
                     .httpMethod(line.method().value())
                     .httpVersion(line.version())
                     .urlPath(line.uri().getPath())
-                    .clientIp(clientIp)
                     .userAgent(headers)
                     .duration(duration)
                     .error(error)
@@ -158,10 +158,10 @@ public final class EcsLoggingSlice implements Slice {
                 throw new RuntimeException(error);
             })
             .whenComplete((response, error) -> {
-                // Clean up MDC after request completes
-                MDC.remove("trace.id");
-                MDC.remove("client.ip");
-                MDC.remove("user.name");
+                // Clean up MDC after request completes (use constants — no key drift)
+                MDC.remove(EcsMdc.TRACE_ID);
+                MDC.remove(EcsMdc.CLIENT_IP);
+                MDC.remove(EcsMdc.USER_NAME);
             });
     }
 }

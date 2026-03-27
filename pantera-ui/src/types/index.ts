@@ -235,4 +235,8 @@ export interface RuntimeConfig {
   grafanaUrl: string
   appTitle: string
   defaultPageSize: number
+  apmEnabled: boolean
+  apmServerUrl: string
+  apmServiceName: string
+  apmEnvironment: string
 }

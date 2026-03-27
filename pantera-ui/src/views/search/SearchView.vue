@@ -17,20 +17,27 @@ const size = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const typeFilter = ref<string | null>(null)
+const repoFilter = ref<string | null>(null)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let searchAbortCtrl: AbortController | null = null
 
 watch(query, (val) => {
   if (debounceTimer) clearTimeout(debounceTimer)
   if (!val.trim()) {
+    if (searchAbortCtrl) { searchAbortCtrl.abort(); searchAbortCtrl = null }
     items.value = []
     total.value = 0
+    loading.value = false
     return
   }
   debounceTimer = setTimeout(() => { page.value = 0; doSearch() }, 300)
 })
 
+watch(typeFilter, () => { repoFilter.value = null })
+
 onBeforeUnmount(() => {
   if (debounceTimer) clearTimeout(debounceTimer)
+  if (searchAbortCtrl) searchAbortCtrl.abort()
 })
 
 function relevanceScore(item: SearchResult, q: string): number {
@@ -48,9 +55,13 @@ function relevanceScore(item: SearchResult, q: string): number {
 
 async function doSearch() {
   if (!query.value.trim()) return
+  if (searchAbortCtrl) searchAbortCtrl.abort()
+  searchAbortCtrl = new AbortController()
+  const ctrl = searchAbortCtrl
   loading.value = true
   try {
-    const resp = await searchApi({ q: query.value, page: page.value, size: size.value })
+    const resp = await searchApi({ q: query.value, page: page.value, size: size.value }, ctrl.signal)
+    if (ctrl.signal.aborted) return
     const q = query.value
     items.value = [...resp.items].sort((a, b) => {
       const ra = relevanceScore(a, q)
@@ -63,10 +74,11 @@ async function doSearch() {
       return (b.version ?? '').localeCompare(a.version ?? '')
     })
     total.value = resp.total
-  } catch {
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
     items.value = []
   } finally {
-    loading.value = false
+    if (!ctrl.signal.aborted) loading.value = false
   }
 }
 
@@ -80,6 +92,10 @@ function selectType(t: string | null) {
   typeFilter.value = t
 }
 
+function selectRepo(r: string | null) {
+  repoFilter.value = r
+}
+
 // Derived filter data from results
 const typeCounts = computed(() => {
   const counts: Record<string, number> = {}
@@ -91,18 +107,27 @@ const typeCounts = computed(() => {
 })
 
 const repoCounts = computed(() => {
+  const source = typeFilter.value
+    ? items.value.filter(i => {
+        const base = (i.repo_type ?? '').replace(/-proxy$/, '').replace(/-group$/, '')
+        return base === typeFilter.value
+      })
+    : items.value
   const counts: Record<string, number> = {}
-  for (const item of items.value) {
+  for (const item of source) {
     counts[item.repo_name] = (counts[item.repo_name] ?? 0) + 1
   }
   return Object.entries(counts).sort(([, a], [, b]) => b - a)
 })
 
 const filteredItems = computed(() => {
-  if (!typeFilter.value) return items.value
   return items.value.filter(i => {
-    const base = (i.repo_type ?? '').replace(/-proxy$/, '').replace(/-group$/, '')
-    return base === typeFilter.value
+    if (typeFilter.value) {
+      const base = (i.repo_type ?? '').replace(/-proxy$/, '').replace(/-group$/, '')
+      if (base !== typeFilter.value) return false
+    }
+    if (repoFilter.value && i.repo_name !== repoFilter.value) return false
+    return true
   })
 })
 
@@ -234,12 +259,25 @@ function browseUrl(data: SearchResult): string {
             <div class="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2 pb-1.5 border-b border-gray-200 dark:border-gray-800">Repository</div>
             <div class="space-y-0.5">
               <div
+                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
+                :class="repoFilter === null ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                @click="selectRepo(null)"
+              >
+                <div class="w-3.5 h-3.5 rounded border-2 flex-shrink-0 flex items-center justify-center" :class="repoFilter === null ? 'border-blue-500 bg-blue-500' : 'border-gray-600'">
+                  <i v-if="repoFilter === null" class="pi pi-check text-white" style="font-size: 8px;" />
+                </div>
+                All
+                <span class="ml-auto text-xs text-gray-600">{{ items.length }}</span>
+              </div>
+              <div
                 v-for="[repo, count] in repoCounts"
                 :key="repo"
-                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-blue-400 bg-blue-500/5 cursor-default"
+                class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer transition-colors"
+                :class="repoFilter === repo ? 'text-blue-400 font-medium bg-blue-500/5' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'"
+                @click="selectRepo(repo)"
               >
-                <div class="w-3.5 h-3.5 rounded border-2 border-blue-500 bg-blue-500 flex items-center justify-center flex-shrink-0">
-                  <i class="pi pi-check text-white" style="font-size: 8px;" />
+                <div class="w-3.5 h-3.5 rounded border-2 flex-shrink-0 flex items-center justify-center" :class="repoFilter === repo ? 'border-blue-500 bg-blue-500' : 'border-gray-600'">
+                  <i v-if="repoFilter === repo" class="pi pi-check text-white" style="font-size: 8px;" />
                 </div>
                 <span class="truncate">{{ repo }}</span>
                 <span class="ml-auto text-xs text-gray-600 flex-shrink-0">{{ count }}</span>

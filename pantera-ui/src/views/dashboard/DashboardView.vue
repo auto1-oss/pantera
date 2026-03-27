@@ -45,6 +45,10 @@ function formatCount(n: number): string {
   return String(n)
 }
 
+const showPgCronNotice = computed(
+  () => !loading.value && stats.value.artifact_count === 0 && stats.value.repo_count > 0,
+)
+
 const greeting = computed(() => {
   const h = new Date().getHours()
   if (h < 12) return 'Good morning'
@@ -119,6 +123,19 @@ const statCards = computed(() => [
         >
           <i class="pi pi-external-link text-xs" /> Grafana
         </a>
+      </div>
+
+      <!-- pg_cron notice: shown when repos exist but artifact stats are all zero -->
+      <div
+        v-if="showPgCronNotice"
+        class="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-600 dark:text-amber-400"
+      >
+        <i class="pi pi-exclamation-triangle mt-0.5 flex-shrink-0" />
+        <span>
+          Dashboard statistics show zero because the database materialized views have not been refreshed yet.
+          <strong>pg_cron must be configured</strong> to keep statistics up to date.
+          See the <a href="https://github.com/auto1-oss/pantera/blob/master/docs/admin-guide/installation.md#database-setup-dashboard-materialized-views" target="_blank" class="underline hover:text-amber-500">Admin Guide — Database Setup</a> for setup instructions.
+        </span>
       </div>
 
       <!-- Stat cards -->

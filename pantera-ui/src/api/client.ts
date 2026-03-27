@@ -2,6 +2,25 @@ import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axio
 
 let apiClient: AxiosInstance | null = null
 
+/** True while a /auth/refresh call is in-flight — prevents parallel refresh storms. */
+let isRefreshing = false
+
+/** Queued request resolvers waiting for the in-flight refresh to complete. */
+let pendingRefreshQueue: Array<(newToken: string) => void> = []
+
+/** Endpoints that must NOT trigger a silent refresh on 401 (they are the auth boundary). */
+const AUTH_BYPASS_URLS = ['/auth/token', '/auth/providers', '/auth/callback', '/auth/refresh']
+
+function flushPendingQueue(newToken: string) {
+  pendingRefreshQueue.forEach((resolve) => resolve(newToken))
+  pendingRefreshQueue = []
+}
+
+function redirectToLogin() {
+  sessionStorage.removeItem('jwt')
+  window.location.href = '/login'
+}
+
 export function initApiClient(baseUrl: string): AxiosInstance {
   apiClient = axios.create({
     baseURL: baseUrl,
@@ -17,16 +36,43 @@ export function initApiClient(baseUrl: string): AxiosInstance {
   })
   apiClient.interceptors.response.use(
     (response) => response,
-    (error) => {
-      if (error.response?.status === 401) {
-        // Don't logout on 401 from public auth endpoints (token generation, login)
-        const url = error.config?.url ?? ''
-        if (!url.includes('/auth/token') && !url.includes('/auth/providers') && !url.includes('/auth/callback')) {
-          sessionStorage.removeItem('jwt')
-          window.location.href = '/login'
-        }
+    async (error) => {
+      if (error.response?.status !== 401) {
+        return Promise.reject(error)
       }
-      return Promise.reject(error)
+      const url: string = error.config?.url ?? ''
+      // Never attempt refresh for the auth boundary endpoints themselves
+      if (AUTH_BYPASS_URLS.some((bypass) => url.includes(bypass))) {
+        redirectToLogin()
+        return Promise.reject(error)
+      }
+      // If a refresh is already in-flight, queue this request to retry after it completes
+      if (isRefreshing) {
+        return new Promise<unknown>((resolve) => {
+          pendingRefreshQueue.push((newToken: string) => {
+            error.config.headers.Authorization = `Bearer ${newToken}`
+            resolve(apiClient!.request(error.config))
+          })
+        })
+      }
+      // First 401 — attempt silent refresh
+      isRefreshing = true
+      try {
+        const resp = await apiClient!.post<{ token: string }>('/auth/refresh')
+        const newToken = resp.data.token
+        sessionStorage.setItem('jwt', newToken)
+        flushPendingQueue(newToken)
+        // Retry the original failed request with the new token
+        error.config.headers.Authorization = `Bearer ${newToken}`
+        return apiClient!.request(error.config)
+      } catch {
+        // Refresh itself failed — token is truly expired or revoked
+        pendingRefreshQueue = []
+        redirectToLogin()
+        return Promise.reject(error)
+      } finally {
+        isRefreshing = false
+      }
     },
   )
   return apiClient

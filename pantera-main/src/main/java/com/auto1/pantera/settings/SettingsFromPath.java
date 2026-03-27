@@ -63,6 +63,21 @@ public final class SettingsFromPath {
      */
     public Settings find(final QuartzService quartz,
         final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
+        return this.find(quartz, dataSource, java.util.Optional.empty());
+    }
+
+    /**
+     * Searches settings by the provided path, reusing pre-created DataSources.
+     * @param quartz Quartz service
+     * @param dataSource Shared (API) DataSource
+     * @param writeDataSource Dedicated write pool for DbConsumer (empty = use shared)
+     * @return Pantera settings
+     * @throws IOException On IO error
+     * @since 1.21.0
+     */
+    public Settings find(final QuartzService quartz,
+        final java.util.Optional<javax.sql.DataSource> dataSource,
+        final java.util.Optional<javax.sql.DataSource> writeDataSource) throws IOException {
         boolean initialize = Boolean.parseBoolean(System.getenv("PANTERA_INIT"));
         if (!Files.exists(this.path)) {
             new JavaResource("example/pantera.yaml").copy(this.path);
@@ -70,7 +85,7 @@ public final class SettingsFromPath {
         }
         final Settings settings = new YamlSettings(
             Yaml.createYamlInput(this.path.toFile()).readYamlMapping(),
-            this.path.getParent(), quartz, dataSource
+            this.path.getParent(), quartz, dataSource, writeDataSource
         );
         final BlockingStorage bsto = new BlockingStorage(settings.configStorage());
         final Key init = new Key.From(".pantera", "initialized");

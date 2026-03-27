@@ -6,6 +6,7 @@ import { definePreset } from '@primevue/themes'
 import ToastService from 'primevue/toastservice'
 import ConfirmationService from 'primevue/confirmationservice'
 import Tooltip from 'primevue/tooltip'
+import { ApmVuePlugin } from '@elastic/apm-rum-vue'
 import App from './App.vue'
 import { useConfigStore } from './stores/config'
 import { initApiClient } from './api/client'
@@ -58,6 +59,18 @@ async function bootstrap() {
 
   const router = createAppRouter()
   app.use(router)
+
+  if (config.apmEnabled && config.apmServerUrl) {
+    app.use(ApmVuePlugin, {
+      router,
+      config: {
+        serviceName: config.apmServiceName,
+        serverUrl: config.apmServerUrl,
+        environment: config.apmEnvironment,
+        serviceVersion: '2.0.0',
+      },
+    })
+  }
 
   app.mount('#app')
 }

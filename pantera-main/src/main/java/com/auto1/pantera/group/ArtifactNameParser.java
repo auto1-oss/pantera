@@ -60,6 +60,10 @@ public final class ArtifactNameParser {
             case "go" -> parseGo(urlPath);
             case "gem" -> parseGem(urlPath);
             case "php" -> parseComposer(urlPath);
+            case "helm" -> parseHelm(urlPath);
+            case "debian", "apt" -> parseDebian(urlPath);
+            case "hex" -> parseHex(urlPath);
+            case "file", "raw" -> parseFile(urlPath);
             default -> Optional.empty();
         };
     }
@@ -287,6 +291,142 @@ public final class ArtifactNameParser {
             return Optional.of(matcher.group(1) + "/" + matcher.group(2));
         }
         return Optional.empty();
+    }
+
+    /**
+     * Helm URL path to chart name.
+     * <p>
+     * Helm URLs follow:
+     * <ul>
+     *   <li>{@code /charts/nginx-1.2.3.tgz} -> {@code nginx}</li>
+     *   <li>{@code /charts/my-chart-2.5.1.tgz.prov} -> {@code my-chart}</li>
+     *   <li>{@code /index.yaml} -> empty (index metadata)</li>
+     * </ul>
+     */
+    static Optional<String> parseHelm(final String urlPath) {
+        final String clean = stripLeadingSlash(urlPath);
+        if (!clean.startsWith("charts/")) {
+            return Optional.empty();
+        }
+        String filename = clean.substring("charts/".length());
+        // Strip .prov suffix if present
+        if (filename.endsWith(".tgz.prov")) {
+            filename = filename.substring(0, filename.length() - ".tgz.prov".length());
+        } else if (filename.endsWith(".tgz")) {
+            filename = filename.substring(0, filename.length() - ".tgz".length());
+        } else {
+            return Optional.empty();
+        }
+        // filename is now "{name}-{version}"; extract name before last "-{digit}"
+        final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+        if (m.find()) {
+            return Optional.of(m.group(1));
+        }
+        return Optional.of(filename);
+    }
+
+    /**
+     * Debian URL path to package name.
+     * <p>
+     * Debian URLs follow:
+     * <ul>
+     *   <li>{@code /pool/main/n/nginx/nginx_1.18.0_amd64.deb} -> {@code nginx}</li>
+     *   <li>{@code /dists/stable/Release} -> empty (distribution metadata)</li>
+     * </ul>
+     * Package name is the part before the first underscore in the filename.
+     */
+    static Optional<String> parseDebian(final String urlPath) {
+        final String clean = stripLeadingSlash(urlPath);
+        if (clean.startsWith("dists/")) {
+            return Optional.empty();
+        }
+        if (!clean.startsWith("pool/")) {
+            return Optional.empty();
+        }
+        final int lastSlash = clean.lastIndexOf('/');
+        if (lastSlash < 0) {
+            return Optional.empty();
+        }
+        final String filename = clean.substring(lastSlash + 1);
+        if (!filename.endsWith(".deb")) {
+            return Optional.empty();
+        }
+        // Debian filename format: {pkg}_{version}_{arch}.deb
+        // DB stores: "{pkg}_{arch}" — matching UpdateSlice/DebianScanner formatName()
+        final String withoutExt =
+            filename.substring(0, filename.length() - ".deb".length());
+        final String[] parts = withoutExt.split("_");
+        if (parts.length < 2) {
+            return Optional.empty();
+        }
+        final String pkg = parts[0];
+        final String arch = parts[parts.length - 1];
+        return Optional.of(pkg + "_" + arch);
+    }
+
+    /**
+     * Hex (Elixir/Erlang) URL path to package name.
+     * <p>
+     * Hex URLs follow:
+     * <ul>
+     *   <li>{@code /api/packages/phoenix} -> {@code phoenix}</li>
+     *   <li>{@code /api/packages/phoenix/releases/1.7.0} -> {@code phoenix}</li>
+     *   <li>{@code /repo/tarballs/phoenix-1.7.0.tar} -> {@code phoenix}</li>
+     *   <li>{@code /names} -> empty (registry metadata)</li>
+     * </ul>
+     */
+    static Optional<String> parseHex(final String urlPath) {
+        final String clean = stripLeadingSlash(urlPath);
+        // /api/packages/{name}[/releases/{version}]
+        if (clean.startsWith("api/packages/")) {
+            final String rest = clean.substring("api/packages/".length());
+            if (rest.isEmpty()) {
+                return Optional.empty();
+            }
+            final String name = rest.split("/")[0];
+            return name.isEmpty() ? Optional.empty() : Optional.of(name);
+        }
+        // /repo/tarballs/{name}-{version}.tar
+        if (clean.startsWith("repo/tarballs/")) {
+            String filename = clean.substring("repo/tarballs/".length());
+            if (!filename.endsWith(".tar")) {
+                return Optional.empty();
+            }
+            filename = filename.substring(0, filename.length() - ".tar".length());
+            final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+            if (m.find()) {
+                return Optional.of(m.group(1));
+            }
+            return Optional.of(filename);
+        }
+        // /repo/packages/{name}
+        if (clean.startsWith("repo/packages/")) {
+            final String name = clean.substring("repo/packages/".length());
+            return name.isEmpty() ? Optional.empty() : Optional.of(name.split("/")[0]);
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * File/raw URL path to artifact name.
+     * <p>
+     * File repositories have no canonical artifact structure. The URL path itself
+     * (stripped of the leading slash) is used directly as the artifact name,
+     * matching how the file adapter stores artifacts in the DB.
+     * <p>
+     * Examples:
+     * <ul>
+     *   <li>{@code /reports/2024/q1.pdf} -> {@code reports.2024.q1.pdf}</li>
+     *   <li>{@code /artifacts/v1.0.0/myapp.zip} -> {@code artifacts.v1.0.0.myapp.zip}</li>
+     *   <li>{@code /} -> empty (root path has no artifact meaning)</li>
+     * </ul>
+     * Slashes are converted to dots to match what {@code FileProxySlice} and
+     * {@code FileScanner} store in the DB ({@code aname.replace('/', '.')}).
+     */
+    static Optional<String> parseFile(final String urlPath) {
+        final String clean = stripLeadingSlash(urlPath);
+        return clean.isEmpty() ? Optional.empty()
+            : Optional.of(clean.replace('/', '.'));
     }
 
     /**

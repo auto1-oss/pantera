@@ -14,35 +14,41 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.message.MapMessage;
+import org.apache.logging.log4j.ThreadContext;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 /**
  * ECS (Elastic Common Schema) compliant log event builder for HTTP requests.
- * 
+ *
  * <p>Significantly reduces log volume by:
  * <ul>
  *   <li>Only logging errors and slow requests at WARN/ERROR level</li>
  *   <li>Success requests logged at DEBUG level (disabled in production)</li>
  *   <li>Using structured fields instead of verbose messages</li>
  * </ul>
- * 
+ *
+ * <p>Architecture: event-specific fields are injected via {@link CloseableThreadContext}
+ * for the duration of one logger call. MDC-owned fields (trace.id, client.ip, user.name)
+ * are set by {@link EcsLoggingSlice} and must NOT be set here — that would create
+ * duplicate keys in Elasticsearch and cause document rejection.
+ *
  * @see <a href="https://www.elastic.co/docs/reference/ecs">ECS Reference</a>
  * @since 1.18.23
  */
 public final class EcsLogEvent {
 
     private static final org.apache.logging.log4j.Logger LOGGER = LogManager.getLogger("http.access");
-    
+
     /**
      * Latency threshold for slow request warnings (ms).
      */
     private static final long SLOW_REQUEST_THRESHOLD_MS = 5000;
 
-    // All ECS fields stored flat with dot notation for proper JSON serialization
+    // All ECS fields stored flat with dot notation
     private String message;
     private final Map<String, Object> fields = new HashMap<>();
 
@@ -51,8 +57,9 @@ public final class EcsLogEvent {
      */
     public EcsLogEvent() {
         fields.put("event.kind", "event");
-        fields.put("event.category", "web");
-        fields.put("event.type", "access");
+        // event.category and event.type must be arrays per ECS 8.11
+        fields.put("event.category", List.of("web"));
+        fields.put("event.type", List.of("access"));
     }
 
     /**
@@ -106,26 +113,6 @@ public final class EcsLogEvent {
     }
 
     /**
-     * Set client IP address.
-     * @param ip Client IP
-     * @return this
-     */
-    public EcsLogEvent clientIp(final String ip) {
-        fields.put("client.ip", ip);
-        return this;
-    }
-
-    /**
-     * Set client port.
-     * @param port Client port
-     * @return this
-     */
-    public EcsLogEvent clientPort(final int port) {
-        fields.put("client.port", port);
-        return this;
-    }
-
-    /**
      * Set user agent from headers (parsed according to ECS schema).
      * @param headers Request headers
      * @return this
@@ -155,18 +142,6 @@ public final class EcsLogEvent {
                 }
             }
             break;
-        }
-        return this;
-    }
-
-    /**
-     * Set authenticated username.
-     * @param username Username
-     * @return this
-     */
-    public EcsLogEvent userName(final String username) {
-        if (username != null && !username.isEmpty()) {
-            fields.put("user.name", username);
         }
         return this;
     }
@@ -244,21 +219,23 @@ public final class EcsLogEvent {
      * @see <a href="https://www.elastic.co/docs/reference/ecs/ecs-error">ECS Error Fields</a>
      */
     public EcsLogEvent error(final Throwable error) {
-        // ECS error.message - The error message
         fields.put("error.message", error.getMessage() != null ? error.getMessage() : error.toString());
-
-        // ECS error.type - Fully qualified class name for better categorization
         fields.put("error.type", error.getClass().getName());
-
-        // ECS error.stack_trace - Full stack trace as string
         fields.put("error.stack_trace", getStackTrace(error));
-
         fields.put("event.outcome", "failure");
         return this;
     }
 
     /**
      * Log at appropriate level based on outcome.
+     *
+     * <p>Uses {@link CloseableThreadContext} to inject event-specific fields as MDC entries
+     * for the duration of one logger call. This avoids MapMessage's duplicate-message
+     * issue while still producing structured ECS JSON output via EcsLayout.
+     *
+     * <p>MDC-owned fields (trace.id, client.ip, user.name) are set by EcsLoggingSlice and
+     * must not appear in this field map — EcsLayout merges both sources and ES rejects
+     * documents with duplicate top-level keys.
      *
      * <p>Strategy to reduce log volume:
      * <ul>
@@ -268,11 +245,6 @@ public final class EcsLogEvent {
      * </ul>
      */
     public void log() {
-        // NOTE: trace.id, client.ip, user.name are in MDC (set by EcsLoggingSlice).
-        // EcsLayout automatically includes all MDC entries in JSON output.
-        // Do NOT copy them into MapMessage — that causes duplicate fields in Elastic.
-
-        // Determine log level based on status and duration
         final Integer statusCode = (Integer) fields.get("http.response.status_code");
         final Long durationNs = (Long) fields.get("event.duration");
         final long durationMs = durationNs != null ? durationNs / 1_000_000 : 0;
@@ -281,25 +253,28 @@ public final class EcsLogEvent {
             ? this.message
             : buildDefaultMessage(statusCode);
 
-        // Create MapMessage with all fields for structured JSON output
-        final MapMessage mapMessage = new MapMessage(fields);
-        mapMessage.with("message", logMessage);
-
-        final boolean failureOutcome = "failure".equals(fields.get("event.outcome"));
-        if (statusCode != null && statusCode >= 500) {
-            mapMessage.with("event.severity", "critical");
-            LOGGER.info(mapMessage);
-        } else if (statusCode != null && statusCode >= 400) {
-            mapMessage.with("event.severity", "warning");
-            LOGGER.info(mapMessage);
-        } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
-            mapMessage.with("event.severity", "warning");
-            mapMessage.with("message", String.format("Slow request: %dms - %s", durationMs, logMessage));
-            LOGGER.info(mapMessage);
-        } else if (failureOutcome) {
-            LOGGER.info(mapMessage);
-        } else {
-            LOGGER.debug(mapMessage);
+        // Inject event-specific fields into ThreadContext for this log call.
+        // ThreadContext.putAll/remove are used directly (not CloseableThreadContext) to avoid
+        // a NPE in CloseableThreadContext.putAll() when ThreadContext map is null in test env.
+        final Map<String, String> added = toStringMap(this.fields);
+        ThreadContext.putAll(added);
+        try {
+            final boolean failureOutcome = "failure".equals(fields.get("event.outcome"));
+            if (statusCode != null && statusCode >= 500) {
+                LOGGER.error(logMessage);
+            } else if (statusCode != null && statusCode >= 400) {
+                LOGGER.warn(logMessage);
+            } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
+                LOGGER.warn(String.format("Slow request: %dms - %s", durationMs, logMessage));
+            } else if (failureOutcome) {
+                LOGGER.warn(logMessage);
+            } else {
+                LOGGER.debug(logMessage);
+            }
+        } finally {
+            for (final String key : added.keySet()) {
+                ThreadContext.remove(key);
+            }
         }
     }
 
@@ -317,6 +292,31 @@ public final class EcsLogEvent {
     }
 
     /**
+     * Convert field map to String map for CloseableThreadContext.
+     * List values (event.category, event.type) are serialized as JSON arrays
+     * so EcsLayout can write them as proper keyword[] arrays in JSON output.
+     */
+    private static Map<String, String> toStringMap(final Map<String, Object> fields) {
+        final Map<String, String> result = new HashMap<>(fields.size());
+        for (Map.Entry<String, Object> entry : fields.entrySet()) {
+            final Object value = entry.getValue();
+            if (value instanceof List<?> list) {
+                // Serialize as JSON array string — EcsLayout preserves raw JSON strings
+                final StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < list.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(list.get(i)).append("\"");
+                }
+                sb.append("]");
+                result.put(entry.getKey(), sb.toString());
+            } else if (value != null) {
+                result.put(entry.getKey(), value.toString());
+            }
+        }
+        return result;
+    }
+
+    /**
      * Get stack trace as string.
      */
     private static String getStackTrace(final Throwable error) {
@@ -327,26 +327,32 @@ public final class EcsLogEvent {
 
     /**
      * Extract IP from X-Forwarded-For or remote address.
+     * Returns null if no valid IP can be determined (never returns "unknown").
      * @param headers Request headers
-     * @param remoteAddress Fallback remote address
-     * @return Client IP
+     * @param remoteAddress Fallback remote address (may be null)
+     * @return Client IP, or null if unavailable
      */
     public static String extractClientIp(final Headers headers, final String remoteAddress) {
         // Check X-Forwarded-For first
         for (Header h : headers.find("x-forwarded-for")) {
             final String value = h.getValue();
             if (value != null && !value.isEmpty()) {
-                // Get first IP in list (original client)
                 final int comma = value.indexOf(',');
                 return comma > 0 ? value.substring(0, comma).trim() : value.trim();
             }
         }
         // Check X-Real-IP
         for (Header h : headers.find("x-real-ip")) {
-            return h.getValue();
+            final String value = h.getValue();
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
         }
         // Fallback to remote address
-        return remoteAddress;
+        if (remoteAddress != null && !remoteAddress.isEmpty() && !"unknown".equals(remoteAddress)) {
+            return remoteAddress;
+        }
+        return null;
     }
 
     /**
@@ -370,26 +376,20 @@ public final class EcsLogEvent {
                     // Invalid base64, ignore
                 }
             }
-            // For Bearer tokens, we don't extract username (would need token validation)
         }
         return Optional.empty();
     }
 
     /**
      * Parse user agent string into ECS components.
-     * Basic implementation focusing on common package managers and CI/CD tools.
-     * 
-     * @param ua User agent string
-     * @return Parsed user agent info
      */
     private static UserAgentInfo parseUserAgent(final String ua) {
         final UserAgentInfo info = new UserAgentInfo();
-        
+
         if (ua == null || ua.isEmpty()) {
             return info;
         }
-        
-        // Common package manager patterns
+
         if (ua.startsWith("Maven/")) {
             info.name = "Maven";
             extractVersion(ua, "Maven/", info);
@@ -423,8 +423,7 @@ public final class EcsLogEvent {
             info.name = "wget";
             extractVersion(ua, "wget/", info);
         }
-        
-        // Extract OS information
+
         if (ua.contains("Linux")) {
             info.osName = "Linux";
         } else if (ua.contains("Windows")) {
@@ -434,8 +433,7 @@ public final class EcsLogEvent {
         } else if (ua.contains("FreeBSD")) {
             info.osName = "FreeBSD";
         }
-        
-        // Extract Java version if present
+
         if (ua.contains("Java/")) {
             final int start = ua.indexOf("Java/") + 5;
             final int end = findVersionEnd(ua, start);
@@ -443,13 +441,10 @@ public final class EcsLogEvent {
                 info.osVersion = ua.substring(start, end);
             }
         }
-        
+
         return info;
     }
-    
-    /**
-     * Extract version from user agent string.
-     */
+
     private static void extractVersion(final String ua, final String prefix, final UserAgentInfo info) {
         final int start = ua.indexOf(prefix);
         if (start >= 0) {
@@ -460,10 +455,7 @@ public final class EcsLogEvent {
             }
         }
     }
-    
-    /**
-     * Find end of version string (space, semicolon, or parenthesis).
-     */
+
     private static int findVersionEnd(final String ua, final int start) {
         int end = start;
         while (end < ua.length()) {
@@ -476,9 +468,6 @@ public final class EcsLogEvent {
         return end;
     }
 
-    /**
-     * Parsed user agent information.
-     */
     private static final class UserAgentInfo {
         String name;
         String version;

@@ -17,6 +17,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.WwwAuthenticate;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import org.slf4j.MDC;
@@ -72,7 +73,7 @@ public final class AuthzSlice implements Slice {
                         // This ensures Bearer/JWT authenticated users are tracked correctly
                         final String userName = result.user().name();
                         if (userName != null && !userName.isEmpty() && !result.user().isAnonymous()) {
-                            MDC.put("user.name", userName);
+                            MDC.put(EcsMdc.USER_NAME, userName);
                         }
                         if (this.control.allowed(result.user())) {
                             return this.origin.response(

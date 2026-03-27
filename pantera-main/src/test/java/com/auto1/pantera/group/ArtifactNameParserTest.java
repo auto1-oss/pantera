@@ -364,10 +364,285 @@ final class ArtifactNameParserTest {
         );
     }
 
+    // ---- Helm: chart downloads ----
+
+    @ParameterizedTest
+    @CsvSource({
+        // Standard chart tarballs: /charts/{name}-{version}.tgz
+        "/charts/nginx-1.2.3.tgz, nginx",
+        "/charts/apache-2.0.0.tgz, apache",
+        "/charts/my-chart-2.5.1.tgz, my-chart",
+        "/charts/cert-manager-1.13.0.tgz, cert-manager",
+        "/charts/kube-state-metrics-5.16.0.tgz, kube-state-metrics",
+        // Provenance files: /charts/{name}-{version}.tgz.prov
+        "/charts/nginx-1.2.3.tgz.prov, nginx",
+        "/charts/my-chart-2.5.1.tgz.prov, my-chart",
+        // Without leading slash
+        "charts/nginx-1.2.3.tgz, nginx",
+    })
+    void helmChartDownloads(final String url, final String expected) {
+        MatcherAssert.assertThat(
+            "Helm chart: " + url,
+            ArtifactNameParser.parse("helm-group", url),
+            new IsEqual<>(Optional.of(expected))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/index.yaml", "/"})
+    void helmMetadataReturnsEmpty(final String url) {
+        MatcherAssert.assertThat(
+            "Helm metadata should not produce a name: " + url,
+            ArtifactNameParser.parse("helm-group", url),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void helmProxyRepoType() {
+        MatcherAssert.assertThat(
+            ArtifactNameParser.parse("helm-proxy", "/charts/nginx-1.2.3.tgz"),
+            new IsEqual<>(Optional.of("nginx"))
+        );
+    }
+
+    @Test
+    void helmHitRateAbove95Percent() {
+        final String[][] cases = {
+            {"helm-group", "/charts/nginx-1.2.3.tgz"},
+            {"helm-group", "/charts/nginx-1.2.4.tgz"},
+            {"helm-group", "/charts/apache-2.0.0.tgz"},
+            {"helm-group", "/charts/my-chart-2.5.1.tgz"},
+            {"helm-group", "/charts/cert-manager-1.13.0.tgz"},
+            {"helm-group", "/charts/kube-state-metrics-5.16.0.tgz"},
+            {"helm-group", "/charts/prometheus-25.0.0.tgz"},
+            {"helm-group", "/charts/grafana-7.0.0.tgz"},
+            {"helm-group", "/charts/nginx-1.2.3.tgz.prov"},
+            {"helm-group", "/charts/my-chart-2.5.1.tgz.prov"},
+            // Metadata — should NOT count as hits
+            {"helm-group", "/index.yaml"},
+        };
+        int hits = 0;
+        int artifacts = 0;
+        for (final String[] tc : cases) {
+            final Optional<String> result = ArtifactNameParser.parse(tc[0], tc[1]);
+            if (!tc[1].equals("/index.yaml") && !tc[1].equals("/")) {
+                artifacts++;
+                if (result.isPresent() && !result.get().isEmpty()) {
+                    hits++;
+                }
+            }
+        }
+        final double hitRate = (double) hits / artifacts * 100;
+        MatcherAssert.assertThat(
+            String.format("Helm hit rate %.1f%% must be >= 95%% (%d/%d)", hitRate, hits, artifacts),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    // ---- Debian: package downloads ----
+
+    @ParameterizedTest
+    @CsvSource({
+        // Pool packages: /pool/{area}/{first-letter}/{source}/{pkg}_{version}_{arch}.deb
+        // DB stores "pkg_arch" — matching UpdateSlice/DebianScanner formatName()
+        "/pool/main/n/nginx/nginx_1.18.0_amd64.deb, nginx_amd64",
+        "/pool/main/p/python3/python3_3.11.0_amd64.deb, python3_amd64",
+        "/pool/main/o/openssh/openssh-server_9.0_amd64.deb, openssh-server_amd64",
+        "/pool/main/c/curl/curl_7.88.1_amd64.deb, curl_amd64",
+        "/pool/contrib/f/fonts-ubuntu/fonts-ubuntu_0.83_all.deb, fonts-ubuntu_all",
+        // Without leading slash
+        "pool/main/n/nginx/nginx_1.18.0_amd64.deb, nginx_amd64",
+    })
+    void debianPackageDownloads(final String url, final String expected) {
+        MatcherAssert.assertThat(
+            "Debian package: " + url,
+            ArtifactNameParser.parse("debian-group", url),
+            new IsEqual<>(Optional.of(expected))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/dists/stable/Release",
+        "/dists/stable/InRelease",
+        "/dists/stable/Release.gpg",
+        "/dists/stable/main/binary-amd64/Packages",
+        "/dists/stable/main/binary-amd64/Packages.gz",
+        "/dists/stable/main/binary-amd64/Release",
+        "/",
+    })
+    void debianMetadataReturnsEmpty(final String url) {
+        MatcherAssert.assertThat(
+            "Debian metadata should not produce a name: " + url,
+            ArtifactNameParser.parse("debian-group", url),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void debianHitRateAbove95Percent() {
+        // Verify the parsed names match the "pkg_arch" format the DB stores
+        final String[][] expected = {
+            {"/pool/main/n/nginx/nginx_1.18.0_amd64.deb", "nginx_amd64"},
+            {"/pool/main/p/python3/python3_3.11.0_amd64.deb", "python3_amd64"},
+            {"/pool/main/o/openssh/openssh-server_9.0_amd64.deb", "openssh-server_amd64"},
+            {"/pool/main/c/curl/curl_7.88.1_amd64.deb", "curl_amd64"},
+            {"/pool/contrib/f/fonts-ubuntu/fonts-ubuntu_0.83_all.deb", "fonts-ubuntu_all"},
+            {"/pool/main/g/git/git_2.39.0_amd64.deb", "git_amd64"},
+            {"/pool/main/v/vim/vim_9.0_amd64.deb", "vim_amd64"},
+        };
+        for (final String[] tc : expected) {
+            MatcherAssert.assertThat(
+                "Debian name format: " + tc[0],
+                ArtifactNameParser.parse("debian-group", tc[0]),
+                new IsEqual<>(Optional.of(tc[1]))
+            );
+        }
+        final String[] artifactUrls = java.util.Arrays.stream(expected)
+            .map(tc -> tc[0]).toArray(String[]::new);
+        int hits = 0;
+        for (final String url : artifactUrls) {
+            final Optional<String> result = ArtifactNameParser.parse("debian-group", url);
+            if (result.isPresent() && !result.get().isEmpty()) {
+                hits++;
+            }
+        }
+        final double hitRate = (double) hits / artifactUrls.length * 100;
+        MatcherAssert.assertThat(
+            String.format("Debian hit rate %.1f%% must be >= 95%% (%d/%d)",
+                hitRate, hits, artifactUrls.length),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    // ---- Hex: Elixir/Erlang package downloads ----
+
+    @ParameterizedTest
+    @CsvSource({
+        // API package endpoints
+        "/api/packages/phoenix, phoenix",
+        "/api/packages/ecto, ecto",
+        "/api/packages/plug, plug",
+        // Release endpoints
+        "/api/packages/phoenix/releases/1.7.0, phoenix",
+        "/api/packages/ecto/releases/3.11.0, ecto",
+        // Repository tarballs
+        "/repo/tarballs/phoenix-1.7.0.tar, phoenix",
+        "/repo/tarballs/ecto-3.11.0.tar, ecto",
+        "/repo/tarballs/plug-1.15.0.tar, plug",
+        // Without leading slash
+        "api/packages/phoenix, phoenix",
+    })
+    void hexPackagePaths(final String url, final String expected) {
+        MatcherAssert.assertThat(
+            "Hex: " + url,
+            ArtifactNameParser.parse("hex-group", url),
+            new IsEqual<>(Optional.of(expected))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/names", "/installs/hex-1.0.0.csv", "/"})
+    void hexMetadataReturnsEmpty(final String url) {
+        MatcherAssert.assertThat(
+            "Hex metadata should not produce a name: " + url,
+            ArtifactNameParser.parse("hex-group", url),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void hexHitRateAbove95Percent() {
+        final String[] urls = {
+            "/api/packages/phoenix",
+            "/api/packages/ecto",
+            "/api/packages/plug",
+            "/api/packages/phoenix/releases/1.7.0",
+            "/api/packages/ecto/releases/3.11.0",
+            "/repo/tarballs/phoenix-1.7.0.tar",
+            "/repo/tarballs/ecto-3.11.0.tar",
+            "/repo/tarballs/plug-1.15.0.tar",
+        };
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> result = ArtifactNameParser.parse("hex-group", url);
+            if (result.isPresent() && !result.get().isEmpty()) {
+                hits++;
+            }
+        }
+        final double hitRate = (double) hits / urls.length * 100;
+        MatcherAssert.assertThat(
+            String.format("Hex hit rate %.1f%% must be >= 95%% (%d/%d)",
+                hitRate, hits, urls.length),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    // ---- File/Raw: URL path as artifact name ----
+
+    @ParameterizedTest
+    @CsvSource({
+        // Slashes are converted to dots — matching FileProxySlice/FileScanner's
+        // aname.replace('/', '.') behavior
+        "/reports/2024/q1.pdf, reports.2024.q1.pdf",
+        "/artifacts/v1.0.0/myapp.zip, artifacts.v1.0.0.myapp.zip",
+        "/index.html, index.html",
+        "/binaries/linux/amd64/myapp, binaries.linux.amd64.myapp",
+        "/data/2024-01-01.csv, data.2024-01-01.csv",
+        // Without leading slash
+        "reports/2024/q1.pdf, reports.2024.q1.pdf",
+    })
+    void fileRepoPaths(final String url, final String expected) {
+        MatcherAssert.assertThat(
+            "File: " + url,
+            ArtifactNameParser.parse("file-group", url),
+            new IsEqual<>(Optional.of(expected))
+        );
+    }
+
+    @Test
+    void fileRootPathReturnsEmpty() {
+        MatcherAssert.assertThat(
+            "File root path should return empty",
+            ArtifactNameParser.parse("file-group", "/"),
+            new IsEqual<>(Optional.empty())
+        );
+    }
+
+    @Test
+    void fileHitRateIs100Percent() {
+        // All non-root paths return a dotted name
+        final String[] urls = {
+            "/reports/2024/q1.pdf",
+            "/artifacts/v1.0.0/myapp.zip",
+            "/index.html",
+            "/binaries/linux/amd64/myapp",
+            "/data/2024-01-01.csv",
+            "/release/1.0.0/checksums.txt",
+            "/images/logo.png",
+        };
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> result = ArtifactNameParser.parse("file-group", url);
+            if (result.isPresent() && !result.get().isEmpty()) {
+                hits++;
+            }
+        }
+        MatcherAssert.assertThat(
+            String.format("File hit rate must be 100%% (%d/%d)", hits, urls.length),
+            hits,
+            new IsEqual<>(urls.length)
+        );
+    }
+
     // ---- Unknown/unsupported repo types ----
 
     @ParameterizedTest
-    @ValueSource(strings = {"file-group", "helm-group", "unknown", ""})
+    @ValueSource(strings = {"unknown", ""})
     void unsupportedTypesReturnEmpty(final String repoType) {
         MatcherAssert.assertThat(
             "Unsupported type '" + repoType + "' should return empty",
@@ -410,6 +685,10 @@ final class ArtifactNameParserTest {
         "gem-group, gem",
         "php-group, php",
         "file-group, file",
+        "helm-group, helm",
+        "helm-proxy, helm",
+        "debian-group, debian",
+        "hex-group, hex",
     })
     void normalizeType(final String input, final String expected) {
         MatcherAssert.assertThat(
@@ -629,6 +908,19 @@ final class ArtifactNameParserTest {
             // PHP/Composer
             {"php-group", "/p2/monolog/monolog.json"},
             {"php-group", "/p2/symfony/console.json"},
+            // Helm
+            {"helm-group", "/charts/nginx-1.2.3.tgz"},
+            {"helm-group", "/charts/cert-manager-1.13.0.tgz"},
+            {"helm-group", "/charts/nginx-1.2.3.tgz.prov"},
+            // Debian (parser returns pkg_arch to match DB format)
+            {"debian-group", "/pool/main/n/nginx/nginx_1.18.0_amd64.deb"},
+            {"debian-group", "/pool/main/c/curl/curl_7.88.1_amd64.deb"},
+            // Hex
+            {"hex-group", "/api/packages/phoenix"},
+            {"hex-group", "/repo/tarballs/phoenix-1.7.0.tar"},
+            // File
+            {"file-group", "/reports/2024/q1.pdf"},
+            {"file-group", "/artifacts/v1.0.0/myapp.zip"},
         };
         int hits = 0;
         for (final String[] tc : cases) {

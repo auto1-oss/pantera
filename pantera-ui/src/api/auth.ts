@@ -80,3 +80,12 @@ export async function exchangeOAuthCode(
   })
   return data
 }
+
+/**
+ * Exchange the current (still-valid) session JWT for a fresh one with a full expiry window.
+ * Called silently by the Axios 401 interceptor before falling back to full logout.
+ */
+export async function refreshToken(): Promise<TokenResponse> {
+  const { data } = await getApiClient().post<TokenResponse>('/auth/refresh')
+  return data
+}

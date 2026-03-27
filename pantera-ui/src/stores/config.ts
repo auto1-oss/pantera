@@ -7,13 +7,25 @@ export const useConfigStore = defineStore('config', () => {
   const grafanaUrl = ref('')
   const appTitle = ref('Pantera')
   const defaultPageSize = ref(20)
+  const apmEnabled = ref(false)
+  const apmServerUrl = ref('')
+  const apmServiceName = ref('pantera-ui')
+  const apmEnvironment = ref('production')
 
   function loadConfig(cfg: RuntimeConfig) {
     apiBaseUrl.value = cfg.apiBaseUrl
     grafanaUrl.value = cfg.grafanaUrl
     appTitle.value = cfg.appTitle
     defaultPageSize.value = cfg.defaultPageSize
+    apmEnabled.value = cfg.apmEnabled
+    apmServerUrl.value = cfg.apmServerUrl
+    apmServiceName.value = cfg.apmServiceName
+    apmEnvironment.value = cfg.apmEnvironment
   }
 
-  return { apiBaseUrl, grafanaUrl, appTitle, defaultPageSize, loadConfig }
+  return {
+    apiBaseUrl, grafanaUrl, appTitle, defaultPageSize,
+    apmEnabled, apmServerUrl, apmServiceName, apmEnvironment,
+    loadConfig,
+  }
 })

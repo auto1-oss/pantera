@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRepos } from '@/api/repos'
 import { REPO_TYPE_FILTERS } from '@/utils/repoTypes'
@@ -21,14 +21,16 @@ const total = ref(0)
 const loading = ref(false)
 const searchQuery = ref('')
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let fetchAbortCtrl: AbortController | null = null
 
-function onSearchInput() {
+watch(searchQuery, () => {
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => { page.value = 0; fetchRepos() }, 300)
-}
+})
 
 onBeforeUnmount(() => {
   if (debounceTimer) clearTimeout(debounceTimer)
+  if (fetchAbortCtrl) fetchAbortCtrl.abort()
 })
 
 function onTypeChange() {
@@ -43,6 +45,9 @@ function onPageChange(event: { page: number; rows: number }) {
 }
 
 async function fetchRepos() {
+  if (fetchAbortCtrl) fetchAbortCtrl.abort()
+  fetchAbortCtrl = new AbortController()
+  const ctrl = fetchAbortCtrl
   loading.value = true
   try {
     const resp = await listRepos({
@@ -50,11 +55,15 @@ async function fetchRepos() {
       size: size.value,
       type: typeFilter.value ?? undefined,
       q: searchQuery.value || undefined,
-    })
+    }, ctrl.signal)
+    if (ctrl.signal.aborted) return
     items.value = resp.items
     total.value = resp.total
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
+    items.value = []
   } finally {
-    loading.value = false
+    if (!ctrl.signal.aborted) loading.value = false
   }
 }
 
@@ -70,7 +79,7 @@ onMounted(fetchRepos)
       <div class="flex flex-wrap items-center gap-3">
         <span class="relative">
           <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <InputText v-model="searchQuery" placeholder="Filter repositories..." class="!pl-10 w-64" @input="onSearchInput" />
+          <InputText v-model="searchQuery" placeholder="Filter repositories..." class="!pl-10 w-64" />
         </span>
         <Select
           v-model="typeFilter"

@@ -668,7 +668,7 @@ public final class VertxSliceServer implements Closeable {
         com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.auto1.pantera.vertx")
+            EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request with streaming body")
                 .eventCategory("http")
                 .eventAction("request_serve_stream")
@@ -783,7 +783,7 @@ public final class VertxSliceServer implements Closeable {
         com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.auto1.pantera.vertx")
+            EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request with body")
                 .eventCategory("http")
                 .eventAction("request_serve")
@@ -891,7 +891,7 @@ public final class VertxSliceServer implements Closeable {
         com.auto1.pantera.http.trace.TraceContext.set(traceId);
 
         addRequestContext(
-            EcsLogger.info("com.auto1.pantera.vertx")
+            EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request without body")
                 .eventCategory("http")
                 .eventAction("request_serve")
@@ -1195,24 +1195,46 @@ public final class VertxSliceServer implements Closeable {
     }
 
     /**
+     * Allowlisted headers for ES injection via dot-notation.
+     * Prevents mapping explosion — only headers with operational value are indexed.
+     * Each becomes http.request.headers.&lt;name&gt; (ES object with dynamic:true).
+     */
+    private static final Set<String> HEADER_ALLOWLIST = Set.of(
+        "content-type", "accept", "user-agent", "authorization",
+        "x-forwarded-for", "x-real-ip", "x-request-id",
+        "cache-control", "content-length", "host"
+    );
+
+    /**
      * Attach common request metadata to ECS logs.
+     * NOTE: client.ip, user.name, trace.id are in MDC (set by EcsLoggingSlice).
+     * EcsLayout includes all MDC entries in JSON output automatically.
+     * Do NOT add them here — that causes duplicate fields in Elastic.
+     *
+     * <p>Headers are injected as individual dot-notated fields
+     * (e.g., {@code http.request.headers.content-type}) so ES can map each
+     * as a keyword sub-field under the {@code http.request.headers} object
+     * (configured as {@code "type": "object", "dynamic": true}).
+     * Passing a {@code Map} as a single field value causes EcsLayout to serialize
+     * it via {@code .toString()}, producing a plain string incompatible with object mapping.
+     *
      * @param logger Logger builder
      * @param ctx Request context
      * @return Enriched logger
      */
     private static EcsLogger addRequestContext(final EcsLogger logger, final RequestLogContext ctx) {
-        if (ctx.clientIp() != null && !ctx.clientIp().isEmpty()) {
-            logger.field("client.ip", ctx.clientIp());
-        }
         if (ctx.remotePort() >= 0) {
             logger.field("client.port", ctx.remotePort());
         }
         if (ctx.userAgent() != null && !ctx.userAgent().isEmpty()) {
             logger.field("user_agent.original", ctx.userAgent());
         }
-        ctx.username().ifPresent(logger::userName);
-        if (!ctx.headers().isEmpty()) {
-            logger.field("http.request.headers", ctx.headers());
+        // Inject each allowlisted header as a separate dot-notated field
+        for (Map.Entry<String, String> entry : ctx.headers().entrySet()) {
+            final String headerName = entry.getKey();
+            if (HEADER_ALLOWLIST.contains(headerName)) {
+                logger.field("http.request.headers." + headerName, entry.getValue());
+            }
         }
         return logger;
     }
@@ -1247,11 +1269,11 @@ public final class VertxSliceServer implements Closeable {
 
         static RequestLogContext from(final HttpServerRequest req, final Headers headers) {
             final io.vertx.reactivex.core.net.SocketAddress remote = req.remoteAddress();
-            final String host = remote == null ? "unknown" : remote.host();
+            final String host = remote == null ? null : remote.host();
             final int port = remote == null ? -1 : remote.port();
             final String clientIp = EcsLogEvent.extractClientIp(headers, host);
             // Try MDC first (set by auth middleware), then fall back to header extraction
-            final String mdcUser = org.slf4j.MDC.get("user.name");
+            final String mdcUser = org.slf4j.MDC.get(com.auto1.pantera.http.log.EcsMdc.USER_NAME);
             final Optional<String> username = (mdcUser != null && !mdcUser.isEmpty())
                 ? Optional.of(mdcUser)
                 : EcsLogEvent.extractUsername(headers);

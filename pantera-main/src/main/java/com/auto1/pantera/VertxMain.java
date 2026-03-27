@@ -147,10 +147,13 @@ public final class VertxMain {
             com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
         final com.amihaiemil.eoyaml.YamlMapping meta = yamlContent.yamlMapping("meta");
         final Optional<javax.sql.DataSource> sharedDs;
+        final Optional<javax.sql.DataSource> writeDs;
         if (meta != null && meta.yamlMapping("artifacts_database") != null) {
-            final javax.sql.DataSource ds =
-                new com.auto1.pantera.db.ArtifactDbFactory(meta, "artifacts").initialize();
+            final com.auto1.pantera.db.ArtifactDbFactory dbFactory =
+                new com.auto1.pantera.db.ArtifactDbFactory(meta, "artifacts");
+            final javax.sql.DataSource ds = dbFactory.initialize();
             sharedDs = Optional.of(ds);
+            writeDs = Optional.of(dbFactory.initializeWritePool());
             DbManager.migrate(ds);
             // Resolve repos and security dirs from YAML config, not relative to config file.
             // pantera.yml may be mounted at /etc/pantera/ while data lives at /var/pantera/.
@@ -177,9 +180,10 @@ public final class VertxMain {
                 .log();
         } else {
             sharedDs = Optional.empty();
+            writeDs = Optional.empty();
             quartz = new QuartzService();
         }
-        this.settings = new SettingsFromPath(this.config).find(quartz, sharedDs);
+        this.settings = new SettingsFromPath(this.config).find(quartz, sharedDs, writeDs);
         // Apply logging configuration from YAML settings
         if (settings.logging().configured()) {
             settings.logging().apply();
@@ -223,6 +227,12 @@ public final class VertxMain {
                     .error(ex)
                     .log();
             }
+        }
+        // Register HikariCP metrics now that Vert.x/Micrometer is initialized
+        if (sharedDs.isPresent()) {
+            com.auto1.pantera.db.ArtifactDbFactory.enableMetrics(
+                sharedDs.get(), BackendRegistries.getDefaultNow()
+            );
         }
         // Listen for repository change events to refresh runtime without restart
         this.vertx.getDelegate().eventBus().consumer(

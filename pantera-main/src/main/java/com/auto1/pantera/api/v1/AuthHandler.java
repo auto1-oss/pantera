@@ -104,6 +104,7 @@ public final class AuthHandler {
         router.post("/api/v1/auth/token/generate").handler(this::generateTokenEndpoint);
         router.get("/api/v1/auth/tokens").handler(this::listTokensEndpoint);
         router.delete("/api/v1/auth/tokens/:tokenId").handler(this::revokeTokenEndpoint);
+        router.post("/api/v1/auth/refresh").handler(this::refreshEndpoint);
     }
 
     /**
@@ -608,6 +609,38 @@ public final class AuthHandler {
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
             .end(resp.encode());
+    }
+
+    /**
+     * POST /api/v1/auth/refresh — issue a fresh session JWT for the current user.
+     *
+     * <p>Requires a valid (non-expired) JWT in the Authorization header. Extracts the
+     * {@code sub} (username) and {@code context} (auth provider) from the existing token
+     * and generates a new JWT with a full fresh expiry window. This prevents UI logout
+     * caused by silent JWT expiry during active sessions.
+     *
+     * <p>Response: {@code {"token": "<new_jwt>"}}
+     *
+     * @param ctx Routing context (user principal populated by JWT filter)
+     */
+    private void refreshEndpoint(final RoutingContext ctx) {
+        final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
+        final String context = ctx.user().principal().getString(AuthTokenRest.CONTEXT);
+        if (sub == null || sub.isBlank()) {
+            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "No subject in token");
+            return;
+        }
+        final String newToken = this.tokens.generate(new AuthUser(sub, context));
+        EcsLogger.debug("com.auto1.pantera.auth")
+            .message("JWT refresh issued for user: " + sub)
+            .eventCategory("authentication")
+            .eventAction("token_refresh")
+            .eventOutcome("success")
+            .log();
+        ctx.response()
+            .setStatusCode(200)
+            .putHeader("Content-Type", "application/json")
+            .end(new JsonObject().put("token", newToken).encode());
     }
 
     /**

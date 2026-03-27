@@ -1,0 +1,66 @@
+{
+  "_meta": {
+    "description": "Pantera custom ECS field extensions — approved non-standard fields and type overrides",
+    "version": "1.21.0"
+  },
+  "component_template": {
+    "template": {
+      "mappings": {
+        "properties": {
+          "repository": {
+            "properties": {
+              "name": { "type": "keyword" },
+              "type": { "type": "keyword" }
+            }
+          },
+          "member": {
+            "properties": {
+              "name": { "type": "keyword" }
+            }
+          },
+          "http": {
+            "properties": {
+              "request": {
+                "properties": {
+                  "headers": {
+                    "dynamic": true,
+                    "type": "object",
+                    "properties": {
+                      "content-type":    { "type": "keyword" },
+                      "accept":          { "type": "keyword" },
+                      "user-agent":      { "type": "keyword" },
+                      "authorization":   { "type": "keyword" },
+                      "x-forwarded-for": { "type": "keyword" },
+                      "x-real-ip":       { "type": "keyword" },
+                      "x-request-id":    { "type": "keyword" },
+                      "cache-control":   { "type": "keyword" },
+                      "content-length":  { "type": "keyword" },
+                      "host":            { "type": "keyword" }
+                    }
+                  },
+                  "timeout": { "type": "long" }
+                }
+              },
+              "response": {
+                "properties": {
+                  "headers": {
+                    "dynamic": true,
+                    "type": "object"
+                  },
+                  "time": { "type": "long" }
+                }
+              }
+            }
+          },
+          "package": {
+            "properties": {
+              "age":          { "type": "long" },
+              "group":        { "type": "keyword" },
+              "release_date": { "type": "date" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

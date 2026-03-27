@@ -1,6 +1,6 @@
 {
   "name": "pantera-ui",
-  "version": "2.0.0",
+  "version": "2.0.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@elastic/apm-rum": "5.17.4",
+    "@elastic/apm-rum-vue": "2.1.14",
     "@primevue/themes": "^4.3.0",
     "axios": "^1.7.0",
     "chart.js": "^4.4.0",

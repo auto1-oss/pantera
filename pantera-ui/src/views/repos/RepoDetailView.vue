@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getRepo, getTree, getArtifactDetail, deleteArtifacts } from '@/api/repos'
 import { getApiClient } from '@/api/client'
@@ -47,7 +47,14 @@ const selectedArtifact = ref<ArtifactDetail | null>(null)
 const deleting = ref(false)
 const downloading = ref(false)
 
+let treeAbortCtrl: AbortController | null = null
+let repoAbortCtrl: AbortController | null = null
+
 async function loadRepo() {
+  if (repoAbortCtrl) repoAbortCtrl.abort()
+  if (treeAbortCtrl) treeAbortCtrl.abort()
+  repoAbortCtrl = new AbortController()
+  const ctrl = repoAbortCtrl
   repoConfig.value = null
   treeItems.value = []
   currentPath.value = '/'
@@ -55,6 +62,7 @@ async function loadRepo() {
   hasMore.value = false
   try {
     repoConfig.value = await getRepo(props.name)
+    if (ctrl.signal.aborted) return
     // Group repos show members, not artifact tree
     if (!isGroup.value) {
       const qpath = route.query.path as string | undefined
@@ -65,26 +73,35 @@ async function loadRepo() {
         await loadTree('/')
       }
     }
-  } catch {
-    // handle error
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
   }
 }
 
 onMounted(loadRepo)
+onBeforeUnmount(() => {
+  if (treeAbortCtrl) treeAbortCtrl.abort()
+  if (repoAbortCtrl) repoAbortCtrl.abort()
+})
 watch(() => props.name, loadRepo)
 
 async function loadTree(path: string) {
+  if (treeAbortCtrl) treeAbortCtrl.abort()
+  treeAbortCtrl = new AbortController()
+  const ctrl = treeAbortCtrl
   treeLoading.value = true
   currentPath.value = path
   try {
-    const resp = await getTree(props.name, { path })
+    const resp = await getTree(props.name, { path }, ctrl.signal)
+    if (ctrl.signal.aborted) return
     treeItems.value = resp.items
     marker.value = resp.marker
     hasMore.value = resp.hasMore
-  } catch {
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
     treeItems.value = []
   } finally {
-    treeLoading.value = false
+    if (!ctrl.signal.aborted) treeLoading.value = false
   }
 }
 

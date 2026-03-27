@@ -374,28 +374,40 @@ public final class CooldownRepository {
     }
 
     /**
-     * Find all active blocks across all repos, paginated, with optional search.
+     * Allowed sort columns (allowlist to prevent SQL injection).
+     */
+    private static final java.util.Set<String> SORTABLE_COLS = java.util.Set.of(
+        "artifact", "version", "repo_name", "repo_type", "reason",
+        "blocked_until", "blocked_at"
+    );
+
+    /**
+     * Find all active blocks across all repos, paginated, with optional search and sort.
      * @param offset Row offset
      * @param limit Max rows
      * @param search Optional search term (filters artifact, repo_name, version)
+     * @param sortBy Column to sort by (validated against SORTABLE_COLS)
+     * @param sortAsc True for ascending, false for descending
      * @return List of active block records
+     * @checkstyle ParameterNumberCheck (5 lines)
      */
     public List<DbBlockRecord> findAllActivePaginated(
-        final int offset, final int limit, final String search
+        final int offset, final int limit, final String search,
+        final String sortBy, final boolean sortAsc
     ) {
         final boolean hasSearch = search != null && !search.isBlank();
+        final String col = SORTABLE_COLS.contains(sortBy) ? sortBy : "blocked_at";
+        final String dir = sortAsc ? "ASC" : "DESC";
+        final String orderBy = " ORDER BY " + col + " " + dir;
+        final String base = "SELECT id, repo_type, repo_name, artifact, version, reason, status,"
+            + " blocked_by, blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by"
+            + " FROM artifact_cooldowns WHERE status = ?";
         final String sql;
         if (hasSearch) {
-            sql = "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
-                + "FROM artifact_cooldowns WHERE status = ? "
-                + "AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?) "
-                + "ORDER BY blocked_at DESC LIMIT ? OFFSET ?";
+            sql = base + " AND (artifact ILIKE ? OR repo_name ILIKE ? OR version ILIKE ?)"
+                + orderBy + " LIMIT ? OFFSET ?";
         } else {
-            sql = "SELECT id, repo_type, repo_name, artifact, version, reason, status, blocked_by, "
-                + "blocked_at, blocked_until, unblocked_at, unblocked_by, installed_by "
-                + "FROM artifact_cooldowns WHERE status = ? "
-                + "ORDER BY blocked_at DESC LIMIT ? OFFSET ?";
+            sql = base + orderBy + " LIMIT ? OFFSET ?";
         }
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -422,13 +434,27 @@ public final class CooldownRepository {
     }
 
     /**
+     * Find all active blocks across all repos, paginated, with optional search.
+     * Defaults to blocked_at DESC.
+     * @param offset Row offset
+     * @param limit Max rows
+     * @param search Optional search term
+     * @return List of active block records
+     */
+    public List<DbBlockRecord> findAllActivePaginated(
+        final int offset, final int limit, final String search
+    ) {
+        return this.findAllActivePaginated(offset, limit, search, "blocked_at", false);
+    }
+
+    /**
      * Find all active blocks (no search filter).
      * @param offset Row offset
      * @param limit Max rows
      * @return List of active block records
      */
     public List<DbBlockRecord> findAllActivePaginated(final int offset, final int limit) {
-        return this.findAllActivePaginated(offset, limit, null);
+        return this.findAllActivePaginated(offset, limit, null, "blocked_at", false);
     }
 
     /**

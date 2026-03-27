@@ -34,6 +34,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: ECS log schema drift gate
+        run: |
+          if grep -rl "JsonLayout" pantera-main/src/main/resources/ pantera-main/docker-compose/ 2>/dev/null; then
+            echo "ERROR: JsonLayout found in active log4j2 configuration. Use EcsLayout instead."
+            exit 1
+          fi
+          echo "Schema drift gate: OK (no JsonLayout in active configurations)"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:

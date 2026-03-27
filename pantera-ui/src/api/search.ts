@@ -3,8 +3,8 @@ import type { PaginatedResponse, SearchResult, LocateResponse, ReindexResponse }
 
 export async function search(params: {
   q: string; page?: number; size?: number
-}): Promise<PaginatedResponse<SearchResult>> {
-  const { data } = await getApiClient().get('/search', { params })
+}, signal?: AbortSignal): Promise<PaginatedResponse<SearchResult>> {
+  const { data } = await getApiClient().get('/search', { params, signal })
   return data
 }
 

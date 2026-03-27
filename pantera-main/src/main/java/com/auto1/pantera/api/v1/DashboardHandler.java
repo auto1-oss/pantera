@@ -10,7 +10,8 @@
  */
 package com.auto1.pantera.api.v1;
 
-import com.auto1.pantera.api.RepositoryName;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.MdcPropagatingCallable;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -19,24 +20,46 @@ import io.vertx.ext.web.RoutingContext;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import javax.json.JsonStructure;
 import javax.sql.DataSource;
 
 /**
  * Dashboard handler for /api/v1/dashboard/* endpoints.
- * All endpoints use a shared 30-second in-memory cache to avoid
- * expensive DB queries and YAML iterations under concurrent load.
+ *
+ * <p>All endpoints serve a shared 5-minute in-memory cache.  A background daemon
+ * thread proactively re-reads the materialized views every {@value #BACKGROUND_REFRESH_INTERVAL_S}
+ * seconds (30 s before TTL), so virtually every request is answered from memory without
+ * touching the database.  Stampede protection via {@link AtomicBoolean} ensures only one
+ * thread rebuilds the cache at a time even if the background refresh is delayed.
+ *
+ * <p><strong>Note:</strong> the underlying PostgreSQL materialized views
+ * ({@code mv_artifact_totals}, {@code mv_artifact_per_repo}) must be refreshed on a
+ * schedule by {@code pg_cron} — this class does <em>not</em> issue {@code REFRESH}
+ * statements.  See {@code docs/admin-guide/installation.md} § "Database Setup" for
+ * pg_cron setup instructions.
  */
 public final class DashboardHandler {
 
     /**
-     * Cache refresh interval in milliseconds (30 seconds).
+     * Cache TTL in milliseconds (5 minutes).
+     * Dashboard stats are aggregate views — 5-minute staleness is acceptable and
+     * reduces the DB scan frequency by 10x compared to the previous 30-second TTL.
      */
-    private static final long CACHE_TTL_MS = 30_000L;
+    private static final long CACHE_TTL_MS = 300_000L;
+
+    /**
+     * Background refresh interval — 30 s before TTL to keep the cache always warm.
+     */
+    private static final int BACKGROUND_REFRESH_INTERVAL_S = 270;
+
+    /**
+     * Initial delay before the first background refresh (gives the JVM time to warm up).
+     */
+    private static final int BACKGROUND_INITIAL_DELAY_S = 10;
 
     /**
      * Repository settings CRUD.
@@ -54,6 +77,18 @@ public final class DashboardHandler {
     private final AtomicReference<CachedDashboard> cache = new AtomicReference<>();
 
     /**
+     * Stampede guard: only one thread rebuilds the cache at a time.
+     * All other threads serve the stale cache during the rebuild.
+     */
+    private final AtomicBoolean rebuilding = new AtomicBoolean(false);
+
+    /**
+     * Background daemon that proactively refreshes the cache before TTL expires.
+     * Daemon thread — does not prevent JVM shutdown.
+     */
+    private final ScheduledExecutorService refresher;
+
+    /**
      * Ctor.
      * @param crs Repository settings CRUD
      * @param dataSource Database data source (nullable)
@@ -61,6 +96,17 @@ public final class DashboardHandler {
     public DashboardHandler(final CrudRepoSettings crs, final DataSource dataSource) {
         this.crs = crs;
         this.dataSource = dataSource;
+        this.refresher = Executors.newSingleThreadScheduledExecutor(r -> {
+            final Thread t = new Thread(r, "dashboard-cache-refresher");
+            t.setDaemon(true);
+            return t;
+        });
+        this.refresher.scheduleAtFixedRate(
+            this::backgroundRefresh,
+            BACKGROUND_INITIAL_DELAY_S,
+            BACKGROUND_REFRESH_INTERVAL_S,
+            TimeUnit.SECONDS
+        );
     }
 
     /**
@@ -71,6 +117,30 @@ public final class DashboardHandler {
         router.get("/api/v1/dashboard/stats").handler(this::handleStats);
         router.get("/api/v1/dashboard/requests").handler(this::handleRequests);
         router.get("/api/v1/dashboard/repos-by-type").handler(this::handleReposByType);
+    }
+
+    /**
+     * Background refresh: proactively rebuilds the cache before TTL expires.
+     * Runs on the dedicated daemon thread every {@value #BACKGROUND_REFRESH_INTERVAL_S} s.
+     * Uses the same {@link #rebuilding} CAS guard so it never races with on-demand rebuilds.
+     */
+    private void backgroundRefresh() {
+        if (this.rebuilding.compareAndSet(false, true)) {
+            try {
+                final CachedDashboard fresh = this.buildDashboard();
+                this.cache.set(fresh);
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("Background dashboard cache refresh failed")
+                    .eventCategory("cache")
+                    .eventAction("dashboard_cache_refresh")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
+            } finally {
+                this.rebuilding.set(false);
+            }
+        }
     }
 
     /**
@@ -108,23 +178,52 @@ public final class DashboardHandler {
     }
 
     /**
-     * Serve a dashboard response from cache. Rebuilds cache if expired.
-     * Only one Vert.x worker thread rebuilds the cache; others serve stale data.
+     * Serve a dashboard response from cache.
+     *
+     * <p>Stampede protection: only one thread rebuilds at a time via {@link #rebuilding}.
+     * All concurrent callers receive the stale cache during the rebuild window.
+     * If the cache is null (first request ever), all callers wait for the rebuild to finish.
+     *
      * @param ctx Routing context
      * @param extractor Function to extract the desired JSON from the cache
      */
     private void respondWithCache(final RoutingContext ctx,
         final java.util.function.Function<CachedDashboard, JsonObject> extractor) {
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
-                CachedDashboard cached = this.cache.get();
-                if (cached == null
-                    || System.currentTimeMillis() - cached.timestamp > CACHE_TTL_MS) {
-                    cached = this.buildDashboard();
-                    this.cache.set(cached);
+            MdcPropagatingCallable.wrap(() -> {
+                final CachedDashboard current = this.cache.get();
+                final boolean expired = current == null
+                    || System.currentTimeMillis() - current.timestamp > CACHE_TTL_MS;
+                if (expired && this.rebuilding.compareAndSet(false, true)) {
+                    // This thread won the rebuild race
+                    try {
+                        final CachedDashboard fresh = this.buildDashboard();
+                        this.cache.set(fresh);
+                        return extractor.apply(fresh);
+                    } finally {
+                        this.rebuilding.set(false);
+                    }
                 }
-                return extractor.apply(cached);
-            },
+                // Serve current cache — either still valid or another thread is rebuilding
+                final CachedDashboard cached = this.cache.get();
+                if (cached != null) {
+                    return extractor.apply(cached);
+                }
+                // First request race: no cache yet and we lost the rebuild CAS —
+                // wait briefly for the winner to populate it
+                for (int i = 0; i < 50 && this.cache.get() == null; i++) {
+                    try { Thread.sleep(20); } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                final CachedDashboard ready = this.cache.get();
+                if (ready != null) {
+                    return extractor.apply(ready);
+                }
+                // Fallback: serve empty stats rather than error
+                return extractor.apply(emptyDashboard());
+            }),
             false
         ).onSuccess(
             json -> ctx.response()
@@ -137,48 +236,55 @@ public final class DashboardHandler {
     }
 
     /**
-     * Build the full dashboard data in a single pass.
-     * Runs two SQL queries + one repo config iteration.
+     * Returns an empty dashboard snapshot for the first-request fallback.
+     */
+    private static CachedDashboard emptyDashboard() {
+        return new CachedDashboard(
+            new JsonObject()
+                .put("repo_count", 0)
+                .put("artifact_count", 0)
+                .put("total_storage", 0)
+                .put("blocked_count", 0)
+                .put("top_repos", new JsonArray()),
+            new JsonObject().put("types", new JsonObject()),
+            0L
+        );
+    }
+
+    /**
+     * Build the full dashboard data.
+     *
+     * <p>Reads from {@code mv_artifact_totals} and {@code mv_artifact_per_repo} materialized
+     * views — queries are sub-millisecond regardless of table size.  The views are kept
+     * current by {@code pg_cron} (see {@code docs/admin-guide/installation.md}).
+     *
+     * <p>Fallback: if the materialized views do not exist yet (first deployment before DDL is
+     * applied), the catch block returns an empty dashboard rather than crashing.
+     *
      * @return Cached dashboard snapshot
      */
-    @SuppressWarnings("PMD.CognitiveComplexity")
     private CachedDashboard buildDashboard() {
-        final Collection<String> names = this.crs.listAll();
-        final int repoCount = names.size();
-        // Build repos-by-type and top repos in a single pass
-        final Map<String, Integer> typeCounts = new HashMap<>(16);
+        final int repoCount = this.crs.listAll().size();
+        final JsonObject types = new JsonObject();
         final JsonArray topRepos = new JsonArray();
-        for (final String name : names) {
-            try {
-                final JsonStructure config =
-                    this.crs.value(new RepositoryName.Simple(name));
-                if (config instanceof javax.json.JsonObject) {
-                    final javax.json.JsonObject jobj = (javax.json.JsonObject) config;
-                    final javax.json.JsonObject repo =
-                        jobj.containsKey("repo") ? jobj.getJsonObject("repo") : jobj;
-                    final String type = repo.getString("type", "unknown");
-                    typeCounts.merge(type, 1, Integer::sum);
-                }
-            } catch (final Exception ignored) {
-                // Skip unreadable configs
-            }
-        }
         long artifactCount = 0;
         long totalStorage = 0;
         long blockedCount = 0;
         if (this.dataSource != null) {
             try (Connection conn = this.dataSource.getConnection();
                  Statement stmt = conn.createStatement()) {
-                // Single query for artifact count + total storage
+                // MVs are refreshed externally by pg_cron on a schedule.
+                // See docs/admin-guide/performance-tuning.md § "Dashboard Materialized Views".
+                // Query 1: global totals (sub-millisecond from MV)
                 try (ResultSet rs = stmt.executeQuery(
-                    "SELECT COUNT(*) AS cnt, COALESCE(SUM(size), 0) AS total FROM artifacts"
+                    "SELECT artifact_count, total_size FROM mv_artifact_totals"
                 )) {
                     if (rs.next()) {
-                        artifactCount = rs.getLong("cnt");
-                        totalStorage = rs.getLong("total");
+                        artifactCount = rs.getLong("artifact_count");
+                        totalStorage = rs.getLong("total_size");
                     }
                 }
-                // Blocked count
+                // Query 2: blocked count (artifact_cooldowns is small, always direct)
                 try (ResultSet rs = stmt.executeQuery(
                     "SELECT COUNT(*) AS cnt FROM artifact_cooldowns WHERE status = 'ACTIVE'"
                 )) {
@@ -186,12 +292,20 @@ public final class DashboardHandler {
                         blockedCount = rs.getLong("cnt");
                     }
                 }
-                // Top repos by size first, then artifact count
+                // Query 3: repos by type (sub-millisecond from MV)
                 try (ResultSet rs = stmt.executeQuery(
-                    "SELECT repo_name, repo_type, COUNT(*) AS cnt, "
-                        + "COALESCE(SUM(size), 0) AS total_size "
-                        + "FROM artifacts GROUP BY repo_name, repo_type "
-                        + "ORDER BY total_size DESC, cnt DESC LIMIT 5"
+                    "SELECT repo_type, COUNT(DISTINCT repo_name) AS repo_count "
+                        + "FROM mv_artifact_per_repo GROUP BY repo_type"
+                )) {
+                    while (rs.next()) {
+                        types.put(rs.getString("repo_type"), rs.getInt("repo_count"));
+                    }
+                }
+                // Query 4: top repos by storage (sub-millisecond from MV)
+                try (ResultSet rs = stmt.executeQuery(
+                    "SELECT repo_name, repo_type, artifact_count AS cnt, total_size "
+                        + "FROM mv_artifact_per_repo "
+                        + "ORDER BY total_size DESC, artifact_count DESC LIMIT 5"
                 )) {
                     while (rs.next()) {
                         topRepos.add(new JsonObject()
@@ -202,19 +316,15 @@ public final class DashboardHandler {
                     }
                 }
             } catch (final Exception ex) {
-                // DB unavailable — return zeros
+                // DB unavailable or MVs not yet created — return zeros
             }
         }
-        // Build stats JSON
         final JsonObject stats = new JsonObject()
             .put("repo_count", repoCount)
             .put("artifact_count", artifactCount)
             .put("total_storage", totalStorage)
             .put("blocked_count", blockedCount)
             .put("top_repos", topRepos);
-        // Build types JSON
-        final JsonObject types = new JsonObject();
-        typeCounts.forEach(types::put);
         final JsonObject reposByType = new JsonObject().put("types", types);
         return new CachedDashboard(stats, reposByType, System.currentTimeMillis());
     }

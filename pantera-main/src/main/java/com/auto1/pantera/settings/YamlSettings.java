@@ -229,6 +229,20 @@ public final class YamlSettings implements Settings {
     @SuppressWarnings("PMD.ConstructorOnlyInitializesOrCallOtherConstructors")
     public YamlSettings(final YamlMapping content, final Path path,
         final QuartzService quartz, final Optional<DataSource> shared) {
+        this(content, path, quartz, shared, Optional.empty());
+    }
+
+    /**
+     * Ctor with separate write pool for DbConsumer.
+     * @param content Yaml settings content
+     * @param path Path to settings file
+     * @param quartz Quartz service
+     * @param shared Pre-created API DataSource (auth, admin, Quartz)
+     * @param writeDs Dedicated write pool for DbConsumer (empty = use shared)
+     */
+    public YamlSettings(final YamlMapping content, final Path path,
+        final QuartzService quartz, final Optional<DataSource> shared,
+        final Optional<DataSource> writeDs) {
         // Config file can be pantera.yaml or pantera.yml
         this.configFilePath = YamlSettings.findConfigFile(path);
         this.meta = content.yamlMapping("meta");
@@ -303,7 +317,10 @@ public final class YamlSettings implements Settings {
         } else {
             this.artifactIndex = ArtifactIndex.NOP;
         }
-        this.events = this.artifactsDb.flatMap(
+        // Use the dedicated write pool for DbConsumer when provided;
+        // fall back to the shared pool so single-pool deployments work unchanged.
+        final Optional<DataSource> eventsDs = writeDs.isPresent() ? writeDs : this.artifactsDb;
+        this.events = eventsDs.flatMap(
             db -> YamlSettings.initArtifactsEvents(this.meta(), quartz, db)
         );
         this.prefixesConfig = new PrefixesConfig(YamlSettings.readPrefixes(this.meta()));

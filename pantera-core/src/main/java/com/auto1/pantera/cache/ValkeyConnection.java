@@ -11,6 +11,7 @@
 package com.auto1.pantera.cache;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -36,6 +37,16 @@ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
  * @since 1.0
  */
 public final class ValkeyConnection implements AutoCloseable {
+
+    /**
+     * Connection initialization timeout (DNS + TCP + Redis handshake).
+     * Intentionally longer than the command timeout — cold DNS resolution on a
+     * cross-VPC shared-services endpoint can take 100–500 ms on JVM startup.
+     * Overridable via PANTERA_VALKEY_CONNECT_TIMEOUT_MS env var.
+     */
+    private static final Duration CONNECT_TIMEOUT = Duration.ofMillis(
+        ConfigDefaults.getLong("PANTERA_VALKEY_CONNECT_TIMEOUT_MS", 5_000L)
+    );
 
     /**
      * Default maximum total connections in the pool.
@@ -126,11 +137,13 @@ public final class ValkeyConnection implements AutoCloseable {
         final Duration timeout,
         final int size
     ) {
+        // CONNECT_TIMEOUT governs DNS resolution + TCP connect + Redis handshake.
+        // It is intentionally larger than `timeout` (the per-command timeout).
         this.client = RedisClient.create(
             RedisURI.builder()
                 .withHost(Objects.requireNonNull(host))
                 .withPort(port)
-                .withTimeout(timeout)
+                .withTimeout(ValkeyConnection.CONNECT_TIMEOUT)
                 .build()
         );
         final RedisCodec<String, byte[]> codec = RedisCodec.of(
@@ -143,8 +156,14 @@ public final class ValkeyConnection implements AutoCloseable {
         config.setMaxIdle(Math.min(ValkeyConnection.DEFAULT_MAX_IDLE, size));
         config.setMinIdle(ValkeyConnection.DEFAULT_MIN_IDLE);
         config.setTestOnBorrow(true);
+        // After the connection is established, override to the command timeout so that
+        // individual Redis operations still fail fast (default 100 ms).
         this.pool = ConnectionPoolSupport.createGenericObjectPool(
-            () -> this.client.connect(codec),
+            () -> {
+                final StatefulRedisConnection<String, byte[]> conn = this.client.connect(codec);
+                conn.setTimeout(timeout);
+                return conn;
+            },
             config
         );
         this.poolSize = Math.max(size, ValkeyConnection.DEFAULT_MIN_IDLE);

@@ -26,7 +26,10 @@ const blockedSize = ref(50)
 const blockedTotal = ref(0)
 const loading = ref(false)
 const search = ref('')
+const sortField = ref<string | null>(null)
+const sortOrder = ref<number>(-1) // -1=desc (default: newest first)
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
+let blockedAbortCtrl: AbortController | null = null
 
 // Debounced server-side search: reset to page 0 and reload
 watch(search, () => {
@@ -39,6 +42,7 @@ watch(search, () => {
 
 onBeforeUnmount(() => {
   if (searchTimeout) clearTimeout(searchTimeout)
+  if (blockedAbortCtrl) blockedAbortCtrl.abort()
 })
 
 async function loadOverview() {
@@ -50,6 +54,9 @@ async function loadOverview() {
 }
 
 async function loadBlocked() {
+  if (blockedAbortCtrl) blockedAbortCtrl.abort()
+  blockedAbortCtrl = new AbortController()
+  const ctrl = blockedAbortCtrl
   loading.value = true
   try {
     const params: Record<string, unknown> = {
@@ -59,12 +66,27 @@ async function loadBlocked() {
     if (search.value.trim()) {
       params.search = search.value.trim()
     }
-    const resp = await getCooldownBlocked(params as any)
+    if (sortField.value) {
+      params.sort_by = sortField.value
+      params.sort_dir = sortOrder.value >= 0 ? 'asc' : 'desc'
+    }
+    const resp = await getCooldownBlocked(params as any, ctrl.signal)
+    if (ctrl.signal.aborted) return
     blocked.value = resp.items
     blockedTotal.value = resp.total
+  } catch (err: unknown) {
+    if (ctrl.signal.aborted) return
+    blocked.value = []
   } finally {
-    loading.value = false
+    if (!ctrl.signal.aborted) loading.value = false
   }
+}
+
+function onSort(event: { sortField: string; sortOrder: number }) {
+  sortField.value = event.sortField
+  sortOrder.value = event.sortOrder
+  blockedPage.value = 0
+  loadBlocked()
 }
 
 async function handleUnblock(art: BlockedArtifact) {
@@ -151,16 +173,24 @@ onMounted(() => {
               />
             </span>
           </div>
-          <DataTable :value="blocked" :loading="loading" stripedRows>
+          <DataTable
+            :value="blocked"
+            :loading="loading"
+            stripedRows
+            :lazy="true"
+            :sortField="sortField ?? undefined"
+            :sortOrder="sortOrder"
+            @sort="onSort"
+          >
             <Column field="package_name" header="Package" sortable />
             <Column field="version" header="Version" sortable />
             <Column field="repo" header="Repository" sortable />
-            <Column field="repo_type" header="Type">
+            <Column field="repo_type" header="Type" sortable>
               <template #body="{ data }">
                 <RepoTypeBadge :type="data.repo_type" />
               </template>
             </Column>
-            <Column field="reason" header="Reason">
+            <Column field="reason" header="Reason" sortable>
               <template #body="{ data }">
                 <Tag :value="data.reason" severity="info" />
               </template>

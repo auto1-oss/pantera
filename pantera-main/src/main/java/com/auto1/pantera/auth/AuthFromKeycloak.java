@@ -45,22 +45,14 @@ public final class AuthFromKeycloak implements Authentication {
             client.obtainAccessToken(username, password);
             res = Optional.of(new AuthUser(username, "keycloak"));
         } catch (final Throwable err) {
+            // NOTE: client.ip, user.name, trace.id are in MDC (set by EcsLoggingSlice).
+            // EcsLayout includes all MDC entries — do NOT add them here to avoid duplicates.
             final EcsLogger logger = EcsLogger.error("com.auto1.pantera.auth")
-                .message("Keycloak authentication failed")
+                .message("Keycloak authentication failed for user '" + username + "'")
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
-                .field("user.name", username)
                 .error(err);
-            // Add request context from MDC if available (propagated via TraceContextExecutor)
-            final String traceId = MDC.get("trace.id");
-            if (traceId != null) {
-                logger.field("trace.id", traceId);
-            }
-            final String clientIp = MDC.get("client.ip");
-            if (clientIp != null) {
-                logger.field("client.ip", clientIp);
-            }
             final String urlPath = MDC.get("url.path");
             if (urlPath != null) {
                 logger.field("url.path", urlPath);

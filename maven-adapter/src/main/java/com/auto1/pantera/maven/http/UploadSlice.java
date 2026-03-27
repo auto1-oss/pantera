@@ -24,6 +24,7 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.ContentWithSize;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.maven.metadata.MavenTimestamp;
 import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.jcabi.xml.XMLDocument;
@@ -234,77 +235,87 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Fix maven-metadata.xml bytes to ensure <latest> tag is correct.
-     * Reads all versions and sets <latest> to the highest version.
+     * Normalize maven-metadata.xml bytes.
+     *
+     * <p>Ensures {@code <latest>} is the highest version (adding it if absent) and
+     * normalises {@code <lastUpdated>} to Maven-standard {@code yyyyMMddHHmmss} UTC.
+     * Epoch-millisecond values written by older clients are corrected here.
+     *
      * @param bytes Original metadata XML bytes
-     * @return Completable future with fixed bytes
+     * @return Completable future with normalised bytes
      */
+    @SuppressWarnings("PMD.CognitiveComplexity")
     private CompletableFuture<byte[]> fixMetadataBytes(final byte[] bytes) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 final String xml = new String(bytes, StandardCharsets.UTF_8);
-                EcsLogger.debug("com.auto1.pantera.maven")
-                    .message("Fixing maven-metadata.xml (" + xml.length() + " bytes)")
-                    .eventCategory("repository")
-                    .eventAction("metadata_fix")
-                    .log();
-
                 final XMLDocument doc = new XMLDocument(xml);
                 final List<String> versions = doc.xpath("//version/text()");
-                EcsLogger.debug("com.auto1.pantera.maven")
-                    .message("Found " + versions.size() + " versions in metadata")
-                    .eventCategory("repository")
-                    .eventAction("metadata_fix")
-                    .log();
-
                 if (versions.isEmpty()) {
-                    return bytes; // No versions, return unchanged
+                    return bytes;
                 }
-                
-                // Find the highest version from all versions
+
                 final String highestVersion = versions.stream()
                     .max(Comparator.comparing(Version::new))
                     .orElse(versions.get(versions.size() - 1));
-                
-                // Get current <latest> tag value
+
                 final List<String> currentLatest = doc.xpath("//latest/text()");
                 final String existingLatest = currentLatest.isEmpty() ? null : currentLatest.get(0);
-                
-                // Only update if the highest version is actually newer than existing latest
+
                 final String newLatest;
                 if (existingLatest == null || existingLatest.isEmpty()) {
                     newLatest = highestVersion;
                 } else {
-                    // Compare versions - only update if new version is higher
                     final Version existing = new Version(existingLatest);
                     final Version highest = new Version(highestVersion);
                     newLatest = highest.compareTo(existing) > 0 ? highestVersion : existingLatest;
                 }
-                
-                // Check if we need to update
-                if (newLatest.equals(existingLatest)) {
-                    EcsLogger.debug("com.auto1.pantera.maven")
-                        .message("Latest version already correct, no update needed")
-                        .eventCategory("repository")
-                        .eventAction("metadata_fix")
-                        .field("package.version", existingLatest)
-                        .log();
-                    return bytes;
+
+                String result = xml;
+
+                // Update existing <latest> or insert it before <release>/<versions>
+                if (existingLatest != null && !existingLatest.isEmpty()) {
+                    result = result.replaceFirst(
+                        "<latest>[^<]*</latest>",
+                        Matcher.quoteReplacement("<latest>" + newLatest + "</latest>")
+                    );
+                } else if (result.contains("<release>")) {
+                    result = result.replaceFirst(
+                        "<release>",
+                        Matcher.quoteReplacement("<latest>" + newLatest + "</latest>\n    <release>")
+                    );
+                } else if (result.contains("<versions>")) {
+                    result = result.replaceFirst(
+                        "<versions>",
+                        Matcher.quoteReplacement("<latest>" + newLatest + "</latest>\n    <versions>")
+                    );
                 }
 
-                // Update the <latest> tag
-                final String updated = xml.replaceFirst(
-                    "<latest>.*?</latest>",
-                    "<latest>" + newLatest + "</latest>"
-                );
+                // Always normalise <lastUpdated> to yyyyMMddHHmmss UTC.
+                // This repairs epoch-millisecond values from older clients/versions.
+                final String timestamp = MavenTimestamp.now();
+                if (result.contains("<lastUpdated>")) {
+                    result = result.replaceFirst(
+                        "<lastUpdated>[^<]*</lastUpdated>",
+                        Matcher.quoteReplacement("<lastUpdated>" + timestamp + "</lastUpdated>")
+                    );
+                } else {
+                    result = result.replaceFirst(
+                        "</versioning>",
+                        Matcher.quoteReplacement(
+                            "    <lastUpdated>" + timestamp + "</lastUpdated>\n  </versioning>"
+                        )
+                    );
+                }
 
                 EcsLogger.debug("com.auto1.pantera.maven")
-                    .message("Fixed maven-metadata.xml latest tag: " + existingLatest + " -> " + newLatest)
+                    .message("Normalised maven-metadata.xml")
                     .eventCategory("repository")
                     .eventAction("metadata_fix")
                     .eventOutcome("success")
+                    .field("package.version", newLatest)
                     .log();
-                return updated.getBytes(StandardCharsets.UTF_8);
+                return result.getBytes(StandardCharsets.UTF_8);
             } catch (IllegalArgumentException ex) {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to parse metadata XML, using original")
@@ -313,7 +324,7 @@ public final class UploadSlice implements Slice {
                     .eventOutcome("failure")
                     .field("error.message", ex.getMessage())
                     .log();
-                return bytes; // Return unchanged on error
+                return bytes;
             }
         });
     }

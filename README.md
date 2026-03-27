@@ -56,6 +56,7 @@ Pantera is based on [Artipie](https://github.com/artipie/artipie), an open-sourc
 
 - JDK 21+ and Maven 3.4+ (for building from source)
 - Docker and Docker Compose (for running)
+- **pg_cron** PostgreSQL extension — required for dashboard statistics (artifact count, storage usage). Without it the dashboard shows zeros. See [Admin Guide — Database Setup](docs/admin-guide/installation.md#database-setup-dashboard-materialized-views) for setup.
 
 ### Build from source
 

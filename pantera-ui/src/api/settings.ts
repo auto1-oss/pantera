@@ -65,9 +65,10 @@ export async function getCooldownOverview(): Promise<CooldownRepo[]> {
 }
 
 export async function getCooldownBlocked(params: {
-  repo?: string; page?: number; size?: number; search?: string
-} = {}): Promise<PaginatedResponse<BlockedArtifact>> {
-  const { data } = await getApiClient().get('/cooldown/blocked', { params })
+  repo?: string; page?: number; size?: number; search?: string;
+  sort_by?: string; sort_dir?: string
+} = {}, signal?: AbortSignal): Promise<PaginatedResponse<BlockedArtifact>> {
+  const { data } = await getApiClient().get('/cooldown/blocked', { params, signal })
   return data
 }
 

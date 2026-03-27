@@ -157,6 +157,22 @@ public final class ArtifactDbFactory {
     }
 
     /**
+     * Create a dedicated write pool for DbConsumer batch inserts.
+     *
+     * <p>Smaller pool (max=10, min=2) prevents DbConsumer write batches from
+     * starving API and dashboard queries on the main pool.
+     *
+     * @return DataSource sized for write-only workloads
+     */
+    public DataSource initializeWritePool() {
+        return this.initializeWithOverrides(
+            "PanteraWrite-Pool",
+            ConfigDefaults.getInt("PANTERA_DB_WRITE_POOL_MAX", 10),
+            ConfigDefaults.getInt("PANTERA_DB_WRITE_POOL_MIN", 2)
+        );
+    }
+
+    /**
      * Initialize artifacts database and mechanism to gather artifacts metadata and
      * write to db.
      * If yaml settings are absent, default PostgreSQL connection parameters are used.
@@ -165,50 +181,58 @@ public final class ArtifactDbFactory {
      */
     public DataSource initialize() {
         final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
-        
+        final int maxSize = config != null && config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE))
+            : ArtifactDbFactory.DEFAULT_POOL_MAX_SIZE;
+        final int minIdle = config != null && config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE) != null
+            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE))
+            : ArtifactDbFactory.DEFAULT_POOL_MIN_IDLE;
+        final DataSource source = this.initializeWithOverrides("PanteraDB-Pool", maxSize, minIdle);
+        ArtifactDbFactory.createStructure(source);
+        return source;
+    }
+
+    /**
+     * Internal pool creation with name and size overrides.
+     * @param poolName HikariCP pool name for JMX and metrics
+     * @param maxSize Maximum pool size
+     * @param minIdle Minimum idle connections
+     * @return Configured HikariDataSource
+     */
+    private DataSource initializeWithOverrides(
+        final String poolName, final int maxSize, final int minIdle) {
+        final YamlMapping config = this.yaml.yamlMapping("artifacts_database");
+
         final String host = resolveEnvVar(
-            config != null && config.string(ArtifactDbFactory.YAML_HOST) != null 
-                ? config.string(ArtifactDbFactory.YAML_HOST) 
+            config != null && config.string(ArtifactDbFactory.YAML_HOST) != null
+                ? config.string(ArtifactDbFactory.YAML_HOST)
                 : ArtifactDbFactory.DEFAULT_HOST
         );
-            
-        final int port = config != null && config.string(ArtifactDbFactory.YAML_PORT) != null 
+        final int port = config != null && config.string(ArtifactDbFactory.YAML_PORT) != null
             ? Integer.parseInt(resolveEnvVar(config.string(ArtifactDbFactory.YAML_PORT)))
             : ArtifactDbFactory.DEFAULT_PORT;
-            
         final String database = resolveEnvVar(
-            config != null && config.string(ArtifactDbFactory.YAML_DATABASE) != null 
-                ? config.string(ArtifactDbFactory.YAML_DATABASE) 
+            config != null && config.string(ArtifactDbFactory.YAML_DATABASE) != null
+                ? config.string(ArtifactDbFactory.YAML_DATABASE)
                 : this.defaultDb
         );
-            
         final String user = resolveEnvVar(
-            config != null && config.string(ArtifactDbFactory.YAML_USER) != null 
-                ? config.string(ArtifactDbFactory.YAML_USER) 
+            config != null && config.string(ArtifactDbFactory.YAML_USER) != null
+                ? config.string(ArtifactDbFactory.YAML_USER)
                 : "pantera"
         );
-
         final String password = resolveEnvVar(
             config != null && config.string(ArtifactDbFactory.YAML_PASSWORD) != null
                 ? config.string(ArtifactDbFactory.YAML_PASSWORD)
                 : "pantera"
         );
 
-        final int poolMaxSize = config != null && config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE) != null
-            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MAX_SIZE))
-            : ArtifactDbFactory.DEFAULT_POOL_MAX_SIZE;
-
-        final int poolMinIdle = config != null && config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE) != null
-            ? Integer.parseInt(config.string(ArtifactDbFactory.YAML_POOL_MIN_IDLE))
-            : ArtifactDbFactory.DEFAULT_POOL_MIN_IDLE;
-        
-        // Configure HikariCP connection pool for better performance and leak detection
         final HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(String.format("jdbc:postgresql://%s:%d/%s", host, port, database));
         hikariConfig.setUsername(user);
         hikariConfig.setPassword(password);
-        hikariConfig.setMaximumPoolSize(poolMaxSize);
-        hikariConfig.setMinimumIdle(poolMinIdle);
+        hikariConfig.setMaximumPoolSize(maxSize);
+        hikariConfig.setMinimumIdle(minIdle);
         hikariConfig.setConnectionTimeout(
             ConfigDefaults.getLong("PANTERA_DB_CONNECTION_TIMEOUT_MS", 5000L)
         );
@@ -218,52 +242,48 @@ public final class ArtifactDbFactory {
         hikariConfig.setMaxLifetime(
             ConfigDefaults.getLong("PANTERA_DB_MAX_LIFETIME_MS", 1_800_000L)
         );
-        hikariConfig.setPoolName("PanteraDB-Pool");
-
-        // Enable connection leak detection (300 seconds threshold)
-        // Logs a warning if a connection is not returned to the pool within 300 seconds
-        // Increased to reduce false positives during large batch processing (200 events/batch)
+        hikariConfig.setPoolName(poolName);
         hikariConfig.setLeakDetectionThreshold(
             ConfigDefaults.getLong("PANTERA_DB_LEAK_DETECTION_MS", 300000)
         );
-
-        // Enable metrics and logging for connection pool monitoring
-        hikariConfig.setRegisterMbeans(true); // Enable JMX metrics
-        // Integrate HikariCP with Micrometer/Prometheus for connection pool observability
-        // Exposes: hikaricp_connections_active, hikaricp_connections_idle,
-        // hikaricp_connections_pending, hikaricp_connections_timeout_total, etc.
-        try {
-            final io.micrometer.core.instrument.MeterRegistry registry =
-                io.vertx.micrometer.backends.BackendRegistries.getDefaultNow();
-            if (registry != null) {
-                hikariConfig.setMetricsTrackerFactory(
-                    new com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory(registry)
-                );
-                EcsLogger.info("com.auto1.pantera.db")
-                    .message("HikariCP Micrometer metrics enabled")
-                    .eventCategory("database")
-                    .eventAction("metrics_init")
-                    .log();
-            }
-        } catch (final Exception ex) {
-            EcsLogger.debug("com.auto1.pantera.db")
-                .message("Micrometer registry not available for HikariCP metrics")
-                .error(ex)
-                .log();
-        }
+        hikariConfig.setRegisterMbeans(true);
 
         final HikariDataSource source = new HikariDataSource(hikariConfig);
-
-        // Log connection pool configuration for monitoring
         EcsLogger.info("com.auto1.pantera.db")
-            .message("HikariCP connection pool initialized (max: " + poolMaxSize + ", min idle: " + poolMinIdle + ", leak detection: " + hikariConfig.getLeakDetectionThreshold() + "ms)")
+            .message("HikariCP pool initialized: " + poolName
+                + " (max=" + maxSize + ", min=" + minIdle + ")")
             .eventCategory("database")
             .eventAction("connection_pool_init")
             .eventOutcome("success")
             .log();
-
-        ArtifactDbFactory.createStructure(source);
         return source;
+    }
+
+    /**
+     * Register HikariCP metrics with Micrometer/Prometheus.
+     * Must be called after Vert.x is initialized so BackendRegistries has a registry.
+     * Exposes: hikaricp_connections_active, hikaricp_connections_idle,
+     * hikaricp_connections_pending, hikaricp_connections_timeout_total, etc.
+     * @param dataSource HikariCP data source
+     * @param registry Micrometer meter registry
+     */
+    public static void enableMetrics(
+        final javax.sql.DataSource dataSource,
+        final io.micrometer.core.instrument.MeterRegistry registry
+    ) {
+        if (registry == null) {
+            return;
+        }
+        if (dataSource instanceof HikariDataSource hds) {
+            hds.setMetricsTrackerFactory(
+                new com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory(registry)
+            );
+            EcsLogger.info("com.auto1.pantera.db")
+                .message("HikariCP Micrometer metrics enabled for pool: " + hds.getPoolName())
+                .eventCategory("database")
+                .eventAction("metrics_init")
+                .log();
+        }
     }
 
     /**
@@ -443,28 +463,6 @@ public final class ArtifactDbFactory {
                     .error(ex)
                     .log();
             }
-            // Backfill search_tokens for all rows using the same translate logic
-            // as the trigger — splits dots/slashes/dashes/underscores into
-            // separate tokens for partial matching.
-            try {
-                statement.executeUpdate(
-                    String.join(
-                        " ",
-                        "UPDATE artifacts SET search_tokens = to_tsvector('simple',",
-                        "translate(coalesce(name, ''), './-_', '    ') || ' ' ||",
-                        "translate(coalesce(version, ''), './-_', '    ') || ' ' ||",
-                        "coalesce(owner, '') || ' ' ||",
-                        "translate(coalesce(repo_name, ''), './-_', '    ') || ' ' ||",
-                        "translate(coalesce(repo_type, ''), './-_', '    '))",
-                        "WHERE TRUE"
-                    )
-                );
-            } catch (final SQLException ex) {
-                EcsLogger.debug("com.auto1.pantera.db")
-                    .message("Failed to backfill search_tokens (may have no rows)")
-                    .error(ex)
-                    .log();
-            }
             // Performance indexes identified by full-stack audit
             try {
                 statement.executeUpdate(
@@ -495,6 +493,67 @@ public final class ArtifactDbFactory {
             } catch (final SQLException ex) {
                 EcsLogger.debug("com.auto1.pantera.db")
                     .message("Failed to create trigram index (pg_trgm extension may not be available)")
+                    .error(ex)
+                    .log();
+            }
+            // Covering index for dashboard top-repos query — turns GROUP BY seq scan into
+            // an index-only aggregation; required for CONCURRENTLY refresh of mv_artifact_per_repo
+            try {
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_repo_size_cover "
+                        + "ON artifacts(repo_name, repo_type) INCLUDE (size)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to create idx_artifacts_repo_size_cover (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            // Materialized views for dashboard aggregates — replaces 3 parallel seq scans with
+            // sub-millisecond reads; DashboardHandler.buildDashboard() calls REFRESH CONCURRENTLY
+            // every 270 s on the background thread so the heavy scan cost is off the request path.
+            try {
+                statement.executeUpdate(
+                    "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_artifact_totals AS "
+                        + "SELECT COUNT(*) AS artifact_count, "
+                        + "COALESCE(SUM(size), 0) AS total_size FROM artifacts"
+                );
+                // Single-row MV: unique index on constant expression — required for CONCURRENTLY
+                statement.executeUpdate(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_artifact_totals "
+                        + "ON mv_artifact_totals ((1))"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.db")
+                    .message("Failed to create mv_artifact_totals — dashboard will use direct queries until resolved")
+                    .eventCategory("database")
+                    .eventAction("mv_create")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
+            }
+            try {
+                statement.executeUpdate(
+                    "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_artifact_per_repo AS "
+                        + "SELECT repo_name, repo_type, "
+                        + "COUNT(*) AS artifact_count, "
+                        + "COALESCE(SUM(size), 0) AS total_size "
+                        + "FROM artifacts GROUP BY repo_name, repo_type"
+                );
+                statement.executeUpdate(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_artifact_per_repo "
+                        + "ON mv_artifact_per_repo (repo_name, repo_type)"
+                );
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_mv_artifact_per_repo_size "
+                        + "ON mv_artifact_per_repo (total_size DESC, artifact_count DESC)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.db")
+                    .message("Failed to create mv_artifact_per_repo — dashboard will use direct queries until resolved")
+                    .eventCategory("database")
+                    .eventAction("mv_create")
+                    .eventOutcome("failure")
                     .error(ex)
                     .log();
             }

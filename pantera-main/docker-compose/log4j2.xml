@@ -27,8 +27,12 @@
                        stackTraceAsArray="false"/>
         </Console>
 
-        <!-- Async wrapper for better performance (10x faster) -->
-        <Async name="AsyncConsole" includeLocation="true">
+        <!-- Async wrapper: non-blocking, large queue, no location capture -->
+        <!-- includeLocation=false: eliminates 7000 Throwable allocations/s at target scale -->
+        <!-- blocking=false: drops events rather than stalling JVM threads on queue overflow -->
+        <!-- bufferSize=4096: survives GC pauses up to ~580ms at 7000 events/s -->
+        <!-- Discard policy: set -Dlog4j2.asyncQueueFullPolicy=Discard -Dlog4j2.discardThreshold=INFO -->
+        <Async name="AsyncConsole" bufferSize="4096" blocking="false" includeLocation="false">
             <AppenderRef ref="Console"/>
         </Async>
     </Appenders>

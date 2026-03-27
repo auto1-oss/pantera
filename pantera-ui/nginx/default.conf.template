@@ -9,15 +9,7 @@ server {
     gzip_types text/plain text/css application/json application/javascript text/xml;
     gzip_min_length 256;
 
-    # API proxy to Pantera AsyncApiVerticle
-    location /api/ {
-        proxy_pass http://pantera:8086/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 10s;
-    }
+    # API_PROXY_BLOCK
 
     # Hashed assets — long cache
     location /assets/ {

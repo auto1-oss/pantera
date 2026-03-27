@@ -239,6 +239,92 @@ WantedBy=multi-user.target
 
 ---
 
+## Database Setup: Dashboard Materialized Views
+
+The dashboard (artifact count, storage usage, top repositories) reads from two PostgreSQL materialized views. **These views must be refreshed on a schedule via `pg_cron`.** Without this, the dashboard will show zeros.
+
+> **Why pg_cron and not the application?** Pantera deploys one verticle per CPU core. Each verticle previously issued `REFRESH` independently, causing up to 25 simultaneous refresh sessions and severe `Lock:Relation` contention on the database. Delegating to `pg_cron` gives a single, predictable refresh with no application-side locking.
+
+### 1. Enable pg_cron
+
+**Amazon RDS / Aurora** — add to the DB parameter group and reboot:
+
+```
+shared_preload_libraries = pg_cron
+cron.database_name = <your_database_name>
+```
+
+**Self-managed PostgreSQL:**
+
+```bash
+# Debian/Ubuntu
+apt-get install postgresql-<version>-cron
+
+# RHEL/CentOS
+yum install pg_cron_<version>
+```
+
+Add to `postgresql.conf`, then restart:
+
+```
+shared_preload_libraries = 'pg_cron'
+cron.database_name = 'artifacts'
+```
+
+### 2. Create the Extension
+
+Run once as a superuser against your Pantera database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+GRANT USAGE ON SCHEMA cron TO pantera;   -- replace 'pantera' with your app user
+```
+
+### 3. Schedule Refresh Jobs
+
+Connect as the `pantera` application user (owner of the materialized views):
+
+```sql
+-- Refresh global totals every 30 minutes
+SELECT cron.schedule(
+  'refresh-mv-artifact-totals',
+  '*/30 * * * *',
+  $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_totals$$
+);
+
+-- Refresh per-repo stats every 30 minutes
+SELECT cron.schedule(
+  'refresh-mv-artifact-per-repo',
+  '*/30 * * * *',
+  $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_per_repo$$
+);
+```
+
+For high-traffic environments reduce to `*/15 * * * *`; for low-traffic increase to `0 * * * *`.
+
+### 4. Trigger an Initial Refresh
+
+The views start empty on first deploy. Populate them immediately:
+
+```sql
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_totals;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_per_repo;
+```
+
+### 5. Verify
+
+```sql
+-- Confirm jobs are registered
+SELECT jobid, jobname, schedule, active FROM cron.job;
+
+-- Check recent run history (pg_cron 1.4+)
+SELECT jobid, status, start_time, return_message
+FROM cron.job_run_details
+ORDER BY start_time DESC LIMIT 10;
+```
+
+---
+
 ## Post-Installation Verification
 
 After starting Pantera by any method, verify the deployment:

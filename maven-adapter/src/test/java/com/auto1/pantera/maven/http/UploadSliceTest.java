@@ -23,9 +23,14 @@ import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
+import com.jcabi.xml.XMLDocument;
 import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * Test for {@link UploadSlice}.
@@ -65,6 +70,153 @@ class UploadSliceTest {
             "Uploaded data were not saved to storage",
             this.asto.value(new Key.From("com/pantera/asto/0.1/asto-0.1.jar")).join(),
             new ContentIs(data)
+        );
+    }
+
+    @Test
+    void normalizesEpochMillisLastUpdated() {
+        // Epoch-millis lastUpdated from old Artipie clients must be repaired
+        final String epochMillisXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<metadata>\n"
+            + "  <groupId>com.example</groupId>\n"
+            + "  <artifactId>my-lib</artifactId>\n"
+            + "  <versioning>\n"
+            + "    <latest>1.0.0</latest>\n"
+            + "    <release>1.0.0</release>\n"
+            + "    <versions><version>1.0.0</version></versions>\n"
+            + "    <lastUpdated>1737801234567</lastUpdated>\n" // 13-digit epoch millis
+            + "  </versioning>\n"
+            + "</metadata>\n";
+        final byte[] data = epochMillisXml.getBytes(StandardCharsets.UTF_8);
+        final Key metaKey = new Key.From("com/example/my-lib/maven-metadata.xml");
+
+        this.ums.response(
+            new RequestLine(RqMethod.PUT, "/com/example/my-lib/maven-metadata.xml"),
+            Headers.from(new ContentLength(data.length)),
+            new Content.From(data)
+        ).join();
+
+        final String stored = new String(
+            this.asto.value(metaKey).join().asBytesFuture().join(),
+            StandardCharsets.UTF_8
+        );
+        final List<String> lastUpdated = new XMLDocument(stored).xpath("//lastUpdated/text()");
+        MatcherAssert.assertThat(
+            "lastUpdated must be present after normalization",
+            lastUpdated.isEmpty(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "lastUpdated must match yyyyMMddHHmmss (14 digits), not epoch millis",
+            lastUpdated.get(0).matches("\\d{14}"),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    void addsLatestTagWhenMissing() {
+        // Maven clients sometimes omit <latest>; Pantera must add it
+        final String noLatestXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<metadata>\n"
+            + "  <groupId>com.example</groupId>\n"
+            + "  <artifactId>my-lib</artifactId>\n"
+            + "  <versioning>\n"
+            + "    <release>1.3.0</release>\n"
+            + "    <versions><version>1.3.0</version></versions>\n"
+            + "    <lastUpdated>20260101000000</lastUpdated>\n"
+            + "  </versioning>\n"
+            + "</metadata>\n";
+        final byte[] data = noLatestXml.getBytes(StandardCharsets.UTF_8);
+        final Key metaKey = new Key.From("com/example/my-lib/maven-metadata.xml");
+
+        this.ums.response(
+            new RequestLine(RqMethod.PUT, "/com/example/my-lib/maven-metadata.xml"),
+            Headers.from(new ContentLength(data.length)),
+            new Content.From(data)
+        ).join();
+
+        final String stored = new String(
+            this.asto.value(metaKey).join().asBytesFuture().join(),
+            StandardCharsets.UTF_8
+        );
+        final List<String> latest = new XMLDocument(stored).xpath("//latest/text()");
+        MatcherAssert.assertThat(
+            "latest must be added when missing",
+            latest.isEmpty(),
+            Matchers.is(false)
+        );
+        MatcherAssert.assertThat(
+            "latest must be set to the highest version",
+            latest.get(0),
+            Matchers.is("1.3.0")
+        );
+    }
+
+    @Test
+    void lastUpdatedNormalizedEvenWhenLatestUnchanged() {
+        // When <latest> is already correct, <lastUpdated> must still be normalised
+        final String staleTimestampXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<metadata>\n"
+            + "  <groupId>com.example</groupId>\n"
+            + "  <artifactId>my-lib</artifactId>\n"
+            + "  <versioning>\n"
+            + "    <latest>2.0.0</latest>\n"
+            + "    <release>2.0.0</release>\n"
+            + "    <versions><version>2.0.0</version></versions>\n"
+            + "    <lastUpdated>1700000000000</lastUpdated>\n" // stale epoch millis
+            + "  </versioning>\n"
+            + "</metadata>\n";
+        final byte[] data = staleTimestampXml.getBytes(StandardCharsets.UTF_8);
+        final Key metaKey = new Key.From("com/example/my-lib/maven-metadata.xml");
+
+        this.ums.response(
+            new RequestLine(RqMethod.PUT, "/com/example/my-lib/maven-metadata.xml"),
+            Headers.from(new ContentLength(data.length)),
+            new Content.From(data)
+        ).join();
+
+        final String stored = new String(
+            this.asto.value(metaKey).join().asBytesFuture().join(),
+            StandardCharsets.UTF_8
+        );
+        final String lastUpdated = new XMLDocument(stored).xpath("//lastUpdated/text()").get(0);
+        MatcherAssert.assertThat(
+            "lastUpdated must be normalised even when latest tag was already correct",
+            lastUpdated.matches("\\d{14}"),
+            Matchers.is(true)
+        );
+    }
+
+    @Test
+    void contractLastUpdatedAlwaysMatchesMavenFormat() {
+        // Contract: <lastUpdated> must always be exactly 14 digits (yyyyMMddHHmmss)
+        final String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<metadata>\n"
+            + "  <groupId>g</groupId><artifactId>a</artifactId>\n"
+            + "  <versioning>\n"
+            + "    <latest>1.0</latest><release>1.0</release>\n"
+            + "    <versions><version>1.0</version></versions>\n"
+            + "    <lastUpdated>20230101120000</lastUpdated>\n"
+            + "  </versioning>\n"
+            + "</metadata>\n";
+        final byte[] data = xml.getBytes(StandardCharsets.UTF_8);
+        final Key metaKey = new Key.From("g/a/maven-metadata.xml");
+
+        this.ums.response(
+            new RequestLine(RqMethod.PUT, "/g/a/maven-metadata.xml"),
+            Headers.from(new ContentLength(data.length)),
+            new Content.From(data)
+        ).join();
+
+        final String stored = new String(
+            this.asto.value(metaKey).join().asBytesFuture().join(),
+            StandardCharsets.UTF_8
+        );
+        final String lastUpdated = new XMLDocument(stored).xpath("//lastUpdated/text()").get(0);
+        MatcherAssert.assertThat(
+            "Contract: lastUpdated must match ^\\d{14}$ (yyyyMMddHHmmss UTC)",
+            lastUpdated.matches("\\d{14}"),
+            Matchers.is(true)
         );
     }
 

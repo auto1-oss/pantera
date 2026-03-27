@@ -56,11 +56,21 @@ public final class AbbreviatedMetadata {
     
     /**
      * Essential version fields to keep in abbreviated format.
+     *
+     * <p>peerDependenciesMeta: tells clients which peer deps are optional.
+     * Without it, all peers are treated as required (incorrect install behavior).
+     *
+     * <p>bundledDependencies: canonical npm spelling. bundleDependencies is the
+     * deprecated alias; both are included for maximum client compatibility.
+     *
+     * <p>libc: glibc vs musl compatibility for native binary packages (npm 9+).
+     * Without it, the wrong native binary could be selected on Alpine Linux (musl).
      */
     private static final String[] ESSENTIAL_FIELDS = {
         "name", "version", "dist", "dependencies", "devDependencies",
-        "peerDependencies", "optionalDependencies", "bundleDependencies",
-        "bin", "engines", "os", "cpu", "deprecated", "hasInstallScript"
+        "peerDependencies", "peerDependenciesMeta",
+        "optionalDependencies", "bundleDependencies", "bundledDependencies",
+        "bin", "engines", "os", "cpu", "libc", "deprecated", "hasInstallScript"
     };
     
     /**

@@ -11,17 +11,24 @@
 package com.auto1.pantera.http.log;
 
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.message.MapMessage;
+import org.apache.logging.log4j.ThreadContext;
+
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * ECS (Elastic Common Schema) compliant logger for non-HTTP application logs.
- * 
+ *
  * <p>Provides structured logging with proper ECS field mapping and automatic
  * trace.id propagation from MDC. Use this instead of plain Logger calls to ensure
  * all logs are ECS-compliant and contain trace context.
- * 
+ *
+ * <p>Architecture: event-specific fields are injected via {@link CloseableThreadContext}
+ * for the duration of one logger call. MDC-owned fields (trace.id, client.ip, user.name)
+ * are set by {@link EcsLoggingSlice} and must NOT be set here — that would create
+ * duplicate keys in Elasticsearch and cause document rejection.
+ *
  * <p>Usage examples:
  * <pre>{@code
  * // Simple message
@@ -30,14 +37,14 @@ import java.util.Map;
  *     .field("package.group", "com.example")
  *     .field("package.name", "my-artifact")
  *     .log();
- * 
+ *
  * // With error
  * EcsLogger.error("com.auto1.pantera.npm")
  *     .message("Package processing failed")
  *     .error(exception)
  *     .field("package.name", packageName)
  *     .log();
- * 
+ *
  * // With event metadata
  * EcsLogger.warn("com.auto1.pantera.docker")
  *     .message("Slow cache operation")
@@ -46,7 +53,7 @@ import java.util.Map;
  *     .duration(durationMs)
  *     .log();
  * }</pre>
- * 
+ *
  * @see <a href="https://www.elastic.co/docs/reference/ecs">ECS Reference</a>
  * @since 1.18.24
  */
@@ -164,11 +171,12 @@ public final class EcsLogger {
 
     /**
      * Set event category (e.g., "storage", "authentication", "database").
+     * ECS requires keyword[] — value is wrapped in a single-element list automatically.
      * @param category Event category
      * @return this
      */
     public EcsLogger eventCategory(final String category) {
-        this.fields.put("event.category", category);
+        this.fields.put("event.category", List.of(category));
         return this;
     }
 
@@ -205,6 +213,8 @@ public final class EcsLogger {
     /**
      * Add custom field using ECS dot notation for nested fields.
      * Use dot notation for nested fields (e.g., "maven.group_id", "npm.package_name").
+     * NOTE: Do not use "trace.id", "client.ip", or "user.name" — those are MDC-owned
+     * and set by EcsLoggingSlice. Duplicating them here causes ES to reject the document.
      *
      * @param key Field key
      * @param value Field value
@@ -218,60 +228,81 @@ public final class EcsLogger {
     }
 
     /**
-     * Add user name (authenticated user).
-     * @param username Username
-     * @return this
+     * Log the event at the configured level.
+     * Uses {@link CloseableThreadContext} to inject event-specific fields as MDC entries
+     * for the duration of this single logger call. EcsLayout then serializes all MDC
+     * entries (both request-scoped and event-scoped) as top-level ECS JSON fields.
+     *
+     * <p>NOTE: trace.id, client.ip, user.name are in MDC (set by EcsLoggingSlice).
+     * EcsLayout automatically includes all MDC entries in JSON output.
+     * Do NOT put them in this field map — that causes duplicate fields in Elastic.
      */
-    public EcsLogger userName(final String username) {
-        if (username != null && !username.isEmpty()) {
-            this.fields.put("user.name", username);
+    public void log() {
+        final String logMessage = this.message != null ? this.message : "Application event";
+
+        // Inject event-specific fields into ThreadContext for this log call.
+        // ThreadContext.putAll/remove are used directly (not CloseableThreadContext) to avoid
+        // a NPE in CloseableThreadContext.putAll() when ThreadContext map is null in test env.
+        final Map<String, String> added = toStringMap(this.fields);
+        ThreadContext.putAll(added);
+        try {
+            switch (this.level) {
+                case TRACE:
+                    if (this.logger.isTraceEnabled()) {
+                        this.logger.trace(logMessage);
+                    }
+                    break;
+                case DEBUG:
+                    if (this.logger.isDebugEnabled()) {
+                        this.logger.debug(logMessage);
+                    }
+                    break;
+                case INFO:
+                    this.logger.info(logMessage);
+                    break;
+                case WARN:
+                    this.logger.warn(logMessage);
+                    break;
+                case ERROR:
+                    this.logger.error(logMessage);
+                    break;
+                case FATAL:
+                    // FATAL logged as ERROR — log.level is set by EcsLayout automatically
+                    ThreadContext.put("event.outcome", "failure");
+                    this.logger.error(logMessage);
+                    break;
+                default:
+                    this.logger.info(logMessage);
+                    break;
+            }
+        } finally {
+            for (final String key : added.keySet()) {
+                ThreadContext.remove(key);
+            }
         }
-        return this;
     }
 
     /**
-     * Log the event at the configured level.
-     * Uses Log4j2 MapMessage for proper structured JSON output with ECS fields.
+     * Convert field map to String map for CloseableThreadContext.
+     * List values (event.category, event.type) are serialized as JSON arrays.
      */
-    public void log() {
-        // NOTE: trace.id, client.ip, user.name are in MDC (set by EcsLoggingSlice).
-        // EcsLayout automatically includes all MDC entries in JSON output.
-        // Do NOT copy them into MapMessage — that causes duplicate fields in Elastic.
-
-        // Create MapMessage with all fields for structured JSON output
-        final MapMessage mapMessage = new MapMessage(this.fields);
-
-        // Set the message text
-        final String logMessage = this.message != null ? this.message : "Application event";
-        mapMessage.with("message", logMessage);
-
-        // Log at appropriate level using MapMessage for structured output
-        switch (this.level) {
-            case TRACE:
-                if (this.logger.isTraceEnabled()) {
-                    this.logger.trace(mapMessage);
+    private static Map<String, String> toStringMap(final Map<String, Object> fields) {
+        final Map<String, String> result = new HashMap<>(fields.size());
+        for (Map.Entry<String, Object> entry : fields.entrySet()) {
+            final Object value = entry.getValue();
+            if (value instanceof List<?> list) {
+                final StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < list.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(list.get(i)).append("\"");
                 }
-                break;
-            case DEBUG:
-                if (this.logger.isDebugEnabled()) {
-                    this.logger.debug(mapMessage);
-                }
-                break;
-            case INFO:
-                this.logger.info(mapMessage);
-                break;
-            case WARN:
-                this.logger.warn(mapMessage);
-                break;
-            case ERROR:
-                this.logger.error(mapMessage);
-                break;
-            case FATAL:
-                // FATAL logged as ERROR with special marker
-                mapMessage.with("event.severity", "fatal");
-                this.logger.error(mapMessage);
-                break;
+                sb.append("]");
+                result.put(entry.getKey(), sb.toString());
+            } else if (value != null) {
+                result.put(entry.getKey(), value.toString());
+            }
         }
+        return result;
     }
 
     /**
@@ -283,4 +314,3 @@ public final class EcsLogger {
         return sw.toString();
     }
 }
-

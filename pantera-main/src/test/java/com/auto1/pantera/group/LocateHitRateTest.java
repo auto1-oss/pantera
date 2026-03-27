@@ -335,6 +335,193 @@ final class LocateHitRateTest {
     }
 
     @Test
+    void helmEndToEndHitRate() throws Exception {
+        // Helm stores: name = chart name, version = chart version
+        final String[][] artifacts = {
+            {"nginx", "1.2.3"},
+            {"apache", "2.0.0"},
+            {"my-chart", "2.5.1"},
+            {"cert-manager", "1.13.0"},
+            {"kube-state-metrics", "5.16.0"},
+            {"prometheus", "25.0.0"},
+        };
+        for (final String[] art : artifacts) {
+            this.index.index(new ArtifactDocument(
+                "helm", "helm-proxy", art[0], art[0],
+                art[1], 50_000L, Instant.now(), "proxy"
+            )).join();
+        }
+
+        final String[] urls = {
+            "/charts/nginx-1.2.3.tgz",
+            "/charts/nginx-1.2.4.tgz",
+            "/charts/apache-2.0.0.tgz",
+            "/charts/my-chart-2.5.1.tgz",
+            "/charts/cert-manager-1.13.0.tgz",
+            "/charts/kube-state-metrics-5.16.0.tgz",
+            "/charts/prometheus-25.0.0.tgz",
+            "/charts/nginx-1.2.3.tgz.prov",
+        };
+
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> parsed = ArtifactNameParser.parse("helm-group", url);
+            if (parsed.isPresent()) {
+                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                if (!repos.isEmpty()) {
+                    hits++;
+                }
+            }
+        }
+        final double hitRate = (double) hits / urls.length * 100;
+        MatcherAssert.assertThat(
+            String.format("Helm E2E hit rate %.1f%% must be >= 95%% (%d/%d)",
+                hitRate, hits, urls.length),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void debianEndToEndHitRate() throws Exception {
+        // Debian stores: name = "{pkg}_{arch}" (matching UpdateSlice.formatName()),
+        // version = package version
+        final String[][] artifacts = {
+            {"nginx_amd64", "1.18.0"},
+            {"python3_amd64", "3.11.0"},
+            {"curl_amd64", "7.88.1"},
+            {"git_amd64", "2.39.0"},
+            {"vim_amd64", "9.0"},
+            {"openssh-server_amd64", "9.0"},
+        };
+        for (final String[] art : artifacts) {
+            this.index.index(new ArtifactDocument(
+                "apt", "debian-proxy", art[0], art[0],
+                art[1], 5_000_000L, Instant.now(), "proxy"
+            )).join();
+        }
+
+        final String[] urls = {
+            "/pool/main/n/nginx/nginx_1.18.0_amd64.deb",
+            "/pool/main/p/python3/python3_3.11.0_amd64.deb",
+            "/pool/main/c/curl/curl_7.88.1_amd64.deb",
+            "/pool/main/g/git/git_2.39.0_amd64.deb",
+            "/pool/main/v/vim/vim_9.0_amd64.deb",
+            "/pool/main/o/openssh/openssh-server_9.0_amd64.deb",
+        };
+
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> parsed = ArtifactNameParser.parse("debian-group", url);
+            if (parsed.isPresent()) {
+                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                if (!repos.isEmpty()) {
+                    hits++;
+                }
+            }
+        }
+        final double hitRate = (double) hits / urls.length * 100;
+        MatcherAssert.assertThat(
+            String.format("Debian E2E hit rate %.1f%% must be >= 95%% (%d/%d)",
+                hitRate, hits, urls.length),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void hexEndToEndHitRate() throws Exception {
+        // Hex stores: name = package name, version = package version
+        final String[][] artifacts = {
+            {"phoenix", "1.7.0"},
+            {"ecto", "3.11.0"},
+            {"plug", "1.15.0"},
+            {"jason", "1.4.1"},
+            {"telemetry", "1.2.1"},
+        };
+        for (final String[] art : artifacts) {
+            this.index.index(new ArtifactDocument(
+                "hex", "hex-proxy", art[0], art[0],
+                art[1], 1_000_000L, Instant.now(), "proxy"
+            )).join();
+        }
+
+        final String[] urls = {
+            "/api/packages/phoenix",
+            "/api/packages/ecto",
+            "/api/packages/plug",
+            "/api/packages/jason",
+            "/api/packages/telemetry",
+            "/api/packages/phoenix/releases/1.7.0",
+            "/api/packages/ecto/releases/3.11.0",
+            "/repo/tarballs/phoenix-1.7.0.tar",
+            "/repo/tarballs/ecto-3.11.0.tar",
+            "/repo/tarballs/plug-1.15.0.tar",
+        };
+
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> parsed = ArtifactNameParser.parse("hex-group", url);
+            if (parsed.isPresent()) {
+                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                if (!repos.isEmpty()) {
+                    hits++;
+                }
+            }
+        }
+        final double hitRate = (double) hits / urls.length * 100;
+        MatcherAssert.assertThat(
+            String.format("Hex E2E hit rate %.1f%% must be >= 95%% (%d/%d)",
+                hitRate, hits, urls.length),
+            hitRate >= 95.0,
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void fileEndToEndHitRate() throws Exception {
+        // File/raw stores: name = path with dots (FileProxySlice: aname.replace('/', '.'))
+        final String[] paths = {
+            "reports.2024.q1.pdf",
+            "artifacts.v1.0.0.myapp.zip",
+            "index.html",
+            "binaries.linux.amd64.myapp",
+            "data.2024-01-01.csv",
+        };
+        for (final String path : paths) {
+            this.index.index(new ArtifactDocument(
+                "file", "file-hosted", path, path,
+                "1", 1_000L, Instant.now(), "admin"
+            )).join();
+        }
+
+        // URL paths: slashes get converted to dots by the parser → matches DB names
+        final String[] urls = {
+            "/reports/2024/q1.pdf",      // → reports.2024.q1.pdf
+            "/artifacts/v1.0.0/myapp.zip", // → artifacts.v1.0.0.myapp.zip
+            "/index.html",                // → index.html
+            "/binaries/linux/amd64/myapp", // → binaries.linux.amd64.myapp
+            "/data/2024-01-01.csv",       // → data.2024-01-01.csv
+        };
+
+        int hits = 0;
+        for (final String url : urls) {
+            final Optional<String> parsed = ArtifactNameParser.parse("file-group", url);
+            if (parsed.isPresent()) {
+                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                if (!repos.isEmpty()) {
+                    hits++;
+                }
+            }
+        }
+        MatcherAssert.assertThat(
+            String.format("File E2E: all %d lookups must hit", urls.length),
+            hits,
+            new IsEqual<>(urls.length)
+        );
+    }
+
+    @Test
     void combinedEndToEndHitRate() throws Exception {
         // Populate a realistic mixed-adapter database
         // Maven artifacts
@@ -362,6 +549,34 @@ final class LocateHitRateTest {
                 "sha256:abc", 200_000_000L, Instant.now(), "proxy"
             )).join();
         }
+        // Helm artifacts
+        for (final String name : List.of("nginx", "cert-manager")) {
+            this.index.index(new ArtifactDocument(
+                "helm", "helm-proxy", name, name,
+                "1.0.0", 50_000L, Instant.now(), "proxy"
+            )).join();
+        }
+        // Debian artifacts — name = pkg_arch (matches DebianScanner.formatName / UpdateSlice)
+        for (final String name : List.of("nginx_amd64", "curl_amd64")) {
+            this.index.index(new ArtifactDocument(
+                "apt", "debian-proxy", name, name,
+                "1.0.0", 5_000_000L, Instant.now(), "proxy"
+            )).join();
+        }
+        // Hex artifacts
+        for (final String name : List.of("phoenix", "ecto")) {
+            this.index.index(new ArtifactDocument(
+                "hex", "hex-proxy", name, name,
+                "1.0.0", 1_000_000L, Instant.now(), "proxy"
+            )).join();
+        }
+        // File artifacts — name = path with dots (matches FileProxySlice / FileScanner)
+        for (final String path : List.of("reports.q1.pdf", "artifacts.app.zip")) {
+            this.index.index(new ArtifactDocument(
+                "file", "file-hosted", path, path,
+                "1", 1_000L, Instant.now(), "admin"
+            )).join();
+        }
 
         final String[][] cases = {
             {"maven-group", "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar"},
@@ -383,6 +598,20 @@ final class LocateHitRateTest {
             {"docker-group", "/v2/library/nginx/blobs/sha256:abc"},
             {"docker-group", "/v2/alpine/manifests/3.18"},
             {"docker-group", "/v2/alpine/tags/list"},
+            // Helm
+            {"helm-group", "/charts/nginx-1.2.3.tgz"},
+            {"helm-group", "/charts/cert-manager-1.13.0.tgz"},
+            {"helm-group", "/charts/nginx-1.2.3.tgz.prov"},
+            // Debian
+            {"debian-group", "/pool/main/n/nginx/nginx_1.18.0_amd64.deb"},
+            {"debian-group", "/pool/main/c/curl/curl_7.88.1_amd64.deb"},
+            // Hex
+            {"hex-group", "/api/packages/phoenix"},
+            {"hex-group", "/repo/tarballs/phoenix-1.7.0.tar"},
+            {"hex-group", "/api/packages/ecto/releases/1.0.0"},
+            // File
+            {"file-group", "/reports/q1.pdf"},
+            {"file-group", "/artifacts/app.zip"},
         };
 
         int hits = 0;

@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.0.0</version>
+    <version>2.0.3</version>
   </parent>
   <artifactId>http-client</artifactId>
-  <version>2.0.0</version>
+  <version>2.0.3</version>
   <name>Pantera HTTP client</name>
   <url>https://github.com/auto1-oss/pantera/tree/master/http-client</url>
   <properties>
@@ -40,7 +40,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-core</artifactId>
-      <version>2.0.0</version>
+      <version>2.0.3</version>
     </dependency>
     <!-- Micrometer for Jetty metrics -->
     <dependency>
@@ -101,7 +101,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>2.0.0</version>
+      <version>2.0.3</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
