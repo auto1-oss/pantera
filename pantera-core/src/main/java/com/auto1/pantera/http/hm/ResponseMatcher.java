@@ -1,0 +1,122 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.hm;
+
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.headers.Header;
+import org.hamcrest.Matcher;
+import org.hamcrest.core.AllOf;
+
+/**
+ * Response matcher.
+ */
+public final class ResponseMatcher extends AllOf<Response> {
+
+    /**
+     * @param status Expected status
+     * @param headers Expected headers
+     * @param body Expected body
+     */
+    public ResponseMatcher(
+        final RsStatus status,
+        final Iterable<? extends Header> headers,
+        final byte[] body
+    ) {
+        super(
+            new RsHasStatus(status),
+            new RsHasHeaders(headers),
+            new RsHasBody(body)
+        );
+    }
+
+    /**
+     * @param status Expected status
+     * @param body Expected body
+     * @param headers Expected headers
+     */
+    public ResponseMatcher(
+        final RsStatus status,
+        final byte[] body,
+        final Header... headers
+    ) {
+        super(
+            new RsHasStatus(status),
+            new RsHasHeaders(headers),
+            new RsHasBody(body)
+        );
+    }
+
+    /**
+     * @param status Expected status
+     * @param body Expected body
+     */
+    public ResponseMatcher(final RsStatus status, final byte[] body) {
+        super(
+            new RsHasStatus(status),
+            new RsHasBody(body)
+        );
+    }
+
+    /**
+     * @param body Expected body
+     */
+    public ResponseMatcher(final byte[] body) {
+        this(RsStatus.OK, body);
+    }
+
+    /**
+     * @param headers Expected headers
+     */
+    public ResponseMatcher(Iterable<? extends Header> headers) {
+        this(RsStatus.OK, new RsHasHeaders(headers));
+    }
+
+    /**
+     * @param headers Expected headers
+     */
+    public ResponseMatcher(Header... headers) {
+        this(RsStatus.OK, new RsHasHeaders(headers));
+    }
+
+    /**
+     * @param status Expected status
+     * @param headers Expected headers
+     */
+    public ResponseMatcher(RsStatus status, Iterable<? extends Header> headers) {
+        this(status, new RsHasHeaders(headers));
+    }
+
+    /**
+     * @param status Expected status
+     * @param headers Expected headers
+     */
+    public ResponseMatcher(RsStatus status, Header... headers) {
+        this(status, new RsHasHeaders(headers));
+    }
+
+    /**
+     * @param status Expected status
+     * @param headers Matchers for expected headers
+     */
+    @SafeVarargs
+    public ResponseMatcher(RsStatus status, Matcher<? super Header>... headers) {
+        this(status, new RsHasHeaders(headers));
+    }
+
+    /**
+     * @param status Expected status
+     * @param headers Matchers for expected headers
+     */
+    public ResponseMatcher(RsStatus status, Matcher<Response> headers) {
+        super(new RsHasStatus(status), headers);
+    }
+}

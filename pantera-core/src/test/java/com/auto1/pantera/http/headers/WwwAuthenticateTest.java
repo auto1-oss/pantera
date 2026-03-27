@@ -1,0 +1,184 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.headers;
+
+import com.auto1.pantera.http.Headers;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.collection.IsEmptyCollection;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.util.Iterator;
+
+/**
+ * Test case for {@link WwwAuthenticate}.
+ *
+ * @since 0.12
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+public final class WwwAuthenticateTest {
+
+    @Test
+    void shouldHaveExpectedName() {
+        MatcherAssert.assertThat(
+            new WwwAuthenticate("Basic").getKey(),
+            new IsEqual<>("WWW-Authenticate")
+        );
+    }
+
+    @Test
+    void shouldHaveExpectedValue() {
+        final String value = "Basic realm=\"http://pantera.com\"";
+        MatcherAssert.assertThat(
+            new WwwAuthenticate(value).getValue(),
+            new IsEqual<>(value)
+        );
+    }
+
+    @Test
+    void shouldExtractValueFromHeaders() {
+        final String value = "Basic realm=\"http://pantera.com/my-repo\"";
+        final WwwAuthenticate header = new WwwAuthenticate(
+            Headers.from(
+                new Header("Content-Length", "11"),
+                new Header("www-authenticate", value),
+                new Header("X-Something", "Some Value")
+            )
+        );
+        MatcherAssert.assertThat(header.getValue(), new IsEqual<>(value));
+    }
+
+    @Test
+    void shouldFailToExtractValueFromEmptyHeaders() {
+        Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new WwwAuthenticate(Headers.EMPTY).getValue()
+        );
+    }
+
+    @Test
+    void shouldFailToExtractValueWhenNoWwwAuthenticateHeaders() {
+        Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new WwwAuthenticate(
+                Headers.from("Content-Type", "text/plain")
+            ).getValue()
+        );
+    }
+
+    @Test
+    void shouldFailToExtractValueFromMultipleHeaders() {
+        Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new WwwAuthenticate(
+                Headers.from(
+                    new WwwAuthenticate("Basic realm=\"https://pantera.com\""),
+                    new WwwAuthenticate("Bearer realm=\"https://pantera.com/token\"")
+                )
+            ).getValue()
+        );
+    }
+
+    @Test
+    void shouldParseHeaderWithoutParams() {
+        final WwwAuthenticate header = new WwwAuthenticate("Basic");
+        MatcherAssert.assertThat("Wrong scheme", header.scheme(), new IsEqual<>("Basic"));
+        MatcherAssert.assertThat("Wrong params", header.params(), new IsEmptyCollection<>());
+    }
+
+    @Test
+    void shouldParseHeaderWithParams() {
+        final WwwAuthenticate header = new WwwAuthenticate(
+            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:busybox:pull\""
+        );
+        MatcherAssert.assertThat(
+            "Wrong scheme",
+            header.scheme(),
+            new IsEqual<>("Bearer")
+        );
+        MatcherAssert.assertThat(
+            "Wrong realm",
+            header.realm(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final Iterator<WwwAuthenticate.Param> params = header.params().iterator();
+        final WwwAuthenticate.Param first = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of param #1",
+            first.name(),
+            new IsEqual<>("realm")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of param #1",
+            first.value(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final WwwAuthenticate.Param second = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of param #2",
+            second.name(),
+            new IsEqual<>("service")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of param #2",
+            second.value(),
+            new IsEqual<>("registry.docker.io")
+        );
+        final WwwAuthenticate.Param third = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of param #3",
+            third.name(),
+            new IsEqual<>("scope")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of param #3",
+            third.value(),
+            new IsEqual<>("repository:busybox:pull")
+        );
+    }
+
+    @Test
+    void shouldHandleCommaInsideParamValue() {
+        final WwwAuthenticate header = new WwwAuthenticate(
+            "Bearer realm=\"https://auth.docker.io/token\",scope=\"repository:library/ubuntu:pull,push\""
+        );
+        MatcherAssert.assertThat(
+            "Wrong realm",
+            header.realm(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final Iterator<WwwAuthenticate.Param> params = header.params().iterator();
+        final WwwAuthenticate.Param realm = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of realm param",
+            realm.name(),
+            new IsEqual<>("realm")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of realm param",
+            realm.value(),
+            new IsEqual<>("https://auth.docker.io/token")
+        );
+        final WwwAuthenticate.Param scope = params.next();
+        MatcherAssert.assertThat(
+            "Wrong name of scope param",
+            scope.name(),
+            new IsEqual<>("scope")
+        );
+        MatcherAssert.assertThat(
+            "Wrong value of scope param",
+            scope.value(),
+            new IsEqual<>("repository:library/ubuntu:pull,push")
+        );
+        MatcherAssert.assertThat("Unexpected extra params", params.hasNext(), new IsEqual<>(false));
+    }
+}

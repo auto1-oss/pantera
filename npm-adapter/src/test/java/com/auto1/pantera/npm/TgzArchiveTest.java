@@ -1,0 +1,131 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
+import com.auto1.pantera.asto.test.TestResource;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
+import javax.json.JsonObject;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.beans.HasPropertyWithValue;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.StringContains;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests for {@link TgzArchive}.
+ * @since 0.9
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+final class TgzArchiveTest {
+    @Test
+    void getProjectNameAndVersionFromPackageJson() {
+        final JsonObject json = new TgzArchive(
+            new String(
+                new TestResource("binaries/vue-cli-plugin-liveapp-1.2.5.tgz").asBytes(),
+                StandardCharsets.ISO_8859_1
+            ),
+            false
+        ).packageJson();
+        MatcherAssert.assertThat(
+            "Name is parsed properly from package.json",
+            json.getJsonString("name").getString(),
+            new IsEqual<>("@aurora/vue-cli-plugin-liveapp")
+        );
+        MatcherAssert.assertThat(
+            "Version is parsed properly from package.json",
+            json.getJsonString("version").getString(),
+            new IsEqual<>("1.2.5")
+        );
+    }
+
+    @Test
+    void getArchiveEncoded() {
+        final byte[] pkgjson =
+            new TestResource("simple-npm-project/package.json").asBytes();
+        final TgzArchive tgz = new TgzArchive(
+            Base64.getEncoder().encodeToString(pkgjson)
+        );
+        MatcherAssert.assertThat(
+            tgz.bytes(),
+            new IsEqual<>(
+                pkgjson
+            )
+        );
+    }
+
+    @Test
+    void savesToFile() throws IOException {
+        final Path temp = Files.createTempFile("temp", ".tgz");
+        new TgzArchive(
+            new String(
+                new TestResource("binaries/simple-npm-project-1.0.2.tgz").asBytes(),
+                StandardCharsets.ISO_8859_1
+            ),
+            false
+        ).saveToFile(temp).blockingGet();
+        MatcherAssert.assertThat(
+            temp.toFile().exists(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void throwsOnMalformedArchive() {
+        final TgzArchive tgz = new TgzArchive(
+            Base64.getEncoder().encodeToString(
+                new byte[]{}
+            )
+        );
+        MatcherAssert.assertThat(
+            Assertions.assertThrows(
+                PanteraIOException.class,
+                tgz::packageJson
+            ),
+            new HasPropertyWithValue<>(
+                "message",
+                new StringContains(
+                    "Input is not in the .gz format"
+                )
+            )
+        );
+    }
+
+    /**
+     * Throws proper exception on empty tgz.
+     * {@code tar czvf - --files-from=/dev/null | base64}
+     */
+    @Test
+    void throwsOnMissingFile() {
+        final TgzArchive tgz = new TgzArchive(
+            "H4sIAAAAAAAAA+3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAIA3A5reHScAKAAA"
+        );
+        MatcherAssert.assertThat(
+            Assertions.assertThrows(
+                PanteraException.class,
+                tgz::packageJson
+            ),
+            new HasPropertyWithValue<>(
+                "message",
+                new StringContains(
+                    "'package.json' file was not found"
+                )
+            )
+        );
+    }
+
+}

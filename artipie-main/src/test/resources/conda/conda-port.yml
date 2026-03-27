@@ -1,8 +1,0 @@
----
-repo:
-  type: conda
-  port: 8081
-  url: http://artipie:8081/my-conda-port
-  storage:
-    type: fs
-    path: /var/artipie/data/

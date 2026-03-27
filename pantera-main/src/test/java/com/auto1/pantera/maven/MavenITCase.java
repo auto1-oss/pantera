@@ -1,0 +1,144 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.maven;
+
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.testcontainers.containers.BindMode;
+
+/**
+ * Integration tests for Maven repository.
+ * @since 0.11
+ */
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseObjectForClearerAPI"})
+@DisabledOnOs(OS.WINDOWS)
+public final class MavenITCase {
+
+    /**
+     * Test deployments.
+     */
+    @RegisterExtension
+    final TestDeployment containers = new TestDeployment(
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
+            .withRepoConfig("maven/maven.yml", "my-maven")
+            .withRepoConfig("maven/maven-port.yml", "my-maven-port")
+            .withExposedPorts(8081),
+        () -> new TestDeployment.ClientContainer("pantera/maven-tests:1.0")
+            .withWorkingDirectory("/w")
+            .withClasspathResourceMapping(
+                "maven/maven-settings.xml", "/w/settings.xml", BindMode.READ_ONLY
+            )
+            .withClasspathResourceMapping(
+                "maven/maven-settings-port.xml", "/w/settings-port.xml", BindMode.READ_ONLY
+            )
+    );
+
+    @ParameterizedTest
+    @CsvSource({
+        "helloworld,0.1,settings.xml,my-maven",
+        "snapshot,1.0-SNAPSHOT,settings.xml,my-maven",
+        "helloworld,0.1,settings-port.xml,my-maven-port",
+        "snapshot,1.0-SNAPSHOT,settings-port.xml,my-maven-port"
+    })
+    void downloadsArtifact(final String type, final String vers, final String stn,
+        final String repo) throws Exception {
+        final String meta = String.format("com/auto1/pantera/%s/maven-metadata.xml", type);
+        this.containers.putResourceToPantera(
+            meta, String.format("/var/pantera/data/%s/%s", repo, meta)
+        );
+        final String base = String.format("com/auto1/pantera/%s/%s", type, vers);
+        MavenITCase.getResourceFiles(base).stream().map(r -> String.join("/", base, r)).forEach(
+            item -> this.containers.putResourceToPantera(
+                item, String.format("/var/pantera/data/%s/%s", repo, item)
+            )
+        );
+        this.containers.assertExec(
+            "Failed to get dependency",
+            new ContainerResultMatcher(),
+            "mvn", "-B", "-q", "-s", stn, "-e", "dependency:get",
+            String.format("-Dartifact=com.auto1.pantera:%s:%s", type, vers)
+        );
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "helloworld,0.1,settings.xml,pom.xml",
+        "snapshot,1.0-SNAPSHOT,settings.xml,pom.xml",
+        "helloworld,0.1,settings-port.xml,pom-port.xml",
+        "snapshot,1.0-SNAPSHOT,settings-port.xml,pom-port.xml"
+    })
+    void deploysArtifact(final String type, final String vers, final String stn, final String pom)
+        throws Exception {
+        this.containers.putBinaryToClient(
+            new TestResource(String.format("%s-src/%s", type, pom)).asBytes(), "/w/pom.xml"
+        );
+        this.containers.assertExec(
+            "Deploy failed",
+            new ContainerResultMatcher(ContainerResultMatcher.SUCCESS),
+            "mvn", "-B", "-q", "-s", stn, "deploy", "-Dmaven.install.skip=true"
+        );
+        this.containers.assertExec(
+            "Download failed",
+            new ContainerResultMatcher(ContainerResultMatcher.SUCCESS),
+            "mvn", "-B", "-q", "-s", stn, "-U", "dependency:get",
+            String.format("-Dartifact=com.auto1.pantera:%s:%s", type, vers)
+        );
+    }
+
+    /**
+     * Get resource files.
+     * @param path Resource path
+     * @return List of subresources
+     */
+    @SuppressWarnings("PMD.AssignmentInOperand")
+    static List<String> getResourceFiles(final String path) throws IOException {
+        final List<String> filenames = new ArrayList<>(0);
+        try (InputStream in = getResourceAsStream(path);
+            BufferedReader br = new BufferedReader(new InputStreamReader(in))) {
+            String resource;
+            while ((resource = br.readLine()) != null) {
+                filenames.add(resource);
+            }
+        }
+        return filenames;
+    }
+
+    /**
+     * Get resource stream.
+     * @param resource Name
+     * @return Stream
+     */
+    private static InputStream getResourceAsStream(final String resource) {
+        return Optional.ofNullable(
+            Thread.currentThread().getContextClassLoader().getResourceAsStream(resource)
+        ).or(
+            () -> Optional.ofNullable(MavenITCase.class.getResourceAsStream(resource))
+        ).orElseThrow(
+            () -> new UncheckedIOException(
+                new IOException(String.format("Resource `%s` not found", resource))
+            )
+        );
+    }
+}

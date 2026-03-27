@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.misc;
+
+import com.auto1.pantera.http.log.EcsLogger;
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Objects;
+import org.apache.commons.io.IOUtils;
+
+/**
+ * Java bundled resource in {@code ./src/main/resources}.
+ * @since 0.9
+ */
+public final class JavaResource {
+
+    /**
+     * Resource name.
+     */
+    private final String name;
+
+    /**
+     * Classloader.
+     */
+    private final ClassLoader clo;
+
+    /**
+     * Java resource for current thread context class loader.
+     * @param name Resource name
+     */
+    public JavaResource(final String name) {
+        this(name, Thread.currentThread().getContextClassLoader());
+    }
+
+    /**
+     * Java resource.
+     * @param name Resource name
+     * @param clo Class loader
+     */
+    public JavaResource(final String name, final ClassLoader clo) {
+        this.name = name;
+        this.clo = clo;
+    }
+
+    /**
+     * Copy resource data to destination.
+     * @param dest Destination path
+     * @throws IOException On error
+     */
+    public void copy(final Path dest) throws IOException {
+        if (!Files.exists(dest.getParent())) {
+            Files.createDirectories(dest.getParent());
+        }
+        try (
+            InputStream src = new BufferedInputStream(
+                Objects.requireNonNull(this.clo.getResourceAsStream(this.name))
+            );
+            OutputStream out = Files.newOutputStream(
+                dest, StandardOpenOption.WRITE, StandardOpenOption.CREATE
+            )
+        ) {
+            IOUtils.copy(src, out);
+        }
+        EcsLogger.debug("com.auto1.pantera.misc")
+            .message("Resource copied successfully")
+            .eventCategory("file")
+            .eventAction("resource_copy")
+            .eventOutcome("success")
+            .field("file.path", this.name)
+            .field("file.target_path", dest.toString())
+            .log();
+    }
+}

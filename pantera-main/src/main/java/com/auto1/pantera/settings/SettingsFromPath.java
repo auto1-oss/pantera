@@ -1,0 +1,147 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.settings;
+
+import com.amihaiemil.eoyaml.Yaml;
+import com.auto1.pantera.VertxMain;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.misc.JavaResource;
+import com.auto1.pantera.scheduling.QuartzService;
+import com.auto1.pantera.http.log.EcsLogger;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Obtain pantera settings by path.
+ * @since 0.22
+ */
+public final class SettingsFromPath {
+
+    /**
+     * Path to find setting by.
+     */
+    private final Path path;
+
+    /**
+     * Ctor.
+     * @param path Path to find setting by
+     */
+    public SettingsFromPath(final Path path) {
+        this.path = path;
+    }
+
+    /**
+     * Searches settings by the provided path, if no settings are found,
+     * example settings are used.
+     * @param quartz Quartz service
+     * @return Pantera settings
+     * @throws IOException On IO error
+     */
+    public Settings find(final QuartzService quartz) throws IOException {
+        return this.find(quartz, java.util.Optional.empty());
+    }
+
+    /**
+     * Searches settings by the provided path, reusing a pre-created DataSource.
+     * @param quartz Quartz service
+     * @param dataSource Shared DataSource to avoid duplicate connection pools
+     * @return Pantera settings
+     * @throws IOException On IO error
+     * @since 1.20.13
+     */
+    public Settings find(final QuartzService quartz,
+        final java.util.Optional<javax.sql.DataSource> dataSource) throws IOException {
+        return this.find(quartz, dataSource, java.util.Optional.empty());
+    }
+
+    /**
+     * Searches settings by the provided path, reusing pre-created DataSources.
+     * @param quartz Quartz service
+     * @param dataSource Shared (API) DataSource
+     * @param writeDataSource Dedicated write pool for DbConsumer (empty = use shared)
+     * @return Pantera settings
+     * @throws IOException On IO error
+     * @since 1.21.0
+     */
+    public Settings find(final QuartzService quartz,
+        final java.util.Optional<javax.sql.DataSource> dataSource,
+        final java.util.Optional<javax.sql.DataSource> writeDataSource) throws IOException {
+        boolean initialize = Boolean.parseBoolean(System.getenv("PANTERA_INIT"));
+        if (!Files.exists(this.path)) {
+            new JavaResource("example/pantera.yaml").copy(this.path);
+            initialize = true;
+        }
+        final Settings settings = new YamlSettings(
+            Yaml.createYamlInput(this.path.toFile()).readYamlMapping(),
+            this.path.getParent(), quartz, dataSource, writeDataSource
+        );
+        final BlockingStorage bsto = new BlockingStorage(settings.configStorage());
+        final Key init = new Key.From(".pantera", "initialized");
+        if (initialize && !bsto.exists(init)) {
+            SettingsFromPath.copyResources(
+                Arrays.asList(
+                    AliasSettings.FILE_NAME, "my-bin.yaml", "my-docker.yaml", "my-maven.yaml"
+                ), "repo", bsto
+            );
+            if (settings.authz().policyStorage().isPresent()) {
+                final BlockingStorage policy = new BlockingStorage(
+                    settings.authz().policyStorage().get()
+                );
+                SettingsFromPath.copyResources(
+                    Arrays.asList(
+                        "roles/reader.yml", "roles/default/github.yml", "roles/api-admin.yaml",
+                        "users/pantera.yaml"
+                    ), "security", policy
+                );
+            }
+            bsto.save(init, "true".getBytes());
+            EcsLogger.info("com.auto1.pantera.settings")
+                .message(String.join(
+                    "\n",
+                    "", "", "\t+===============================================================+",
+                    "\t\t\t\t\tHello!",
+                    "\t\tPantera configuration was not found, created default.",
+                    "\t\t\tDefault username/password: `pantera`/`pantera`. ",
+                    "\t-===============================================================-", ""
+                ))
+                .eventCategory("configuration")
+                .eventAction("default_config_create")
+                .eventOutcome("success")
+                .log();
+        }
+        return settings;
+    }
+
+    /**
+     * Copies given resources list from given directory to the blocking storage.
+     * @param resources What to copy
+     * @param dir Example resources directory
+     * @param bsto Where to copy
+     * @throws IOException On error
+     */
+    private static void copyResources(
+        final List<String> resources, final String dir, final BlockingStorage bsto
+    ) throws IOException {
+        for (final String res : resources) {
+            final Path tmp = Files.createTempFile(
+                Path.of(res).getFileName().toString(), ".tmp"
+            );
+            tmp.toFile().deleteOnExit();
+            new JavaResource(String.format("example/%s/%s", dir, res)).copy(tmp);
+            bsto.save(new Key.From(res), Files.readAllBytes(tmp));
+            Files.delete(tmp);
+        }
+    }
+}

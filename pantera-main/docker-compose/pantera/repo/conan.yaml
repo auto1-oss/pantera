@@ -1,0 +1,5 @@
+repo:
+  type: conan
+  storage:
+    type: fs
+    path: /var/pantera/data

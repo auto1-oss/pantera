@@ -1,0 +1,103 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.http.manifest;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.error.ManifestError;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.http.DockerActionSlice;
+import com.auto1.pantera.docker.perms.DockerActions;
+import com.auto1.pantera.docker.perms.DockerRepositoryPermission;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.rq.RequestLine;
+import org.slf4j.MDC;
+
+import java.security.Permission;
+import java.util.concurrent.CompletableFuture;
+
+public class GetManifestSlice extends DockerActionSlice {
+
+    public GetManifestSlice(Docker docker) {
+        super(docker);
+    }
+
+    @Override
+    public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        ManifestRequest request = ManifestRequest.from(line);
+        // Capture the authenticated login before crossing the async boundary.
+        // AuthzSlice adds pantera_login to headers; body.asBytesFuture() may complete
+        // on a different thread (Vert.x event loop) where MDC.user.name is not set.
+        // Re-setting MDC inside the thenCompose ensures CacheManifests.get() sees
+        // the correct owner when it calls MDC.get("user.name").
+        final String login = new Login(headers).getValue();
+        // Consume request body to prevent Vert.x resource leak
+        return body.asBytesFuture().thenCompose(ignored -> {
+            MDC.put("user.name", login);
+            return this.docker.repo(request.name())
+                .manifests()
+                .get(request.reference())
+                .thenApply(
+                    manifest -> manifest.map(
+                        found -> {
+                            Response response = ResponseBuilder.ok()
+                                .header(ContentType.mime(found.mediaType()))
+                                .header(new DigestHeader(found.digest()))
+                                .body(found.content())
+                                .build();
+
+                            // Log response headers at DEBUG level for diagnostics
+                            com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.docker")
+                                .message(String.format("GET manifest response: digest=%s", found.digest()))
+                                .eventCategory("repository")
+                                .eventAction("manifest_get")
+                                .field("container.image.name", request.name())
+                                .field("container.image.tag", request.reference().digest())
+                                .field("file.type", found.mediaType())
+                                .field("package.checksum", found.digest())
+                                .field("http.response.mime_type", found.mediaType())
+                                .log();
+
+                            return response;
+                        }
+                    ).orElseGet(
+                        () -> ResponseBuilder.notFound()
+                            .jsonBody(new ManifestError(request.reference()).json())
+                            .build()
+                    )
+                )
+                .exceptionally(err -> {
+                    com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.docker")
+                        .message("Manifest GET failed with exception, returning 404")
+                        .eventCategory("repository")
+                        .eventAction("manifest_get")
+                        .eventOutcome("failure")
+                        .field("container.image.name", request.name())
+                        .error(err)
+                        .log();
+                    return ResponseBuilder.notFound()
+                        .jsonBody(new ManifestError(request.reference()).json())
+                        .build();
+                });
+        });
+    }
+
+    @Override
+    public Permission permission(RequestLine line) {
+        return new DockerRepositoryPermission(
+            docker.registryName(), ManifestRequest.from(line).name(), DockerActions.PULL.mask()
+        );
+    }
+}

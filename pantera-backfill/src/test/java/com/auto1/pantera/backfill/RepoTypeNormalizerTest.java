@@ -1,0 +1,43 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.backfill;
+
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+/**
+ * Tests for {@link RepoTypeNormalizer}.
+ *
+ * @since 1.20.13
+ */
+final class RepoTypeNormalizerTest {
+
+    @ParameterizedTest
+    @CsvSource({
+        "docker-proxy,  docker",
+        "npm-proxy,     npm",
+        "maven-proxy,   maven",
+        "go-proxy,      go",
+        "maven,         maven",
+        "docker,        docker",
+        "file,          file",
+        "go,            go"
+    })
+    void normalizesType(final String raw, final String expected) {
+        MatcherAssert.assertThat(
+            String.format("normalize('%s') should return '%s'", raw, expected),
+            RepoTypeNormalizer.normalize(raw),
+            Matchers.is(expected.trim())
+        );
+    }
+}

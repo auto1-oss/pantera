@@ -1,0 +1,10 @@
+{
+  "apiBaseUrl": "http://localhost:8086/api/v1",
+  "grafanaUrl": "http://localhost:3000",
+  "appTitle": "Pantera",
+  "defaultPageSize": 20,
+  "apmEnabled": false,
+  "apmServerUrl": "",
+  "apmServiceName": "pantera-ui",
+  "apmEnvironment": "development"
+}

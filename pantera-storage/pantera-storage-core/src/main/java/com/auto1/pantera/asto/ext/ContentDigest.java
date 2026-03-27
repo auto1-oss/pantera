@@ -1,0 +1,114 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto.ext;
+
+import com.auto1.pantera.asto.Content;
+import hu.akarnokd.rxjava2.interop.SingleInterop;
+import io.reactivex.Flowable;
+import java.nio.ByteBuffer;
+import java.security.MessageDigest;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
+import org.apache.commons.codec.binary.Hex;
+import org.reactivestreams.Publisher;
+
+/**
+ * Digest of specified {@link Content}.
+ * @since 0.22
+ */
+public final class ContentDigest {
+
+    /**
+     * Content.
+     */
+    private final Content content;
+
+    /**
+     * Message digest.
+     */
+    private final Supplier<MessageDigest> digest;
+
+    /**
+     * Restore buffer position after read.
+     */
+    private final boolean restore;
+
+    /**
+     * Digest of content.
+     * @param content Content
+     * @param digest Digest
+     */
+    public ContentDigest(final Publisher<ByteBuffer> content,
+        final Supplier<MessageDigest> digest) {
+        this(content, digest, false);
+    }
+
+    /**
+     * Digest of content.
+     * @param content Content
+     * @param digest Digest
+     * @param restore Restore buffer position after reading
+     */
+    public ContentDigest(final Publisher<ByteBuffer> content, final Supplier<MessageDigest> digest,
+        final boolean restore) {
+        this(new Content.From(content), digest, restore);
+    }
+
+    /**
+     * Digest of content.
+     * @param content Content
+     * @param digest Digest
+     */
+    public ContentDigest(final Content content, final Supplier<MessageDigest> digest) {
+        this(content, digest, false);
+    }
+
+    /**
+     * Digest of content.
+     * @param content Content
+     * @param digest Digest
+     * @param restore Restore buffer position after reading
+     */
+    public ContentDigest(final Content content, final Supplier<MessageDigest> digest,
+        final boolean restore) {
+        this.content = content;
+        this.digest = digest;
+        this.restore = restore;
+    }
+
+    /**
+     * Bytes digest.
+     * @return Bytes digest
+     */
+    public CompletionStage<byte[]> bytes() {
+        return Flowable.fromPublisher(this.content).reduceWith(
+            this.digest::get,
+            (dgst, buf) -> {
+                if (this.restore) {
+                    buf.mark();
+                }
+                dgst.update(buf);
+                if (this.restore) {
+                    buf.reset();
+                }
+                return dgst;
+            }
+        ).map(MessageDigest::digest).to(SingleInterop.get());
+    }
+
+    /**
+     * Hex of the digest.
+     * @return Hex string
+     */
+    public CompletionStage<String> hex() {
+        return this.bytes().thenApply(Hex::encodeHexString);
+    }
+}

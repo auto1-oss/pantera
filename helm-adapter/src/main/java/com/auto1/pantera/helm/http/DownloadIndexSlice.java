@@ -1,0 +1,189 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.helm.http;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.helm.ChartYaml;
+import com.auto1.pantera.helm.metadata.IndexYamlMapping;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.KeyFromPath;
+
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+/**
+ * Download index file endpoint. Return index file with urls that are
+ * based on requested URL.
+ */
+final class DownloadIndexSlice implements Slice {
+    /**
+     * Endpoint request line pattern.
+     */
+    static final Pattern PTRN = Pattern.compile(".*index.yaml$");
+
+    /**
+     * Base URL.
+     */
+    private final URL base;
+
+    /**
+     * Abstract Storage.
+     */
+    private final Storage storage;
+
+    /**
+     * Ctor.
+     *
+     * @param base Base URL
+     * @param storage Abstract storage
+     */
+    DownloadIndexSlice(final String base, final Storage storage) {
+        this.base = DownloadIndexSlice.url(base);
+        this.storage = storage;
+    }
+
+    @Override
+    public CompletableFuture<Response> response(
+        RequestLine line, Headers headers, Content body
+    ) {
+        final String uri = line.uri().getPath();
+        final Matcher matcher = DownloadIndexSlice.PTRN.matcher(uri);
+        if (matcher.matches()) {
+            final Key path = new KeyFromPath(uri);
+            return this.storage.exists(path).thenCompose(
+                exists -> {
+                    if (exists) {
+                        return this.storage.value(path)
+                            .thenCompose(content -> new UpdateIndexUrls(content, this.base).value())
+                            .thenApply(content -> ResponseBuilder.ok().body(content).build());
+                    }
+                    return ResponseBuilder.notFound().completedFuture();
+                }
+            );
+        }
+        return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * Converts string with url to URL.
+     * @param url String with url
+     * @return URL from string with url.
+     */
+    private static URL url(final String url) {
+        try {
+            return URI.create(url.replaceAll("/$", "")).toURL();
+        } catch (final MalformedURLException exc) {
+            throw new PanteraException(
+                new IllegalStateException(
+                    String.format("Failed to build URL from '%s'", url),
+                    exc
+                )
+            );
+        }
+    }
+
+    /**
+     * Prepends all urls in the index file with the prefix to build
+     * absolute URL: chart-0.4.1.tgz -&gt; http://host:port/path/chart-0.4.1.tgz.
+     * @since 0.3
+     */
+    private static final class UpdateIndexUrls {
+        /**
+         * Original content.
+         */
+        private final Content original;
+
+        /**
+         * Base URL.
+         */
+        private final URL base;
+
+        /**
+         * Ctor.
+         * @param original Original content
+         * @param base Base URL
+         */
+        UpdateIndexUrls(final Content original, final URL base) {
+            this.original = original;
+            this.base = base;
+        }
+
+        /**
+         * Return modified content with prepended URLs.
+         * @return Modified content with prepended URLs
+         */
+        public CompletionStage<Content> value() {
+            return this.original
+                .asBytesFuture()
+                .thenApply(bytes -> new String(bytes, StandardCharsets.UTF_8))
+                .thenApply(IndexYamlMapping::new)
+                .thenApply(this::update)
+                .thenApply(idx -> idx.toContent().orElseThrow());
+        }
+
+        /**
+         * Updates urls for index file.
+         * @param index Index yaml mapping
+         * @return Index yaml mapping with updated urls.
+         */
+        private IndexYamlMapping update(final IndexYamlMapping index) {
+            final Set<String> entrs = index.entries().keySet();
+            entrs.forEach(
+                chart -> index.byChart(chart).forEach(
+                    entr -> {
+                        final List<String> urls = new ChartYaml(entr).urls();
+                        entr.put(
+                            "urls",
+                            urls.stream()
+                                .map(this::baseUrlWithUri)
+                                .collect(Collectors.toList())
+                        );
+                    }
+                )
+            );
+            return index;
+        }
+
+        /**
+         * Combine base url with uri.
+         * @param uri Uri
+         * @return Url that was obtained after combining.
+         */
+        private String baseUrlWithUri(final String uri) {
+            final String unsafe = String.format("%s/%s", this.base, uri);
+            try {
+                return new URI(unsafe).toString();
+            } catch (final URISyntaxException exc) {
+                throw new IllegalStateException(
+                    String.format("Failed to create URI from `%s`", unsafe),
+                    exc
+                );
+            }
+        }
+    }
+}

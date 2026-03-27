@@ -1,0 +1,209 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.rq.multipart;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.http.misc.ByteBufferTokenizer;
+import com.auto1.pantera.http.misc.Pipeline;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.reactivestreams.Processor;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
+
+/**
+ * Multipart parts publisher.
+ *
+ * @since 1.0
+ */
+final class MultiParts implements Processor<ByteBuffer, RqMultipart.Part>,
+    ByteBufferTokenizer.Receiver {
+
+    /**
+     * Pool name prefix for metrics identification.
+     */
+    public static final String POOL_NAME = "pantera.http.multipart";
+
+    /**
+     * Cached thread pool for parts processing.
+     * Pool name: {@value #POOL_NAME}.parts (visible in thread dumps and metrics).
+     * Wrapped with TraceContextExecutor to propagate MDC (trace.id, user, etc.) to parts threads.
+     */
+    private static final ExecutorService CACHED_PEXEC = TraceContextExecutor.wrap(
+        Executors.newCachedThreadPool(
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(final Runnable runnable) {
+                    final Thread thread = new Thread(runnable);
+                    thread.setName(POOL_NAME + ".parts-" + counter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }
+        )
+    );
+
+    /**
+     * Counter for subscription executor threads.
+     */
+    private static final AtomicInteger SUB_COUNTER = new AtomicInteger(0);
+
+    /**
+     * Upstream downstream pipeline.
+     */
+    private final Pipeline<RqMultipart.Part> pipeline;
+
+    /**
+     * Parts tokenizer.
+     */
+    private final ByteBufferTokenizer tokenizer;
+
+    /**
+     * Subscription executor service.
+     */
+    private final ExecutorService exec;
+
+    /**
+     * Part executor service.
+     */
+    private final ExecutorService pexec;
+
+    /**
+     * State synchronization.
+     */
+    private final Object lock;
+
+    /**
+     * Current part.
+     */
+    private volatile MultiPart current;
+
+    /**
+     * State flags.
+     */
+    private final State state;
+
+    /**
+     * Completion handler.
+     */
+    private final Completion<?> completion;
+
+    /**
+     * New multipart parts publisher for upstream publisher.
+     * @param boundary Boundary token delimiter of parts
+     */
+    MultiParts(final String boundary) {
+        this(boundary, MultiParts.CACHED_PEXEC);
+    }
+
+    /**
+     * New multipart parts publisher for upstream publisher.
+     * @param boundary Boundary token delimiter of parts
+     * @param pexec Parts processing executor
+     */
+    MultiParts(final String boundary, final ExecutorService pexec) {
+        this.tokenizer = new ByteBufferTokenizer(
+            this, boundary.getBytes(StandardCharsets.US_ASCII)
+        );
+        this.exec = TraceContextExecutor.wrap(
+            Executors.newSingleThreadExecutor(
+                r -> {
+                    final Thread thread = new Thread(r, POOL_NAME + ".sub-" + SUB_COUNTER.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            )
+        );
+        this.pipeline = new Pipeline<>();
+        this.completion = new Completion<>(this.pipeline);
+        this.state = new State();
+        this.lock = new Object();
+        this.pexec = pexec;
+    }
+
+    /**
+     * Subscribe publisher to this processor asynchronously.
+     * @param pub Upstream publisher
+     */
+    public void subscribeAsync(final Publisher<ByteBuffer> pub) {
+        this.exec.submit(() -> pub.subscribe(this));
+    }
+
+    @Override
+    public void subscribe(final Subscriber<? super RqMultipart.Part> sub) {
+        this.pipeline.connect(sub);
+    }
+
+    @Override
+    public void onSubscribe(final Subscription sub) {
+        this.pipeline.onSubscribe(sub);
+    }
+
+    @Override
+    public void onNext(final ByteBuffer chunk) {
+        final ByteBuffer next;
+        if (this.state.isInit()) {
+            // multipart preamble is tricky:
+            // if request is started with boundary, then it donesn't have a preamble
+            // but we're splitting it by \r\n<boundary> token.
+            // To tell tokenizer emmit empty chunk on non-preamble first buffer started with
+            // boudnary we need to add \r\n to it.
+            next = ByteBuffer.allocate(chunk.limit() + 2);
+            next.put("\r\n".getBytes(StandardCharsets.US_ASCII));
+            next.put(chunk);
+            next.rewind();
+        } else {
+            next = chunk;
+        }
+        this.tokenizer.push(next);
+        this.pipeline.request(1L);
+    }
+
+    @Override
+    public void onError(final Throwable err) {
+        this.pipeline.onError(new PanteraException("Upstream failed", err));
+        this.exec.shutdown();
+    }
+
+    @Override
+    public void onComplete() {
+        this.completion.upstreamCompleted();
+    }
+
+    @Override
+    public void receive(final ByteBuffer next, final boolean end) {
+        synchronized (this.lock) {
+            this.state.patch(next, end);
+            if (this.state.shouldIgnore()) {
+                return;
+            }
+            if (this.state.started()) {
+                this.completion.itemStarted();
+                this.current = new MultiPart(
+                    this.completion,
+                    part -> this.exec.submit(() -> this.pipeline.onNext(part)),
+                    this.pexec
+                );
+            }
+            this.current.push(next);
+            if (this.state.ended()) {
+                this.current.flush();
+            }
+        }
+    }
+}

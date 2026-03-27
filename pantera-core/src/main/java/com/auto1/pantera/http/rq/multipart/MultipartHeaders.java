@@ -1,0 +1,92 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.rq.multipart;
+
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.misc.BufAccumulator;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.stream.Collectors;
+
+/**
+ * Multipart headers builder.
+ * <p>
+ * Multipart headers are created from byte-buffer chunks.
+ * The chunk-receiver pushes buffers to this builder.
+ * When complete, it returns this headers wrapper and
+ * it lazy parses and construt headers collection.
+ * After reading headers iterable, the temporary buffer
+ * becomes invalid.
+ */
+final class MultipartHeaders {
+
+    /**
+     * Sync lock.
+     */
+    private final Object lock;
+
+    /**
+     * Temporary buffer accumulator.
+     */
+    private final BufAccumulator accumulator;
+
+    /**
+     * Headers instance cache constructed from buffer.
+     */
+    private volatile Headers cache;
+
+    /**
+     * New headers builder with initial capacity.
+     * @param cap Initial capacity
+     */
+    MultipartHeaders(final int cap) {
+        this.lock = new Object();
+        this.accumulator = new BufAccumulator(cap);
+    }
+
+    public Headers headers() {
+        if (this.cache == null) {
+            synchronized (this.lock) {
+                if (this.cache == null) {
+                    final byte[] arr = this.accumulator.array();
+                    final String hstr = new String(arr, StandardCharsets.US_ASCII);
+                    this.cache = new Headers(
+                        Arrays.stream(hstr.split("\r\n")).filter(str -> !str.isEmpty()).map(
+                            line -> {
+                                final String[] parts = line.split(":", 2);
+                                return new Header(
+                                    parts[0].trim().toLowerCase(Locale.US),
+                                    parts[1].trim()
+                                );
+                            }
+                        ).collect(Collectors.toList())
+                    );
+                }
+                this.accumulator.close();
+            }
+        }
+        return this.cache;
+    }
+
+    /**
+     * Push new chunk to builder.
+     * @param chunk Part of headers bytes
+     */
+    void push(final ByteBuffer chunk) {
+        synchronized (this.lock) {
+            this.accumulator.write(chunk);
+        }
+    }
+}

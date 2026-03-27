@@ -1,0 +1,80 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.importer.api;
+
+import java.security.MessageDigest;
+
+/**
+ * Supported digest algorithms for import verification.
+ *
+ * @since 1.0
+ */
+public enum DigestType {
+
+    /**
+     * SHA-1 digest.
+     */
+    SHA1("SHA-1"),
+
+    /**
+     * SHA-256 digest.
+     */
+    SHA256("SHA-256"),
+
+    /**
+     * MD5 digest.
+     */
+    MD5("MD5"),
+
+    /**
+     * SHA-512 digest.
+     */
+    SHA512("SHA-512");
+
+    /**
+     * JCA algorithm name.
+     */
+    private final String algorithm;
+
+    DigestType(final String algorithm) {
+        this.algorithm = algorithm;
+    }
+
+    /**
+     * Create an initialized {@link MessageDigest}.
+     *
+     * @return MessageDigest instance
+     */
+    public MessageDigest newDigest() {
+        try {
+            return MessageDigest.getInstance(this.algorithm);
+        } catch (final Exception err) {
+            throw new IllegalStateException(
+                String.format("Failed to initialize digest %s", this.algorithm),
+                err
+            );
+        }
+    }
+
+    /**
+     * Header alias for digest.
+     *
+     * @return Header name suffix
+     */
+    public String headerSuffix() {
+        return switch (this) {
+            case SHA1 -> "sha1";
+            case SHA256 -> "sha256";
+            case MD5 -> "md5";
+            case SHA512 -> "sha512";
+        };
+    }
+}

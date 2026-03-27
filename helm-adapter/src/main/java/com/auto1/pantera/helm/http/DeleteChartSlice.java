@@ -1,0 +1,187 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.helm.http;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.helm.ChartYaml;
+import com.auto1.pantera.helm.TgzArchive;
+import com.auto1.pantera.helm.metadata.IndexYaml;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import hu.akarnokd.rxjava2.interop.SingleInterop;
+import io.reactivex.Single;
+
+import java.net.URI;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+/**
+ * Endpoint for removing chart by name or by name and version.
+ */
+final class DeleteChartSlice implements Slice {
+    /**
+     * Pattern for endpoint.
+     */
+    static final Pattern PTRN_DEL_CHART = Pattern.compile(
+        "^/charts/(?<name>[a-zA-Z\\-\\d.]+)/?(?<version>[a-zA-Z\\-\\d.]*)$"
+    );
+
+    private final Storage storage;
+
+    /**
+     * Events queue.
+     */
+    private final Optional<Queue<ArtifactEvent>> events;
+
+    /**
+     * Repository name.
+     */
+    private final String repoName;
+
+    /**
+     * @param storage The storage.
+     * @param events Events queue
+     * @param repoName Repository name
+     */
+    DeleteChartSlice(Storage storage, Optional<Queue<ArtifactEvent>> events, String repoName) {
+        this.storage = storage;
+        this.events = events;
+        this.repoName = repoName;
+    }
+
+    @Override
+    public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        final URI uri = line.uri();
+        final Matcher matcher = DeleteChartSlice.PTRN_DEL_CHART.matcher(uri.getPath());
+        if (matcher.matches()) {
+            final String chart = matcher.group("name");
+            final String vers = matcher.group("version");
+            if (vers.isEmpty()) {
+                return new IndexYaml(this.storage)
+                    .deleteByName(chart)
+                    .andThen(this.deleteArchives(chart, Optional.empty()))
+                    .to(SingleInterop.get())
+                    .toCompletableFuture();
+            }
+            return new IndexYaml(this.storage)
+                .deleteByNameAndVersion(chart, vers)
+                .andThen(this.deleteArchives(chart, Optional.of(vers)))
+                .to(SingleInterop.get())
+                .toCompletableFuture();
+        }
+        return ResponseBuilder.badRequest().completedFuture();
+    }
+
+    /**
+     * Delete archives from storage which contain chart with specified name and version.
+     * @param name Name of chart.
+     * @param vers Version of chart. If it is empty, all versions will be deleted.
+     * @return OK - archives were successfully removed, NOT_FOUND - in case of absence.
+     */
+    private Single<Response> deleteArchives(final String name, final Optional<String> vers) {
+        final AtomicBoolean wasdeleted = new AtomicBoolean();
+        // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
+        return com.auto1.pantera.asto.rx.RxFuture.single(
+            this.storage.list(Key.ROOT)
+                .thenApply(
+                    keys -> keys.stream()
+                        .filter(key -> key.string().endsWith(".tgz"))
+                        .collect(Collectors.toList())
+                )
+                .thenCompose(
+                    keys -> CompletableFuture.allOf(
+                        keys.stream().map(
+                            key -> this.storage.value(key)
+                                .thenCompose(Content::asBytesFuture)
+                                .thenCompose(bytes -> {
+                                    TgzArchive tgz = new TgzArchive(bytes);
+                                    final ChartYaml chart = tgz.chartYaml();
+                                    if (chart.name().equals(name)) {
+                                        return this.wasChartDeleted(chart, vers, key)
+                                            .thenCompose(
+                                                wasdel -> {
+                                                    wasdeleted.compareAndSet(false, wasdel);
+                                                    return CompletableFuture.allOf();
+                                                }
+                                            );
+                                    }
+                                    return CompletableFuture.allOf();
+                                })
+                        ).toArray(CompletableFuture[]::new)
+                    ).thenApply(
+                        noth -> {
+                            if (wasdeleted.get()) {
+                                this.events.ifPresent(
+                                    queue -> queue.add(
+                                        vers.map(
+                                            item -> new ArtifactEvent(
+                                                PushChartSlice.REPO_TYPE, this.repoName, name, item
+                                            )
+                                        ).orElseGet(
+                                            () -> new ArtifactEvent(
+                                                PushChartSlice.REPO_TYPE, this.repoName, name
+                                            )
+                                        )
+                                    )
+                                );
+                                return ResponseBuilder.ok().build();
+                            }
+                            return ResponseBuilder.notFound().build();
+                        }
+                    )
+                )
+            );
+    }
+
+    /**
+     * Checks that chart has required version and delete archive from storage in
+     * case of existence of the key.
+     * @param chart Chart yaml.
+     * @param vers Version which should be deleted. If it is empty, all versions should be deleted.
+     * @param key Key to archive which will be deleted in case of compliance.
+     * @return Was chart by passed key deleted?
+     */
+    private CompletionStage<Boolean> wasChartDeleted(
+        final ChartYaml chart,
+        final Optional<String> vers,
+        final Key key
+    ) {
+        final CompletionStage<Boolean> res;
+        if (!vers.isPresent() || chart.version().equals(vers.get())) {
+            res = this.storage.exists(key).thenCompose(
+                exists -> {
+                    final CompletionStage<Boolean> result;
+                    if (exists) {
+                        result = this.storage.delete(key).thenApply(noth -> true);
+                    } else {
+                        result = CompletableFuture.completedFuture(false);
+                    }
+                    return result;
+                }
+            );
+        } else {
+            res = CompletableFuture.completedFuture(false);
+        }
+        return res;
+    }
+}

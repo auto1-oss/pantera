@@ -1,0 +1,12 @@
+---
+repo:
+  type: npm-proxy
+  port: 8081
+  url: http://pantera-proxy:8081/my-npm-proxy-port
+  path: my-npm-proxy-port
+  storage:
+    type: fs
+    path: /var/pantera/data/
+  settings:
+    remote:
+      url: http://pantera:8080/my-npm

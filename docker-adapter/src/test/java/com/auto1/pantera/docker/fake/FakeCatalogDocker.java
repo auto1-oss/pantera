@@ -1,0 +1,77 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.fake;
+
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.Docker;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.misc.Pagination;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * Docker implementation with specified catalog.
+ * Values of parameters `from` and `limit` from last call of `catalog` method are captured.
+ *
+ * @since 0.10
+ */
+public final class FakeCatalogDocker implements Docker {
+
+    /**
+     * Catalog.
+     */
+    private final Catalog catalog;
+
+    /**
+     * From parameter captured.
+     */
+    private final AtomicReference<Pagination> paginationRef;
+
+    public FakeCatalogDocker(Catalog catalog) {
+        this.catalog = catalog;
+        this.paginationRef = new AtomicReference<>();
+    }
+
+    @Override
+    public String registryName() {
+        return "registry";
+    }
+
+    /**
+     * Get captured from parameter.
+     *
+     * @return Captured from parameter.
+     */
+    public String from() {
+        return this.paginationRef.get().last();
+    }
+
+    /**
+     * Get captured limit parameter.
+     *
+     * @return Captured limit parameter.
+     */
+    public int limit() {
+        return this.paginationRef.get().limit();
+    }
+
+    @Override
+    public Repo repo(String name) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<Catalog> catalog(Pagination pagination) {
+        this.paginationRef.set(pagination);
+        return CompletableFuture.completedFuture(this.catalog);
+    }
+}

@@ -1,0 +1,7 @@
+repo:
+  type: php
+  port: 8081
+  storage:
+    type: fs
+    path: /var/pantera/data
+  url: http://pantera:8081/php-port/

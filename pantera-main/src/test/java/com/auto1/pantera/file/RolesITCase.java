@@ -1,0 +1,88 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.file;
+
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
+import java.io.IOException;
+import org.hamcrest.core.StringContains;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+
+/**
+ * Integration test with user's roles permissions.
+ * @since 0.26
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+public final class RolesITCase {
+
+    /**
+     * Deployment for tests.
+     */
+    @RegisterExtension
+    final TestDeployment deployment = new TestDeployment(
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera_with_policy.yaml")
+            .withRepoConfig("binary/bin.yml", "bin")
+            .withUser("security/users/bob.yaml", "bob")
+            .withUser("security/users/john.yaml", "john")
+            .withRole("security/roles/admin.yaml", "admin")
+            .withRole("security/roles/readers.yaml", "readers"),
+        () -> new TestDeployment.ClientContainer("pantera/file-tests:1.0")
+            .withWorkingDirectory("/w")
+    );
+
+    @Test
+    void readersAndAdminsCanDownload() throws Exception {
+        final byte[] target = new byte[]{0, 1, 2, 3};
+        this.deployment.putBinaryToPantera(
+            target, "/var/pantera/data/bin/target"
+        );
+        this.deployment.assertExec(
+            "Bob failed to download artifact",
+            new ContainerResultMatcher(
+                ContainerResultMatcher.SUCCESS, new StringContains("200")
+            ),
+            "curl", "-v", "-X", "GET", "--user", "bob:qwerty", "http://pantera:8080/bin/target"
+        );
+        this.deployment.assertExec(
+            "John failed to download artifact",
+            new ContainerResultMatcher(
+                ContainerResultMatcher.SUCCESS, new StringContains("200")
+            ),
+            "curl", "-v", "-X", "GET", "--user", "john:xyz", "http://pantera:8080/bin/target"
+        );
+    }
+
+    @Test
+    void readersCanNotUpload() throws IOException {
+        this.deployment.assertExec(
+            "Upload should fail with 403 status",
+            new ContainerResultMatcher(
+                ContainerResultMatcher.SUCCESS, new StringContains("403 Forbidden")
+            ),
+            "curl", "-v", "-X", "PUT", "--user", "bob:qwerty", "--data-binary", "123",
+            "http://pantera:8080/bin/target"
+        );
+    }
+
+    @Test
+    void adminsCanUpload() throws IOException {
+        this.deployment.assertExec(
+            "Failed to upload",
+            new ContainerResultMatcher(
+                ContainerResultMatcher.SUCCESS, new StringContains("201")
+            ),
+            "curl", "-v", "-X", "PUT", "--user", "john:xyz", "--data-binary", "123",
+            "http://pantera:8080/bin/target"
+        );
+    }
+}

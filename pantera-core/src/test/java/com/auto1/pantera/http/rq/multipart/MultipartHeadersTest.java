@@ -1,0 +1,72 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.rq.multipart;
+
+import com.auto1.pantera.http.headers.ContentDisposition;
+import com.auto1.pantera.http.headers.Header;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Test case for multipart headers.
+ */
+final class MultipartHeadersTest {
+
+    @Test
+    @SuppressWarnings("PMD.OneDeclarationPerLine")
+    void buildHeadersFromChunks() throws Exception {
+        final MultipartHeaders headers = new MultipartHeaders(10);
+        final String source = String.join(
+            "\r\n",
+            "Accept: application/json",
+            "Content-length: 100",
+            "Connection: keep-alive",
+            "Content-Disposition: form-data; name=\"content\"; filename=\"My-Test.txt\""
+        );
+        for (int pos = 0, take = 3; pos < source.length(); pos += take, ++take) {
+            if (pos + take > source.length()) {
+                take = source.length() - pos;
+            }
+            final String sub = source.substring(pos, pos + take);
+            headers.push(ByteBuffer.wrap(sub.getBytes()));
+        }
+        MatcherAssert.assertThat(
+            headers.headers(),
+            Matchers.containsInAnyOrder(
+                new Header("Accept", "application/json"),
+                new Header("Connection", "keep-alive"),
+                new Header("Content-length", "100"),
+                new Header(
+                    "Content-Disposition", "form-data; name=\"content\"; filename=\"My-Test.txt\""
+                )
+            )
+        );
+    }
+
+    @Test
+    void buildHeadersWithColon() {
+        final MultipartHeaders headers = new MultipartHeaders(1);
+        headers.push(
+            ByteBuffer.wrap(
+                "Content-Disposition: form-data; name=\":action\""
+                    .getBytes(StandardCharsets.US_ASCII)
+            )
+        );
+        MatcherAssert.assertThat(
+            new ContentDisposition(headers.headers()).fieldName(),
+            new IsEqual<>(":action")
+        );
+    }
+}

@@ -1,0 +1,96 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.proxy;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.http.ResponseBuilder;
+import io.reactivex.Flowable;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+
+/**
+ * Tests for {@link ProxyBlob}.
+ */
+class ProxyBlobTest {
+
+    @Test
+    void shouldReadContent() {
+        final byte[] data = "data".getBytes();
+        final Content content = new ProxyBlob(
+            (line, headers, body) -> {
+                if (!line.toString().startsWith("GET /v2/test/blobs/sha256:123 ")) {
+                    throw new IllegalArgumentException();
+                }
+                return ResponseBuilder.ok().body(data).completedFuture();
+            },
+            "test",
+            new Digest.FromString("sha256:123"),
+            data.length
+        ).content().toCompletableFuture().join();
+        MatcherAssert.assertThat(content.asBytes(), new IsEqual<>(data));
+        MatcherAssert.assertThat(
+            content.size(),
+            Matchers.is(Optional.of((long) data.length))
+        );
+    }
+
+    @Test
+    void shouldReadSize() {
+        final long size = 1235L;
+        final ProxyBlob blob = new ProxyBlob(
+            (line, headers, body) -> {
+                throw new UnsupportedOperationException();
+            },
+            "my/test",
+            new Digest.FromString("sha256:abc"),
+            size
+        );
+        MatcherAssert.assertThat(blob.size().join(), Matchers.is(size));
+    }
+
+    @Test
+    void shouldFinishSendWhenContentIsBad() {
+        final Content content = this.badContent();
+        Assertions.assertThrows(CompletionException.class, content::asBytes);
+    }
+
+    @Test
+    void shouldHandleStatus() {
+        final byte[] data = "content".getBytes();
+        final CompletableFuture<Content> content = new ProxyBlob(
+            (line, headers, body) -> ResponseBuilder.internalError(new IllegalArgumentException()).completedFuture(),
+            "test-2",
+            new Digest.FromString("sha256:567"),
+            data.length
+        ).content();
+        Assertions.assertThrows(CompletionException.class, content::join);
+    }
+
+    private Content badContent() {
+        final byte[] data = "1234".getBytes();
+        return new ProxyBlob(
+            (line, headers, body) -> ResponseBuilder.ok()
+                .body(new Content.From(Flowable.error(new IllegalStateException())))
+                .completedFuture(),
+            "abc",
+            new Digest.FromString("sha256:987"),
+            data.length
+        ).content().join();
+    }
+}

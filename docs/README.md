@@ -1,141 +1,41 @@
-# Artipie Documentation
+# Pantera Artifact Registry Documentation
 
-Documentation for Artipie - Enterprise Binary Artifact Management.
+**Version 2.0.0** | GPL-3.0 | JDK 21+ | Maven 3.4+
 
-## Quick Start
+Pantera is a universal binary artifact registry supporting 15+ package formats including Maven, Docker, npm, PyPI, Composer, Helm, Go, Gem, NuGet, Debian, RPM, Conda, Conan, and Hex. It can operate as a local hosted registry, a caching proxy to upstream sources, or a group that merges multiple repositories into a single endpoint.
 
-| Guide | Description |
-|-------|-------------|
-| [User Guide](USER_GUIDE.md) | Installation, configuration, and usage |
-| [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, contributing, and extending |
+---
 
-## User Documentation
+## Choose Your Guide
 
-### Getting Started
+### For Platform Administrators
 
-- [User Guide](USER_GUIDE.md) - Complete user documentation
-  - Installation (Docker, Docker Compose, JAR)
-  - Configuration (main config, repositories, storage)
-  - Repository types (Maven, NPM, Docker, PyPI, etc.)
-  - Authentication and Authorization
-  - Monitoring and Logging
+[Admin Guide](admin-guide/index.md) -- Installation, configuration, security, monitoring, scaling, and operations.
 
-### Configuration Guides
+Covers deployment options (Docker, bare-metal), PostgreSQL and Valkey setup, authentication (basic, token, Okta OIDC), S3 storage configuration, high-availability clustering, logging, and troubleshooting.
 
-| Document | Description |
-|----------|-------------|
-| [API Routing](API_ROUTING.md) | URL patterns and routing configuration |
-| [Okta OIDC Integration](OKTA_OIDC_INTEGRATION.md) | Okta authentication with MFA |
-| [Disk Cache Cleanup](DISK_CACHE_CLEANUP_CONFIG.md) | S3 disk cache configuration |
+### For Developers and Users
 
-### Operations and Performance
+[User Guide](user-guide/index.md) -- Getting started, client configuration, pushing and pulling artifacts across 15 formats.
 
-| Document | Description |
-|----------|-------------|
-| [JVM Optimization](ARTIPIE_JVM_OPTIMIZATION.md) | JVM tuning for production |
-| [S3 Storage Configuration](s3-optimizations/README.md) | S3 storage setup and tuning |
-| [Logging Configuration](LOGGING_CONFIGURATION.md) | Log4j2 and ECS JSON setup |
-| [ECS JSON Reference](ECS_JSON_QUICK_REFERENCE.md) | Structured logging format |
+Covers repository types (local, proxy, group), per-format client setup (Maven `settings.xml`, Docker CLI, npm `.npmrc`, pip, Composer, Helm, etc.), and common workflows.
 
-### Package Manager Guides
+### For Contributors
 
-| Document | Description |
-|----------|-------------|
-| [NPM CLI Compatibility](NPM_CLI_COMPATIBILITY.md) | NPM command reference |
+[Developer Guide](developer-guide/index.md) -- Architecture, codebase, extending Pantera, testing, and contributing.
 
-## Security
+Covers the Vert.x HTTP layer, Slice pipeline, adapter modules, database schema, cache architecture, thread model, build system, and how to add new features.
 
-| Document | Description |
-|----------|-------------|
-| [Cooldown System](cooldown-fallback/README.md) | Supply chain attack prevention |
+---
 
-## Developer Documentation
+## Reference Documentation
 
-### Architecture
+- [Configuration Reference](configuration-reference.md) -- All YAML config keys, storage options, and repository settings.
+- [REST API Reference](rest-api-reference.md) -- All API endpoints with request/response formats and curl examples.
+- [Environment Variables](admin-guide/environment-variables.md) -- Runtime configuration via environment variables.
+- [Changelog](CHANGELOG.md) -- All releases with highlights, breaking changes, and migration notes.
 
-- [Developer Guide](DEVELOPER_GUIDE.md) - Complete developer documentation
-  - Development environment setup
-  - Architecture overview (Slice pattern, Storage abstraction)
-  - Adding new features
-  - Testing guidelines
-  - Code style and standards
+## Additional Resources
 
-### Storage
-
-- [S3 Storage Configuration](s3-optimizations/README.md) - S3 configuration and tuning
-  - Multipart uploads
-  - Parallel downloads
-  - Encryption
-  - Disk caching
-
-### API
-
-- [Global Import API](global-import-api.md) - Bulk import API specification
-
-## Configuration Examples
-
-Example configuration files:
-
-| File | Description |
-|------|-------------|
-| [S3 Storage Config](s3-optimizations/S3_STORAGE_CONFIG_EXAMPLE.yml) | S3 storage with performance settings |
-| [S3 High-Scale Config](s3-optimizations/S3_HIGH_SCALE_CONFIG.yml) | High-scale S3 configuration |
-
-## Document Map
-
-```
-docs/
-├── README.md                      # This file
-├── USER_GUIDE.md                  # User documentation
-├── DEVELOPER_GUIDE.md             # Developer documentation
-│
-├── Configuration/
-│   ├── API_ROUTING.md
-│   ├── DISK_CACHE_CLEANUP_CONFIG.md
-│   └── OKTA_OIDC_INTEGRATION.md
-│
-├── Performance/
-│   ├── ARTIPIE_JVM_OPTIMIZATION.md
-│   └── S3_PERFORMANCE_TUNING.md
-│
-├── Logging/
-│   ├── LOGGING_CONFIGURATION.md
-│   └── ECS_JSON_QUICK_REFERENCE.md
-│
-├── Package Managers/
-│   └── NPM_CLI_COMPATIBILITY.md
-│
-├── s3-optimizations/
-│   ├── README.md                  # S3 storage configuration
-│   ├── S3_STORAGE_CONFIG_EXAMPLE.yml
-│   └── S3_HIGH_SCALE_CONFIG.yml
-│
-├── cooldown-fallback/
-│   └── README.md                  # Cooldown system documentation
-│
-└── global-import-api.md           # Import API specification
-```
-
-## Contributing to Documentation
-
-When contributing to Artipie documentation:
-
-1. **User-facing docs** go in [USER_GUIDE.md](USER_GUIDE.md)
-2. **Developer docs** go in [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
-3. **Feature-specific docs** go in dedicated files
-4. **Update this README** when adding new documents
-
-### Style Guidelines
-
-- Use clear, concise language
-- Include code examples where helpful
-- Keep commands copy-pasteable
-- Add tables for reference information
-- Use diagrams for architecture
-
-## Version
-
-| Component | Version |
-|-----------|---------|
-| Artipie | 1.20.12 |
-| Documentation | January 2026 |
+- [Contributing Guidelines](../CONTRIBUTING.md)
+- [Code Standards](../CODE_STANDARDS.md)

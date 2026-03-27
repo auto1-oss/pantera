@@ -1,0 +1,18 @@
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+  base_url: http://pantera:8080/
+  credentials:
+    - type: local
+      storage:
+        type: fs
+        path: /var/pantera/security
+  artifacts_database:
+    postgres_host: localhost
+    postgres_port: 5432
+    postgres_database: artifacts
+    postgres_user: pantera
+    postgres_password: pantera
+    threads_count: 2
+    interval_seconds: 3

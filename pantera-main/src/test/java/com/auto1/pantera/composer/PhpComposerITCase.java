@@ -1,0 +1,78 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.composer;
+
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
+import java.io.IOException;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.testcontainers.containers.BindMode;
+
+/**
+ * Integration test for Composer repo.
+ * @since 0.18
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+final class PhpComposerITCase {
+    /**
+     * Package for installation.
+     */
+    static final String PACK = "log-1.1.4.zip";
+
+    /**
+     * Deployment for tests.
+     */
+    @RegisterExtension
+    final TestDeployment containers = new TestDeployment(
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
+            .withRepoConfig("composer/php.yml", "php")
+            .withRepoConfig("composer/php-port.yml", "php-port")
+            .withExposedPorts(8081),
+        () -> new TestDeployment.ClientContainer("composer:2.0.9")
+            .withWorkingDirectory("/w")
+            .withClasspathResourceMapping(
+                String.format("composer/%s", PhpComposerITCase.PACK),
+                String.format("/w/%s", PhpComposerITCase.PACK),
+                BindMode.READ_ONLY
+            ).withClasspathResourceMapping(
+                "composer/composer.json",
+                "/w/repo/composer.json",
+                BindMode.READ_ONLY
+            ).withClasspathResourceMapping(
+                "composer/composer-port.json",
+                "/w/repo/composer-port.json",
+                BindMode.READ_ONLY
+            )
+    );
+
+    @ParameterizedTest
+    @CsvSource({
+        "http://pantera:8080/php,composer.json",
+        "http://pantera:8081/php-port,composer-port.json"
+    })
+    void canUploadAndInstall(final String url, final String stn) throws IOException {
+        this.containers.assertExec(
+            "Failed to upload composer package archive",
+            new ContainerResultMatcher(),
+            "curl", "-X", "PUT", String.format("%s/%s", url, PhpComposerITCase.PACK),
+            "--upload-file", String.format("/w/%s", PhpComposerITCase.PACK),
+            "--verbose"
+        );
+        this.containers.assertExec(
+            "Failed to install uploaded package",
+            new ContainerResultMatcher(),
+            "env", String.format("COMPOSER=/w/repo/%s", stn),
+            "composer", "install", "--verbose", "--no-cache"
+        );
+    }
+}

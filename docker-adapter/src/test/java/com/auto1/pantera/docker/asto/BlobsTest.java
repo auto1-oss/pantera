@@ -1,0 +1,113 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.asto;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.docker.Digest;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
+
+import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
+
+/**
+ * Tests for {@link Blobs}.
+ */
+final class BlobsTest {
+
+    @Test
+    void shouldNotSaveExistingBlob() {
+        final byte[] bytes = new byte[]{0x00, 0x01, 0x02, 0x03};
+        final Digest digest = new Digest.Sha256(
+            "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
+        );
+        final FakeStorage storage = new FakeStorage();
+        final Blobs blobs = new Blobs(storage);
+        blobs.put(new TrustedBlobSource(new Content.From(bytes), digest))
+            .toCompletableFuture().join();
+        blobs.put(new TrustedBlobSource(new Content.From(bytes), digest))
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(storage.saves, new IsEqual<>(1));
+    }
+
+    /**
+     * Fake storage that stores everything in memory and counts save operations.
+     *
+     * @since 0.6
+     */
+    private static final class FakeStorage implements Storage {
+
+        /**
+         * Origin storage.
+         */
+        private final Storage origin;
+
+        /**
+         * Save operations counter.
+         */
+        private int saves;
+
+        private FakeStorage() {
+            this.origin = new InMemoryStorage();
+        }
+
+        @Override
+        public CompletableFuture<Boolean> exists(final Key key) {
+            return this.origin.exists(key);
+        }
+
+        @Override
+        public CompletableFuture<Collection<Key>> list(final Key key) {
+            return this.origin.list(key);
+        }
+
+        @Override
+        public CompletableFuture<Void> save(final Key key, final Content content) {
+            this.saves += 1;
+            return this.origin.save(key, content);
+        }
+
+        @Override
+        public CompletableFuture<Void> move(final Key source, final Key target) {
+            return this.origin.move(source, target);
+        }
+
+        @Override
+        public CompletableFuture<? extends Meta> metadata(final Key key) {
+            return this.origin.metadata(key);
+        }
+
+        @Override
+        public CompletableFuture<Content> value(final Key key) {
+            return this.origin.value(key);
+        }
+
+        @Override
+        public CompletableFuture<Void> delete(final Key key) {
+            return this.origin.delete(key);
+        }
+
+        @Override
+        public <T> CompletionStage<T> exclusively(
+            final Key key,
+            final Function<Storage, CompletionStage<T>> function
+        ) {
+            return this.origin.exclusively(key, function);
+        }
+    }
+}

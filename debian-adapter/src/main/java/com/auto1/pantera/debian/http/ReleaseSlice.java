@@ -1,0 +1,95 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.debian.http;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.debian.Config;
+import com.auto1.pantera.debian.metadata.InRelease;
+import com.auto1.pantera.debian.metadata.Release;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Release slice decorator.
+ * Checks, whether Release index exists and creates it if necessary.
+ */
+public final class ReleaseSlice implements Slice {
+
+    /**
+     * Origin slice.
+     */
+    private final Slice origin;
+
+    /**
+     * Abstract storage.
+     */
+    private final Storage storage;
+
+    /**
+     * Repository release index.
+     */
+    private final Release release;
+
+    /**
+     * Repository InRelease index.
+     */
+    private final InRelease inrelease;
+
+    /**
+     * @param origin Origin
+     * @param asto Storage
+     * @param release Release index
+     * @param inrelease InRelease index
+     */
+    public ReleaseSlice(final Slice origin, final Storage asto, final Release release,
+        final InRelease inrelease) {
+        this.origin = origin;
+        this.release = release;
+        this.storage = asto;
+        this.inrelease = inrelease;
+    }
+
+    /**
+     * @param origin Origin
+     * @param asto Storage
+     * @param config Repository configuration
+     */
+    public ReleaseSlice(final Slice origin, final Storage asto, final Config config) {
+        this(origin, asto, new Release.Asto(asto, config), new InRelease.Asto(asto, config));
+    }
+
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        return this.storage.exists(this.release.key()).thenCompose(
+            exists -> {
+                final CompletableFuture<Response> res;
+                if (exists) {
+                    res = this.origin.response(line, headers, body);
+                } else {
+                    res = this.release.create()
+                        .toCompletableFuture()
+                        .thenCompose(nothing -> this.inrelease.generate(this.release.key()))
+                        .thenCompose(nothing -> this.origin.response(line, headers, body));
+                }
+                return res;
+            }
+        );
+    }
+}

@@ -1,0 +1,187 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.conda.http;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.json.JSONException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.skyscreamer.jsonassert.JSONAssert;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedList;
+import java.util.Optional;
+import java.util.Queue;
+
+/**
+ * Test for {@link UpdateSlice}.
+ */
+class UpdateSliceTest {
+
+    /**
+     * Test headers.
+     */
+    private static final Headers HEADERS = Headers.from(
+        ContentType.mime("multipart/form-data; boundary=\"simple boundary\"")
+    );
+
+    /**
+     * Repository name.
+     */
+    private static final String RNAME = "my-repo";
+
+    /**
+     * Test storage.
+     */
+    private Storage asto;
+
+    private Queue<ArtifactEvent> events;
+
+    @BeforeEach
+    void init() {
+        this.asto = new InMemoryStorage();
+        this.events = new LinkedList<>();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "anaconda-navigator-1.8.4-py35_0.tar.bz2,addsPackageToEmptyRepo-1.json",
+        "7zip-19.00-h59b6b97_2.conda,addsPackageToEmptyRepo-2.json"
+    })
+    void addsPackageToEmptyRepo(final String name, final String result) throws JSONException,
+        IOException {
+        final Key key = new Key.From("linux-64", name);
+        MatcherAssert.assertThat(
+            "Slice returned 201 CREATED",
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CREATED),
+                new RequestLine(RqMethod.POST, String.format("/%s", key.string())),
+                UpdateSliceTest.HEADERS,
+                new Content.From(this.body(new TestResource(name).asBytes()))
+            )
+        );
+        MatcherAssert.assertThat(
+            "Package was saved to storage",
+            this.asto.exists(key).join(),
+            new IsEqual<>(true)
+        );
+        JSONAssert.assertEquals(
+            this.asto.value(new Key.From("linux-64", "repodata.json")).join().asString(),
+            new TestResource(String.format("UpdateSliceTest/%s", result)).asString(),
+            true
+        );
+        MatcherAssert.assertThat("Package info was added to events queue", this.events.size() == 1);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "anaconda-navigator-1.8.4-py35_0.tar.bz2,addsPackageToEmptyRepo-2.json",
+        "7zip-19.00-h59b6b97_2.conda,addsPackageToEmptyRepo-1.json"
+    })
+    void addsPackageToRepo(final String name, final String index) throws JSONException,
+        IOException {
+        final Key arch = new Key.From("linux-64");
+        final Key key = new Key.From(arch, name);
+        this.asto.save(
+            new Key.From(arch, "repodata.json"),
+            new Content.From(new TestResource(String.format("UpdateSliceTest/%s", index)).asBytes())
+        ).join();
+        MatcherAssert.assertThat(
+            "Slice returned 201 CREATED",
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.CREATED),
+                new RequestLine(RqMethod.POST, String.format("/%s", key.string())),
+                UpdateSliceTest.HEADERS,
+                new Content.From(this.body(new TestResource(name).asBytes()))
+            )
+        );
+        MatcherAssert.assertThat(
+            "Package was saved to storage",
+            this.asto.exists(key).join()
+        );
+        JSONAssert.assertEquals(
+            this.asto.value(new Key.From("linux-64", "repodata.json")).join().asString(),
+            new TestResource("UpdateSliceTest/addsPackageToRepo.json").asString(),
+            true
+        );
+        MatcherAssert.assertThat("Package info was added to events queue", this.events.size() == 1);
+    }
+
+    @Test
+    void returnsBadRequestIfRequestLineIsIncorrect() {
+        MatcherAssert.assertThat(
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.PUT, "/any")
+            )
+        );
+        MatcherAssert.assertThat(
+            "Package info was not added to events queue", this.events.isEmpty()
+        );
+    }
+
+    @Test
+    @Disabled("Upload synchronization behaviour should be discussed further")
+    void returnsBadRequestIfPackageAlreadyExists() {
+        final String key = "linux-64/test.conda";
+        this.asto.save(new Key.From(key), Content.EMPTY).join();
+        MatcherAssert.assertThat(
+            new UpdateSlice(this.asto, Optional.of(this.events), UpdateSliceTest.RNAME),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.PUT, String.format("/%s", key))
+            )
+        );
+        MatcherAssert.assertThat(
+            "Package info was not added to events queue", this.events.isEmpty()
+        );
+    }
+
+    private byte[] body(final byte[] file) throws IOException {
+        final ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.write(
+            String.join(
+                "\r\n",
+                "Ignored preamble",
+                "--simple boundary",
+                "Content-Disposition: form-data; name=\"file\"",
+                "",
+                ""
+            ).getBytes(StandardCharsets.US_ASCII)
+        );
+        body.write(file);
+        body.write("\r\n--simple boundary--".getBytes(StandardCharsets.US_ASCII));
+        return body.toByteArray();
+    }
+
+}

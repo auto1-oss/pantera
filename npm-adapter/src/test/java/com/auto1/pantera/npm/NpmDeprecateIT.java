@@ -1,0 +1,207 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm;
+
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
+import com.jcabi.log.Logger;
+import io.vertx.reactivex.core.Vertx;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.text.StringContainsInOrder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
+import org.testcontainers.Testcontainers;
+import org.testcontainers.containers.Container;
+import org.testcontainers.containers.GenericContainer;
+import wtf.g4s8.hamcrest.json.JsonHas;
+import wtf.g4s8.hamcrest.json.JsonValueIs;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.LinkedList;
+
+/**
+ * IT case for `npm deprecate` command.
+ */
+@DisabledOnOs(OS.WINDOWS)
+public final class NpmDeprecateIT {
+
+    @TempDir
+    Path tmp;
+
+    /**
+     * Vert.x used to create tested FileStorage.
+     */
+    private Vertx vertx;
+
+    /**
+     * Server.
+     */
+    private VertxSliceServer server;
+
+    /**
+     * Repository URL.
+     */
+    private String url;
+
+    /**
+     * Container.
+     */
+    private GenericContainer<?> cntn;
+
+    /**
+     * Storage used as client-side data (for packages to publish).
+     */
+    private Storage data;
+
+    /**
+     * Storage used for repository data.
+     */
+    private Storage repo;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        this.data = new FileStorage(this.tmp);
+        this.repo = new InMemoryStorage();
+        this.vertx = Vertx.vertx();
+        final int port = new RandomFreePort().value();
+        this.url = String.format("http://host.testcontainers.internal:%d", port);
+        this.server = new VertxSliceServer(
+            this.vertx,
+            new LoggingSlice(new NpmSlice(
+                URI.create(this.url).toURL(), this.repo, (Policy<?>) Policy.FREE,
+                new Authentication.Single("testuser", "testpassword"),
+                (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
+                "*", java.util.Optional.of(new LinkedList<>())
+            )),
+            port
+        );
+        this.server.start();
+        Testcontainers.exposeHostPorts(port);
+        Files.writeString(
+            this.tmp.resolve(".npmrc"),
+            String.format("//host.testcontainers.internal:%d/:_auth=dGVzdHVzZXI6dGVzdHBhc3N3b3Jk", port),
+            StandardCharsets.UTF_8
+        );
+        this.cntn = new GenericContainer<>("node:14-alpine")
+            .withCommand("tail", "-f", "/dev/null")
+            .withWorkingDirectory("/home/")
+            .withFileSystemBind(this.tmp.toString(), "/home");
+        this.cntn.start();
+    }
+
+    @AfterEach
+    void tearDown() {
+        this.server.stop();
+        this.vertx.close();
+        this.cntn.stop();
+    }
+
+    @Test
+    void addsDeprecation() throws Exception {
+        final String pkg = "@hello/simple-npm-project";
+        new TestResource("json/not_deprecated.json")
+            .saveTo(this.repo, new Key.From(pkg, "meta.json"));
+        final String msg = "Danger! Do not use!";
+        MatcherAssert.assertThat(
+            "Npm deprecate command was successful",
+            this.exec("npm", "deprecate", pkg, msg, "--registry", this.url).getExitCode(),
+            new IsEqual<>(0)
+        );
+        MatcherAssert.assertThat(
+            "Metadata file was updates",
+            this.repo.value(new Key.From(pkg, "meta.json"))
+                .join().asJsonObject(),
+            new JsonHas(
+                "versions",
+                new JsonHas(
+                    "1.0.1", new JsonHas("deprecated", new JsonValueIs(msg))
+                )
+            )
+        );
+    }
+
+    @Test
+    void installsWithDeprecationWarning() throws Exception {
+        final String pkg = "@hello/simple-npm-project";
+        new TestResource("json/deprecated.json")
+            .saveTo(this.repo, new Key.From(pkg, "meta.json"));
+        new TestResource(String.format("storage/%s/-/%s-1.0.1.tgz", pkg, pkg))
+            .saveTo(this.repo, new Key.From(pkg, "-", String.format("%s-1.0.1.tgz", pkg)));
+        MatcherAssert.assertThat(
+            this.exec("npm", "install", pkg, "--registry", this.url).getStderr(),
+            new StringContainsInOrder(
+                Arrays.asList(
+                    "WARN", "deprecated", "@hello/simple-npm-project@1.0.1: Danger! Do not use!"
+                )
+            )
+        );
+    }
+
+    @Test
+    void publishThenDeprecateAndInstallWithDeprecationFromDependency() throws Exception {
+        final String proj = "@hello/simple-npm-project";
+        final String withdep = "project-with-simple-dependency";
+        new TestResource("simple-npm-project")
+            .addFilesTo(this.data, new Key.From(String.format("tmp/%s", proj)));
+        new TestResource(withdep)
+            .addFilesTo(this.data, new Key.From(String.format("tmp/%s", withdep)));
+        this.exec("npm", "publish", String.format("tmp/%s", proj), "--registry", this.url);
+        this.exec("npm", "publish", String.format("tmp/%s", withdep), "--registry", this.url);
+        final String msg = "Danger! Do not use!";
+        this.exec("npm", "deprecate", proj, msg, "--registry", this.url);
+        final Container.ExecResult res;
+        res = this.exec("npm", "install", withdep, "--registry", this.url);
+        MatcherAssert.assertThat(
+            "Deprecation warn was shown",
+            res.getStderr(),
+            new StringContainsInOrder(
+                Arrays.asList(
+                    "WARN", "deprecated", "@hello/simple-npm-project@1.0.1: Danger! Do not use!"
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "Package was installed",
+            res.getStdout(),
+            new StringContainsInOrder(
+                Arrays.asList(
+                    "+ project-with-simple-dependency@1.0.0", "added 2 packages"
+                )
+            )
+        );
+    }
+
+    private Container.ExecResult exec(final String... command) throws Exception {
+        Logger.debug(this, "Command:\n%s\n", String.join(" ", command));
+        final Container.ExecResult res = this.cntn.execInContainer(command);
+        Logger.debug(this, "STDOUT:\n%s\nSTDERR:\n%s", res.getStdout(), res.getStderr());
+        return res;
+    }
+
+}

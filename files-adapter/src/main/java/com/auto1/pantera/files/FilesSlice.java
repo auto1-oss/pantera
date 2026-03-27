@@ -1,0 +1,261 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.files;
+
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.BasicAuthzSlice;
+import com.auto1.pantera.http.auth.CombinedAuthzSliceWrap;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.OperationControl;
+import com.auto1.pantera.http.headers.Accept;
+import com.auto1.pantera.http.headers.ContentType;
+import com.auto1.pantera.http.rt.MethodRule;
+import com.auto1.pantera.http.rt.RtRule;
+import com.auto1.pantera.http.rt.RtRulePath;
+import com.auto1.pantera.http.rt.SliceRoute;
+import com.auto1.pantera.http.slice.HeadSlice;
+import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.slice.SliceDelete;
+import com.auto1.pantera.http.slice.SliceDownload;
+import com.auto1.pantera.http.slice.StorageArtifactSlice;
+import com.auto1.pantera.http.slice.SliceSimple;
+import com.auto1.pantera.http.slice.SliceUpload;
+import com.auto1.pantera.http.slice.SliceWithHeaders;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
+import com.auto1.pantera.security.perms.Action;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
+
+import java.util.Optional;
+import java.util.Queue;
+import java.util.regex.Pattern;
+
+/**
+ * A {@link Slice} which servers binary files.
+ */
+public final class FilesSlice extends Slice.Wrap {
+
+    /**
+     * HTML mime type.
+     */
+    public static final String HTML_TEXT = "text/html";
+
+    /**
+     * Plain text mime type.
+     */
+    public static final String PLAIN_TEXT = "text/plain";
+
+    /**
+     * Repo name for the test cases when policy and permissions are not used
+     * and any actions are allowed for anyone.
+     */
+    static final String ANY_REPO = "*";
+
+    /**
+     * Mime type of file.
+     */
+    private static final String OCTET_STREAM = "application/octet-stream";
+
+    /**
+     * JavaScript Object Notation mime type.
+     */
+    private static final String JSON = "application/json";
+
+    /**
+     * Repository type.
+     */
+    private static final String REPO_TYPE = "file";
+
+    /**
+     * Ctor used by Pantera server which knows `Authentication` implementation.
+     * @param storage The storage. And default parameters for free access.
+     * @param perms Access permissions.
+     * @param auth Auth details.
+     * @param name Repository name
+     * @param events Repository artifact events
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication auth, final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        this(storage, perms, auth, null, name, events);
+    }
+
+    /**
+     * Ctor with combined authentication support.
+     * @param storage The storage. And default parameters for free access.
+     * @param perms Access permissions.
+     * @param basicAuth Basic authentication.
+     * @param tokenAuth Token authentication.
+     * @param name Repository name
+     * @param events Repository artifact events
+     */
+    public FilesSlice(
+        final Storage storage, final Policy<?> perms, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final String name,
+        final Optional<Queue<ArtifactEvent>> events
+    ) {
+        super(
+            new SliceRoute(
+                new RtRulePath(
+                    MethodRule.HEAD,
+                    FilesSlice.createAuthSlice(
+                        new SliceWithHeaders(
+                            new FileMetaSlice(new HeadSlice(storage), storage),
+                            Headers.from(ContentType.mime(FilesSlice.OCTET_STREAM))
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            perms, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    MethodRule.GET,
+                    FilesSlice.createAuthSlice(
+                        new SliceRoute(
+                            new RtRulePath(
+                                new RtRule.ByHeader(
+                                    Accept.NAME,
+                                    Pattern.compile(FilesSlice.PLAIN_TEXT)
+                                ),
+                                new ListBlobsSlice(
+                                    storage,
+                                    BlobListFormat.Standard.TEXT,
+                                    FilesSlice.PLAIN_TEXT
+                                )
+                            ),
+                            new RtRulePath(
+                                new RtRule.ByHeader(
+                                    Accept.NAME,
+                                    Pattern.compile(FilesSlice.JSON)
+                                ),
+                                new ListBlobsSlice(
+                                    storage,
+                                    BlobListFormat.Standard.JSON,
+                                    FilesSlice.JSON
+                                )
+                            ),
+                            new RtRulePath(
+                                new RtRule.ByHeader(
+                                    Accept.NAME,
+                                    Pattern.compile(FilesSlice.HTML_TEXT)
+                                ),
+                                new ListBlobsSlice(
+                                    storage,
+                                    BlobListFormat.Standard.HTML,
+                                    FilesSlice.HTML_TEXT
+                                )
+                            ),
+                            new RtRulePath(
+                                RtRule.FALLBACK,
+                                new SliceWithHeaders(
+                                    new FileMetaSlice(
+                                        new StorageArtifactSlice(storage),
+                                        storage
+                                    ),
+                                    Headers.from(ContentType.mime(FilesSlice.OCTET_STREAM))
+                                )
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            perms, new AdapterBasicPermission(name, Action.Standard.READ)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    MethodRule.PUT,
+                    FilesSlice.createAuthSlice(
+                        new SliceUpload(
+                            storage,
+                            KeyFromPath::new,
+                            events.map(
+                                queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue)
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            perms, new AdapterBasicPermission(name, Action.Standard.WRITE)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    MethodRule.DELETE,
+                    FilesSlice.createAuthSlice(
+                        new SliceDelete(
+                            storage,
+                            events.map(
+                                queue -> new RepositoryEvents(FilesSlice.REPO_TYPE, name, queue)
+                            )
+                        ),
+                        basicAuth,
+                        tokenAuth,
+                        new OperationControl(
+                            perms, new AdapterBasicPermission(name, Action.Standard.DELETE)
+                        )
+                    )
+                ),
+                new RtRulePath(
+                    RtRule.FALLBACK,
+                    new SliceSimple(ResponseBuilder.methodNotAllowed().build())
+                )
+            )
+        );
+    }
+
+    /**
+     * Creates appropriate auth slice based on available authentication methods.
+     * @param origin Original slice to wrap
+     * @param basicAuth Basic authentication
+     * @param tokenAuth Token authentication
+     * @param control Operation control
+     * @return Auth slice
+     */
+    private static Slice createAuthSlice(
+        final Slice origin, final Authentication basicAuth, 
+        final TokenAuthentication tokenAuth, final OperationControl control
+    ) {
+        if (tokenAuth != null) {
+            return new CombinedAuthzSliceWrap(origin, basicAuth, tokenAuth, control);
+        }
+        return new BasicAuthzSlice(origin, basicAuth, control);
+    }
+
+    /**
+     * Entry point.
+     * @param args Command line args
+     */
+    public static void main(final String... args) {
+        final int port = 8080;
+        try (
+            VertxSliceServer server = new VertxSliceServer(
+                new FilesSlice(
+                    new InMemoryStorage(), Policy.FREE,
+                    (username, password) -> Optional.of(AuthUser.ANONYMOUS),
+                    FilesSlice.ANY_REPO, Optional.empty()), port
+            )
+        ) {
+            server.start();
+        }
+    }
+}

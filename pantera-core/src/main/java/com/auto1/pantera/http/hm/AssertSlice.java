@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.hm;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.rq.RequestLine;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.hamcrest.TypeSafeMatcher;
+import org.reactivestreams.Publisher;
+
+import java.nio.ByteBuffer;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Slice implementation which assert request data against specified matchers.
+ */
+public final class AssertSlice implements Slice {
+
+    /**
+     * Always true type safe matcher for publisher.
+     * @since 0.10
+     */
+    private static final TypeSafeMatcher<Publisher<ByteBuffer>> STUB_BODY_MATCHER =
+        new TypeSafeMatcher<>() {
+            @Override
+            protected boolean matchesSafely(final Publisher<ByteBuffer> item) {
+                return true;
+            }
+
+            @Override
+            public void describeTo(final Description description) {
+                description.appendText("stub");
+            }
+        };
+
+    /**
+     * Request line matcher.
+     */
+    private final Matcher<? super RequestLine> lineMatcher;
+
+    /**
+     * Request headers matcher.
+     */
+    private final Matcher<? super Headers> headersMatcher;
+
+    /**
+     * Request body matcher.
+     */
+    private final Matcher<? super Publisher<ByteBuffer>> bodyMatcher;
+
+    /**
+     * Assert slice request line.
+     * @param lineMatcher Request line matcher
+     */
+    public AssertSlice(final Matcher<? super RequestLine> lineMatcher) {
+        this(lineMatcher, Matchers.any(Headers.class), AssertSlice.STUB_BODY_MATCHER);
+    }
+
+    /**
+     * @param lineMatcher Request line matcher
+     * @param headersMatcher Request headers matcher
+     * @param bodyMatcher Request body matcher
+     */
+    public AssertSlice(Matcher<? super RequestLine> lineMatcher,
+                       Matcher<? super Headers> headersMatcher,
+                       Matcher<? super Publisher<ByteBuffer>> bodyMatcher) {
+        this.lineMatcher = lineMatcher;
+        this.headersMatcher = headersMatcher;
+        this.bodyMatcher = bodyMatcher;
+    }
+
+    @Override
+    public CompletableFuture<Response> response(RequestLine line, Headers headers, Content body) {
+        MatcherAssert.assertThat(
+            "Wrong request line", line, this.lineMatcher
+        );
+        MatcherAssert.assertThat(
+            "Wrong headers", headers, this.headersMatcher
+        );
+        MatcherAssert.assertThat(
+            "Wrong body", body, this.bodyMatcher
+        );
+        return ResponseBuilder.ok().completedFuture();
+    }
+}

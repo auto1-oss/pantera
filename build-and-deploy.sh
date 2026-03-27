@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "=== Artipie Complete Build & Deploy ==="
+echo "=== Pantera Complete Build & Deploy ==="
 echo ""
 
 # Colors for output
@@ -40,8 +40,8 @@ NC='\033[0m' # No Color
 
 # Configuration - Read version from pom.xml
 VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout 2>/dev/null || grep -m 1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
-IMAGE_NAME="auto1-artipie:${VERSION}"
-COMPOSE_DIR="artipie-main/docker-compose"
+IMAGE_NAME="auto1-pantera:${VERSION}"
+COMPOSE_DIR="pantera-main/docker-compose"
 
 echo "Detected version: ${VERSION}"
 
@@ -85,11 +85,11 @@ echo ""
 echo -e "${YELLOW}Step 6: Verify deployment${NC}"
 
 # Check container is running
-if docker ps | grep -q "auto1-artipie"; then
+if docker ps | grep -q "auto1-pantera"; then
     echo -e "${GREEN}✓ Container is running${NC}"
 else
     echo -e "${RED}✗ Container is not running!${NC}"
-    docker-compose logs artipie | tail -50
+    docker-compose logs pantera | tail -50
     exit 1
 fi
 

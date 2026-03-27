@@ -1,0 +1,5 @@
+repo:
+  type: gradle
+  storage:
+    type: fs
+    path: /var/pantera/data

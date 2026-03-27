@@ -1,0 +1,50 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.security.perms;
+
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * Test for {@link Action.Standard}.
+ * @since 1.2
+ */
+public final class StandardActionTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"r", "read", "install", "download", "pull"})
+    void readsAllReadActionSynonyms(final String name) {
+        MatcherAssert.assertThat(
+            Action.Standard.maskByAction(name),
+            new IsEqual<>(0x4)
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"w", "write", "publish", "push", "deploy", "upload"})
+    void readsAllWriteActionSynonyms(final String name) {
+        MatcherAssert.assertThat(
+            Action.Standard.maskByAction(name),
+            new IsEqual<>(0x2)
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"d", "delete", "remove"})
+    void readsAllDeleteActionSynonyms(final String name) {
+        MatcherAssert.assertThat(
+            Action.Standard.maskByAction(name),
+            new IsEqual<>(0x8)
+        );
+    }
+}

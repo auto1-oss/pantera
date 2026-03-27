@@ -1,0 +1,74 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.settings;
+
+import com.amihaiemil.eoyaml.Yaml;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.misc.ContentAsYaml;
+import hu.akarnokd.rxjava2.interop.SingleInterop;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
+/**
+ * Find aliases settings for repository.
+ * @since 0.28
+ */
+public final class AliasSettings {
+
+    /**
+     * Name of the file with storage aliases.
+     */
+    public static final String FILE_NAME = "_storages.yaml";
+
+    /**
+     * Settings storage.
+     */
+    private final Storage storage;
+
+    /**
+     * Ctor.
+     * @param storage Settings storage
+     */
+    public AliasSettings(final Storage storage) {
+        this.storage = storage;
+    }
+
+    /**
+     * Find alias settings for repository.
+     *
+     * @param repo Repository name
+     * @return Instance of {@link StorageByAlias}
+     */
+    public CompletableFuture<StorageByAlias> find(final Key repo) {
+        final Key.From key = new Key.From(repo, AliasSettings.FILE_NAME);
+        return new ConfigFile(key).existsIn(this.storage).thenCompose(
+            found -> {
+                final CompletionStage<StorageByAlias> res;
+                if (found) {
+                    // Use non-blocking RxFuture.single instead of blocking SingleInterop.fromFuture
+                    res = com.auto1.pantera.asto.rx.RxFuture.single(new ConfigFile(key).valueFrom(this.storage))
+                        .to(new ContentAsYaml())
+                        .to(SingleInterop.get())
+                        .thenApply(StorageByAlias::new);
+                } else {
+                    res = repo.parent().map(this::find)
+                        .orElse(
+                            CompletableFuture.completedFuture(
+                                new StorageByAlias(Yaml.createYamlMappingBuilder().build())
+                            )
+                        );
+                }
+                return res;
+            }
+        ).toCompletableFuture();
+    }
+}

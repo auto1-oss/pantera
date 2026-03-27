@@ -1,0 +1,80 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.rpm;
+
+import com.auto1.pantera.rpm.pkg.Checksum;
+import java.io.IOException;
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.util.Locale;
+import javax.xml.bind.DatatypeConverter;
+
+/**
+ * Hashing sum of a file.
+ *
+ * @since 0.1
+ */
+public final class FileChecksum implements Checksum {
+
+    /**
+     * Default file buffer is 8K.
+     */
+    private static final int BUF_SIZE = 1024 * 8;
+
+    /**
+     * The XML.
+     */
+    private final Path file;
+
+    /**
+     * Message digest.
+     */
+    private final Digest dgst;
+
+    /**
+     * Ctor.
+     * @param path The path
+     * @param dgst The hashing algorithm for checksum computation
+     */
+    public FileChecksum(final Path path, final Digest dgst) {
+        this.file = path;
+        this.dgst = dgst;
+    }
+
+    @Override
+    public Digest digest() {
+        return this.dgst;
+    }
+
+    @Override
+    public String hex() throws IOException {
+        final MessageDigest digest = this.dgst.messageDigest();
+        // Use heap buffer instead of direct buffer for short-lived operations.
+        // Direct buffers are intended for long-lived I/O operations where the
+        // overhead of native memory allocation is amortized. For checksum
+        // calculation which completes quickly, heap buffers are more appropriate
+        // and avoid potential direct memory leaks if cleanup fails.
+        final ByteBuffer buf = ByteBuffer.allocate(FileChecksum.BUF_SIZE);
+        try (FileChannel chan = FileChannel.open(this.file, StandardOpenOption.READ)) {
+            while (chan.read(buf) > 0) {
+                ((Buffer) buf).flip();
+                digest.update(buf);
+                buf.clear();
+            }
+        }
+        return DatatypeConverter.printHexBinary(digest.digest())
+            .toLowerCase(Locale.US);
+    }
+}

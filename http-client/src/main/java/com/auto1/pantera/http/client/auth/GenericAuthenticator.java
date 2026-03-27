@@ -1,0 +1,151 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.client.auth;
+
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.headers.WwwAuthenticate;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
+
+/**
+ * Generic authenticator that performs authentication using username and password.
+ * Authentication is done if requested by server using required scheme.
+ *
+ * @since 0.3
+ */
+public final class GenericAuthenticator implements Authenticator {
+
+    public static Authenticator create(ClientSlices client, String username, String pwd) {
+        if (username == null && pwd == null) {
+            return new GenericAuthenticator(client);
+        }
+        if (username == null) {
+            throw new IllegalStateException("`username` is not specified for remote");
+        }
+        if (pwd == null) {
+            throw new IllegalStateException("`password` is not specified for remote");
+        }
+        return new GenericAuthenticator(client, username, pwd);
+    }
+
+    /**
+     * Basic authenticator used when required.
+     */
+    private final Authenticator basic;
+
+    /**
+     * Bearer authenticator used when required.
+     */
+    private final Authenticator bearer;
+
+    /**
+     * Ctor.
+     *
+     * @param client Client slices.
+     */
+    public GenericAuthenticator(final ClientSlices client) {
+        this(
+            Authenticator.ANONYMOUS,
+            new BearerAuthenticator(client, new OAuthTokenFormat(), Authenticator.ANONYMOUS)
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param client Client slices.
+     * @param username Username.
+     * @param password Password.
+     */
+    public GenericAuthenticator(
+        final ClientSlices client,
+        final String username,
+        final String password
+    ) {
+        this(
+            new BasicAuthenticator(username, password),
+            new BearerAuthenticator(
+                client,
+                new OAuthTokenFormat(),
+                new BasicAuthenticator(username, password)
+            )
+        );
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param basic Basic authenticator used when required.
+     * @param bearer Bearer authenticator used when required.
+     */
+    public GenericAuthenticator(final Authenticator basic, final Authenticator bearer) {
+        this.basic = basic;
+        this.bearer = bearer;
+    }
+
+    @Override
+    public CompletionStage<Headers> authenticate(final Headers headers) {
+        final List<WwwAuthenticate> challenges = StreamSupport.stream(headers.spliterator(), false)
+            .filter(header -> WwwAuthenticate.NAME.equalsIgnoreCase(header.getKey()))
+            .map(header -> new WwwAuthenticate(header.getValue()))
+            .collect(Collectors.toList());
+        for (final WwwAuthenticate challenge : challenges) {
+            if (isBearer(challenge)) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        for (final WwwAuthenticate challenge : challenges) {
+            if (isBasic(challenge) && this.supportsBasic()) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        for (final WwwAuthenticate challenge : challenges) {
+            if (!isBasic(challenge) && !isBearer(challenge)) {
+                return this.authenticate(challenge).authenticate(headers);
+            }
+        }
+        return Authenticator.ANONYMOUS.authenticate(headers);
+    }
+
+    /**
+     * Get authorization headers.
+     *
+     * @param header WWW-Authenticate to use for authorization.
+     * @return Authorization headers.
+     */
+    public Authenticator authenticate(final WwwAuthenticate header) {
+        final Authenticator result;
+        final String scheme = header.scheme();
+        if ("Basic".equals(scheme)) {
+            result = this.basic;
+        } else if ("Bearer".equals(scheme)) {
+            result = this.bearer;
+        } else {
+            throw new IllegalArgumentException(String.format("Unsupported scheme: %s", scheme));
+        }
+        return result;
+    }
+
+    private static boolean isBearer(final WwwAuthenticate challenge) {
+        return "Bearer".equalsIgnoreCase(challenge.scheme());
+    }
+
+    private static boolean isBasic(final WwwAuthenticate challenge) {
+        return "Basic".equalsIgnoreCase(challenge.scheme());
+    }
+
+    private boolean supportsBasic() {
+        return this.basic != Authenticator.ANONYMOUS;
+    }
+}

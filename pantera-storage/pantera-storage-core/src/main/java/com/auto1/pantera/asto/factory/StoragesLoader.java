@@ -1,0 +1,103 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto.factory;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.Storage;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Storages to get instance of storage.
+ */
+public final class StoragesLoader
+    extends FactoryLoader<StorageFactory, PanteraStorageFactory, Config, Storage> {
+
+    public static StoragesLoader STORAGES = new StoragesLoader();
+
+    /**
+     * Environment parameter to define packages to find storage factories.
+     * Package names should be separated by semicolon ';'.
+     */
+    public static final String SCAN_PACK = "STORAGE_FACTORY_SCAN_PACKAGES";
+
+    /**
+     * Ctor.
+     */
+    private StoragesLoader() {
+        this(System.getenv());
+    }
+
+    /**
+     * Ctor.
+     *
+     * @param env Environment parameters.
+     */
+    public StoragesLoader(final Map<String, String> env) {
+        super(PanteraStorageFactory.class, env);
+    }
+
+    @Override
+    public Storage newObject(final String type, final Config cfg) {
+        final StorageFactory factory = super.factories.get(type);
+        if (factory == null) {
+            throw new StorageNotFoundException(type);
+        }
+        return factory.newStorage(cfg);
+    }
+
+    /**
+     * Get storage factory by type.
+     * 
+     * @param type Storage type (e.g., "s3", "fs")
+     * @return Storage factory instance
+     * @throws StorageNotFoundException if type is not found
+     */
+    public StorageFactory getFactory(final String type) {
+        final StorageFactory factory = super.factories.get(type);
+        if (factory == null) {
+            throw new StorageNotFoundException(type);
+        }
+        return factory;
+    }
+
+    /**
+     * Known storage types.
+     *
+     * @return Set of storage types.
+     */
+    public Set<String> types() {
+        return this.factories.keySet();
+    }
+
+    @Override
+    public Set<String> defPackages() {
+        return Collections.singleton("com.auto1.pantera.asto");
+    }
+
+    @Override
+    public String scanPackagesEnv() {
+        return StoragesLoader.SCAN_PACK;
+    }
+
+    @Override
+    public String getFactoryName(final Class<?> element) {
+        return Arrays.stream(element.getAnnotations())
+            .filter(PanteraStorageFactory.class::isInstance)
+            .map(a -> ((PanteraStorageFactory) a).value())
+            .findFirst()
+            .orElseThrow(
+                () -> new PanteraException("Annotation 'PanteraStorageFactory' should have a not empty value")
+            );
+    }
+}

@@ -1,0 +1,8 @@
+type: plain # plain and sha256 types are supported
+pass: pantera
+email: david@example.com # Optional
+enabled: true # optional default true
+roles: # optional
+  - admin
+  - pantera
+  - api-admin

@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.composite;
+
+import com.auto1.pantera.docker.Blob;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.misc.DigestFromContent;
+import com.auto1.pantera.docker.proxy.ProxyLayers;
+import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.client.auth.AuthClientSlice;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * Integration test for {@link MultiReadLayers}.
+ *
+ * @since 0.3
+ */
+class MultiReadLayersIT {
+
+    /**
+     * HTTP client used for proxy.
+     */
+    private JettyClientSlices slices;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        this.slices = new JettyClientSlices(
+            new HttpClientSettings().setFollowRedirects(true)
+        );
+        this.slices.start();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        this.slices.stop();
+    }
+
+    @Test
+    void shouldGetBlob() {
+        final MultiReadLayers layers = new MultiReadLayers(
+            Stream.of(
+                this.slices.https("mcr.microsoft.com"),
+                new AuthClientSlice(
+                    this.slices.https("registry-1.docker.io"),
+                    new GenericAuthenticator(this.slices)
+                )
+            ).map(LoggingSlice::new).map(
+                slice -> new ProxyLayers(slice, "library/busybox")
+            ).collect(Collectors.toList())
+        );
+        final String digest = String.format(
+            "%s:%s",
+            "sha256",
+            "78096d0a54788961ca68393e5f8038704b97d8af374249dc5c8faec1b8045e42"
+        );
+        MatcherAssert.assertThat(
+            layers.get(new Digest.FromString(digest))
+                .thenApply(Optional::get)
+                .thenCompose(Blob::content)
+                .thenApply(DigestFromContent::new)
+                .thenCompose(DigestFromContent::digest)
+                .thenApply(Digest::string)
+                .toCompletableFuture().join(),
+            new IsEqual<>(digest)
+        );
+    }
+}

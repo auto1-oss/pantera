@@ -1,0 +1,6 @@
+repo:
+  type: npm
+  storage:
+    type: fs
+    path: /var/pantera/data
+  url: http://localhost:8081/npm

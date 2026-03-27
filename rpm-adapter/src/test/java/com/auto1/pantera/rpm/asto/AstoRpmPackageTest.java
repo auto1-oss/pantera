@@ -1,0 +1,66 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.rpm.asto;
+
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.rpm.Digest;
+import com.auto1.pantera.rpm.pkg.Package;
+import java.io.IOException;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.redline_rpm.header.Header;
+
+/**
+ * Test for {@link AstoRpmPackage}.
+ * @since 1.9
+ */
+class AstoRpmPackageTest {
+
+    /**
+     * Test storage.
+     */
+    private Storage storage;
+
+    @BeforeEach
+    void init() {
+        this.storage = new InMemoryStorage();
+    }
+
+    @Test
+    void readsPackageMeta() throws IOException {
+        final String name = "time-1.7-45.el7.x86_64.rpm";
+        new TestResource(name).saveTo(this.storage);
+        final Package.Meta meta = new AstoRpmPackage(this.storage, Digest.SHA256)
+            .packageMeta(new Key.From(name)).toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            "Failed to calc checksum",
+            meta.checksum().hex(),
+            new IsEqual<>("fdb381e12e4fa1d4e4b7680b2ca90813b5048c42a0a41d7f1270b5a5d3a5358f")
+        );
+        MatcherAssert.assertThat(
+            "Failed to calc size",
+            meta.size(),
+            new IsEqual<>(31_064L)
+        );
+        MatcherAssert.assertThat(
+            "Failed to read header",
+            meta.header(Header.HeaderTag.NAME).asStrings(),
+            Matchers.contains("time")
+        );
+    }
+
+}

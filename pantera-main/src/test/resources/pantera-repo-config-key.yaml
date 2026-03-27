@@ -1,0 +1,8 @@
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+  base_url: http://pantera:8080/
+  repo_configs: my_configs
+  artifacts_database:
+    sqlite_data_file_path: /var/pantera/artifacts.db

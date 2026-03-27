@@ -1,0 +1,22 @@
+meta:
+  storage:
+    type: fs
+    path: /var/artipie/repo
+  credentials:
+    - type: env
+    - type: github
+    - type: local
+  policy:
+    type: local
+    storage:
+      type: fs
+      path: /var/artipie/security
+  base_url: http://central.artipie.com/
+  logging:
+    level: INFO
+    loggers:
+      com.artipie: DEBUG
+      com.artipie.maven.http.CachedProxySlice: TRACE
+  metrics:
+    port: 8087
+    endpoint: "/metrics"

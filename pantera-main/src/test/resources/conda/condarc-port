@@ -1,0 +1,2 @@
+channels:
+  - http://pantera:8081/my-conda-port

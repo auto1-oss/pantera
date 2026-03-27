@@ -1,0 +1,175 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.proxy;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.Manifests;
+import com.auto1.pantera.docker.Repo;
+import com.auto1.pantera.docker.Tags;
+import com.auto1.pantera.docker.http.DigestHeader;
+import com.auto1.pantera.docker.manifest.Manifest;
+import com.auto1.pantera.docker.misc.Pagination;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
+
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Proxy implementation of {@link Repo}.
+ */
+public final class ProxyManifests implements Manifests {
+
+    private static final Headers MANIFEST_ACCEPT_HEADERS = Headers.from(
+            new Header("Accept", "application/json"),
+            new Header("Accept", "application/vnd.oci.image.index.v1+json"),
+            new Header("Accept", "application/vnd.oci.image.manifest.v1+json"),
+            new Header("Accept", "application/vnd.docker.distribution.manifest.v1+prettyjws"),
+            new Header("Accept", "application/vnd.docker.distribution.manifest.v2+json"),
+            new Header("Accept", "application/vnd.docker.distribution.manifest.list.v2+json")
+    );
+
+    public static String uri(String repo, int limit, String from) {
+        String lim = limit > 0 ? "n=" + limit : null;
+        String last = Strings.isNullOrEmpty(from) ? null : "last=" + from;
+        String params = Joiner.on("&").skipNulls().join(lim, last);
+
+        return String.format("/v2/%s/tags/list%s",
+            repo, Strings.isNullOrEmpty(params) ? "" : '?' + params
+        );
+    }
+
+    /**
+     * Remote repository.
+     */
+    private final Slice remote;
+
+    /**
+     * Repository name.
+     */
+    private final String name;
+
+    /**
+     * @param remote Remote repository.
+     * @param name Repository name.
+     */
+    public ProxyManifests(Slice remote, String name) {
+        this.remote = remote;
+        this.name = name;
+    }
+
+    @Override
+    public CompletableFuture<Manifest> put(final ManifestReference ref, final Content content) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
+        final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
+        EcsLogger.info("com.auto1.pantera.docker.proxy")
+            .message("ProxyManifests upstream request")
+            .eventCategory("repository")
+            .eventAction("proxy_manifest_get")
+            .field("container.image.name", this.name)
+            .field("container.image.tag", ref.digest())
+            .field("url.path", uri)
+            .log();
+        final long start = System.currentTimeMillis();
+        return new ResponseSink<>(
+            this.remote.response(
+                new RequestLine(RqMethod.GET, uri),
+                MANIFEST_ACCEPT_HEADERS,
+                Content.EMPTY
+            ),
+            response -> {
+                final long duration = System.currentTimeMillis() - start;
+                EcsLogger.info("com.auto1.pantera.docker.proxy")
+                    .message("ProxyManifests upstream response")
+                    .eventCategory("repository")
+                    .eventAction("proxy_manifest_get")
+                    .eventOutcome(response.status().success() ? "success" : "failure")
+                    .field("container.image.name", this.name)
+                    .field("container.image.tag", ref.digest())
+                    .field("http.response.status_code", response.status().code())
+                    .duration(duration)
+                    .log();
+                final CompletableFuture<Optional<Manifest>> result;
+                if (response.status() == RsStatus.OK) {
+                    final Digest digest = new DigestHeader(response.headers()).value();
+                    result = response.body().asBytesFuture().thenApply(
+                        bytes -> Optional.of(new Manifest(digest, bytes))
+                    );
+                } else if (response.status() == RsStatus.NOT_FOUND
+                    || response.status() == RsStatus.UNAUTHORIZED
+                    || response.status() == RsStatus.FORBIDDEN
+                    || response.status() == RsStatus.PRECONDITION_FAILED) {
+                    // Treat 401/403/412 same as 404 for proxy use: image not accessible here.
+                    // 412 can occur when upstream registry rejects conditional requests.
+                    // Consume body to prevent request leak.
+                    result = response.body().asBytesFuture().thenApply(ignored -> Optional.empty());
+                } else {
+                    // CRITICAL: Consume body even on error to prevent request leak
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> unexpected(response.status())
+                    );
+                }
+                return result;
+            }
+        ).result();
+    }
+
+    @Override
+    public CompletableFuture<Tags> tags(Pagination pagination) {
+        return new ResponseSink<>(
+            this.remote.response(
+                new RequestLine(
+                    RqMethod.GET, pagination.uriWithPagination(String.format("/v2/%s/tags/list", name))
+                ),
+                Headers.EMPTY,
+                Content.EMPTY
+            ),
+            response -> {
+                final CompletableFuture<Tags> result;
+                if (response.status() == RsStatus.OK) {
+                    result = CompletableFuture.completedFuture(response::body);
+                } else {
+                    // CRITICAL: Consume body even on error to prevent request leak
+                    result = response.body().asBytesFuture().thenCompose(
+                        ignored -> unexpected(response.status())
+                    );
+                }
+                return result;
+            }
+        ).result();
+    }
+
+    /**
+     * Creates completion stage failed with unexpected status exception.
+     *
+     * @param status Status to be reported in error.
+     * @param <T> Completion stage result type.
+     * @return Failed completion stage.
+     */
+    private static <T> CompletableFuture<T> unexpected(RsStatus status) {
+        return CompletableFuture.failedFuture(
+            new IllegalArgumentException("Unexpected status: " + status)
+        );
+    }
+}

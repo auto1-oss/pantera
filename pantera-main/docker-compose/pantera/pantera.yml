@@ -1,0 +1,152 @@
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+  
+  # JWT token settings
+  jwt:
+    # Set to true for tokens that expire, false for permanent tokens
+    expires: true
+    # Token lifetime in seconds (default: 86400 = 24 hours)
+    expiry-seconds: 86400
+    # Secret key for signing tokens (use env var in production)
+    secret: ${JWT_SECRET}
+  
+  credentials:
+    # - type: env
+    # - type: pantera
+    - type: keycloak
+      url: "http://keycloak:8080"
+      realm: pantera
+      client-id: pantera
+      client-password: ${KEYCLOAK_CLIENT_SECRET}
+      user-domains:
+        - "local"
+
+    - type: jwt-password
+
+    - type: okta
+      issuer: ${OKTA_ISSUER}
+      client-id: ${OKTA_CLIENT_ID}
+      client-secret: ${OKTA_CLIENT_SECRET}
+      redirect-uri: ${OKTA_REDIRECT_URI}
+      scope: "openid email profile groups"
+      groups-claim: "groups"
+      group-roles:
+         - pantera_readers: "reader"
+         - pantera_admins: "admin"
+      user-domains:
+        - "@auto1.local"
+  
+  policy:
+    type: pantera
+    eviction_millis: 180000 # optional, default 3 min
+    storage:
+      type: fs
+      path: /var/pantera/security
+  
+  cooldown:
+    # Global default: disabled. Only enable for specific repo types below.
+    enabled: false
+    # Use duration strings: m = minutes, h = hours, d = days
+    minimum_allowed_age: 7d
+    repo_types:
+      npm-proxy:
+        enabled: true
+  
+  artifacts_database:
+    postgres_host: "pantera-db"
+    postgres_port: 5432
+    postgres_database: pantera
+    postgres_user: ${POSTGRES_USER}
+    postgres_password: ${POSTGRES_PASSWORD}
+    pool_max_size: 50
+    pool_min_idle: 10
+  
+  http_client:
+    proxy_timeout: 120
+    max_connections_per_destination: 512
+    max_requests_queued_per_destination: 2048
+    idle_timeout: 30000
+    connection_timeout: 15000
+    follow_redirects: true
+    connection_acquire_timeout: 120000  # ms to wait for pooled connection before failing
+
+  http_server:
+    # ISO-8601 duration (or milliseconds) before failing long running requests. Use 0 to disable.
+    request_timeout: PT2M
+
+  metrics:
+    endpoint: /metrics/vertx # Path of the endpoint, starting with `/`, where the metrics will be served
+    port: 8087 # Port to serve the metrics
+    types:
+      - jvm # enables jvm-related metrics
+      - storage # enables storage-related metrics
+      - http # enables http requests/responses related metrics
+  global_prefixes:
+    - test_prefix
+
+  caches:
+    valkey:
+      enabled: true
+      host: valkey
+      port: 6379
+      timeout: 100ms
+
+    cooldown:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+
+    negative:
+      ttl: 24h
+      maxSize: 5000
+      valkey:
+        enabled: true
+        l1MaxSize: 5000
+        l1Ttl: 24h
+        l2MaxSize: 5000000
+        l2Ttl: 7d
+    auth:
+      ttl: 5m
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 5m
+        l2MaxSize: 100000
+        l2Ttl: 5m
+    maven-metadata:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 0
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
+
+    npm-search:
+      ttl: 24h
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 1000
+        l1Ttl: 24h
+        l2MaxSize: 1000000
+        l2Ttl: 72h
+
+    cooldown-metadata:
+      ttl: 30d
+      maxSize: 1000
+      valkey:
+        enabled: true
+        l1MaxSize: 0
+        l1Ttl: 30d
+        l2MaxSize: 500000
+        l2Ttl: 30d

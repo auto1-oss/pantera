@@ -1,0 +1,142 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.api;
+
+import com.auto1.pantera.api.verifier.ReservedNamesVerifier;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.misc.Json2Yaml;
+import com.auto1.pantera.misc.Yaml2Json;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import javax.json.JsonStructure;
+
+/**
+ * Manage repository settings.
+ * @since 0.26
+ */
+@SuppressWarnings("PMD.TooManyMethods")
+public final class ManageRepoSettings implements CrudRepoSettings {
+    /**
+     * Repository settings storage.
+     */
+    private final BlockingStorage asto;
+
+    /**
+     * Ctor.
+     * @param asto Repository settings storage
+     */
+    public ManageRepoSettings(final BlockingStorage asto) {
+        this.asto = asto;
+    }
+
+    @Override
+    public Collection<String> listAll() {
+        return this.list(Key.ROOT);
+    }
+
+    @Override
+    public Collection<String> list(final String uname) {
+        return this.list(new Key.From(uname));
+    }
+
+    @Override
+    public boolean exists(final RepositoryName rname) {
+        final ConfigKeys keys = new ConfigKeys(rname.toString());
+        return this.asto.exists(keys.yamlKey()) || this.asto.exists(keys.ymlKey());
+    }
+
+    @Override
+    public JsonStructure value(final RepositoryName rname) {
+        final ConfigKeys keys = new ConfigKeys(rname.toString());
+        JsonStructure json = null;
+        if (this.asto.exists(keys.yamlKey())) {
+            json = new Yaml2Json().apply(
+                new String(
+                    this.asto.value(keys.yamlKey()),
+                    StandardCharsets.UTF_8
+                )
+            ).asJsonObject();
+        } else if (this.asto.exists(keys.ymlKey())) {
+            json = new Yaml2Json().apply(
+                new String(
+                    this.asto.value(keys.ymlKey()),
+                    StandardCharsets.UTF_8
+                )
+            ).asJsonObject().getJsonObject(BaseRest.REPO);
+        }
+        return json;
+    }
+
+    @Override
+    public void save(final RepositoryName rname, final JsonStructure value) {
+        final ConfigKeys keys = new ConfigKeys(rname.toString());
+        this.asto.save(
+            keys.yamlKey(),
+            new Json2Yaml().apply(value.toString()).toString().getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    @Override
+    public void delete(final RepositoryName rname) {
+        new ConfigKeys(rname.toString()).keys()
+            .forEach(
+                key -> {
+                    if (this.asto.exists(key)) {
+                        this.asto.delete(key);
+                    }
+                }
+            );
+    }
+
+    @Override
+    public void move(final RepositoryName rname, final RepositoryName newrname) {
+        final ConfigKeys oldkeys = new ConfigKeys(rname.toString());
+        final ConfigKeys newkeys = new ConfigKeys(newrname.toString());
+        this.asto.move(
+            oldkeys.yamlKey(),
+            newkeys.yamlKey()
+        );
+    }
+
+    @Override
+    public boolean hasSettingsDuplicates(final RepositoryName rname) {
+        final ConfigKeys keys = new ConfigKeys(rname.toString());
+        return this.asto.exists(keys.yamlKey()) && this.asto.exists(keys.ymlKey());
+    }
+
+    /**
+     * List existing repositories.
+     * @param key Key (ROOT or user name)
+     * @return List of the repositories
+     */
+    private Collection<String> list(final Key key) {
+        final Collection<String> res = new ArrayList<>(5);
+        for (final Key item : this.asto.list(key)) {
+            final String name = item.string();
+            if (yamlFilename(name) && new ReservedNamesVerifier(name).valid()) {
+                res.add(name.replaceAll("\\.yaml|\\.yml", ""));
+            }
+        }
+        return res;
+    }
+
+    /**
+     * Checks whether name is yaml-file name.
+     * @param name Key name
+     * @return True if name has yaml-file extension
+     */
+    private static boolean yamlFilename(final String name) {
+        return name.endsWith(".yaml") || name.endsWith(".yml");
+    }
+}

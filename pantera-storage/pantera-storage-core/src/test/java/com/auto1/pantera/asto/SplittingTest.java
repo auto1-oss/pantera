@@ -1,0 +1,70 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto;
+
+import io.reactivex.Flowable;
+import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.Random;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests for {@link Splitting}.
+ *
+ * @since 1.12.0
+ */
+public class SplittingTest {
+
+    @Test
+    void shouldReturnOneByteBufferWhenOriginalLessSize() {
+        final byte[] data = new byte[12];
+        new Random().nextBytes(data);
+        final List<ByteBuffer> buffers = Flowable.fromPublisher(
+            new Splitting(ByteBuffer.wrap(data), 24).publisher()
+        ).toList().blockingGet();
+        MatcherAssert.assertThat(buffers.size(), Matchers.equalTo(1));
+        MatcherAssert.assertThat(
+            new Remaining(buffers.get(0)).bytes(), Matchers.equalTo(data)
+        );
+    }
+
+    @Test
+    void shouldReturnOneByteBufferWhenOriginalEqualsSize() {
+        final byte[] data = new byte[24];
+        new Random().nextBytes(data);
+        final List<ByteBuffer> buffers = Flowable.fromPublisher(
+            new Splitting(ByteBuffer.wrap(data), 24).publisher()
+        ).toList().blockingGet();
+        MatcherAssert.assertThat(buffers.size(), Matchers.equalTo(1));
+        MatcherAssert.assertThat(
+            new Remaining(buffers.get(0)).bytes(), Matchers.equalTo(data)
+        );
+    }
+
+    @Test
+    void shouldReturnSeveralByteBuffersWhenOriginalMoreSize() {
+        final byte[] data = new byte[2 * 24 + 8];
+        new Random().nextBytes(data);
+        final List<ByteBuffer> buffers = Flowable.fromPublisher(
+            new Splitting(ByteBuffer.wrap(data), 24).publisher()
+        ).toList().blockingGet();
+        MatcherAssert.assertThat(buffers.size(), Matchers.equalTo(3));
+        MatcherAssert.assertThat(
+            new Remaining(
+                new Concatenation(
+                    Flowable.fromIterable(buffers)
+                ).single().blockingGet()
+            ).bytes(), Matchers.equalTo(data)
+        );
+    }
+}

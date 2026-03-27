@@ -2,7 +2,7 @@
 <!--
 MIT License
 
-Copyright (c) 2020-2023 Artipie
+Copyright (c) 2020-2023 Pantera
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,24 +25,24 @@ SOFTWARE.
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.artipie</groupId>
-    <artifactId>artipie</artifactId>
-    <version>1.20.12</version>
+    <groupId>com.auto1.pantera</groupId>
+    <artifactId>pantera</artifactId>
+    <version>2.0.4</version>
   </parent>
   <artifactId>hexpm-adapter</artifactId>
-  <version>1.20.12</version>
+  <version>2.0.4</version>
   <name>hexpm-adapter</name>
-  <description>An Artipie adapter for Erlang/Elixir packages</description>
-  <url>https://github.com/artipie/hexpm-adapter</url>
+  <description>A Pantera adapter for Erlang/Elixir packages</description>
+  <url>https://github.com/auto1-oss/pantera/tree/master/hexpm-adapter</url>
   <properties>
     <protobuf.version>3.21.10</protobuf.version>
     <header.license>${project.basedir}/../LICENSE.header</header.license>
   </properties>
   <dependencies>
     <dependency>
-      <groupId>com.artipie</groupId>
-      <artifactId>artipie-core</artifactId>
-      <version>1.20.12</version>
+      <groupId>com.auto1.pantera</groupId>
+      <artifactId>pantera-core</artifactId>
+      <version>2.0.4</version>
     </dependency>
     <dependency>
       <groupId>com.google.protobuf</groupId>
@@ -50,9 +50,9 @@ SOFTWARE.
       <version>${protobuf.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.artipie</groupId>
+      <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>1.20.12</version>
+      <version>2.0.4</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

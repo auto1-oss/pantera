@@ -1,0 +1,6 @@
+repo:
+  type: nuget
+  url: http://pantera.pantera:8080/my-nuget
+  storage:
+    type: fs
+    path: /var/pantera/data

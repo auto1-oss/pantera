@@ -1,0 +1,115 @@
+##
+## Pantera Benchmark v3 Infrastructure
+## Runs ONE Pantera instance at a time with 8 CPU / 16 GB (isolated).
+## bench-tools sidecar runs real client traffic against it.
+##
+## For v1.20.12 (artipie): CONFIG_DIR=/etc/artipie, DATA_DIR=/var/artipie
+## For v2.0.0 (pantera):   CONFIG_DIR=/etc/pantera, DATA_DIR=/var/pantera
+##
+
+services:
+  postgres:
+    image: postgres:17.8-alpine
+    container_name: bench-postgres
+    environment:
+      POSTGRES_USER: pantera
+      POSTGRES_PASSWORD: pantera
+    volumes:
+      - ./setup/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pantera"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    networks:
+      - bench-net
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  valkey:
+    image: valkey/valkey:8.1.4
+    container_name: bench-valkey
+    command:
+      - valkey-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bench-net
+
+  pantera:
+    image: ${PANTERA_IMAGE}
+    container_name: bench-pantera
+    user: "0:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    cpus: 8
+    mem_limit: 16gb
+    environment:
+      - PANTERA_USER_NAME=${PANTERA_USER_NAME:-pantera}
+      - PANTERA_USER_PASS=${PANTERA_USER_PASS:-pantera}
+      - ARTIPIE_USER_NAME=${PANTERA_USER_NAME:-pantera}
+      - ARTIPIE_USER_PASS=${PANTERA_USER_PASS:-pantera}
+      - LOG4J_CONFIGURATION_FILE=${CONFIG_DIR:-/etc/pantera}/log4j2.xml
+      - ELASTIC_APM_ENABLED=false
+      - JVM_ARGS=-XX:+UseG1GC -Xms10g -Xmx10g -XX:G1HeapRegionSize=16m -XX:MaxGCPauseMillis=300 -XX:MaxDirectMemorySize=2g -Djava.io.tmpdir=${DATA_DIR:-/var/pantera}/cache/tmp
+    volumes:
+      - ./setup/${PANTERA_CONFIG:-pantera-new.yml}:${CONFIG_DIR:-/etc/pantera}/${CONFIG_FILE:-pantera.yml}
+      - ./setup/${REPOS_DIR:-repos-new}:${DATA_DIR:-/var/pantera}/repo
+      - ./setup/security:${DATA_DIR:-/var/pantera}/security
+      - ./setup/log4j2-bench.xml:${CONFIG_DIR:-/etc/pantera}/log4j2.xml
+      - pantera-data:${DATA_DIR:-/var/pantera}/data
+      - pantera-cache:${DATA_DIR:-/var/pantera}/cache
+    ports:
+      - "9080:8080"
+      - "9086:8086"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/.health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - bench-net
+
+  bench-tools:
+    build:
+      context: ./bench-tools
+      args:
+        NUM_WORKERS: ${BENCH_WRITERS:-100}
+    container_name: bench-tools
+    depends_on:
+      pantera:
+        condition: service_healthy
+    environment:
+      - REGISTRY_HOST=bench-pantera:8080
+      - BENCH_USER=${PANTERA_USER_NAME:-pantera}
+      - BENCH_PASS=${PANTERA_USER_PASS:-pantera}
+      - BENCH_CONCURRENCY=${BENCH_CONCURRENCY:-40}
+      - BENCH_DURATION=${BENCH_DURATION:-60}
+      - BENCH_PROTOCOLS=${BENCH_PROTOCOLS:-maven,npm,docker,php,pypi}
+      - BENCH_SKIP_CORRECTNESS=${BENCH_SKIP_CORRECTNESS:-0}
+    volumes:
+      - ./results:/results
+    networks:
+      - bench-net
+
+volumes:
+  pantera-data:
+  pantera-cache:
+
+networks:
+  bench-net:
+    driver: bridge

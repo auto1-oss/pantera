@@ -1,0 +1,58 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.maven.metadata;
+
+import com.jcabi.xml.XMLDocument;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Extracts information from the metadata maven client sends on deploy.
+ * @since 0.8
+ */
+public final class DeployMetadata {
+
+    /**
+     * Metadata.
+     */
+    private final String data;
+
+    /**
+     * Ctor.
+     * @param data Metadata
+     */
+    public DeployMetadata(final String data) {
+        this.data = data;
+    }
+
+    /**
+     * Get versioning/release tag value.
+     * @return Completion action
+     */
+    public String release() {
+        final List<String> release = new XMLDocument(this.data).xpath("//release/text()");
+        if (release.isEmpty()) {
+            throw new IllegalArgumentException("Failed to read deploy maven metadata");
+        } else {
+            return release.get(0);
+        }
+    }
+
+    /**
+     * Reads snapshot versions from metadata.xml.
+     * @return List of snapshot versions
+     */
+    public Set<String> snapshots() {
+        return new XMLDocument(this.data).xpath("//version/text()").stream()
+            .filter(item -> item.contains("SNAPSHOT")).collect(Collectors.toSet());
+    }
+}

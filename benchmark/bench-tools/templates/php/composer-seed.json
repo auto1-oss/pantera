@@ -1,0 +1,8 @@
+{
+  "name": "bench/read",
+  "version": "1.0.0",
+  "description": "Benchmark seed package for readers",
+  "type": "library",
+  "license": "proprietary",
+  "require": {}
+}

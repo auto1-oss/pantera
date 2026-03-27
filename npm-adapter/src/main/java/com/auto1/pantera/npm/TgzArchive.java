@@ -1,0 +1,165 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.PanteraIOException;
+import io.reactivex.Completable;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
+import java.util.Optional;
+import javax.json.Json;
+import javax.json.JsonObject;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+
+/**
+ * A .tgz archive.
+ *
+ * @since 0.1
+ */
+public final class TgzArchive {
+
+    /**
+     * The archive representation in a form of a base64 string.
+     */
+    private final String bitstring;
+
+    /**
+     * Is Base64 encoded?
+     */
+    private final boolean encoded;
+
+    /**
+     * Ctor.
+     * @param bitstring The archive.
+     */
+    public TgzArchive(final String bitstring) {
+        this(bitstring, true);
+    }
+
+    /**
+     * Ctor.
+     * @param bitstring The archive
+     * @param encoded Is Base64 encoded?
+     */
+    public TgzArchive(final String bitstring, final boolean encoded) {
+        this.bitstring = bitstring;
+        this.encoded = encoded;
+    }
+
+    /**
+     * Save the archive to a file.
+     *
+     * @param path The path to save .tgz file at.
+     * @return Completion or error signal.
+     */
+    public Completable saveToFile(final Path path) {
+        return Completable.fromAction(
+            () -> Files.write(path, this.bytes())
+        );
+    }
+
+    /**
+     * Obtain an archive in form of byte array.
+     *
+     * @return Archive bytes
+     */
+    public byte[] bytes() {
+        final byte[] res;
+        if (this.encoded) {
+            res = Base64.getDecoder().decode(this.bitstring);
+        } else {
+            res = this.bitstring.getBytes(StandardCharsets.ISO_8859_1);
+        }
+        return res;
+    }
+
+    /**
+     * Obtains package.json from archive.
+     * @return Json object from package.json file from archive.
+     */
+    public JsonObject packageJson() {
+        return new JsonFromStream(new ByteArrayInputStream(this.bytes())).json();
+    }
+
+    /**
+     * Json input stream.
+     * @since 1.5
+     */
+    public static class JsonFromStream {
+
+        /**
+         * Input stream to read json from.
+         */
+        private final InputStream input;
+
+        /**
+         * Ctor.
+         * @param input Input stream to read json from
+         */
+        public JsonFromStream(final InputStream input) {
+            this.input = input;
+        }
+
+        /**
+         * Read json from tgz input stream.
+         * @return Json object from stream
+         */
+        @SuppressWarnings("PMD.AssignmentInOperand")
+        public JsonObject json() {
+            try (
+                InputStream source = this.input;
+                GzipCompressorInputStream gzip = new GzipCompressorInputStream(source, true);
+                TarArchiveInputStream tar = new TarArchiveInputStream(gzip)
+            ) {
+                ArchiveEntry entry;
+                Optional<JsonObject> json = Optional.empty();
+                while ((entry = tar.getNextTarEntry()) != null) {
+                    if (!tar.canReadEntryData(entry) || entry.isDirectory()) {
+                        continue;
+                    }
+                    final String[] parts = entry.getName().split("/");
+                    if ("package.json".equals(parts[parts.length - 1])) {
+                        // Read package.json without closing the tar stream
+                        final byte[] jsonBytes = new byte[(int) entry.getSize()];
+                        int totalRead = 0;
+                        while (totalRead < jsonBytes.length) {
+                            final int read = tar.read(jsonBytes, totalRead, jsonBytes.length - totalRead);
+                            if (read == -1) {
+                                break;
+                            }
+                            totalRead += read;
+                        }
+                        json = Optional.of(
+                            Json.createReader(
+                                new ByteArrayInputStream(jsonBytes)
+                            ).readObject()
+                        );
+                        break;
+                    }
+                }
+                return json.orElseThrow(
+                    () -> new PanteraException("'package.json' file was not found")
+                );
+            } catch (final IOException exc) {
+                throw new PanteraIOException(exc);
+            }
+        }
+    }
+
+}

@@ -1,0 +1,264 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.conda;
+
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.conda.http.CondaSlice;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.auth.Tokens;
+import com.auto1.pantera.http.misc.RandomFreePort;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.security.policy.PolicyByUsername;
+import com.auto1.pantera.vertx.VertxSliceServer;
+import com.jcabi.log.Logger;
+import io.vertx.reactivex.core.Vertx;
+import org.cactoos.list.ListOf;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.text.StringContainsInOrder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
+import org.testcontainers.Testcontainers;
+import org.testcontainers.containers.Container;
+import org.testcontainers.containers.GenericContainer;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Conda adapter integration test.
+ */
+@DisabledOnOs(OS.WINDOWS)
+public final class CondaSliceAuthITCase {
+
+    /**
+     * Test auth token.
+     */
+    private static final String TKN = "abc123";
+
+    /**
+     * Vertx instance.
+     */
+    private static final Vertx VERTX = Vertx.vertx();
+
+    /**
+     * Test username.
+     */
+    private static final String UNAME = "Alice";
+
+    /**
+     * Test username.
+     */
+    private static final String PSWD = "wonderland";
+
+    /**
+     * Condarc file name with user credentials.
+     */
+    private static final String USER = ".condarc_user";
+
+    /**
+     * Condarc file name without credentials.
+     */
+    private static final String ANONIM = ".condarc_anonim";
+
+    /**
+     * Temporary directory for all tests.
+     */
+    @TempDir
+    Path tmp;
+
+    /**
+     * Test storage.
+     */
+    private Storage storage;
+
+    /**
+     * Vertx slice server instance.
+     */
+    private VertxSliceServer server;
+
+    /**
+     * Container.
+     */
+    private GenericContainer<?> cntn;
+
+    /**
+     * Application port.
+     */
+    private int port;
+
+    @BeforeEach
+    void initialize() throws Exception {
+        this.port = RandomFreePort.get();
+        this.storage = new InMemoryStorage();
+        final String url = String.format("http://host.testcontainers.internal:%d", this.port);
+        this.server = new VertxSliceServer(
+            CondaSliceAuthITCase.VERTX,
+            new LoggingSlice(
+                new CondaSlice(
+                    this.storage,
+                    new PolicyByUsername(CondaSliceAuthITCase.UNAME),
+                    new Authentication.Single(
+                        CondaSliceAuthITCase.UNAME, CondaSliceAuthITCase.PSWD
+                    ),
+                    new FakeAuthTokens(),
+                    url,
+                    "any",
+                    Optional.empty()
+                )
+            ),
+            this.port
+        );
+        this.server.start();
+        Testcontainers.exposeHostPorts(this.port);
+        Files.write(
+            this.tmp.resolve(CondaSliceAuthITCase.USER),
+            String.format(
+                "channels:\n  - \"http://%s:%s@host.testcontainers.internal:%d\"",
+                CondaSliceAuthITCase.UNAME, CondaSliceAuthITCase.PSWD, this.port
+            ).getBytes()
+        );
+        Files.write(
+            this.tmp.resolve(CondaSliceAuthITCase.ANONIM),
+            String.format("channels:\n  - %s", url).getBytes()
+        );
+        this.cntn = new GenericContainer<>("pantera/conda-tests:1.0")
+            .withCommand("tail", "-f", "/dev/null")
+            .withWorkingDirectory("/home/")
+            .withFileSystemBind(this.tmp.toString(), "/home");
+        this.cntn.start();
+    }
+
+    @Test
+    @Disabled("https://github.com/pantera/pantera/issues/1336")
+    void canUploadAndInstall() throws Exception {
+        this.moveCondarc(CondaSliceAuthITCase.ANONIM);
+        this.exec(
+            "anaconda", "config", "--set", "url",
+            String.format("http://host.testcontainers.internal:%d/", this.port), "-s"
+        );
+        MatcherAssert.assertThat(
+            "Anaconda login was not successful",
+            this.exec(
+                "anaconda", "-v", "login", "--username",
+                CondaSliceAuthITCase.UNAME, "--password", CondaSliceAuthITCase.PSWD
+            ),
+            new StringContainsInOrder(
+                new ListOf<>("http://host.testcontainers.internal", "Alice's login successful")
+            )
+        );
+        MatcherAssert.assertThat(
+            "Anaconda upload was not successful",
+            this.exec(
+                "anaconda", "upload", "/w/snappy-1.1.3-0.tar.bz2"
+            ),
+            new StringContainsInOrder(
+                new ListOf<>(
+                    "http://host.testcontainers.internal",
+                    "Alice/snappy/1.1.3/linux-64/snappy-1.1.3-0.tar.bz2",
+                    "Upload complete"
+                )
+            )
+        );
+        MatcherAssert.assertThat(
+            "Failed to install package snappy",
+            exec("conda", "install", "--verbose", "-y", "snappy"),
+            new StringContainsInOrder(
+                new ListOf<String>(
+                    "The following packages will be downloaded:",
+                    "http://host.testcontainers.internal",
+                    "linux-64::snappy-1.1.3-0",
+                    "Preparing transaction: ...working... done",
+                    "Verifying transaction: ...working... done",
+                    "Executing transaction: ...working... done"
+                )
+            )
+        );
+    }
+
+    @Test
+    void canInstallWithCondaInstall() throws Exception {
+        this.moveCondarc(CondaSliceAuthITCase.USER);
+        new TestResource("CondaSliceITCase/packages.json")
+            .saveTo(this.storage, new Key.From("linux-64/repodata.json"));
+        new TestResource("CondaSliceITCase/snappy-1.1.3-0.tar.bz2")
+            .saveTo(this.storage, new Key.From("linux-64/snappy-1.1.3-0.tar.bz2"));
+        MatcherAssert.assertThat(
+            exec("conda", "install", "--verbose", "-y", "snappy"),
+            new StringContainsInOrder(
+                new ListOf<String>(
+                    "The following packages will be downloaded:",
+                    "http://host.testcontainers.internal",
+                    "linux-64::snappy-1.1.3-0",
+                    "Preparing transaction: ...working... done",
+                    "Verifying transaction: ...working... done",
+                    "Executing transaction: ...working... done"
+                )
+            )
+        );
+    }
+
+    @AfterEach
+    void stop() {
+        this.server.stop();
+        this.cntn.stop();
+    }
+
+    private String exec(final String... command) throws Exception {
+        final Container.ExecResult res = this.cntn.execInContainer(command);
+        Logger.debug(this, "Command:\n%s\nResult:\n%s", String.join(" ", command), res.toString());
+        return res.toString();
+    }
+
+    private void moveCondarc(final String name) throws IOException, InterruptedException {
+        final String file = String.format("/home/%s", name);
+        this.cntn.execInContainer("mv", file, "/root/.condarc");
+        this.cntn.execInContainer("rm", file);
+    }
+
+    /**
+     * Fake implementation of {@link Tokens}.
+     * @since 0.5
+     */
+    static class FakeAuthTokens implements Tokens {
+
+        @Override
+        public TokenAuthentication auth() {
+            return tkn -> {
+                Optional<AuthUser> res = Optional.empty();
+                if (CondaSliceAuthITCase.TKN.equals(tkn)) {
+                    res = Optional.of(new AuthUser(CondaSliceAuthITCase.UNAME, "test"));
+                }
+                return CompletableFuture.completedFuture(res);
+            };
+        }
+
+        @Override
+        public String generate(final AuthUser user) {
+            if (user.name().equals(CondaSliceAuthITCase.UNAME)) {
+                return CondaSliceAuthITCase.TKN;
+            }
+            throw new IllegalStateException("Unexpected user");
+        }
+    }
+}

@@ -1,0 +1,79 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.slice;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.headers.ContentLength;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.RsHasHeaders;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.RsStatus;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Test for {@link WithGzipSlice}.
+ */
+class WithGzipSliceTest {
+
+    @Test
+    void returnsGzipedResponseIfAcceptEncodingIsPassed() throws IOException {
+        MatcherAssert.assertThat(
+            new WithGzipSlice(new SliceSimple(ResponseBuilder.ok()
+                .textBody("some content to gzip").build())),
+            new SliceHasResponse(
+                Matchers.allOf(
+                    new RsHasStatus(RsStatus.OK),
+                    new RsHasBody(GzipSliceTest.gzip("some content to gzip".getBytes(StandardCharsets.UTF_8))),
+                    new RsHasHeaders(new ContentLength(20), new Header("Content-Encoding", "gzip"))
+                ),
+                new RequestLine(RqMethod.GET, "/"),
+                Headers.from(new Header("accept-encoding", "gzip")),
+                Content.EMPTY
+            )
+        );
+    }
+
+    @Test
+    void returnsResponseAsIsIfAcceptEncodingIsNotPassed() {
+        final byte[] data = "abc123".getBytes(StandardCharsets.UTF_8);
+        final Header hdr = new Header("name", "value");
+        MatcherAssert.assertThat(
+            new WithGzipSlice(
+                new SliceSimple(
+                    ResponseBuilder.created()
+                        .header(hdr)
+                        .body(data)
+                        .build()
+                )
+            ),
+            new SliceHasResponse(
+                Matchers.allOf(
+                    new RsHasStatus(RsStatus.CREATED),
+                    new RsHasBody(data),
+                    new RsHasHeaders(new ContentLength(data.length), hdr)
+                ),
+                new RequestLine(RqMethod.GET, "/")
+            )
+        );
+    }
+
+}

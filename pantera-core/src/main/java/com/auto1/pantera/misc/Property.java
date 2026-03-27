@@ -1,0 +1,61 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.misc;
+
+import com.auto1.pantera.PanteraException;
+
+import java.util.Optional;
+
+/**
+ * Obtains value of property from properties which were already set in
+ * the environment or in the file.
+ * @since 0.23
+ */
+public final class Property {
+    /**
+     * Name of the property.
+     */
+    private final String name;
+
+    /**
+     * Ctor.
+     * @param name Name of the property.
+     */
+    public Property(final String name) {
+        this.name = name;
+    }
+
+    /**
+     * Obtains long value of the property from already set properties or
+     * from the file with values of the properties.
+     * @param defval Default value for property
+     * @return Long value of property or default value.
+     * @throws PanteraException In case of problem with parsing value of the property
+     */
+    public long asLongOrDefault(final long defval) {
+        final long val;
+        try {
+            val = Long.parseLong(
+                Optional.ofNullable(System.getProperty(this.name))
+                    .orElse(
+                        new PanteraProperties().valueBy(this.name)
+                            .orElse(String.valueOf(defval))
+                    )
+            );
+        } catch (final NumberFormatException exc) {
+            throw new PanteraException(
+                String.format("Failed to read property '%s'", this.name),
+                exc
+            );
+        }
+        return val;
+    }
+}

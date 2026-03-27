@@ -1,0 +1,16 @@
+pluginManagement {
+    repositories {
+        // Resolve Gradle plugins through the Pantera proxy so they get cached
+        maven {
+            url = 'http://localhost:8081/test_prefix/api/gradle_group'
+            allowInsecureProtocol = true
+            credentials {
+                username = 'ayd'
+                password = 'ayd'
+            }
+        }
+        gradlePluginPortal() // fallback for plugins not yet cached
+    }
+}
+
+rootProject.name = 'hello'

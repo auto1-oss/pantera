@@ -1,0 +1,111 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.ref;
+
+import com.auto1.pantera.docker.Digest;
+import com.auto1.pantera.docker.ManifestReference;
+import com.auto1.pantera.docker.error.InvalidTagNameException;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.hamcrest.core.AllOf;
+import org.hamcrest.core.StringContains;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.util.Arrays;
+
+/**
+ * Test case for {@link ManifestReference}.
+ */
+public final class ManifestReferenceTest {
+
+    @Test
+    void resolvesDigestString() {
+        MatcherAssert.assertThat(
+            ManifestReference.from("sha256:1234").link().string(),
+            Matchers.equalTo("revisions/sha256/1234/link")
+        );
+    }
+
+    @Test
+    void resolvesTagString() {
+        MatcherAssert.assertThat(
+            ManifestReference.from("1.0").link().string(),
+            Matchers.equalTo("tags/1.0/current/link")
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "",
+        "a:b:c",
+        ".123"
+    })
+    void failsToResolveInvalid(final String tag) {
+        final Throwable throwable = Assertions.assertThrows(
+            InvalidTagNameException.class,
+            () -> ManifestReference.from(tag).link().string()
+        );
+        MatcherAssert.assertThat(
+            throwable.getMessage(),
+            new AllOf<>(
+                Arrays.asList(
+                    new StringContains(true, "Invalid tag"),
+                    new StringContains(false, tag)
+                )
+            )
+        );
+    }
+
+    @Test
+    void resolvesDigestLink() {
+        MatcherAssert.assertThat(
+            ManifestReference.from(new Digest.Sha256("0000")).link().string(),
+            Matchers.equalTo("revisions/sha256/0000/link")
+        );
+    }
+
+    @Test
+    void resolvesTagLink() {
+        MatcherAssert.assertThat(
+            ManifestReference.fromTag("latest").link().string(),
+            Matchers.equalTo("tags/latest/current/link")
+        );
+    }
+
+    @Test
+    void stringFromDigestRef() {
+        MatcherAssert.assertThat(
+            ManifestReference.from(new Digest.Sha256("0123")).digest(),
+            Matchers.equalTo("sha256:0123")
+        );
+    }
+
+    @Test
+    void stringFromTagRef() {
+        final String tag = "0.2";
+        MatcherAssert.assertThat(
+            ManifestReference.fromTag(tag).digest(),
+            Matchers.equalTo(tag)
+        );
+    }
+
+    @Test
+    void stringFromStringRef() {
+        final String value = "whatever";
+        MatcherAssert.assertThat(
+            ManifestReference.from(value).digest(),
+            Matchers.equalTo(value)
+        );
+    }
+}

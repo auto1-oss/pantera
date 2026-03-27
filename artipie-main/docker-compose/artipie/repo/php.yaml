@@ -1,7 +1,0 @@
-repo:
-  type: php
-  storage:
-    type: fs
-    path: /var/artipie/data
-  settings:
-    url: http://localhost:8081/test_prefix/api/composer/php

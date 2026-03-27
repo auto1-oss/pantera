@@ -1,0 +1,84 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.perms;
+
+import com.auto1.pantera.docker.http.CatalogSlice;
+import com.auto1.pantera.security.perms.Action;
+
+import java.util.Collections;
+import java.util.Set;
+
+/**
+ * Registry permission categories.
+ *
+ * @since 0.18
+ */
+public enum RegistryCategory implements Action {
+
+    /**
+     * Base category, check {@link com.auto1.pantera.docker.http.BaseSlice}.
+     */
+    BASE("base", 0x4),
+
+    /**
+     * Catalog category, check {@link CatalogSlice}.
+     */
+    CATALOG("catalog", 0x2),
+
+    /**
+     * Any category.
+     */
+    ANY("*", 0x4 | 0x2);
+
+    /**
+     * The name of the category.
+     */
+    private final String name;
+
+    /**
+     * Category mask.
+     */
+    private final int mask;
+
+    /**
+     * @param name Category name
+     * @param mask Category mask
+     */
+    RegistryCategory(final String name, final int mask) {
+        this.name = name;
+        this.mask = mask;
+    }
+
+    @Override
+    public Set<String> names() {
+        return Collections.singleton(this.name);
+    }
+
+    @Override
+    public int mask() {
+        return this.mask;
+    }
+
+    /**
+     * Get category int mask by name.
+     * @param name The category name
+     * @return The mask
+     * @throws IllegalArgumentException is the category not valid
+     */
+    public static int maskByCategory(String name) {
+        for (Action item : values()) {
+            if (item.names().contains(name)) {
+                return item.mask();
+            }
+        }
+        throw new IllegalArgumentException("Unknown permission action " + name);
+    }
+}

@@ -1,0 +1,53 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.error;
+
+import com.auto1.pantera.docker.Digest;
+import java.util.Optional;
+
+/**
+ * This error may be returned when a blob is unknown to the registry in a specified repository.
+ * This can be returned with a standard get
+ * or if a manifest references an unknown layer during upload.
+ *
+ * @since 0.5
+ */
+public final class BlobUnknownError implements DockerError {
+
+    /**
+     * Blob digest.
+     */
+    private final Digest digest;
+
+    /**
+     * Ctor.
+     *
+     * @param digest Blob digest.
+     */
+    public BlobUnknownError(final Digest digest) {
+        this.digest = digest;
+    }
+
+    @Override
+    public String code() {
+        return "BLOB_UNKNOWN";
+    }
+
+    @Override
+    public String message() {
+        return "blob unknown to registry";
+    }
+
+    @Override
+    public Optional<String> detail() {
+        return Optional.of(this.digest.string());
+    }
+}

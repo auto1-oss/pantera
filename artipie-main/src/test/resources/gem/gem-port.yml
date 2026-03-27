@@ -1,7 +1,0 @@
----
-repo:
-  type: gem
-  port: 8081
-  storage:
-    type: fs
-    path: /var/artipie/data/

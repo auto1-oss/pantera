@@ -1,0 +1,130 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.composer;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import org.cactoos.set.SetOf;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
+import org.hamcrest.core.IsNull;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import javax.json.JsonObject;
+import java.util.Optional;
+
+/**
+ * Tests for {@link JsonPackages}.
+ *
+ * @since 0.1
+ */
+class JsonPackagesTest {
+
+    /**
+     * Storage used in tests.
+     */
+    private Storage storage;
+
+    /**
+     * Package created from 'minimal-package.json' resource.
+     */
+    private Package pack;
+
+    /**
+     * Package name.
+     */
+    private Name name;
+
+    @BeforeEach
+    void init() {
+        this.storage = new InMemoryStorage();
+        this.pack = new JsonPackage(new TestResource("minimal-package.json").asBytes());
+        this.name = this.pack.name().toCompletableFuture().join();
+    }
+
+    @Test
+    void shouldSaveEmpty() throws Exception {
+        new JsonPackages().save(this.storage, this.name.key())
+            .toCompletableFuture().get();
+        MatcherAssert.assertThat(
+            this.versions(this.json(this.name.key())),
+            new IsNull<>()
+        );
+    }
+
+    @Test
+    void shouldSaveNotEmpty() {
+        final byte[] pkg = new TestResource("packages.json").asBytes();
+        final Key key = this.name.key();
+        new JsonPackages(new Content.From(pkg))
+            .save(this.storage, key)
+            .toCompletableFuture().join();
+        MatcherAssert.assertThat(
+            new BlockingStorage(this.storage).value(key),
+            new IsEqual<>(pkg)
+        );
+    }
+
+    @Test
+    void shouldAddPackageWhenEmpty() {
+        final JsonObject json = this.addPackageTo("{\"packages\":{}}");
+        MatcherAssert.assertThat(
+            this.versions(json).getJsonObject(
+                this.pack.version(Optional.empty())
+                    .toCompletableFuture().join()
+                    .orElseThrow()
+            ),
+            new IsNot<>(new IsNull<>())
+        );
+    }
+
+    @Test
+    void shouldAddPackageWhenNotEmpty() {
+        final JsonObject json = this.addPackageTo(
+            "{\"packages\":{\"vendor/package\":{\"1.1.0\":{}}}}"
+        );
+        final JsonObject versions = this.versions(json);
+        MatcherAssert.assertThat(
+            versions.keySet(),
+            new IsEqual<>(
+                new SetOf<>(
+                    "1.1.0",
+                    this.pack.version(Optional.empty()).toCompletableFuture().join().orElseThrow()
+                )
+            )
+        );
+    }
+
+    private JsonObject addPackageTo(final String original) {
+        final Key key = this.name.key();
+        new JsonPackages(new Content.From(original.getBytes()))
+            .add(this.pack, Optional.empty())
+            .toCompletableFuture().join()
+            .save(this.storage, key)
+            .toCompletableFuture().join();
+        return this.json(key);
+    }
+
+    private JsonObject json(final Key key) {
+        return this.storage.value(key).join().asJsonObject();
+    }
+
+    private JsonObject versions(final JsonObject json) {
+        return json.getJsonObject("packages")
+            .getJsonObject(this.name.string());
+    }
+}

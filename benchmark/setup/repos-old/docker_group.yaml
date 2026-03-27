@@ -1,0 +1,5 @@
+repo:
+  type: docker-group
+  members:
+    - docker_local
+    - docker_proxy

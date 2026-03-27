@@ -1,0 +1,40 @@
+/*
+ * The MIT License (MIT) Copyright (c) 2020-2023 pantera.com
+ * https://github.com/pantera/pantera/blob/master/LICENSE.txt
+ */
+
+package com.auto1.pantera.docker;
+
+import com.auto1.pantera.docker.misc.Pagination;
+
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Docker registry storage main object.
+ * @see com.auto1.pantera.docker.asto.AstoDocker
+ */
+public interface Docker {
+
+    /**
+     * Gets registry name.
+     *
+     * @return Registry name.
+     */
+    String registryName();
+
+    /**
+     * Docker repo by name.
+     *
+     * @param name Repository name
+     * @return Repository object
+     */
+    Repo repo(String name);
+
+    /**
+     * Docker repositories catalog.
+     *
+     * @param pagination  Pagination parameters.
+     * @return Catalog.
+     */
+    CompletableFuture<Catalog> catalog(Pagination pagination);
+}

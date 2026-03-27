@@ -1,0 +1,79 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.maven.http;
+
+import com.auto1.pantera.asto.Key;
+import org.cactoos.map.MapEntry;
+import org.cactoos.map.MapOf;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * Test case for {@link ArtifactHeaders}.
+ */
+public final class ArtifactHeadersTest {
+
+    @Test
+    void addsChecksumAndEtagHeaders() {
+        final String one = "one";
+        final String two = "two";
+        final String three = "three";
+        MatcherAssert.assertThat(
+            ArtifactHeaders.from(
+                new Key.From("anything"),
+                new MapOf<>(
+                    new MapEntry<>("sha1", one),
+                    new MapEntry<>("sha256", two),
+                    new MapEntry<>("sha512", three)
+                )
+            ).stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
+            Matchers.allOf(
+                Matchers.hasEntry("X-Checksum-sha1", one),
+                Matchers.hasEntry("X-Checksum-sha256", two),
+                Matchers.hasEntry("X-Checksum-sha512", three),
+                Matchers.hasEntry("ETag", one)
+            )
+        );
+    }
+
+    @Test
+    void addsContentDispositionHeader() {
+        MatcherAssert.assertThat(
+            ArtifactHeaders.from(new Key.From("artifact.jar"), Collections.emptyNavigableMap())
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
+            Matchers.hasEntry("Content-Disposition", "attachment; filename=\"artifact.jar\"")
+        );
+    }
+
+    @CsvSource({
+        "target.jar,application/java-archive",
+        "target.pom,application/x-maven-pom+xml",
+        "target.xml,application/xml",
+        "target.none,*"
+    })
+    @ParameterizedTest
+    void addsContentTypeHeaders(final String target, final String mime) {
+        MatcherAssert.assertThat(
+            ArtifactHeaders.from(new Key.From(target), Collections.emptyNavigableMap())
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
+            Matchers.hasEntry("Content-Type", mime)
+        );
+    }
+}

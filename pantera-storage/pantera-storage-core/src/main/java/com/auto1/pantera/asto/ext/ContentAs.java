@@ -1,0 +1,71 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto.ext;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.rx.RxFuture;
+import io.reactivex.Single;
+import io.reactivex.functions.Function;
+import org.reactivestreams.Publisher;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Rx publisher transformer to single.
+ * @param <T> Single type
+ * @since 0.33
+ */
+public final class ContentAs<T>
+    implements Function<Single<? extends Publisher<ByteBuffer>>, Single<? extends T>> {
+
+    /**
+     * Content as string.
+     */
+    public static final ContentAs<String> STRING = new ContentAs<>(
+        bytes -> new String(bytes, StandardCharsets.UTF_8)
+    );
+
+    /**
+     * Content as {@code long} number.
+     */
+    public static final ContentAs<Long> LONG = new ContentAs<>(
+        bytes -> Long.valueOf(new String(bytes, StandardCharsets.US_ASCII))
+    );
+
+    /**
+     * Content as {@code bytes}.
+     */
+    public static final ContentAs<byte[]> BYTES = new ContentAs<>(bytes -> bytes);
+
+    /**
+     * Transform function.
+     */
+    private final Function<byte[], T> transform;
+
+    /**
+     * Ctor.
+     * @param transform Transform function
+     */
+    public ContentAs(final Function<byte[], T> transform) {
+        this.transform = transform;
+    }
+
+    @Override
+    public Single<? extends T> apply(
+        final Single<? extends Publisher<ByteBuffer>> content
+    ) {
+        // Use non-blocking RxFuture.single instead of blocking Single.fromFuture
+        return content.flatMap(
+            pub -> RxFuture.single(new Content.From(pub).asBytesFuture())
+        ).map(this.transform);
+    }
+}

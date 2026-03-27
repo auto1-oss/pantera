@@ -1,0 +1,73 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.docker.misc;
+
+import com.auto1.pantera.docker.Catalog;
+import com.auto1.pantera.docker.Docker;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.Collectors;
+
+/**
+ * Source of catalog built by loading and merging multiple catalogs.
+ *
+ * @since 0.10
+ */
+public final class JoinedCatalogSource {
+
+    /**
+     * Dockers for reading.
+     */
+    private final List<Docker> dockers;
+
+    private final Pagination pagination;
+
+    /**
+     * @param pagination Pagination parameters.
+     * @param dockers Registries to load catalogs from.
+     */
+    public JoinedCatalogSource(Pagination pagination, Docker... dockers) {
+        this(Arrays.asList(dockers), pagination);
+    }
+
+    /**
+     * @param dockers Registries to load catalogs from.
+     * @param pagination Pagination parameters.
+     */
+    public JoinedCatalogSource(List<Docker> dockers, Pagination pagination) {
+        this.dockers = dockers;
+        this.pagination = pagination;
+    }
+
+    /**
+     * Load catalog.
+     *
+     * @return Catalog.
+     */
+    public CompletableFuture<Catalog> catalog() {
+        final List<CompletionStage<List<String>>> all = this.dockers.stream().map(
+            docker -> docker.catalog(pagination)
+                .thenApply(ParsedCatalog::new)
+                .thenCompose(ParsedCatalog::repos)
+                .exceptionally(err -> Collections.emptyList())
+        ).collect(Collectors.toList());
+        return CompletableFuture.allOf(all.toArray(new CompletableFuture<?>[0]))
+            .thenApply(nothing -> all.stream()
+                .map(stage -> stage.toCompletableFuture().getNow(List.of()))
+                .flatMap(List::stream)
+                .toList())
+            .thenApply(names -> new CatalogPage(names, pagination));
+    }
+}

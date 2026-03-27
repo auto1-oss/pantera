@@ -1,0 +1,124 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http;
+
+import com.auto1.pantera.PanteraException;
+import com.google.common.collect.ImmutableMap;
+
+import java.io.Serial;
+import java.util.Map;
+
+/**
+ * Base HTTP exception for Pantera endpoints.
+ */
+public final class PanteraHttpException extends PanteraException {
+
+    @Serial
+    private static final long serialVersionUID = -16695752893817954L;
+
+    /**
+     * HTTP error codes reasons map.
+     */
+    private static final Map<String, String> MEANINGS = new ImmutableMap.Builder<String, String>()
+        .put("400", "Bad request")
+        .put("401", "Unauthorized")
+        .put("402", "Payment Required")
+        .put("403", "Forbidden")
+        .put("404", "Not Found")
+        .put("405", "Method Not Allowed")
+        .put("406", "Not Acceptable")
+        .put("407", "Proxy Authentication Required")
+        .put("408", "Request Timeout")
+        .put("409", "Conflict")
+        .put("410", "Gone")
+        .put("411", "Length Required")
+        .put("412", "Precondition Failed")
+        .put("413", "Payload Too Large")
+        .put("414", "URI Too Long")
+        .put("415", "Unsupported Media Type")
+        .put("416", "Range Not Satisfiable")
+        .put("417", "Expectation Failed")
+        .put("418", "I'm a teapot")
+        .put("421", "Misdirected Request")
+        .put("422", "Unprocessable Entity (WebDAV)")
+        .put("423", "Locked (WebDAV)")
+        .put("424", "Failed Dependency (WebDAV)")
+        .put("425", "Too Early")
+        .put("426", "Upgrade Required")
+        .put("428", "Precondition Required")
+        .put("429", "Too Many Requests")
+        .put("431", "Request Header Fields Too Large")
+        .put("451", "Unavailable For Legal Reasons")
+        .put("500", "Internal Server Error")
+        .put("501", "Not Implemented")
+        .build();
+
+    /**
+     * HTTP status code for error.
+     */
+    private final RsStatus code;
+
+    /**
+     * New HTTP error exception.
+     * @param status HTTP status code
+     */
+    public PanteraHttpException(final RsStatus status) {
+        this(status, PanteraHttpException.meaning(status));
+    }
+
+    /**
+     * New HTTP error exception.
+     * @param status HTTP status code
+     * @param cause Of the error
+     */
+    public PanteraHttpException(final RsStatus status, final Throwable cause) {
+        this(status, PanteraHttpException.meaning(status), cause);
+    }
+
+    /**
+     * New HTTP error exception with custom message.
+     * @param status HTTP status code
+     * @param message HTTP status meaning
+     */
+    public PanteraHttpException(final RsStatus status, final String message) {
+        super(message);
+        this.code = status;
+    }
+
+    /**
+     * New HTTP error exception with custom message and cause error.
+     * @param status HTTP status code
+     * @param message HTTP status meaning
+     * @param cause Of the error
+     */
+    public PanteraHttpException(final RsStatus status, final String message,
+                                final Throwable cause) {
+        super(message, cause);
+        this.code = status;
+    }
+
+    /**
+     * Status code.
+     * @return RsStatus
+     */
+    public RsStatus status() {
+        return this.code;
+    }
+
+    /**
+     * The meaning of error code.
+     * @param status HTTP status code for error
+     * @return Meaning string for this code
+     */
+    private static String meaning(RsStatus status) {
+        return PanteraHttpException.MEANINGS.getOrDefault(status.asString(), "Unknown");
+    }
+}

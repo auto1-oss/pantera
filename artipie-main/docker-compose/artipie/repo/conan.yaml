@@ -1,5 +1,0 @@
-repo:
-  type: conan
-  storage:
-    type: fs
-    path: /var/artipie/data

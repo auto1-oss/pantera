@@ -1,0 +1,82 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto;
+
+import com.auto1.pantera.asto.lock.Lock;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
+
+/**
+ * Operation performed under lock.
+ *
+ * @param <T> Operation result type.
+ * @since 0.27
+ */
+public final class UnderLockOperation<T> {
+
+    /**
+     * Lock.
+     */
+    private final Lock lock;
+
+    /**
+     * Operation.
+     */
+    private final Function<Storage, CompletionStage<T>> operation;
+
+    /**
+     * Ctor.
+     *
+     * @param lock Lock.
+     * @param operation Operation.
+     */
+    public UnderLockOperation(
+        final Lock lock,
+        final Function<Storage, CompletionStage<T>> operation
+    ) {
+        this.lock = lock;
+        this.operation = operation;
+    }
+
+    /**
+     * Perform operation under lock on storage.
+     *
+     * @param storage Storage.
+     * @return Operation result.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingThrowable")
+    public CompletionStage<T> perform(final Storage storage) {
+        return this.lock.acquire().thenCompose(
+            nothing -> {
+                CompletionStage<T> result;
+                try {
+                    result = this.operation.apply(storage);
+                } catch (final Throwable throwable) {
+                    result = new FailedCompletionStage<>(throwable);
+                }
+                return result.handle(
+                    (value, throwable) -> this.lock.release().thenCompose(
+                        released -> {
+                            final CompletableFuture<T> future = new CompletableFuture<>();
+                            if (throwable == null) {
+                                future.complete(value);
+                            } else {
+                                future.completeExceptionally(throwable);
+                            }
+                            return future;
+                        }
+                    )
+                ).thenCompose(Function.identity());
+            }
+        );
+    }
+}

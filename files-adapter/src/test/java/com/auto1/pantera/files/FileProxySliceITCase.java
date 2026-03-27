@@ -1,0 +1,186 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.files;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.hm.RsHasBody;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
+import io.vertx.reactivex.core.Vertx;
+import org.apache.http.client.utils.URIBuilder;
+import org.awaitility.Awaitility;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Tests for files adapter.
+ */
+final class FileProxySliceITCase {
+
+    /**
+     * The host to send requests to.
+     */
+    private static final String HOST = "localhost";
+
+    /**
+     * Vertx instance.
+     */
+    private Vertx vertx;
+
+    /**
+     * Storage for server.
+     */
+    private Storage storage;
+
+    /**
+     * Server port.
+     */
+    private int port;
+
+    /**
+     * Jetty HTTP client slices.
+     */
+    private final JettyClientSlices clients = new JettyClientSlices();
+
+    /**
+     * Slice server.
+     */
+    private VertxSliceServer server;
+
+    @BeforeEach
+    void setUp() {
+        this.vertx = Vertx.vertx();
+        this.storage = new InMemoryStorage();
+        this.server = new VertxSliceServer(
+            this.vertx,
+            new FilesSlice(
+                this.storage,
+                Policy.FREE,
+                (username, password) -> Optional.empty(),
+                FilesSlice.ANY_REPO,
+                Optional.empty()
+            )
+        );
+        this.port = this.server.start();
+        this.clients.start();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        this.server.stop();
+        this.vertx.close();
+        this.clients.stop();
+    }
+
+    @Test
+    void sendsRequestsViaProxy() throws Exception {
+        final String data = "hello";
+        new BlockingStorage(this.storage)
+            .save(new Key.From("foo/bar"), data.getBytes(StandardCharsets.UTF_8));
+        MatcherAssert.assertThat(
+            new FileProxySlice(
+                this.clients,
+                new URIBuilder().setScheme("http")
+                    .setHost(FileProxySliceITCase.HOST)
+                    .setPort(this.port)
+                    .setPath("/foo")
+                    .build()
+            ),
+            new SliceHasResponse(
+                new RsHasBody(data.getBytes(StandardCharsets.UTF_8)),
+                new RequestLine(RqMethod.GET, "/bar")
+            )
+        );
+    }
+
+    @Test
+    void savesDataInCache() throws URISyntaxException {
+        final byte[] data = "xyz098".getBytes(StandardCharsets.UTF_8);
+        new BlockingStorage(this.storage).save(new Key.From("foo/any"), data);
+        final Storage cache = new InMemoryStorage();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedDeque<>();
+        MatcherAssert.assertThat(
+            "Does not return content from proxy",
+            new FileProxySlice(
+                this.clients,
+                new URIBuilder().setScheme("http")
+                    .setHost(FileProxySliceITCase.HOST)
+                    .setPort(this.port)
+                    .setPath("/foo")
+                    .build(),
+                cache, events, "my-files-proxy"
+            ),
+            new SliceHasResponse(
+                new RsHasBody(data),
+                new RequestLine(RqMethod.GET, "/any")
+            )
+        );
+        MatcherAssert.assertThat(
+            "Does not cache data",
+            new BlockingStorage(cache).value(new Key.From("any")),
+            new IsEqual<>(data)
+        );
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> events.size() == 1);
+        final ArtifactEvent item = events.element();
+        MatcherAssert.assertThat(
+            item.artifactName(),
+            new IsEqual<>("any")
+        );
+        MatcherAssert.assertThat(
+            item.size(),
+            new IsEqual<>(6L)
+        );
+    }
+
+    @Test
+    void getsFromCacheIfInRemoteNotFound() throws URISyntaxException {
+        final Storage cache = new InMemoryStorage();
+        final byte[] data = "abc123".getBytes(StandardCharsets.UTF_8);
+        final String key = "abc";
+        cache.save(new Key.From(key), new Content.From(data)).join();
+        final Queue<ArtifactEvent> events = new ConcurrentLinkedDeque<>();
+        MatcherAssert.assertThat(
+            new FileProxySlice(
+                this.clients,
+                new URIBuilder().setScheme("http")
+                    .setHost(FileProxySliceITCase.HOST)
+                    .setPort(this.port)
+                    .setPath("/foo")
+                    .build(),
+                cache, events, "my-repo"
+            ),
+            new SliceHasResponse(
+                new RsHasBody(data),
+                new RequestLine(RqMethod.GET, String.format("/%s", key))
+            )
+        );
+        MatcherAssert.assertThat("Events queue is empty", events.isEmpty());
+    }
+}

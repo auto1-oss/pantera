@@ -1,0 +1,7 @@
+repo:
+  type: helm
+  port: 8081
+  storage:
+    type: fs
+    path: /var/pantera/data
+  url: http://pantera:8081/my-helm-port

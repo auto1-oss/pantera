@@ -1,0 +1,10 @@
+meta:
+  storage:
+    type: fs
+    path: /var/pantera/repo
+  base_url: http://pantera:8080/
+  credentials:
+    - type: local
+      storage:
+        type: fs
+        path: /var/pantera/security

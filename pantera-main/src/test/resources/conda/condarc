@@ -1,0 +1,2 @@
+channels:
+  - http://pantera:8080/my-conda

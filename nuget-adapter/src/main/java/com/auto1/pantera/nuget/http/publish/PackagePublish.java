@@ -1,0 +1,161 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.nuget.http.publish;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.headers.Login;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.nuget.InvalidPackageException;
+import com.auto1.pantera.nuget.PackageVersionAlreadyExistsException;
+import com.auto1.pantera.nuget.Repository;
+import com.auto1.pantera.nuget.http.Resource;
+import com.auto1.pantera.nuget.http.Route;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Package publish service, used to pushing new packages and deleting existing ones.
+ * See <a href="https://docs.microsoft.com/en-us/nuget/api/package-publish-resource">Push and Delete</a>
+ */
+public final class PackagePublish implements Route {
+
+    /**
+     * Repository type constant.
+     */
+    private static final String REPO_TYPE = "nuget";
+
+    /**
+     * Repository for adding package.
+     */
+    private final Repository repository;
+
+    /**
+     * Repository name.
+     */
+    private final String name;
+
+    /**
+     * Artifact events.
+     */
+    private final Optional<Queue<ArtifactEvent>> events;
+
+    /**
+     * Ctor.
+     *
+     * @param repository Repository for adding package.
+     * @param events Repository events queue
+     * @param name Repository name
+     */
+    public PackagePublish(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+        final String name) {
+        this.repository = repository;
+        this.events = events;
+        this.name = name;
+    }
+
+    @Override
+    public String path() {
+        return "/package";
+    }
+
+    @Override
+    public Resource resource(final String path) {
+        return new NewPackage(this.repository, this.events, this.name);
+    }
+
+    /**
+     * New package resource. Used to push a package into repository.
+     * See <a href="https://docs.microsoft.com/en-us/nuget/api/package-publish-resource#push-a-package">Push a package</a>
+     */
+    public static final class NewPackage implements Resource {
+
+        /**
+         * Repository for adding package.
+         */
+        private final Repository repository;
+
+        /**
+         * Repository name.
+         */
+        private final String name;
+
+        /**
+         * Artifact events.
+         */
+        private final Optional<Queue<ArtifactEvent>> events;
+
+        /**
+         * Ctor.
+         *
+         * @param repository Repository for adding package.
+         * @param events Repository events
+         * @param name Repository name
+         */
+        public NewPackage(final Repository repository, final Optional<Queue<ArtifactEvent>> events,
+            final String name) {
+            this.repository = repository;
+            this.events = events;
+            this.name = name;
+        }
+
+        @Override
+        public CompletableFuture<Response> get(final Headers headers) {
+            return ResponseBuilder.methodNotAllowed().completedFuture();
+        }
+
+        @Override
+        public CompletableFuture<Response> put(Headers headers, Content body) {
+            return CompletableFuture.supplyAsync(
+                () -> new Multipart(headers, body).first()
+            ).thenCompose(this.repository::add).handle(
+                (info, throwable) -> {
+                    if (throwable == null) {
+                        this.events.ifPresent(
+                            queue -> queue.add(
+                                new ArtifactEvent(
+                                    PackagePublish.REPO_TYPE, this.name,
+                                    new Login(headers).getValue(), info.packageName(),
+                                    info.packageVersion(), info.zipSize()
+                                )
+                            )
+                        );
+                        return RsStatus.CREATED;
+                    }
+                    return toStatus(throwable.getCause());
+                }
+            ).thenApply(s -> ResponseBuilder.from(s).build());
+        }
+
+        /**
+         * Converts throwable to HTTP response status.
+         *
+         * @param throwable Throwable.
+         * @return HTTP response status.
+         */
+        private static RsStatus toStatus(final Throwable throwable) {
+            final RsStatus status;
+            if (throwable instanceof InvalidPackageException) {
+                status = RsStatus.BAD_REQUEST;
+            } else if (throwable instanceof PackageVersionAlreadyExistsException) {
+                status = RsStatus.CONFLICT;
+            } else {
+                status = RsStatus.INTERNAL_ERROR;
+            }
+            return status;
+        }
+    }
+}

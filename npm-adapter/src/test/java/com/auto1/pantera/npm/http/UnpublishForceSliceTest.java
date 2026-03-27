@@ -1,0 +1,93 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm.http;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.hm.RsHasStatus;
+import com.auto1.pantera.http.hm.SliceHasResponse;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import java.util.LinkedList;
+import java.util.Optional;
+import java.util.Queue;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Test for {@link UnpublishForceSlice}.
+ * @since 0.8
+ */
+final class UnpublishForceSliceTest {
+    /**
+     * Storage.
+     */
+    private Storage storage;
+
+    /**
+     * Test artifact events.
+     */
+    private Queue<ArtifactEvent> events;
+
+    @BeforeEach
+    void init() {
+        this.storage = new InMemoryStorage();
+        this.events = new LinkedList<>();
+    }
+
+    @Test
+    void returnsOkAndDeletePackage() {
+        new TestResource("storage").addFilesTo(this.storage, Key.ROOT);
+        MatcherAssert.assertThat(
+            "Response status is OK",
+            new UnpublishForceSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.OK),
+                new RequestLine(
+                    RqMethod.DELETE, "/@hello%2fsimple-npm-project/-rev/undefined"
+                ),
+                Headers.EMPTY,
+                Content.EMPTY
+            )
+        );
+        MatcherAssert.assertThat(
+            "The entire package was removed",
+            this.storage.list(new Key.From("@hello/simple-npm-project"))
+                .join().isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat("Events queue has one item", this.events.size() == 1);
+    }
+
+    @Test
+    void returnsBadRequest() {
+        MatcherAssert.assertThat(
+            new UnpublishForceSlice(
+                this.storage, Optional.of(this.events), UnpublishPutSliceTest.REPO
+            ),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.BAD_REQUEST),
+                new RequestLine(RqMethod.GET, "/bad/request")
+            )
+        );
+        MatcherAssert.assertThat("Events queue is empty", this.events.size() == 0);
+    }
+}

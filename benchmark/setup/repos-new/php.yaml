@@ -1,0 +1,6 @@
+repo:
+  type: php
+  url: http://bench-pantera:8080/php
+  storage:
+    type: fs
+    path: /var/pantera/data

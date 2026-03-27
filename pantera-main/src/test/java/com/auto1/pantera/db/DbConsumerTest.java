@@ -1,0 +1,317 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.db;
+
+import com.amihaiemil.eoyaml.Yaml;
+import com.auto1.pantera.scheduling.ArtifactEvent;
+import java.sql.Connection;
+import java.sql.Date;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
+import org.awaitility.Awaitility;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+/**
+ * Record consumer.
+ * @since 0.31
+ */
+@SuppressWarnings(
+    {
+        "PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.CheckResultSet",
+        "PMD.CloseResource", "PMD.UseUnderscoresInNumericLiterals"
+    }
+)
+@Testcontainers
+class DbConsumerTest {
+
+    /**
+     * PostgreSQL test container.
+     */
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = PostgreSQLTestConfig.createContainer();
+
+    /**
+     * Test connection.
+     */
+    private DataSource source;
+
+    @BeforeEach
+    void init() {
+        this.source = new ArtifactDbFactory(
+            Yaml.createYamlMappingBuilder().add(
+                "artifacts_database",
+                Yaml.createYamlMappingBuilder()
+                    .add(ArtifactDbFactory.YAML_HOST, POSTGRES.getHost())
+                    .add(ArtifactDbFactory.YAML_PORT, String.valueOf(POSTGRES.getFirstMappedPort()))
+                    .add(ArtifactDbFactory.YAML_DATABASE, POSTGRES.getDatabaseName())
+                    .add(ArtifactDbFactory.YAML_USER, POSTGRES.getUsername())
+                    .add(ArtifactDbFactory.YAML_PASSWORD, POSTGRES.getPassword())
+                    .build()
+            ).build(),
+            "artifacts"
+        ).initialize();
+        
+        // Clean up any existing data before each test
+        try (Connection conn = this.source.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("DELETE FROM artifacts");
+        } catch (SQLException e) {
+            // Ignore cleanup errors
+        }
+    }
+
+    @Test
+    void addsAndRemovesRecord() throws SQLException, InterruptedException {
+        final DbConsumer consumer = new DbConsumer(this.source);
+        Thread.sleep(1000);
+        final long created = System.currentTimeMillis();
+        final ArtifactEvent record = new ArtifactEvent(
+            "rpm", "my-rpm", "Alice", "org.time", "1.2", 1250L, created
+        );
+        consumer.accept(record);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 1;
+                }
+            }
+        );
+        try (
+            Connection conn = this.source.getConnection();
+            Statement stat = conn.createStatement()
+        ) {
+            stat.execute("SELECT * FROM artifacts");
+            final ResultSet res = stat.getResultSet();
+            res.next();
+            MatcherAssert.assertThat(
+                res.getString("repo_type").trim(),
+                new IsEqual<>(record.repoType())
+            );
+            MatcherAssert.assertThat(
+                res.getString("repo_name").trim(),
+                new IsEqual<>(record.repoName())
+            );
+            MatcherAssert.assertThat(
+                res.getString("name"),
+                new IsEqual<>(record.artifactName())
+            );
+            MatcherAssert.assertThat(
+                res.getString("version"),
+                new IsEqual<>(record.artifactVersion())
+            );
+            MatcherAssert.assertThat(
+                res.getString("owner"),
+                new IsEqual<>(record.owner())
+            );
+            MatcherAssert.assertThat(
+                res.getLong("size"),
+                new IsEqual<>(record.size())
+            );
+            MatcherAssert.assertThat(
+                res.getLong("created_date"),
+                new IsEqual<>(record.createdDate())
+            );
+            MatcherAssert.assertThat(
+                "ResultSet does not have more records",
+                res.next(), new IsEqual<>(false)
+            );
+        }
+        consumer.accept(
+            new ArtifactEvent(
+                "rpm", "my-rpm", "Alice", "org.time", "1.2", 1250L, created,
+                ArtifactEvent.Type.DELETE_VERSION
+            )
+        );
+        Awaitility.await().atMost(20, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 0;
+                }
+            }
+        );
+    }
+
+    @Test
+    void insertsAndRemovesRecords() throws InterruptedException {
+        final DbConsumer consumer = new DbConsumer(this.source);
+        Thread.sleep(1000);
+        final long created = System.currentTimeMillis();
+        for (int i = 0; i < 500; i++) {
+            consumer.accept(
+                new ArtifactEvent(
+                    "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i), 1250L, created - i
+                )
+            );
+            if (i % 99 == 0) {
+                Thread.sleep(1000);
+            }
+        }
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 500;
+                }
+            }
+        );
+        for (int i = 500; i <= 1000; i++) {
+            consumer.accept(
+                new ArtifactEvent(
+                    "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i), 1250L, created - i
+                )
+            );
+            if (i % 99 == 0) {
+                Thread.sleep(1000);
+            }
+            if (i % 20 == 0) {
+                consumer.accept(
+                    new ArtifactEvent(
+                        "rpm", "my-rpm", "Alice", "org.time", String.valueOf(i - 500), 1250L,
+                        created - i, ArtifactEvent.Type.DELETE_VERSION
+                    )
+                );
+            }
+        }
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 975;
+                }
+            }
+        );
+    }
+
+    @Test
+    void removesAllByName() throws InterruptedException {
+        final DbConsumer consumer = new DbConsumer(this.source);
+        Thread.sleep(1000);
+        final long created = System.currentTimeMillis();
+        for (int i = 0; i < 10; i++) {
+            consumer.accept(
+                new ArtifactEvent(
+                    "maven", "my-maven", "Alice", "com.auto1.pantera.asto",
+                    String.valueOf(i), 1250L, created - i
+                )
+            );
+        }
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 10;
+                }
+            }
+        );
+        consumer.accept(new ArtifactEvent("maven", "my-maven", "com.auto1.pantera.asto"));
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 0;
+                }
+            }
+        );
+    }
+
+    @Test
+    void replacesOnConflict() throws InterruptedException, SQLException {
+        final DbConsumer consumer = new DbConsumer(this.source);
+        Thread.sleep(1000);
+        final long first = System.currentTimeMillis();
+        consumer.accept(
+            new ArtifactEvent(
+                "docker", "my-docker", "Alice", "linux/alpine", "latest", 12550L, first
+            )
+        );
+        final long size = 56950L;
+        final long second = first + 65854L;
+        consumer.accept(
+            new ArtifactEvent(
+                "docker", "my-docker", "Alice", "linux/alpine", "latest", size, second
+            )
+        );
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(
+            () -> {
+                try (
+                    Connection conn = this.source.getConnection();
+                    Statement stat = conn.createStatement()
+                ) {
+                    stat.execute("SELECT COUNT(*) FROM artifacts");
+                    final ResultSet rs = stat.getResultSet();
+                    rs.next();
+                    return rs.getInt(1) == 1;
+                }
+            }
+        );
+        try (
+            Connection conn = this.source.getConnection();
+            Statement stat = conn.createStatement()
+        ) {
+            stat.execute("SELECT * FROM artifacts");
+            final ResultSet res = stat.getResultSet();
+            res.next();
+            MatcherAssert.assertThat(
+                res.getLong("size"),
+                new IsEqual<>(size)
+            );
+            MatcherAssert.assertThat(
+                res.getLong("created_date"),
+                new IsEqual<>(second)
+            );
+            MatcherAssert.assertThat(
+                "ResultSet does not have more records",
+                res.next(), new IsEqual<>(false)
+            );
+        }
+    }
+}

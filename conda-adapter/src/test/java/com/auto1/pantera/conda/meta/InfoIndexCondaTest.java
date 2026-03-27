@@ -1,0 +1,57 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.conda.meta;
+
+import com.auto1.pantera.asto.test.TestResource;
+import java.io.IOException;
+import org.json.JSONException;
+import org.junit.jupiter.api.Test;
+import org.skyscreamer.jsonassert.JSONAssert;
+
+/**
+ * Test for {@link InfoIndex.Conda}.
+ * @since 0.2
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+class InfoIndexCondaTest {
+
+    @Test
+    void readsMetadata() throws IOException, JSONException {
+        JSONAssert.assertEquals(
+            new InfoIndex.Conda(
+                new TestResource("7zip-19.00-h59b6b97_2.conda").asInputStream()
+            ).json().toString(),
+            String.join(
+                "\n",
+                "{\n",
+                "  \"arch\": \"x86_64\",",
+                "  \"build\": \"h59b6b97_2\",",
+                "  \"build_number\": 2,",
+                "  \"constrains\": [",
+                "    \"7za <0.0.0a\"",
+                "  ],",
+                "  \"depends\": [",
+                "    \"vc >=14.1,<15.0a0\",",
+                "    \"vs2015_runtime >=14.16.27012,<15.0a0\"",
+                "  ],",
+                "  \"license\": \"LGPL-2.1-or-later AND LGPL-2.1-or-later WITH unRAR-restriction\",",
+                "  \"name\": \"7zip\",",
+                "  \"platform\": \"win\",",
+                "  \"subdir\": \"win-64\",",
+                "  \"timestamp\": 1619516322562,",
+                "  \"version\": \"19.00\"",
+                "}"
+            ),
+            true
+        );
+    }
+
+}

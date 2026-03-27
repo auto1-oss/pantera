@@ -1,0 +1,149 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.maven.http;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.ResponseBuilder;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.jetty.JettyClientSlices;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.vertx.VertxSliceServer;
+import io.vertx.reactivex.core.Vertx;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+
+/**
+ * Test for {@link RepoHead}.
+ */
+class RepoHeadITCase {
+
+    private static final Vertx VERTX = Vertx.vertx();
+
+    /**
+     * Jetty client.
+     */
+    private final JettyClientSlices client = new JettyClientSlices();
+
+    /**
+     * Server port.
+     */
+    private int port;
+
+    /**
+     * Vertx slice server instance.
+     */
+    private VertxSliceServer server;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        this.client.start();
+        this.server = new VertxSliceServer(
+            RepoHeadITCase.VERTX,
+            new LoggingSlice(new FakeProxy(this.client))
+        );
+        this.port = this.server.start();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        this.client.stop();
+        this.server.stop();
+    }
+
+    @Test
+    void performsHeadRequest() throws Exception {
+        final HttpURLConnection con = (HttpURLConnection) URI.create(
+            String.format(
+                "http://localhost:%s/maven2/args4j/args4j/2.32/args4j-2.32.pom", this.port
+            )
+        ).toURL().openConnection();
+        con.setRequestMethod("GET");
+        MatcherAssert.assertThat(
+            con.getResponseCode(),
+            new IsEqual<>(RsStatus.OK.code())
+        );
+        con.disconnect();
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void worksForInvalidUrl() throws Exception {
+        final HttpURLConnection con = (HttpURLConnection) URI.create(
+            String.format(
+                "http://localhost:%s/maven2/abc/123", this.port
+            )
+        ).toURL().openConnection();
+        con.setRequestMethod("GET");
+        MatcherAssert.assertThat(
+            con.getResponseCode(),
+            new IsEqual<>(RsStatus.NOT_FOUND.code())
+        );
+        con.disconnect();
+    }
+
+    /**
+     * Fake proxy slice.
+     */
+    private static final class FakeProxy implements Slice {
+
+        private final ClientSlices client;
+
+        private FakeProxy(final ClientSlices client) {
+            this.client = client;
+        }
+
+        @Override
+        public CompletableFuture<Response> response(
+            final RequestLine line,
+            final Headers headers,
+            final Content body
+        ) {
+            return new RepoHead(this.client.https("repo.maven.apache.org"))
+                .head(line.uri().toString())
+                .handle(
+                    (head, throwable) -> {
+                        final CompletionStage<Response> res;
+                        if (throwable == null) {
+                            if (head.isPresent()) {
+                                res = CompletableFuture.completedFuture(
+                                    ResponseBuilder.ok().headers(head.get()).build()
+                                );
+                            } else {
+                                res = CompletableFuture.completedFuture(
+                                    ResponseBuilder.notFound().build()
+                                );
+                            }
+                        } else {
+                            res = CompletableFuture.failedFuture(throwable);
+                        }
+                        return res;
+                    }
+                ).thenCompose(Function.identity()).toCompletableFuture();
+        }
+    }
+
+}

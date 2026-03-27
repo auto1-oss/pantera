@@ -1,0 +1,62 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.asto.streams;
+
+import com.auto1.pantera.asto.Content;
+import io.reactivex.Flowable;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests for {@link StorageValuePipeline.PublishingOutputStream}.
+ *
+ * @since 1.12
+ */
+public final class ContentAsInputStreamTest {
+
+    @Test
+    void shouldGetContentDataFromInputStream() throws Exception {
+        final StorageValuePipeline.ContentAsInputStream cnt =
+            new StorageValuePipeline.ContentAsInputStream(
+                new Content.From(
+                    Flowable.fromArray(
+                        ByteBuffer.wrap("test data".getBytes(StandardCharsets.UTF_8)),
+                        ByteBuffer.wrap(" test data2".getBytes(StandardCharsets.UTF_8))
+                    )
+                )
+            );
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(cnt.inputStream()))) {
+            MatcherAssert.assertThat(
+                in.readLine(),
+                new IsEqual<>("test data test data2")
+            );
+        }
+    }
+
+    @Test
+    void shouldEndOfStreamWhenContentIsEmpty() throws Exception {
+        final StorageValuePipeline.ContentAsInputStream cnt =
+            new StorageValuePipeline.ContentAsInputStream(Content.EMPTY);
+        try (InputStream stream = cnt.inputStream()) {
+            final byte[] buf = new byte[8];
+            MatcherAssert.assertThat(
+                stream.read(buf),
+                new IsEqual<>(-1)
+            );
+        }
+    }
+}

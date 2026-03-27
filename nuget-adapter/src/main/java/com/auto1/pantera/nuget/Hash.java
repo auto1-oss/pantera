@@ -1,0 +1,59 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.nuget;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.ext.ContentDigest;
+import com.auto1.pantera.asto.ext.Digests;
+import java.nio.ByteBuffer;
+import java.util.Base64;
+import java.util.concurrent.CompletionStage;
+import org.reactivestreams.Publisher;
+
+/**
+ * Package hash.
+ *
+ * @since 0.1
+ */
+public final class Hash {
+
+    /**
+     * Bytes to calculate hash code value from.
+     */
+    private final Publisher<ByteBuffer> value;
+
+    /**
+     * Ctor.
+     *
+     * @param value Bytes to calculate hash code value from.
+     */
+    public Hash(final Publisher<ByteBuffer> value) {
+        this.value = value;
+    }
+
+    /**
+     * Saves hash to storage as base64 string.
+     *
+     * @param storage Storage to use for saving.
+     * @param identity Package identity.
+     * @return Completion of save operation.
+     */
+    public CompletionStage<Void> save(final Storage storage, final PackageIdentity identity) {
+        return
+            new ContentDigest(this.value, Digests.SHA512).bytes().thenCompose(
+                bytes -> storage.save(
+                    identity.hashKey(),
+                    new Content.From(Base64.getEncoder().encode(bytes))
+                )
+        );
+    }
+}

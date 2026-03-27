@@ -1,0 +1,91 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.rpm.pkg;
+
+import org.redline_rpm.header.AbstractHeader;
+
+/**
+ * Rpm package dependency section.
+ * <a href="https://rpm-software-management.github.io/rpm/manual/tags.html">Tags</a>.
+ * <a href="https://rpm-software-management.github.io/rpm/manual/dependencies.html">Deps</a>.
+ * @since 1.11
+ */
+public final class DependencySection {
+
+    /**
+     * Xml-section name.
+     */
+    private final String name;
+
+    /**
+     * Tag for names.
+     */
+    private final AbstractHeader.Tag names;
+
+    /**
+     * Tag for versions.
+     */
+    private final AbstractHeader.Tag versions;
+
+    /**
+     * Tag for flags.
+     */
+    private final AbstractHeader.Tag flags;
+
+    /**
+     * Ctor.
+     * @param name Xml-section name
+     * @param names Tag for names
+     * @param versions Tag for versions
+     * @param flags Tag for flags
+     */
+    public DependencySection(
+        final String name, final AbstractHeader.Tag names, final AbstractHeader.Tag versions,
+        final AbstractHeader.Tag flags
+    ) {
+        this.name = name;
+        this.names = names;
+        this.versions = versions;
+        this.flags = flags;
+    }
+
+    /**
+     * Xml-section name.
+     * @return String name for xml
+     */
+    public String xmlName() {
+        return this.name;
+    }
+
+    /**
+     * Tag for names.
+     * @return Rpm tag to get deps names
+     */
+    public AbstractHeader.Tag tagForNames() {
+        return this.names;
+    }
+
+    /**
+     * Tag for versions.
+     * @return Rpm tag to get deps versions
+     */
+    public AbstractHeader.Tag tagForVersions() {
+        return this.versions;
+    }
+
+    /**
+     * Tag for flags.
+     * @return Rpm tag to get deps flags
+     */
+    public AbstractHeader.Tag tagForFlags() {
+        return this.flags;
+    }
+}

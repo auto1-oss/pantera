@@ -1,0 +1,98 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.adapters.pypi;
+
+import com.auto1.pantera.asto.Content;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.Response;
+import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.client.ClientSlices;
+import com.auto1.pantera.http.client.auth.GenericAuthenticator;
+import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.pypi.http.CachedPyProxySlice;
+import com.auto1.pantera.pypi.http.PyProxySlice;
+import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import com.auto1.pantera.settings.repo.RepoConfig;
+
+import java.time.Duration;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+
+/**
+ * PyPI proxy adapter with maven-proxy feature parity.
+ * Supports multiple remotes, authentication, priority ordering, and failover.
+ */
+public final class PypiProxy implements Slice {
+
+    private final Slice slice;
+
+    /**
+     * @param client HTTP client.
+     * @param cfg Repository configuration.
+     * @param queue Artifact events queue
+     * @param cooldown Cooldown service
+     */
+    public PypiProxy(
+        ClientSlices client,
+        RepoConfig cfg,
+        Optional<Queue<ProxyArtifactEvent>> queue,
+        CooldownService cooldown
+    ) {
+        final Storage storage = cfg.storageOpt().orElseThrow(
+            () -> new IllegalStateException("PyPI proxy requires storage to be set")
+        );
+        
+        // Support multiple remotes with GroupSlice (like maven-proxy)
+        // Each remote gets its own PyProxySlice, evaluated in priority order
+        this.slice = new GroupSlice(
+            cfg.remotes().stream().map(
+                remote -> {
+                    // Create PyProxySlice for this remote
+                    final Slice pyProxySlice = new PyProxySlice(
+                        client,
+                        remote.uri(),
+                        GenericAuthenticator.create(client, remote.username(), remote.pwd()),
+                        storage,
+                        queue,
+                        cfg.name(),
+                        cfg.type(),
+                        cooldown
+                    );
+                    
+                    // Wrap with caching layer to prevent repeated 404 requests
+                    return new CachedPyProxySlice(
+                        pyProxySlice,
+                        Optional.of(storage),
+                        Duration.ofHours(24),  // 404 cache TTL
+                        true,                   // negative caching enabled
+                        cfg.name(),             // CRITICAL: Pass repo name for cache isolation
+                        remote.uri().toString(), // Upstream URL for metrics
+                        cfg.type()              // Repository type
+                    );
+                }
+            ).collect(Collectors.toList())
+        );
+    }
+
+    @Override
+    public CompletableFuture<Response> response(
+        final RequestLine line,
+        final Headers headers,
+        final Content body
+    ) {
+        return slice.response(line, headers, body);
+    }
+}

@@ -1,0 +1,106 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.debian;
+
+import com.auto1.pantera.test.ContainerResultMatcher;
+import com.auto1.pantera.test.TestDeployment;
+import java.io.IOException;
+import org.cactoos.list.ListOf;
+import org.hamcrest.Matcher;
+import org.hamcrest.core.AllOf;
+import org.hamcrest.core.IsEqual;
+import org.hamcrest.core.IsNot;
+import org.hamcrest.core.StringContains;
+import org.hamcrest.text.StringContainsInOrder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.testcontainers.containers.BindMode;
+
+/**
+ * Debian integration test.
+ * @since 0.17
+ */
+@EnabledOnOs({OS.LINUX, OS.MAC})
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+public final class DebianGpgITCase {
+
+    /**
+     * Test deployments.
+     */
+    @RegisterExtension
+    final TestDeployment containers = new TestDeployment(
+        () -> TestDeployment.PanteraContainer.defaultDefinition()
+            .withRepoConfig("debian/debian-gpg.yml", "my-debian")
+            .withClasspathResourceMapping(
+                "debian/secret-keys.gpg", "/var/pantera/repo/secret-keys.gpg", BindMode.READ_ONLY
+            ),
+        () -> new TestDeployment.ClientContainer("pantera/deb-tests:1.0")
+            .withWorkingDirectory("/w")
+            .withClasspathResourceMapping(
+                "debian/aglfn_1.7-3_amd64.deb", "/w/aglfn_1.7-3_amd64.deb", BindMode.READ_ONLY
+            )
+            .withClasspathResourceMapping(
+                "debian/public-key.asc", "/w/public-key.asc", BindMode.READ_ONLY
+            )
+    );
+
+    @BeforeEach
+    void setUp() throws IOException {
+        this.containers.assertExec(
+            "Failed to add public key to apt-get",
+            new ContainerResultMatcher(),
+            "apt-key", "add", "/w/public-key.asc"
+        );
+        this.containers.putBinaryToClient(
+            "deb http://pantera:8080/my-debian my-debian main".getBytes(),
+            "/etc/apt/sources.list"
+        );
+    }
+
+    @Test
+    void pushAndInstallWorks() throws Exception {
+        this.containers.assertExec(
+            "Failed to upload deb package",
+            new ContainerResultMatcher(),
+            "curl", "http://pantera:8080/my-debian/main/aglfn_1.7-3_amd64.deb",
+            "--upload-file", "/w/aglfn_1.7-3_amd64.deb"
+        );
+        this.containers.assertExec(
+            "Apt-get update failed",
+            new ContainerResultMatcher(
+                new IsEqual<>(0),
+                new AllOf<String>(
+                    new ListOf<Matcher<? super String>>(
+                        new StringContains(
+                            "Get:1 http://pantera:8080/my-debian my-debian InRelease"
+                        ),
+                        new StringContains(
+                            "Get:2 http://pantera:8080/my-debian my-debian/main amd64 Packages"
+                        ),
+                        new IsNot<>(new StringContains("Get:3"))
+                    )
+                )
+            ),
+            "apt-get", "update"
+        );
+        this.containers.assertExec(
+            "Package was not downloaded and unpacked",
+            new ContainerResultMatcher(
+                new IsEqual<>(0),
+                new StringContainsInOrder(new ListOf<>("Unpacking aglfn", "Setting up aglfn"))
+            ),
+            "apt-get", "install", "-y", "aglfn"
+        );
+    }
+}

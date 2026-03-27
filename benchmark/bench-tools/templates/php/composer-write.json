@@ -1,0 +1,8 @@
+{
+  "name": "bench/w__WORKER_ID__",
+  "version": "1.0.0",
+  "description": "Benchmark write package for worker __WORKER_ID__",
+  "type": "library",
+  "license": "proprietary",
+  "require": {}
+}

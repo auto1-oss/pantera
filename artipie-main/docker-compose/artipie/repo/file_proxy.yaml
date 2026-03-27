@@ -1,7 +1,0 @@
-repo:
-  type: file-proxy
-  storage:
-    type: fs
-    path: /var/artipie/data
-  remotes:
-    - url: http://elinks.or.cz/download/

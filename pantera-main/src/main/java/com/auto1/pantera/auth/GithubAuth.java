@@ -1,0 +1,95 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.auth;
+
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.auth.Authentication;
+import com.jcabi.github.RtGithub;
+import java.io.IOException;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * GitHub authentication uses username prefixed by provider name {@code github.com}
+ * and personal access token as a password.
+ * See <a href="https://developer.github.com/v3/oauth_authorizations/">GitHub docs</a>
+ * for details.
+ * @implNote This implementation is not case sensitive.
+ * @since 0.10
+ */
+public final class GithubAuth implements Authentication {
+
+    /**
+     * Username pattern, starts with provider name {@code github.com}, slash,
+     * and GitHub username, e.g. {@code github.com/octocat}.
+     */
+    private static final Pattern PTN_NAME = Pattern.compile("^github\\.com/(.+)$");
+
+    /**
+     * Github username resolver by personal access token.
+     */
+    private final Function<String, String> github;
+
+    /**
+     * New GitHub authentication.
+     */
+    public GithubAuth() {
+        this(
+            token -> {
+                try {
+                    return new RtGithub(token).users().self().login();
+                } catch (final IOException unauthorized) {
+                    return "";
+                }
+            }
+        );
+    }
+
+    /**
+     * Primary constructor.
+     * @param github Resolves GitHub token to username
+     */
+    GithubAuth(final Function<String, String> github) {
+        this.github = github;
+    }
+
+    @Override
+    public Optional<AuthUser> user(final String username, final String password) {
+        Optional<AuthUser> result = Optional.empty();
+        final Matcher matcher = GithubAuth.PTN_NAME.matcher(username);
+        if (matcher.matches()) {
+            try {
+                final String login = this.github.apply(password).toLowerCase(Locale.US);
+                if (
+                    Objects.equals(login, matcher.group(1).toLowerCase(Locale.US))
+                ) {
+                    result = Optional.of(new AuthUser(matcher.group(1), "github"));
+                }
+            } catch (final AssertionError error) {
+                if (error.getMessage() == null
+                    || !error.getMessage().contains("401 Unauthorized")) {
+                    throw new PanteraException(error);
+                }
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public String toString() {
+        return String.format("%s()", this.getClass().getSimpleName());
+    }
+}

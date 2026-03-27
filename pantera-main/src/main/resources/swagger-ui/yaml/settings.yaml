@@ -1,0 +1,220 @@
+openapi: "3.0.0"
+info:
+  version: 1.0.0
+  title: Artipie - OpenAPI 3.0
+  description:
+    This is Artipie Server based on the OpenAPI 3.0 specification.
+  license:
+    name: MIT
+externalDocs:
+  description: Find out more about Artipie
+  url: https://github.com/artipie
+tags:
+  - name: settings
+    description: Operations about settings
+paths:
+  /api/v1/dashboard:
+    get:
+      summary: Admin dashboard statistics
+      description: |
+        Returns aggregate statistics for the Artipie instance including
+        server port, version, and repository count. Useful for admin
+        dashboard UIs.
+      operationId: getDashboard
+      tags:
+        - settings
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+              example:
+                port: 8080
+                version: "1.20.13"
+                repositories: 42
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/settings/port:
+    get:
+      summary: Artipie server-side port (repositories default port).
+      operationId: port
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Artipie server-side port (repositories default port)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Port'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/settings/global_prefixes:
+    get:
+      summary: Get global path prefixes configuration
+      description: Returns the list of global path prefixes and their version
+      operationId: getGlobalPrefixes
+      tags:
+        - settings
+      responses:
+        '200':
+          description: Global prefixes configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalPrefixes'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update global path prefixes configuration
+      description: Updates the global path prefixes list. Validates that prefixes don't conflict with existing repository names.
+      operationId: updateGlobalPrefixes
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefixesList'
+      responses:
+        '200':
+          description: Prefixes updated successfully
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        '409':
+          description: Conflict - One or more prefixes match existing repository names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Port:
+      type: object
+      description: Artipie server port information
+      required:
+        - port
+      properties:
+        port:
+          type: integer
+          format: int32
+          description: Server port number for repository access
+          minimum: 1
+          maximum: 65535
+          example: 8080
+    GlobalPrefixes:
+      type: object
+      description: Global path prefixes configuration with versioning
+      required:
+        - prefixes
+        - version
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes. These prefixes are used to route requests
+            to repositories under a specific organization or team namespace.
+            Example: With prefix "org1", requests to /org1/my-repo will route to repository "org1/my-repo"
+          example: ["org1", "org2", "team-alpha"]
+        version:
+          type: integer
+          format: int64
+          description: |
+            Configuration version number. Automatically increments on each update.
+            Used for optimistic concurrency control and cache invalidation.
+          example: 5
+    PrefixesList:
+      type: object
+      description: Request body for updating global prefixes
+      required:
+        - prefixes
+      properties:
+        prefixes:
+          type: array
+          items:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: |
+            List of global path prefixes to set. Must not conflict with existing repository names.
+            Prefixes can contain alphanumeric characters, underscores, and hyphens.
+          example: ["org1", "org2", "team-alpha"]
+          minItems: 0
+          uniqueItems: true
+    Dashboard:
+      type: object
+      description: Admin dashboard statistics
+      required:
+        - port
+        - version
+      properties:
+        port:
+          type: integer
+          format: int32
+          description: Artipie server port
+          example: 8080
+        version:
+          type: string
+          description: Artipie version
+          example: "1.20.13"
+        repositories:
+          type: integer
+          description: Total number of configured repositories
+          example: 42
+    Error:
+      type: object
+      description: Error response
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: HTTP status code
+        message:
+          type: string
+          description: Human-readable error message
+  responses:
+    UnauthorizedError:
+      description: "Access token is missing or invalid"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

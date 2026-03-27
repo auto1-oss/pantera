@@ -1,0 +1,8 @@
+---
+repo:
+  type: nuget
+  port: 8081
+  url: http://pantera:8081/my-nuget-port
+  storage:
+    type: fs
+    path: /var/pantera/data/

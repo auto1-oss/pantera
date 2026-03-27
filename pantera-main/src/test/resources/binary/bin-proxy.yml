@@ -1,0 +1,7 @@
+repo:
+  type: file-proxy
+  remotes:
+    - url: http://pantera:8080/my-bin
+      username: alice
+      password: 123
+

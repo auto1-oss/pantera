@@ -1,0 +1,180 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.npm;
+
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.asto.test.TestResource;
+import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import com.auto1.pantera.http.slice.LoggingSlice;
+import com.auto1.pantera.npm.http.NpmSlice;
+import com.auto1.pantera.security.policy.Policy;
+import com.auto1.pantera.vertx.VertxSliceServer;
+import com.jcabi.log.Logger;
+import io.vertx.reactivex.core.Vertx;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsNot;
+import org.hamcrest.core.StringContains;
+import org.hamcrest.text.StringContainsInOrder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
+import org.testcontainers.Testcontainers;
+import org.testcontainers.containers.Container;
+import org.testcontainers.containers.GenericContainer;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.LinkedList;
+
+/**
+ * IT for npm dist-tags command.
+ */
+@DisabledOnOs(OS.WINDOWS)
+public final class NpmDistTagsIT {
+
+    @TempDir
+    Path tmp;
+
+    /**
+     * Vert.x used to create tested FileStorage.
+     */
+    private Vertx vertx;
+
+    /**
+     * Server.
+     */
+    private VertxSliceServer server;
+
+    /**
+     * Repository URL.
+     */
+    private String url;
+
+    /**
+     * Container.
+     */
+    private GenericContainer<?> cntn;
+
+    /**
+     * Test storage.
+     */
+    private Storage storage;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        this.storage = new InMemoryStorage();
+        this.vertx = Vertx.vertx();
+        final int port = new RandomFreePort().value();
+        this.url = String.format("http://host.testcontainers.internal:%d", port);
+        this.server = new VertxSliceServer(
+            this.vertx,
+            new LoggingSlice(new NpmSlice(
+                URI.create(this.url).toURL(), this.storage, (Policy<?>) Policy.FREE,
+                new Authentication.Single("testuser", "testpassword"),
+                (TokenAuthentication) tkn -> java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty()),
+                "*", java.util.Optional.of(new LinkedList<>())
+            )),
+            port
+        );
+        this.server.start();
+        Testcontainers.exposeHostPorts(port);
+        Files.writeString(
+            this.tmp.resolve(".npmrc"),
+            String.format("//host.testcontainers.internal:%d/:_auth=dGVzdHVzZXI6dGVzdHBhc3N3b3Jk", port),
+            StandardCharsets.UTF_8
+        );
+        this.cntn = new GenericContainer<>("node:14-alpine")
+            .withCommand("tail", "-f", "/dev/null")
+            .withWorkingDirectory("/home/")
+            .withFileSystemBind(this.tmp.toString(), "/home");
+        this.cntn.start();
+    }
+
+    @AfterEach
+    void tearDown() {
+        this.server.stop();
+        this.vertx.close();
+        this.cntn.stop();
+    }
+
+    @Test
+    void lsDistTagsWorks() throws Exception {
+        final String pkg = "@hello/simple-npm-project";
+        new TestResource("json/dist-tags.json")
+            .saveTo(this.storage, new Key.From(pkg, "meta.json"));
+        MatcherAssert.assertThat(
+            this.exec("npm", "dist-tag", "ls", pkg, "--registry", this.url),
+            new StringContainsInOrder(
+                Arrays.asList(
+                    "latest: 1.0.1",
+                    "previous: 1.0.0"
+                )
+            )
+        );
+    }
+
+    @Test
+    void addDistTagsWorks() throws Exception {
+        final String pkg = "@hello/simple-npm-project";
+        final Key meta = new Key.From(pkg, "meta.json");
+        new TestResource("json/dist-tags.json").saveTo(this.storage, meta);
+        final String tag = "min";
+        final String ver = "0.0.1";
+        MatcherAssert.assertThat(
+            "npm dist-tags successful",
+            this.exec(
+                "npm", "dist-tag", "add", String.format("%s@%s", pkg, ver),
+                tag, "--registry", this.url
+            ),
+            new StringContains("+min: @hello/simple-npm-project@0.0.1")
+        );
+        MatcherAssert.assertThat(
+            "Meta file was updated",
+            this.storage.value(meta).join().asString(),
+            new StringContainsInOrder(Arrays.asList(tag, ver))
+        );
+    }
+
+    @Test
+    void rmDistTagsWorks() throws Exception {
+        final String pkg = "@hello/simple-npm-project";
+        final Key meta = new Key.From(pkg, "meta.json");
+        new TestResource("json/dist-tags.json").saveTo(this.storage, meta);
+        final String tag = "previous";
+        MatcherAssert.assertThat(
+            "npm dist-tags rm successful",
+            this.exec(
+                "npm", "dist-tag", "rm", pkg, tag, "--registry", this.url
+            ),
+            new StringContains(String.format("-%s: @hello/simple-npm-project@1.0.0", tag))
+        );
+        MatcherAssert.assertThat(
+            "Meta file was updated",
+            this.storage.value(meta).join().asString(),
+            new IsNot<>(new StringContainsInOrder(Arrays.asList(tag, "1.0.0")))
+        );
+    }
+
+    private String exec(final String... command) throws Exception {
+        final Container.ExecResult res = this.cntn.execInContainer(command);
+        Logger.debug(this, "Command:\n%s\nResult:\n%s", String.join(" ", command), res.toString());
+        return res.getStdout();
+    }
+}

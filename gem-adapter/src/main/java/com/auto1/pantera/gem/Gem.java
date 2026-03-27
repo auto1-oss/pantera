@@ -1,0 +1,243 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.gem;
+
+import com.auto1.pantera.asto.PanteraIOException;
+import com.auto1.pantera.asto.Copy;
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.asto.fs.FileStorage;
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.gem.GemMeta.MetaInfo;
+import com.auto1.pantera.gem.ruby.RubyGemDependencies;
+import com.auto1.pantera.gem.ruby.RubyGemIndex;
+import com.auto1.pantera.gem.ruby.RubyGemMeta;
+import com.auto1.pantera.gem.ruby.SharedRuntime;
+import java.io.File;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BiFunction;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
+
+/**
+ * An SDK, which servers gem packages.
+ * <p>
+ * Performes gem index update using specified indexer implementation.
+ * </p>
+ * @since 1.0
+ */
+public final class Gem {
+
+    /**
+     * Read only set of metadata item names.
+     */
+    private static final Set<Key> META_NAMES = Collections.unmodifiableSet(
+        Stream.of(
+            "latest_specs.4.8", "latest_specs.4.8.gz", "prerelease_specs.4.8",
+            "prerelease_specs.4.8.gz", "specs.4.8", "specs.4.8.gz"
+        ).map(Key.From::new).collect(Collectors.toSet())
+    );
+
+    /**
+     * Gem repository storage.
+     */
+    private final Storage storage;
+
+    /**
+     * Shared ruby runtime.
+     */
+    private final SharedRuntime shared;
+
+    /**
+     * New Gem SDK with default indexer.
+     * @param storage Repository storage.
+     */
+    public Gem(final Storage storage) {
+        this.storage = storage;
+        this.shared = new SharedRuntime();
+    }
+
+    /**
+     * Batch update Ruby gems for repository.
+     *
+     * @param gem Ruby gem for indexing
+     * @return Completable action
+     */
+    public CompletionStage<Pair<String, String>> update(final Key gem) {
+        return newTempDir().thenCompose(
+            tmp -> new Copy(
+                this.storage, key -> META_NAMES.contains(key) || key.equals(gem)
+            ).copy(new FileStorage(tmp)).thenCompose(
+                ignore -> this.shared.apply(RubyGemMeta::new)
+                    .thenApply(meta -> meta.info(tmp.resolve(gem.string())))
+                    .thenCompose(
+                        info -> {
+                            final RevisionFormat fmt = new RevisionFormat();
+                            final String name = info.toString(fmt);
+                            return CompletableFuture.supplyAsync(
+                                new UncheckedSupplier<>(
+                                    () -> Files.move(
+                                        tmp.resolve(gem.string()),
+                                        gem.parent().map(key -> tmp.resolve(key.string()))
+                                            .orElse(tmp).resolve(name)
+                                    )
+                                )
+                            ).thenCompose(
+                                path -> this.shared.apply(RubyGemIndex::new)
+                                    .thenAccept(index -> index.update(path))
+                                ).thenCompose(
+                                    ignored -> new Copy(new FileStorage(tmp)).copy(this.storage)
+                                ).thenApply(ignored -> new ImmutablePair<>(fmt.name, fmt.version));
+                        }
+                    )
+            ).handle(removeTempDir(tmp))
+        );
+    }
+
+    /**
+     * Gem info data.
+     * @param gem Gem name
+     * @return Future
+     */
+    public CompletionStage<MetaInfo> info(final String gem) {
+        return newTempDir().thenCompose(
+            tmp -> new Copy(this.storage, new GemKeyPredicate(gem))
+                .copy(new FileStorage(tmp))
+                .thenApply(ignore -> tmp)
+        ).thenCompose(
+            tmp -> this.shared.apply(RubyGemMeta::new)
+                .thenCompose(
+                    info -> new FileStorage(tmp).list(Key.ROOT).thenApply(
+                        items -> items.stream().findFirst()
+                            .map(first -> Paths.get(tmp.toString(), first.string()))
+                            .map(path -> info.info(path))
+                            .orElseThrow(() -> new PanteraIOException("gem not found"))
+                    )
+                ).handle(removeTempDir(tmp))
+        );
+    }
+
+    /**
+     * Retreive and merge dependencies for gems specified.
+     * @param gems Set of gem names
+     * @return Dependencies binary data
+     */
+    public CompletionStage<ByteBuffer> dependencies(final Set<? extends String> gems) {
+        return newTempDir().thenCompose(
+            tmp -> new Copy(
+                this.storage, new GemKeyPredicate(gems)
+            ).copy(new FileStorage(tmp)).thenCompose(
+                ignore -> this.shared.apply(RubyGemDependencies::new).thenCompose(
+                    deps -> new FileStorage(tmp).list(Key.ROOT).thenApply(
+                        keys -> keys.stream()
+                            .map(key -> tmp.resolve(key.string()))
+                            .collect(Collectors.toSet())
+                    ).thenApply(paths -> new ImmutablePair<>(deps, paths))
+                ).thenApply(
+                    tuple -> tuple.getLeft().dependencies(tuple.getRight())
+                )
+            ).handle(removeTempDir(tmp))
+        );
+    }
+
+    /**
+     * Create new temp dir asynchronously.
+     * @return Future
+     */
+    private static CompletionStage<Path> newTempDir() {
+        return CompletableFuture.supplyAsync(
+            new UncheckedSupplier<>(
+                () -> {
+                    final Path tmp = Files.createTempDirectory(Gem.class.getSimpleName());
+                    tmp.toFile().deleteOnExit();
+                    return tmp;
+                }
+            )
+        );
+    }
+
+    /**
+     * Handle async result.
+     * @param tmpdir Path directory to remove
+     * @param <T> Result type
+     * @return Function handler
+     */
+    private static <T> BiFunction<T, Throwable, T> removeTempDir(
+        final Path tmpdir) {
+        return (res, err) -> {
+            try {
+                if (tmpdir != null) {
+                    FileUtils.deleteDirectory(new File(tmpdir.toString()));
+                }
+            } catch (final IOException iox) {
+                throw new PanteraIOException(iox);
+            }
+            if (err != null) {
+                throw new CompletionException(err);
+            }
+            return res;
+        };
+    }
+
+    /**
+     * Revision Gem meta format.
+     * @since 1.0
+     */
+    private static final class RevisionFormat implements GemMeta.MetaFormat {
+
+        /**
+         * Gem name.
+         */
+        private String name;
+
+        /**
+         * Gem value.
+         */
+        private String version;
+
+        @Override
+        public void print(final String nme, final String value) {
+            if ("name".equals(nme)) {
+                this.name = value;
+            }
+            if ("version".equals(nme)) {
+                this.version = value;
+            }
+        }
+
+        @Override
+        public void print(final String nme, final MetaInfo value) {
+            // do nothing
+        }
+
+        @Override
+        public void print(final String nme, final String[] values) {
+            // do nothing
+        }
+
+        @Override
+        public String toString() {
+            return String.format("%s-%s.gem", this.name, this.version);
+        }
+    }
+}

@@ -1,0 +1,89 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.db;
+
+import com.auto1.pantera.asto.misc.UncheckedSupplier;
+import com.auto1.pantera.docker.Image;
+import com.auto1.pantera.test.TestDeployment;
+import java.nio.file.Path;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
+
+/**
+ * Integration test for artifact metadata
+ * database.
+ * @since 0.31
+ */
+@SuppressWarnings("PMD.AvoidDuplicateLiterals")
+public final class MetadataDockerITCase {
+
+    /**
+     * Deployment for tests.
+     */
+    @RegisterExtension
+    final TestDeployment deployment = new TestDeployment(
+        () -> new TestDeployment.PanteraContainer().withConfig("pantera-db.yaml")
+            .withRepoConfig("docker/registry.yml", "registry")
+            .withRepoConfig("docker/docker-proxy-port.yml", "my-docker-proxy")
+            .withUser("security/users/alice.yaml", "alice")
+            .withExposedPorts(8081),
+        () -> new TestDeployment.ClientContainer("alpine:3.11")
+            .withPrivilegedMode(true)
+            .withWorkingDirectory("/w")
+    );
+
+    @BeforeEach
+    void setUp() throws Exception {
+        this.deployment.setUpForDockerTests(8080, 8081);
+    }
+
+    @Test
+    void pushAndPull(final @TempDir Path temp) throws Exception {
+        final String alpine = "pantera:8080/registry/alpine:3.11";
+        final String debian = "pantera:8080/registry/debian:stable-slim";
+        new TestDeployment.DockerTest(this.deployment, "pantera:8080")
+            .loginAsAlice()
+            .pull("alpine:3.11")
+            .tag("alpine:3.11", alpine)
+            .push(alpine)
+            .remove(alpine)
+            .pull(alpine)
+            .pull("debian:stable-slim")
+            .tag("debian:stable-slim", debian)
+            .push(debian)
+            .remove(debian)
+            .pull(debian)
+            .assertExec();
+        MetadataMavenITCase.awaitDbRecords(
+            this.deployment, temp, rs -> new UncheckedSupplier<>(() -> rs.getInt(1) == 2).get()
+        );
+    }
+
+    @Test
+    void shouldPullFromProxy(final @TempDir Path temp) throws Exception {
+        final Image image = new Image.ForOs();
+        final String img = new Image.From(
+            "pantera:8081",
+            String.format("my-docker-proxy/%s", image.name()),
+            image.digest(),
+            image.layer()
+        ).remoteByDigest();
+        new TestDeployment.DockerTest(this.deployment, "pantera:8081")
+            .loginAsAlice()
+            .pull(img)
+            .assertExec();
+        MetadataMavenITCase.awaitDbRecords(
+            this.deployment, temp, rs -> new UncheckedSupplier<>(() -> rs.getInt(1) == 1).get()
+        );
+    }
+}

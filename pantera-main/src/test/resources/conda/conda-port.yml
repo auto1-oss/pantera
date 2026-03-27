@@ -1,0 +1,8 @@
+---
+repo:
+  type: conda
+  port: 8081
+  url: http://pantera:8081/my-conda-port
+  storage:
+    type: fs
+    path: /var/pantera/data/

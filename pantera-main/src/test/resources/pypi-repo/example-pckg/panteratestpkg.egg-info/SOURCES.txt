@@ -1,0 +1,6 @@
+README.md
+setup.py
+panteratestpkg.egg-info/PKG-INFO
+panteratestpkg.egg-info/SOURCES.txt
+panteratestpkg.egg-info/dependency_links.txt
+panteratestpkg.egg-info/top_level.txt

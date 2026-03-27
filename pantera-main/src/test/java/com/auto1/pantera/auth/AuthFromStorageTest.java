@@ -1,0 +1,136 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.auth;
+
+import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.http.auth.AuthUser;
+import java.nio.charset.StandardCharsets;
+import org.apache.commons.codec.digest.DigestUtils;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * Test for {@link AuthFromStorage}.
+ * @since 1.29
+ */
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
+class AuthFromStorageTest {
+
+    /**
+     * Test storage.
+     */
+    private BlockingStorage asto;
+
+    @BeforeEach
+    void init() {
+        this.asto = new BlockingStorage(new InMemoryStorage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"users/alice.yaml", "users/alice.yml"})
+    void authorisesUserWithPlainPassword(final String key) {
+        this.asto.save(new Key.From(key), this.aliceConfig());
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("alice", "qwerty").get(),
+            new IsEqual<>(new AuthUser("alice", "test"))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"users/alice.yaml", "users/alice.yml"})
+    void notAuthorisesUserWithPlainPasswordIfPasswordNotCorrect(final String key) {
+        this.asto.save(new Key.From(key), this.aliceConfig());
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("alice", "not_correct").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"users/david.yaml", "users/david.yml"})
+    void authorisesUserWithSha256Password(final String key) {
+        this.asto.save(new Key.From(key), this.davidConfig());
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("david", "abc123").get(),
+            new IsEqual<>(new AuthUser("david", "test"))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"users/david.yaml", "users/david.yml"})
+    void notAuthorisesUserWithSha256PasswordIfPasswordNotCorrect(final String key) {
+        this.asto.save(new Key.From(key), this.davidConfig());
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("david", "not_valid").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void doesNotAuthoriseDisabledUser() {
+        this.asto.save(new Key.From("users/jane.yml"), this.janeConfig());
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("jane", "qwerty").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void doesNotAuthoriseIfUserNotExists() {
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("notPresent", "any").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void doesNotAuthoriseIfUserYamlIsNotValid() {
+        this.asto.save(new Key.From("users/olga.yml"), "any text".getBytes(StandardCharsets.UTF_8));
+        MatcherAssert.assertThat(
+            new AuthFromStorage(this.asto).user("olga", "any").isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    private byte[] aliceConfig() {
+        return String.join(
+            "\n",
+            "type: plain",
+            "pass: qwerty",
+            "email: alice@example.com"
+        ).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] davidConfig() {
+        return String.join(
+            "\n",
+            "type: sha256",
+            String.format("pass: %s", DigestUtils.sha256Hex("abc123")),
+            "enabled: true"
+        ).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] janeConfig() {
+        return String.join(
+            "\n",
+            "type: plain",
+            "pass: qwerty",
+            "enabled: false"
+        ).getBytes(StandardCharsets.UTF_8);
+    }
+
+}

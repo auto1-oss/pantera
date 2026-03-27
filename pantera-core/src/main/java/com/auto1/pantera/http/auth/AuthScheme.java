@@ -1,0 +1,218 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.auth;
+
+import com.auto1.pantera.http.Headers;
+import com.auto1.pantera.http.rq.RequestLine;
+
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
+/**
+ * Authentication scheme such as Basic, Bearer etc.
+ */
+public interface AuthScheme {
+
+    /**
+     * Absent auth scheme that authenticates any request as "anonymous" user.
+     */
+    AuthScheme NONE = (hdrs, line)  -> CompletableFuture.completedFuture(
+        new Result(AuthStatus.NO_CREDENTIALS, AuthUser.ANONYMOUS, null) {
+            @Override
+            public String challenge() {
+                throw new UnsupportedOperationException();
+            }
+        }
+    );
+
+    /**
+     * Authenticate HTTP request by its headers and request line.
+     *
+     * @param headers Request headers.
+     * @param line Request line.
+     * @return Authentication result.
+     */
+    CompletionStage<Result> authenticate(Headers headers, RequestLine line);
+
+    /**
+     * Authenticate HTTP request by its headers.
+     *
+     * @param headers Request headers.
+     * @return Authentication result.
+     */
+    default CompletionStage<Result> authenticate(Headers headers) {
+        return this.authenticate(headers, null);
+    }
+
+    /**
+     * Authentication status.
+     */
+    enum AuthStatus {
+        /**
+         * Successful authentication.
+         */
+        AUTHENTICATED,
+        /**
+         * Failed authentication.
+         */
+        FAILED,
+        /**
+         * A request doesn't contain credentials.
+         */
+        NO_CREDENTIALS
+    }
+
+    /**
+     * Build authentication result.
+     *
+     * @param user Result's user
+     * @param challenge Challenge value
+     * @return Result
+     */
+    static Result result(final AuthUser user, final String challenge) {
+        Objects.requireNonNull(user, "User must not be null!");
+        final AuthStatus status = user.isAnonymous()
+            ? AuthStatus.NO_CREDENTIALS
+            : AuthStatus.AUTHENTICATED;
+        return new Result(status, user, challenge);
+    }
+
+    /**
+     * Build authentication result.
+     *
+     * @param user Result's user
+     * @param challenge Challenge value
+     * @return Result
+     */
+    static Result result(final Optional<AuthUser> user, final String challenge) {
+        return user
+            .map(
+                authUser -> {
+                    final AuthStatus status = authUser.isAnonymous()
+                        ? AuthStatus.NO_CREDENTIALS
+                        : AuthStatus.AUTHENTICATED;
+                    return new Result(status, authUser, challenge);
+                }).orElseGet(() -> new Result(AuthStatus.FAILED, null, challenge));
+    }
+
+    /**
+     * HTTP request authentication result.
+     *
+     * @since 0.17
+     */
+    class Result {
+
+        private final AuthStatus status;
+
+        private final AuthUser user;
+
+        private final String challenge;
+
+        private Result(final AuthStatus status, final AuthUser user, final String challenge) {
+            assert (status != AuthStatus.FAILED) == (user != null);
+            this.status = status;
+            this.user = user;
+            this.challenge = challenge;
+        }
+
+        /**
+         * Gets authentication status.
+         *
+         * @return AuthenticationStatus.
+         */
+        public AuthStatus status() {
+            return this.status;
+        }
+
+        /**
+         * Authenticated user.
+         *
+         * @return Authenticated user, empty if not authenticated.
+         */
+        public AuthUser user() {
+            return this.user;
+        }
+
+        /**
+         * Get authentication challenge that is provided in response WWW-Authenticate header value.
+         *
+         * @return Authentication challenge for client.
+         */
+        public String challenge() {
+            return this.challenge;
+        }
+
+        @Override
+        public String toString() {
+            final String usr = this.status == AuthStatus.FAILED ? "" :
+                ", user=" + this.user.name();
+            return String.format("Result: [status=%s%s]", this.status, usr);
+        }
+    }
+
+    /**
+     * Fake implementation of {@link AuthScheme}.
+     * @since 0.17.5
+     */
+    final class Fake implements AuthScheme {
+
+        /**
+         * Fake challange constant.
+         */
+        public static final String FAKE_CHLLNG = "fake";
+
+        /**
+         * Optional of User.
+         */
+        private final Optional<AuthUser> usr;
+
+        /**
+         * Challenge.
+         */
+        private final String chllng;
+
+        /**
+         * Ctor.
+         * @param usr User
+         * @param chllng Challenge
+         */
+        public Fake(final Optional<AuthUser> usr, final String chllng) {
+            this.usr = usr;
+            this.chllng = chllng;
+        }
+
+        /**
+         * Ctor.
+         * @param name User name
+         */
+        public Fake(final String name) {
+            this(Optional.of(new AuthUser(name)), Fake.FAKE_CHLLNG);
+        }
+
+        /**
+         * Ctor.
+         */
+        public Fake() {
+            this(Optional.empty(), Fake.FAKE_CHLLNG);
+        }
+
+        @Override
+        public CompletionStage<Result> authenticate(
+            Headers headers, RequestLine line
+        ) {
+            return CompletableFuture.completedFuture(
+                AuthScheme.result(this.usr, this.chllng)
+            );
+        }
+    }
+}

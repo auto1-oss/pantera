@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pantera Log4j2 Configuration - External Configuration File
+  
+  This file controls logging for Pantera and all its dependencies.
+  Place this file alongside pantera.yaml and mount it to /etc/pantera/log4j2.xml
+  
+  To apply changes: Restart Pantera or wait for automatic reload (30 seconds)
+-->
+<Configuration status="WARN" monitorInterval="30">
+    <Properties>
+        <!-- Service identification (appears in logs) -->
+        <Property name="service.name">pantera</Property>
+        <!-- Version is read from PANTERA_VERSION environment variable -->
+        <Property name="service.version">${env:PANTERA_VERSION:-unknown}</Property>
+        <Property name="service.environment">${env:PANTERA_ENV:-production}</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- Console appender with ECS JSON format for Elasticsearch/Kibana -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <EcsLayout serviceName="${service.name}" 
+                       serviceVersion="${service.version}"
+                       serviceEnvironment="${service.environment}"
+                       includeMarkers="true"
+                       includeOrigin="true"
+                       stackTraceAsArray="false"/>
+        </Console>
+
+        <!-- Async wrapper: non-blocking, large queue, no location capture -->
+        <!-- includeLocation=false: eliminates 7000 Throwable allocations/s at target scale -->
+        <!-- blocking=false: drops events rather than stalling JVM threads on queue overflow -->
+        <!-- bufferSize=4096: survives GC pauses up to ~580ms at 7000 events/s -->
+        <!-- Discard policy: set -Dlog4j2.asyncQueueFullPolicy=Discard -Dlog4j2.discardThreshold=INFO -->
+        <Async name="AsyncConsole" bufferSize="4096" blocking="false" includeLocation="false">
+            <AppenderRef ref="Console"/>
+        </Async>
+    </Appenders>
+
+    <Loggers>
+        <!-- ============================================ -->
+        <!-- PANTERA APPLICATION LOGGERS                  -->
+        <!-- ============================================ -->
+        
+        <!-- Main Pantera packages - Set to INFO for production, DEBUG for troubleshooting -->
+        <Logger name="com.auto1.pantera" level="INFO" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        
+        <!-- Security and authentication events - Keep at DEBUG to track auth issues -->
+        <Logger name="security" level="INFO" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        
+        <!-- Storage operations (S3, file system, etc.) -->
+        <Logger name="com.auto1.pantera.asto" level="INFO"/>
+        
+        <!-- HTTP client operations -->
+        <Logger name="com.auto1.pantera.http.client" level="INFO"/>
+        <Logger name="com.auto1.pantera.scheduling" level="INFO" />
+        
+        <!-- Repository adapters - Uncomment specific adapters for debugging -->
+        <!-- <Logger name="com.auto1.pantera.maven" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.npm" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.docker" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.pypi" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.helm" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.debian" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.rpm" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.composer" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.nuget" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.gem" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.conda" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.conan" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.go" level="DEBUG"/> -->
+        <!-- <Logger name="com.auto1.pantera.hexpm" level="DEBUG"/> -->
+
+        <!-- ============================================ -->
+        <!-- THIRD-PARTY LIBRARY LOGGERS                  -->
+        <!-- ============================================ -->
+        
+        <!-- Vert.x (HTTP server framework) -->
+        <Logger name="io.vertx" level="INFO"/>
+        <Logger name="io.vertx.core.impl.BlockedThreadChecker" level="WARN"/>
+        
+        <!-- Jetty (HTTP client) -->
+        <Logger name="org.eclipse.jetty" level="INFO"/>
+        <Logger name="org.eclipse.jetty.client" level="INFO"/>
+        <Logger name="org.eclipse.jetty.http" level="INFO"/>
+        <Logger name="org.eclipse.jetty.io" level="INFO"/>
+        
+        <!-- AWS SDK (S3 operations) -->
+        <Logger name="software.amazon.awssdk" level="INFO"/>
+        <Logger name="software.amazon.awssdk.request" level="WARN"/>
+        <Logger name="com.amazonaws" level="INFO"/>
+        
+        <!-- Netty (async I/O) -->
+        <Logger name="io.netty" level="INFO"/>
+        <Logger name="io.netty.buffer.PooledByteBufAllocator" level="WARN"/>
+        
+        <!-- Redis client (if using Redis storage) -->
+        <Logger name="io.lettuce" level="INFO"/>
+        <Logger name="io.lettuce.core.protocol" level="WARN"/>
+        
+        <!-- YAML parser -->
+        <Logger name="com.amihaiemil.eoyaml" level="WARN"/>
+        
+        <!-- HTTP components -->
+        <Logger name="org.apache.http" level="INFO"/>
+        <Logger name="org.apache.http.wire" level="WARN"/>
+        
+        <!-- Quartz scheduler (for cron jobs) -->
+        <Logger name="org.quartz" level="INFO"/>
+        
+        <!-- TestContainers (only active during tests) -->
+        <Logger name="org.testcontainers" level="WARN"/>
+        <Logger name="com.github.dockerjava" level="WARN"/>
+        
+        <!-- ============================================ -->
+        <!-- ROOT LOGGER (catches everything else)        -->
+        <!-- ============================================ -->
+        
+        <Root level="INFO">
+            <AppenderRef ref="AsyncConsole"/>
+        </Root>
+    </Loggers>
+</Configuration>

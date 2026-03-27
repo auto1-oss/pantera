@@ -1,0 +1,59 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.cache;
+
+import com.amihaiemil.eoyaml.Yaml;
+import com.amihaiemil.eoyaml.YamlMapping;
+import com.auto1.pantera.PanteraException;
+import com.auto1.pantera.asto.Storage;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests for {@link StoragesCache}.
+ */
+final class CachedStoragesTest {
+
+    @Test
+    void getsValueFromCache() {
+        final String path = "same/path/for/storage";
+        final StoragesCache cache = new StoragesCache();
+        final Storage storage = cache.storage(this.config(path));
+        final Storage same = cache.storage(this.config(path));
+        Assertions.assertEquals(storage, same);
+        Assertions.assertEquals(1L, cache.size());
+    }
+
+    @Test
+    void getsOriginForDifferentConfiguration() {
+        final StoragesCache cache = new StoragesCache();
+        final Storage first = cache.storage(this.config("first"));
+        final Storage second = cache.storage(this.config("second"));
+        Assertions.assertNotEquals(first, second);
+        Assertions.assertEquals(2L, cache.size());
+    }
+
+    @Test
+    void failsToGetStorageWhenSectionIsAbsent() {
+        Assertions.assertThrows(
+            PanteraException.class,
+            () -> new StoragesCache().storage(
+                Yaml.createYamlMappingBuilder().build()
+            )
+        );
+    }
+
+    private YamlMapping config(final String path) {
+        return Yaml.createYamlMappingBuilder()
+            .add("type", "fs")
+            .add("path", path).build();
+    }
+}

@@ -1,0 +1,95 @@
+/*
+ * Copyright (c) 2025-2026 Auto1 Group
+ * Maintainers: Auto1 DevOps Team
+ * Lead Maintainer: Ayd Asraf
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License v3.0.
+ *
+ * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
+ */
+package com.auto1.pantera.http.headers;
+
+import com.auto1.pantera.http.Headers;
+import org.hamcrest.MatcherAssert;
+import org.hamcrest.core.IsEqual;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.llorllale.cactoos.matchers.IsTrue;
+
+/**
+ * Test case for {@link ContentDisposition}.
+ *
+ * @since 0.17.8
+ */
+public final class ContentDispositionTest {
+
+    @Test
+    void shouldHaveExpectedValue() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("").getKey(),
+            new IsEqual<>("Content-Disposition")
+        );
+    }
+
+    @Test
+    void shouldExtractFileName() {
+        MatcherAssert.assertThat(
+            new ContentDisposition(
+                Headers.from(
+                    new Header("Content-Type", "application/octet-stream"),
+                    new Header("content-disposition", "attachment; filename=\"filename.jpg\"")
+                )
+            ).fileName(),
+            new IsEqual<>("filename.jpg")
+        );
+    }
+
+    @Test
+    void shouldFailToExtractLongValueFromEmptyHeaders() {
+        Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new ContentDisposition(Headers.EMPTY).fileName()
+        );
+    }
+
+    @Test
+    void shouldBeInline() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("inline").isInline(),
+            new IsTrue()
+        );
+    }
+
+    @Test
+    void shouldBeAttachment() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("attachment; name=\"input\"").isAttachment(),
+            new IsTrue()
+        );
+    }
+
+    @Test
+    void parsesNameDirective() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("attachment; name=\"field\"").fieldName(),
+            new IsEqual<>("field")
+        );
+    }
+
+    @Test
+    void parsesFilenameDirective() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("attachment; filename=\"foo.jpg\"").fileName(),
+            new IsEqual<>("foo.jpg")
+        );
+    }
+
+    @Test
+    void readNameWithColons() {
+        MatcherAssert.assertThat(
+            new ContentDisposition("form-data; name=\":action\"").fieldName(),
+            new IsEqual<>(":action")
+        );
+    }
+}
