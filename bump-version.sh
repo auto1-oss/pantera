@@ -38,18 +38,18 @@ fi
 
 # 1b. Manually update build-tools (standalone module without parent)
 echo "   Updating build-tools (standalone module)..."
-perl -i -pe "s|<version>$OLD_VERSION</version>|<version>$NEW_VERSION</version>|" build-tools/pom.xml
+perl -i -pe "s|<version>.*?</version>|<version>$NEW_VERSION</version>|" build-tools/pom.xml
 echo "   ✅ Updated all Maven modules"
 
 # 2. Update docker-compose image tag
 echo "2. Updating docker-compose.yaml (image tag)..."
-perl -i -pe "s|auto1-pantera:$OLD_VERSION|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
+perl -i -pe "s|auto1-pantera:.*|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
 
 # 3. Update docker-compose environment variable (now in .env file)
 echo "3. Updating .env.example (PANTERA_VERSION)..."
-perl -i -pe "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
+perl -i -pe "s|PANTERA_VERSION=.*|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
 if [ -f pantera-main/docker-compose/.env ]; then
-    perl -i -pe "s|PANTERA_VERSION=$OLD_VERSION|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
+    perl -i -pe "s|PANTERA_VERSION=.*|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
     echo "   ✅ Updated .env.example and .env"
 else
     echo "   ✅ Updated .env.example (.env not present — update manually if needed)"
@@ -57,19 +57,19 @@ fi
 
 # 4. Update Dockerfile PANTERA_VERSION
 echo "4. Updating Dockerfile (PANTERA_VERSION)..."
-perl -i -pe "s|ENV PANTERA_VERSION=$OLD_VERSION|ENV PANTERA_VERSION=$NEW_VERSION|" pantera-main/Dockerfile
+perl -i -pe "s|ENV PANTERA_VERSION=.*|ENV PANTERA_VERSION=$NEW_VERSION|" pantera-main/Dockerfile
 echo "   ✅ Updated Dockerfile"
 
 # 5. Update pantera-ui package.json version
 echo "5. Updating pantera-ui/package.json..."
-perl -i -pe "s|\"version\": \"$OLD_VERSION\"|\"version\": \"$NEW_VERSION\"|" pantera-ui/package.json
+perl -i -pe "s|\"version\": \".*?\"|\"version\": \"$NEW_VERSION\"|" pantera-ui/package.json
 echo "   ✅ Updated pantera-ui"
 
 echo ""
 echo "✅ Version bumped successfully!"
 echo ""
 echo "Changes made:"
-echo "  - All 33 Maven modules: $OLD_VERSION → $NEW_VERSION"
+echo "  - All 33 Maven modules: $NEW_VERSION"
 echo "  - docker-compose.yaml: image tag updated"
 echo "  - .env: PANTERA_VERSION updated"
 echo "  - .env.example: PANTERA_VERSION updated"
