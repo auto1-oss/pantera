@@ -27,6 +27,8 @@ onMounted(async () => {
 const storageDisplay = computed(() => {
   const raw = stats.value.total_storage
   const bytes = typeof raw === 'string' ? parseFloat(raw) || 0 : raw
+  if (bytes >= 1_125_899_906_842_624) return `${(bytes / 1_125_899_906_842_624).toFixed(1)} PB`
+  if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(1)} TB`
   if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   return `${bytes} B`
@@ -58,6 +60,8 @@ const greeting = computed(() => {
 
 function formatSize(bytes: number): string {
   if (!bytes) return '—'
+  if (bytes >= 1_125_899_906_842_624) return `${(bytes / 1_125_899_906_842_624).toFixed(1)} PB`
+  if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(1)} TB`
   if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`

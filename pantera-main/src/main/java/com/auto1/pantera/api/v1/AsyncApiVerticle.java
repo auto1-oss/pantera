@@ -19,6 +19,7 @@ import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.db.dao.RepositoryDao;
@@ -100,6 +101,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final CooldownService cooldown;
 
     /**
+     * Cooldown metadata filtering service (for cache invalidation on unblock).
+     */
+    private final CooldownMetadataService cooldownMetadata;
+
+    /**
      * Pantera settings.
      */
     private final Settings settings;
@@ -150,6 +156,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.jwt = jwt;
         this.events = events;
         this.cooldown = cooldown;
+        this.cooldownMetadata = CooldownSupport.createMetadataService(cooldown, settings);
         this.settings = settings;
         this.artifactIndex = artifactIndex;
         this.dataSource = dataSource;
@@ -301,7 +308,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new CooldownHandler(
-            this.cooldown, crs, this.settings.cooldown(), this.dataSource,
+            this.cooldown, this.cooldownMetadata, crs, this.settings.cooldown(), this.dataSource,
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);

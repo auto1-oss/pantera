@@ -311,7 +311,22 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_totals;
 REFRESH MATERIALIZED VIEW CONCURRENTLY mv_artifact_per_repo;
 ```
 
-### 5. Verify
+### 5. Schedule Cooldown Expiry Cleanup
+
+Expired cooldown blocks (where `blocked_until` is in the past) accumulate in the database because they are only deleted lazily when the specific artifact is next requested. Add a pg_cron job to purge them hourly:
+
+```sql
+SELECT cron.schedule(
+  'cleanup-expired-cooldowns',
+  '0 * * * *',
+  $$DELETE FROM artifact_cooldowns
+    WHERE status = 'ACTIVE' AND blocked_until < EXTRACT(EPOCH FROM NOW()) * 1000$$
+);
+```
+
+A partial index (`idx_cooldowns_status_blocked_until`) is created automatically by Pantera at startup to make this DELETE efficient.
+
+### 6. Verify
 
 ```sql
 -- Confirm jobs are registered
