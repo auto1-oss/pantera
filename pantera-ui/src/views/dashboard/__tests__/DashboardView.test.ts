@@ -9,6 +9,7 @@ vi.mock('@/api/settings', () => ({
   getDashboardStats: vi.fn().mockResolvedValue({
     repo_count: 10, artifact_count: 500, total_storage: 1024, blocked_count: 2,
   }),
+  getSettings: vi.fn().mockResolvedValue({ ui: {} }),
   getReposByType: vi.fn().mockResolvedValue({ types: { maven: 5, docker: 3 } }),
   getDashboardRequests: vi.fn().mockResolvedValue({ period: '24h', data: [] }),
 }))
@@ -27,8 +28,8 @@ describe('DashboardView', () => {
         },
       },
     })
-    // Wait for async onMounted
     await new Promise((r) => setTimeout(r, 50))
-    expect(wrapper.text()).toContain('Dashboard')
+    expect(wrapper.text()).toContain('Repositories')
+    expect(wrapper.text()).toContain('Artifacts')
   })
 })

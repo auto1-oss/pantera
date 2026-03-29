@@ -852,7 +852,9 @@ public abstract class BaseCachedProxySlice implements Slice {
             this.recordProxyMetric("client_error", duration);
         }
         return resp.body().asBytesFuture()
-            .thenApply(bytes -> RequestDeduplicator.FetchSignal.ERROR);
+            .thenApply(bytes -> resp.status().code() < 500
+                ? RequestDeduplicator.FetchSignal.NOT_FOUND
+                : RequestDeduplicator.FetchSignal.ERROR);
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(

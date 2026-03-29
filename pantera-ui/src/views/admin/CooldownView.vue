@@ -82,6 +82,17 @@ async function loadBlocked() {
   }
 }
 
+function formatRemaining(blockedUntil: string): string {
+  const secs = Math.max(0, Math.floor((new Date(blockedUntil).getTime() - Date.now()) / 1000))
+  if (secs === 0) return '<1m'
+  const days = Math.floor(secs / 86400)
+  const hours = Math.floor((secs % 86400) / 3600)
+  const mins = Math.floor((secs % 3600) / 60)
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+  if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
+  return `${mins}m`
+}
+
 function onSort(event: { sortField: string; sortOrder: number }) {
   sortField.value = event.sortField
   sortOrder.value = event.sortOrder
@@ -197,8 +208,7 @@ onMounted(() => {
             </Column>
             <Column field="remaining_hours" header="Remaining" sortable>
               <template #body="{ data }">
-                <span v-if="data.remaining_hours > 24">{{ Math.floor(data.remaining_hours / 24) }}d {{ data.remaining_hours % 24 }}h</span>
-                <span v-else>{{ data.remaining_hours }}h</span>
+                <span>{{ formatRemaining(data.blocked_until) }}</span>
               </template>
             </Column>
             <Column v-if="canWrite" header="" class="w-16">
