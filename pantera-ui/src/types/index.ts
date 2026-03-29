@@ -222,6 +222,9 @@ export interface Settings {
   caches?: {
     valkey_configured: boolean
   }
+  ui?: {
+    grafana_url?: string
+  }
 }
 
 // Health

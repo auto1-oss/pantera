@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { getDashboardStats } from '@/api/settings'
+import { getDashboardStats, getSettings } from '@/api/settings'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { repoTypeColor } from '@/utils/repoTypes'
@@ -16,7 +16,9 @@ const loading = ref(true)
 
 onMounted(async () => {
   try {
-    stats.value = await getDashboardStats()
+    const [dashStats, settings] = await Promise.all([getDashboardStats(), getSettings()])
+    stats.value = dashStats
+    if (settings.ui?.grafana_url) config.grafanaUrl = settings.ui.grafana_url
   } catch {
     // Stats unavailable
   } finally {

@@ -78,7 +78,7 @@ onMounted(async () => {
     ])
     settings.value = s
     prefixes.value = (s.prefixes ?? []).join(', ')
-    grafanaUrl.value = config.grafanaUrl
+    grafanaUrl.value = s.ui?.grafana_url ?? config.grafanaUrl
     if (s.jwt) {
       jwtExpires.value = s.jwt.expires
       jwtExpirySeconds.value = s.jwt.expiry_seconds
@@ -263,9 +263,14 @@ function addRepoType() {
   newRepoType.value = ''
 }
 
-function saveExternalLinks() {
-  config.grafanaUrl = grafanaUrl.value
-  notify.success('External links updated')
+async function saveExternalLinks() {
+  try {
+    await updateSettingsSection('ui', { grafana_url: grafanaUrl.value })
+    config.grafanaUrl = grafanaUrl.value
+    notify.success('External links updated')
+  } catch {
+    notify.error('Failed to save external links')
+  }
 }
 
 const SENSITIVE_KEYS = ['secret', 'password', 'token', 'key', 'credential']
