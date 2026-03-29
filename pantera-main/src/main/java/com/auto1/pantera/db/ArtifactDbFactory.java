@@ -633,6 +633,11 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_cooldowns_status_artifact ON artifact_cooldowns(status, artifact, repo_name)"
             );
+            // Partial index for pg_cron expired-block cleanup query
+            statement.executeUpdate(
+                "CREATE INDEX IF NOT EXISTS idx_cooldowns_status_blocked_until "
+                    + "ON artifact_cooldowns(status, blocked_until) WHERE status = 'ACTIVE'"
+            );
             statement.executeUpdate(
                 "UPDATE artifact_cooldowns SET status = 'INACTIVE' WHERE status = 'MANUAL'"
             );

@@ -7,7 +7,7 @@
 <p align="center"><strong>Universal multi-format artifact registry built for enterprise teams.</strong></p>
 
 <p align="center">
-  <a href="docs/user-guide.md">User Guide</a> |
+  <a href="docs/user-guide/index.md">User Guide</a> |
   <a href="docs/developer-guide.md">Developer Guide</a> |
   <a href="docs/configuration-reference.md">Configuration</a> |
   <a href="docs/rest-api-reference.md">REST API</a> |
@@ -132,25 +132,25 @@ See the [Configuration Reference](docs/configuration-reference.md) for all optio
 
 | Document | Description |
 |----------|-------------|
-| [User Guide](docs/user-guide.md) | Installation, configuration, repository setup, auth, monitoring, troubleshooting |
+| [User Guide](docs/user-guide/index.md) | Installation, configuration, repository setup, auth, monitoring, troubleshooting |
 | [Developer Guide](docs/developer-guide.md) | Architecture, codebase map, adding features, testing, debugging |
 | [Configuration Reference](docs/configuration-reference.md) | Complete reference for all YAML config, environment variables, and CLI options |
 | [REST API Reference](docs/rest-api-reference.md) | All API endpoints with examples |
 | [Contributing](CONTRIBUTING.md) | How to contribute, build, test, and submit PRs |
 | [Code Standards](CODE_STANDARDS.md) | Coding conventions, style rules, testing patterns |
-| [Changelog](docs/CHANGELOG-AUTO1.md) | Auto1 fork changelog |
+| [Changelog](docs/CHANGELOG.md) | Release history |
 
 ### Additional References
 
 | Document | Description |
 |----------|-------------|
-| [Okta OIDC Integration](docs/OKTA_OIDC_INTEGRATION.md) | Okta SSO setup with MFA support |
-| [NPM CLI Compatibility](docs/NPM_CLI_COMPATIBILITY.md) | NPM command support matrix across repository types |
-| [S3 Storage Tuning](docs/s3-optimizations/README.md) | S3 multipart, parallel download, disk cache configuration |
-| [Cooldown System](docs/cooldown-fallback/README.md) | Supply chain security cooldown architecture |
-| [Import API](docs/global-import-api.md) | Bulk artifact import endpoint |
-| [API Routing](docs/API_ROUTING.md) | URL pattern support per repository type |
-| [Logging Configuration](docs/LOGGING_CONFIGURATION.md) | Log4j2 external configuration and hot-reload |
+| [Okta OIDC Integration](docs/admin-guide/authentication.md) | Okta SSO setup with MFA support |
+| [NPM CLI Compatibility](docs/user-guide/repositories/npm.md) | NPM command support matrix across repository types |
+| [S3 Storage Tuning](docs/admin-guide/storage-backends.md) | S3 multipart, parallel download, disk cache configuration |
+| [Cooldown System](docs/admin-guide/cooldown.md) | Supply chain security cooldown architecture |
+| [Import API](docs/user-guide/import-and-migration.md) | Bulk artifact import endpoint |
+| [API Routing](docs/rest-api-reference.md) | URL pattern support per repository type |
+| [Logging Configuration](docs/admin-guide/logging.md) | Log4j2 external configuration and hot-reload |
 
 ## Attribution
 

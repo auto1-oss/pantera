@@ -19,6 +19,7 @@ import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.cooldown.CooldownRepository;
 import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.DbBlockRecord;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.security.policy.Policy;
@@ -65,6 +66,11 @@ public final class CooldownHandler {
     private final CooldownService cooldown;
 
     /**
+     * Cooldown metadata service (for filtered metadata cache invalidation on unblock).
+     */
+    private final CooldownMetadataService metadataService;
+
+    /**
      * Repository settings CRUD.
      */
     private final CrudRepoSettings crs;
@@ -92,16 +98,19 @@ public final class CooldownHandler {
     /**
      * Ctor.
      * @param cooldown Cooldown service
+     * @param metadataService Cooldown metadata service for cache invalidation
      * @param crs Repository settings CRUD
      * @param csettings Cooldown settings
      * @param dataSource Database data source (nullable)
      * @param policy Security policy
      * @checkstyle ParameterNumberCheck (5 lines)
      */
-    public CooldownHandler(final CooldownService cooldown, final CrudRepoSettings crs,
+    public CooldownHandler(final CooldownService cooldown,
+        final CooldownMetadataService metadataService, final CrudRepoSettings crs,
         final CooldownSettings csettings, final DataSource dataSource,
         final Policy<?> policy) {
         this.cooldown = cooldown;
+        this.metadataService = metadataService;
         this.crs = crs;
         this.csettings = csettings;
         this.repository = dataSource != null ? new CooldownRepository(dataSource) : null;
@@ -487,6 +496,7 @@ public final class CooldownHandler {
             .whenComplete(
                 (ignored, error) -> {
                     if (error == null) {
+                        this.metadataService.invalidate(repoType, name, artifact);
                         ctx.response().setStatusCode(204).end();
                     } else {
                         ApiResponse.sendError(
@@ -520,6 +530,7 @@ public final class CooldownHandler {
             .whenComplete(
                 (ignored, error) -> {
                     if (error == null) {
+                        this.metadataService.invalidateAll(repoType, name);
                         ctx.response().setStatusCode(204).end();
                     } else {
                         ApiResponse.sendError(

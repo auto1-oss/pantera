@@ -15,10 +15,12 @@ describe('Router', () => {
     expect(adminRoutes.length).toBeGreaterThanOrEqual(5)
   })
 
-  it('all admin routes have admin meta', () => {
+  it('all admin routes have access control meta', () => {
     const adminRoutes = routes.filter((r) => r.path.startsWith('/admin'))
     adminRoutes.forEach((r) => {
-      expect(r.meta?.requiresAdmin).toBe(true)
+      const hasAccessControl =
+        r.meta?.requiresAdmin === true || r.meta?.requiredPermission !== undefined
+      expect(hasAccessControl).toBe(true)
     })
   })
 })

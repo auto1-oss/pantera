@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import RepoDetailView from '../RepoDetailView.vue'
 import PrimeVue from 'primevue/config'
 import Aura from '@primevue/themes/aura'
@@ -12,14 +13,24 @@ vi.mock('@/api/repos', () => ({
   getPullInstructions: vi.fn().mockResolvedValue({ type: 'maven-proxy', instructions: ['mvn dependency:get -Dartifact=...'] }),
 }))
 
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [
+    { path: '/', component: { template: '<div/>' } },
+    { path: '/repositories/:name', component: RepoDetailView, props: true },
+  ],
+})
+
 describe('RepoDetailView', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   it('renders repo name', async () => {
+    await router.push('/repositories/my-repo')
+    await router.isReady()
     const wrapper = mount(RepoDetailView, {
       props: { name: 'my-repo' },
       global: {
-        plugins: [[PrimeVue, { theme: { preset: Aura } }]],
+        plugins: [[PrimeVue, { theme: { preset: Aura } }], router],
         stubs: {
           'router-link': true,
           'router-view': true,

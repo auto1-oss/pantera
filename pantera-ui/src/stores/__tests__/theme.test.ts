@@ -5,30 +5,27 @@ import { useThemeStore } from '../theme'
 describe('themeStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    localStorage.clear()
   })
 
-  it('defaults to light mode', () => {
+  it('is always dark mode', () => {
     const store = useThemeStore()
-    expect(store.mode).toBe('light')
-  })
-
-  it('toggles to dark mode', () => {
-    const store = useThemeStore()
-    store.toggle()
     expect(store.mode).toBe('dark')
   })
 
-  it('persists to localStorage', () => {
+  it('isDark is always true', () => {
     const store = useThemeStore()
-    store.toggle()
-    expect(localStorage.getItem('theme')).toBe('dark')
+    expect(store.isDark).toBe(true)
   })
 
-  it('isDark computed', () => {
+  it('toggle is a no-op', () => {
     const store = useThemeStore()
-    expect(store.isDark).toBe(false)
     store.toggle()
+    expect(store.mode).toBe('dark')
     expect(store.isDark).toBe(true)
+  })
+
+  it('applyTheme does not throw', () => {
+    const store = useThemeStore()
+    expect(() => store.applyTheme()).not.toThrow()
   })
 })

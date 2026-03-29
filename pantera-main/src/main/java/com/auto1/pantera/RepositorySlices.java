@@ -135,7 +135,7 @@ public class RepositorySlices {
     /**
      * Pattern to trim path before passing it to adapters' slice.
      */
-    private static final Pattern PATTERN = Pattern.compile("/(?:[^/.]+)(/.*)?");
+    private static final Pattern PATTERN = Pattern.compile("/(?:[^/]+)(/.*)?");
 
     /**
      * Pantera settings.

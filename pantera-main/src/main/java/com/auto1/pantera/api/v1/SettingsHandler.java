@@ -241,6 +241,18 @@ public final class SettingsHandler {
         response.put("caches", new JsonObject()
             .put("valkey_configured", this.settings.valkeyConnection().isPresent())
         );
+        // UI overrides (persisted via /settings/ui)
+        if (this.settingsDao != null) {
+            this.settingsDao.get("ui").ifPresent(uiSettings -> {
+                final JsonObject uiJson = new JsonObject();
+                if (uiSettings.containsKey("grafana_url")) {
+                    uiJson.put("grafana_url", uiSettings.getString("grafana_url"));
+                }
+                if (!uiJson.isEmpty()) {
+                    response.put("ui", uiJson);
+                }
+            });
+        }
         return response;
     }
 
