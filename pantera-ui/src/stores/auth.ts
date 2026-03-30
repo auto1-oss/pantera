@@ -4,7 +4,7 @@ import type { UserInfo, AuthProvider } from '@/types'
 import * as authApi from '@/api/auth'
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(sessionStorage.getItem('jwt'))
+  const token = ref<string | null>(localStorage.getItem('jwt'))
   const user = ref<UserInfo | null>(null)
   const providers = ref<AuthProvider[]>([])
   const loading = ref(false)
@@ -22,7 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const resp = await authApi.login(uname, password)
       token.value = resp.token
-      sessionStorage.setItem('jwt', resp.token)
+      localStorage.setItem('jwt', resp.token)
       await fetchUser()
     } finally {
       loading.value = false
@@ -73,7 +73,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const resp = await authApi.exchangeOAuthCode(code, provider, callbackUrl)
       token.value = resp.token
-      sessionStorage.setItem('jwt', resp.token)
+      localStorage.setItem('jwt', resp.token)
       await fetchUser()
     } finally {
       loading.value = false
@@ -83,7 +83,7 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     token.value = null
     user.value = null
-    sessionStorage.removeItem('jwt')
+    localStorage.removeItem('jwt')
   }
 
   function hasAction(key: string, action: string): boolean {

@@ -177,8 +177,8 @@ final class JdbcCooldownService implements CooldownService {
         final CooldownRequest request,
         final CooldownInspector inspector
     ) {
-        // Check if cooldown is enabled for this repository type
-        if (!this.settings.enabledFor(request.repoType())) {
+        // Check if cooldown is enabled (per-repo-name override beats per-type beats global)
+        if (!this.effectiveEnabled(request)) {
             EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("Cooldown disabled for repo type - allowing")
                 .eventCategory("cooldown")
@@ -526,8 +526,8 @@ final class JdbcCooldownService implements CooldownService {
             return CompletableFuture.completedFuture(false);
         }
 
-        // Use per-repo-type minimum allowed age
-        final Duration fresh = this.settings.minimumAllowedAgeFor(request.repoType());
+        // Use per-repo-name duration if configured, otherwise per-type, otherwise global
+        final Duration fresh = this.effectiveDuration(request);
         final Instant date = release.get();
         
         // Debug logging to diagnose blocking decisions
@@ -627,6 +627,28 @@ final class JdbcCooldownService implements CooldownService {
             this.incrementActiveBlocksMetric(request.repoType(), request.repoName());
             return result;
         });
+    }
+
+    /**
+     * Whether cooldown enforcement is active for this request.
+     * Per-repo-name override (highest priority) → per-type → global.
+     */
+    private boolean effectiveEnabled(final CooldownRequest request) {
+        if (this.settings.isRepoNameOverridePresent(request.repoName())) {
+            return this.settings.enabledForRepoName(request.repoName());
+        }
+        return this.settings.enabledFor(request.repoType());
+    }
+
+    /**
+     * Effective minimum allowed age for this request.
+     * Per-repo-name override (highest priority) → per-type → global.
+     */
+    private Duration effectiveDuration(final CooldownRequest request) {
+        if (this.settings.isRepoNameOverridePresent(request.repoName())) {
+            return this.settings.minimumAllowedAgeForRepoName(request.repoName());
+        }
+        return this.settings.minimumAllowedAgeFor(request.repoType());
     }
 
     private void expire(final DbBlockRecord record, final Instant when) {

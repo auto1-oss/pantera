@@ -54,7 +54,7 @@ final class DownloadArchiveSlice implements Slice {
         // Java's URLDecoder.decode() incorrectly treats + as space in paths
         // So we manually decode only %XX sequences
         final String decodedPath = decodePathPreservingPlus(path);
-        
+
         final CompletableFuture<Response> initial = this.repos.value(new KeyFromPath(decodedPath))
             .thenApply(content -> ResponseBuilder.ok().body(content).build());
         return initial.handle((resp, err) -> {
@@ -62,10 +62,14 @@ final class DownloadArchiveSlice implements Slice {
                 return CompletableFuture.completedFuture(resp);
             }
             final Throwable cause = err instanceof CompletionException ? err.getCause() : err;
-            // Fallback: try with + replaced by space (for legacy files)
-            if (cause instanceof ValueNotFoundException && decodedPath.contains("+")) {
-                return this.repos.value(new KeyFromPath(decodedPath.replace('+', ' ')))
-                    .thenApply(content -> ResponseBuilder.ok().body(content).build());
+            if (cause instanceof ValueNotFoundException) {
+                // Fallback: try with + replaced by space (for legacy files stored with spaces)
+                if (decodedPath.contains("+")) {
+                    return this.repos.value(new KeyFromPath(decodedPath.replace('+', ' ')))
+                        .thenApply(content -> ResponseBuilder.ok().body(content).build())
+                        .exceptionally(fallbackErr -> ResponseBuilder.notFound().build());
+                }
+                return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
             }
             return CompletableFuture.<Response>failedFuture(cause);
         }).thenCompose(Function.identity());

@@ -1,0 +1,5 @@
+repo:
+  type: pypi-proxy
+  url: https://pypi.org
+  cooldown:
+    duration: P30D

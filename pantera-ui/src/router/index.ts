@@ -123,7 +123,7 @@ export function createAppRouter() {
     if (!auth.isAuthenticated) {
       return { name: 'login', query: { redirect: to.fullPath } }
     }
-    // On page refresh the token survives in sessionStorage but user data is lost.
+    // On page refresh the token survives in localStorage but user data is lost.
     // Re-fetch it so permissions, admin status, and profile info are available.
     if (!auth.user) {
       await auth.fetchUser()

@@ -214,7 +214,12 @@ public final class VertxMain {
         } else {
             repos = new MapRepositories(settings);
         }
-        final RepositorySlices slices = new RepositorySlices(settings, repos, new JwtTokens(jwt, jwtSettings));
+        final com.auto1.pantera.db.dao.UserTokenDao userTokenDao = sharedDs
+            .map(com.auto1.pantera.db.dao.UserTokenDao::new)
+            .orElse(null);
+        final RepositorySlices slices = new RepositorySlices(
+            settings, repos, new JwtTokens(jwt, jwtSettings, userTokenDao)
+        );
         if (settings.metrics().http()) {
             try {
                 slices.enableJettyMetrics(BackendRegistries.getDefaultNow());

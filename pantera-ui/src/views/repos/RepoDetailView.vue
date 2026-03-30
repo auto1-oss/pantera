@@ -19,7 +19,7 @@ const props = defineProps<{ name: string }>()
 const route = useRoute()
 const notify = useNotificationStore()
 const auth = useAuthStore()
-const canDelete = computed(() => auth.user?.can_delete_artifacts === true)
+const canDelete = computed(() => auth.user?.can_delete_artifacts === true || auth.hasAction('api_repository_permissions', 'delete'))
 
 const repoConfig = ref<Record<string, unknown> | null>(null)
 const repoType = computed(() => {

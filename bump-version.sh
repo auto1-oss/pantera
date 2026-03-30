@@ -46,10 +46,12 @@ echo "2. Updating docker-compose.yaml (image tag)..."
 perl -i -pe "s|auto1-pantera:.*|auto1-pantera:$NEW_VERSION|" pantera-main/docker-compose/docker-compose.yaml
 
 # 3. Update docker-compose environment variable (now in .env file)
-echo "3. Updating .env.example (PANTERA_VERSION)..."
+echo "3. Updating .env.example (PANTERA_VERSION, PANTERA_UI_VERSION)..."
 perl -i -pe "s|PANTERA_VERSION=.*|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
+perl -i -pe "s|PANTERA_UI_VERSION=.*|PANTERA_UI_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env.example
 if [ -f pantera-main/docker-compose/.env ]; then
     perl -i -pe "s|PANTERA_VERSION=.*|PANTERA_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
+    perl -i -pe "s|PANTERA_UI_VERSION=.*|PANTERA_UI_VERSION=$NEW_VERSION|" pantera-main/docker-compose/.env
     echo "   ✅ Updated .env.example and .env"
 else
     echo "   ✅ Updated .env.example (.env not present — update manually if needed)"
@@ -71,8 +73,8 @@ echo ""
 echo "Changes made:"
 echo "  - All 33 Maven modules: $NEW_VERSION"
 echo "  - docker-compose.yaml: image tag updated"
-echo "  - .env: PANTERA_VERSION updated"
-echo "  - .env.example: PANTERA_VERSION updated"
+echo "  - .env: PANTERA_VERSION, PANTERA_UI_VERSION updated"
+echo "  - .env.example: PANTERA_VERSION, PANTERA_UI_VERSION updated"
 echo "  - Dockerfile: PANTERA_VERSION updated"
 echo "  - pantera-ui/package.json: version updated"
 echo ""

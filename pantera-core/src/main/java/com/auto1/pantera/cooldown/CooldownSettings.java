@@ -45,13 +45,20 @@ public final class CooldownSettings {
     private volatile Map<String, RepoTypeConfig> repoTypeOverrides;
 
     /**
+     * Per-repo-name overrides (highest priority, beats type and global).
+     * Key: repository name (e.g. "my-pypi-proxy")
+     * Value: RepoTypeConfig with enabled flag and minimum age
+     */
+    private volatile Map<String, RepoTypeConfig> repoNameOverrides;
+
+    /**
      * Ctor with global settings only.
      *
      * @param enabled Whether cooldown logic is enabled
      * @param minimumAllowedAge Minimum allowed age duration for fresh releases
      */
     public CooldownSettings(final boolean enabled, final Duration minimumAllowedAge) {
-        this(enabled, minimumAllowedAge, new HashMap<>());
+        this(enabled, minimumAllowedAge, new HashMap<>(), new HashMap<>());
     }
 
     /**
@@ -66,9 +73,27 @@ public final class CooldownSettings {
         final Duration minimumAllowedAge,
         final Map<String, RepoTypeConfig> repoTypeOverrides
     ) {
+        this(enabled, minimumAllowedAge, repoTypeOverrides, new HashMap<>());
+    }
+
+    /**
+     * Full ctor with per-repo-type and per-repo-name overrides.
+     *
+     * @param enabled Whether cooldown logic is enabled globally
+     * @param minimumAllowedAge Global minimum allowed age duration
+     * @param repoTypeOverrides Per-repo-type configuration overrides
+     * @param repoNameOverrides Per-repo-name configuration overrides (highest priority)
+     */
+    public CooldownSettings(
+        final boolean enabled,
+        final Duration minimumAllowedAge,
+        final Map<String, RepoTypeConfig> repoTypeOverrides,
+        final Map<String, RepoTypeConfig> repoNameOverrides
+    ) {
         this.enabled = enabled;
         this.minimumAllowedAge = Objects.requireNonNull(minimumAllowedAge);
         this.repoTypeOverrides = Objects.requireNonNull(repoTypeOverrides);
+        this.repoNameOverrides = Objects.requireNonNull(repoNameOverrides);
     }
 
     /**
@@ -111,6 +136,54 @@ public final class CooldownSettings {
     public Duration minimumAllowedAgeFor(final String repoType) {
         final RepoTypeConfig override = this.repoTypeOverrides.get(repoType.toLowerCase());
         return override != null ? override.minimumAllowedAge() : this.minimumAllowedAge;
+    }
+
+    /**
+     * Check whether a per-repo-name override is registered for this repository.
+     *
+     * @param repoName Repository name
+     * @return {@code true} if an override exists for this repo name
+     */
+    public boolean isRepoNameOverridePresent(final String repoName) {
+        return this.repoNameOverrides.containsKey(repoName);
+    }
+
+    /**
+     * Check if cooldown is enabled for a specific repository name.
+     * Only valid when {@link #isRepoNameOverridePresent(String)} returns {@code true}.
+     *
+     * @param repoName Repository name
+     * @return {@code true} if cooldown is enabled for this repo
+     */
+    public boolean enabledForRepoName(final String repoName) {
+        final RepoTypeConfig override = this.repoNameOverrides.get(repoName);
+        return override != null && override.enabled();
+    }
+
+    /**
+     * Get minimum allowed age for a specific repository name.
+     * Only valid when {@link #isRepoNameOverridePresent(String)} returns {@code true}.
+     *
+     * @param repoName Repository name
+     * @return Minimum allowed age for this repo
+     */
+    public Duration minimumAllowedAgeForRepoName(final String repoName) {
+        final RepoTypeConfig override = this.repoNameOverrides.get(repoName);
+        return override != null ? override.minimumAllowedAge() : this.minimumAllowedAge;
+    }
+
+    /**
+     * Register or update a per-repo-name cooldown override.
+     * Thread-safe: replaces the internal map atomically.
+     *
+     * @param repoName Repository name
+     * @param enabled Whether cooldown is enabled for this repo
+     * @param duration Minimum allowed age for this repo
+     */
+    public void setRepoNameOverride(final String repoName, final boolean enabled, final Duration duration) {
+        final Map<String, RepoTypeConfig> copy = new HashMap<>(this.repoNameOverrides);
+        copy.put(repoName, new RepoTypeConfig(enabled, Objects.requireNonNull(duration)));
+        this.repoNameOverrides = copy;
     }
 
     /**

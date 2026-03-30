@@ -83,6 +83,14 @@ public final class AutoBlockRegistry {
         this.states.compute(remoteId, (key, current) -> {
             final BlockState state =
                 current != null ? current : BlockState.online();
+            // If already actively blocked, don't extend the duration.
+            // Under high traffic every in-flight request hits this path and would
+            // keep resetting blockedUntil to "now + maxBlockDuration", preventing
+            // the circuit from ever transitioning to PROBING and self-healing.
+            if (state.status() == BlockState.Status.BLOCKED
+                && !Instant.now().isAfter(state.blockedUntil())) {
+                return state;
+            }
             final int failures = state.failureCount() + 1;
             if (failures >= this.settings.failureThreshold()) {
                 final int fibIdx = state.status() == BlockState.Status.ONLINE

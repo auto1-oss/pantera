@@ -31,6 +31,20 @@ import org.junit.jupiter.api.Test;
  */
 final class DownloadArchiveSliceTest {
     @Test
+    void returnsNotFoundWhenArtifactMissing() {
+        final Storage storage = new InMemoryStorage();
+        MatcherAssert.assertThat(
+            new DownloadArchiveSlice(new AstoRepository(storage)),
+            new SliceHasResponse(
+                new RsHasStatus(RsStatus.NOT_FOUND),
+                new RequestLine(RqMethod.GET, "/wkda-api/dev/dev-PP-1234/wkda-api-dev-PP-1234.zip"),
+                Headers.EMPTY,
+                Content.EMPTY
+            )
+        );
+    }
+
+    @Test
     void returnsOkStatus() {
         final Storage storage = new InMemoryStorage();
         final String archive = "log-1.1.3.zip";

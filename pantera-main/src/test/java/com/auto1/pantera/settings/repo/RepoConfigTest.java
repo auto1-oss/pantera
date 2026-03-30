@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -138,6 +139,24 @@ public final class RepoConfigTest {
                 new Key.From("key"), cache, false
             ).storage()
         );
+    }
+
+    @Test
+    public void readsCooldownDuration() throws Exception {
+        Assertions.assertEquals(
+            Optional.of(Duration.ofDays(30)),
+            readFromResource("repo-cooldown-config.yml").cooldownDuration()
+        );
+    }
+
+    @Test
+    public void cooldownDurationEmptyWhenNotConfigured() throws Exception {
+        Assertions.assertEquals(Optional.empty(), readMin().cooldownDuration());
+    }
+
+    @Test
+    public void cooldownDurationEmptyWhenFullConfigHasNoCooldown() throws Exception {
+        Assertions.assertEquals(Optional.empty(), readFull().cooldownDuration());
     }
 
     private RepoConfig readFull() throws Exception {

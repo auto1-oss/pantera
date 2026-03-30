@@ -2,6 +2,77 @@
 
 ---
 
+## v2.0.7 (March 2026)
+
+### Security
+
+- **JWT JTI allowlist** — every issued token now has its UUID persisted in `user_tokens`. Validation checks the DB on every request; forged tokens (even with the correct HMAC secret) are rejected with 401 because they carry a JTI that was never issued. Closes the privilege-escalation vector that existed when the default secret was known.
+- **Public UI settings endpoint** — new `GET /api/v1/settings/ui` serves only the Grafana URL and requires no authentication, so all users can see the Grafana link without exposing writable settings.
+
+### Fixed
+
+- **Auth redirect loop** — `localStorage` was used in the Pinia auth store but `sessionStorage` in the Axios request interceptor and `redirectToLogin` helper. Every API call went out without an Authorization header, got 401, and redirected to login. All three references in `client.ts` are now `localStorage`, consistent with `auth.ts`.
+- **Cross-tab session loss** — JWT was kept in `sessionStorage` (per-tab) so opening a URL in a new tab required a fresh login. Moved to `localStorage` so the session is shared across tabs and survives browser restart.
+- **Dashboard zeros for non-admin users** — dashboard statistics were fetched inside the same `Promise.all` as `GET /settings`, which requires admin. A single 403 failed the whole chain, leaving all stat cards at zero. Stats and settings are now fetched independently; stats always display regardless of role.
+- **PHP Composer download 500 → 404** — `DownloadArchiveSlice` propagated `ValueNotFoundException` as an unhandled exception when an artifact was not found at the URL-derived path (upload path ≠ storage path, which includes `artifacts/` prefix). The exception now converts to a proper 404. The `+`-to-space fallback path also returns 404 instead of 500 when the fallback lookup misses.
+- **Per-repo cooldown overrides** — `cooldown.duration` in repository YAML was stored in the management UI but never read by the backend. `JdbcCooldownService` now applies a three-tier priority: per-repo-name override > per-type > global. `RepositorySlices` registers overrides from each repo's config at startup.
+
+### Tests
+
+- `CooldownSettingsTest` — 7 unit tests covering global defaults, per-type overrides, per-repo-name overrides, and idempotent updates.
+- `JdbcCooldownServiceTest` — 3 integration tests: per-repo duration blocks within window, per-repo disabled beats global enabled, override does not affect other repos.
+- `GroupSliceIndexRoutingTest` — verifies index routing decisions (`locateByName` vs direct fanout) via `RecordingIndex`.
+- `DownloadArchiveSliceTest` — added `returnsNotFoundWhenArtifactMissing` to assert 404 (not 500) on missing artifacts.
+
+---
+
+## v2.0.6 (March 2026)
+
+### Added
+
+- **Theme switcher** — three-way System / Dark / Light selector in the Profile view, persisted to `localStorage`. The Tailwind `dark:` utilities now follow the `.dark` CSS class so toggling the theme applies instantly without a page reload.
+- **Artifact sorting** — artifacts in the repository browser are now sorted alphabetically by name.
+
+### Fixed
+
+- PrimeVue components (Card, Input, Select, DataTable, Dialog, Breadcrumb) were defaulting to dark backgrounds regardless of active theme; now they respect the selected mode.
+- Breadcrumb black background in dark mode and missing background in light mode; height stabilised.
+- Dashboard stat-card accent top border disappeared in dark mode.
+- "Top Repositories" dashboard section had hardcoded dark colours.
+- Artifacts card layout shifted when navigating into subdirectories.
+
+---
+
+## v2.0.5 (March 2026)
+
+### Fixed
+
+- **Cooldown unblock cache invalidation** — unblocking or bulk-releasing artifacts via the API did not evict the cached block decision, so clients continued to receive 404s until the TTL expired. `CooldownMetadataService.invalidate()` is now called from `CooldownHandler` after every unblock/unblockAll DB write.
+- **Maven 500 for repo names with dots** — repository names such as `atlassian.com` or `build.shibboleth.net` did not match `RepositorySlices.PATTERN` because the pattern excluded `.`. Relaxed character class from `[^/.]` to `[^/]`.
+- **Proxy 4xx passed through as 503** — when an upstream returned any 4xx response, `BaseCachedProxySlice` emitted an `ERROR` signal, causing clients to receive 503. 4xx responses now emit a `NOT_FOUND` signal and are returned to the client as 404.
+- **Grafana URL persistence** — the Grafana URL entered in Settings was only written to the in-memory Pinia store. On page reload, `config.json` overwrote it. The URL is now persisted via `PUT /api/v1/settings/ui` and read back from the DB on mount.
+- **Cooldown remaining time display** — durations under one hour showed `0h` instead of the actual minutes. The UI now displays `40m`, `15m`, etc. using the exact `blocked_until` timestamp.
+
+### Added
+
+- **pg_cron cleanup job** — hourly `DELETE` for expired cooldown rows to prevent unbounded table growth. A partial index (`idx_cooldowns_status_blocked_until`) on `artifact_cooldowns` accelerates cleanup queries and the status check hot path.
+- **Dashboard storage tiers** — TB and PB tiers added to the storage size display on the dashboard.
+
+### Security
+
+- commons-fileupload bumped to 1.6.0, fixing active CVE-2025-48976 (DoS via crafted multipart headers).
+- happy-dom bumped to 20.x, fixing GHSA-37j7-fg3j-429f (CVSS 10.0 RCE via JavaScript `eval`; disabled by default in test environments).
+
+### Dependencies
+
+- log4j 2.25.3, postgresql driver 42.7.7, Jetty 11.0.26, commons-lang3 3.20.0, assertj 3.27.3
+
+### Documentation
+
+- Fixed 9 broken README links pointing to non-existent paths.
+
+---
+
 ## v2.0.0 -- The Pantera Release (March 2026)
 
 The debut release of Pantera Artifact Registry. Everything that was Artipie is now Pantera -- new name, new identity, same battle-tested core, massively expanded capabilities.

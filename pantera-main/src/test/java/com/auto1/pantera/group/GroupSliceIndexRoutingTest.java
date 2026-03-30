@@ -119,6 +119,52 @@ final class GroupSliceIndexRoutingTest {
         assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
     }
 
+    // ---- Nested group: index hit on leaf resolves to the correct direct member ----
+
+    @Test
+    void nestedGroupIndexHitResolvesLeafToDirectMember() {
+        // libs-release topology:
+        //   libs-release-local  (leaf)
+        //   remote-repos        (nested group) → contains jboss, maven-central
+        // Index says: com.google.guava.guava is in jboss.
+        // leafToMember: jboss → remote-repos, maven-central → remote-repos
+        // Expected: only remote-repos is queried (not libs-release-local).
+        final String jboss = "jboss";
+        final RecordingIndex idx = new RecordingIndex(List.of(jboss));
+        final AtomicInteger remoteReposCount = new AtomicInteger(0);
+        final AtomicInteger localCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put("remote-repos", countingSlice(remoteReposCount));
+        slices.put("libs-release-local", countingSlice(localCount));
+        final Map<String, String> leafToMember = new HashMap<>();
+        leafToMember.put(jboss, "remote-repos");
+        leafToMember.put("maven-central", "remote-repos");
+        leafToMember.put("libs-release-local", "libs-release-local");
+        final GroupSlice slice = new GroupSlice(
+            new MapResolver(slices),
+            "libs-release",
+            List.of("libs-release-local", "remote-repos"),
+            8080, 0, 0,
+            Collections.emptyList(),
+            Optional.of(idx),
+            Set.of("remote-repos"),
+            "maven-group",
+            leafToMember
+        );
+        slice.response(
+            new RequestLine("GET",
+                "/com/google/guava/guava/19.0.0.jbossorg-1/guava-19.0.0.jbossorg-1.jar"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(1, remoteReposCount.get(),
+            "remote-repos (containing jboss) must be queried on index hit");
+        assertEquals(0, localCount.get(),
+            "libs-release-local must NOT be queried when index routes to remote-repos");
+        assertTrue(idx.locateByNameCalls.contains("com.google.guava.guava"),
+            "locateByName() called with parsed Maven name");
+        assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
+    }
+
     // ---- Index hit for each new adapter type ----
 
     @ParameterizedTest

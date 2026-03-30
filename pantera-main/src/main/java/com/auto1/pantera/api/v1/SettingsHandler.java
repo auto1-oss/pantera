@@ -106,6 +106,8 @@ public final class SettingsHandler {
         router.get("/api/v1/settings")
             .handler(new AuthzHandler(this.policy, read))
             .handler(this::getSettings);
+        // Public UI settings — any authenticated user may read (contains only grafana_url etc.)
+        router.get("/api/v1/settings/ui").handler(this::getUiSettings);
         router.put("/api/v1/settings/prefixes")
             .handler(new AuthzHandler(this.policy, update))
             .handler(this::updatePrefixes);
@@ -137,6 +139,26 @@ public final class SettingsHandler {
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
+    }
+
+    /**
+     * GET /api/v1/settings/ui — UI-facing settings readable by any authenticated user.
+     * Returns only the {@code ui} section (e.g. grafana_url).
+     * @param ctx Routing context
+     */
+    private void getUiSettings(final RoutingContext ctx) {
+        final JsonObject ui = new JsonObject();
+        if (this.settingsDao != null) {
+            this.settingsDao.get("ui").ifPresent(uiSettings -> {
+                if (uiSettings.containsKey("grafana_url")) {
+                    ui.put("grafana_url", uiSettings.getString("grafana_url"));
+                }
+            });
+        }
+        ctx.response()
+            .setStatusCode(HttpStatus.OK_200)
+            .putHeader("Content-Type", "application/json")
+            .end(new JsonObject().put("ui", ui).encode());
     }
 
     /**

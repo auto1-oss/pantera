@@ -17,7 +17,7 @@ function flushPendingQueue(newToken: string) {
 }
 
 function redirectToLogin() {
-  sessionStorage.removeItem('jwt')
+  localStorage.removeItem('jwt')
   window.location.href = '/login'
 }
 
@@ -28,7 +28,7 @@ export function initApiClient(baseUrl: string): AxiosInstance {
     headers: { 'Content-Type': 'application/json' },
   })
   apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-    const token = sessionStorage.getItem('jwt')
+    const token = localStorage.getItem('jwt')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -60,7 +60,7 @@ export function initApiClient(baseUrl: string): AxiosInstance {
       try {
         const resp = await apiClient!.post<{ token: string }>('/auth/refresh')
         const newToken = resp.data.token
-        sessionStorage.setItem('jwt', newToken)
+        localStorage.setItem('jwt', newToken)
         flushPendingQueue(newToken)
         // Retry the original failed request with the new token
         error.config.headers.Authorization = `Bearer ${newToken}`

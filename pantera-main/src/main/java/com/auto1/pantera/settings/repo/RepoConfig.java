@@ -26,6 +26,7 @@ import com.google.common.base.Strings;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -298,6 +299,25 @@ public final class RepoConfig {
             }
         });
         return rules;
+    }
+
+    /**
+     * Per-repo cooldown window configured in this repository's YAML.
+     * Present when the repo has {@code cooldown.duration} set (ISO-8601, e.g. {@code P30D}).
+     * When present, this duration overrides the global and per-type cooldown settings.
+     *
+     * @return Cooldown duration if configured, empty otherwise
+     */
+    public Optional<Duration> cooldownDuration() {
+        final YamlMapping cooldown = this.repoYaml().yamlMapping("cooldown");
+        if (cooldown == null) {
+            return Optional.empty();
+        }
+        final String duration = cooldown.string("duration");
+        if (duration == null) {
+            return Optional.empty();
+        }
+        return Optional.of(Duration.parse(duration));
     }
 
     public Optional<HttpClientSettings> httpClientSettings() {

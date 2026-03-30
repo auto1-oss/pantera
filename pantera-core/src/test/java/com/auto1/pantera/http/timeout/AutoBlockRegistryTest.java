@@ -101,6 +101,27 @@ final class AutoBlockRegistryTest {
     }
 
     @Test
+    void doesNotExtendBlockUnderHighTraffic() throws Exception {
+        final AutoBlockRegistry fast = new AutoBlockRegistry(new AutoBlockSettings(
+            1, Duration.ofMillis(100), Duration.ofHours(1)
+        ));
+        fast.recordFailure("r1");
+        assertThat(fast.isBlocked("r1"), is(true));
+        // Simulate 1000 in-flight requests all calling recordFailure (circuit-open path).
+        // Without the fix each call would reset blockedUntil to now+100ms, so the
+        // block would never expire. With the fix the state is unchanged.
+        for (int i = 0; i < 1_000; i++) {
+            fast.recordFailure("r1");
+        }
+        Thread.sleep(150);
+        assertThat(
+            "Block must expire after initial duration despite traffic",
+            fast.isBlocked("r1"), is(false)
+        );
+        assertThat(fast.status("r1"), equalTo("probing"));
+    }
+
+    @Test
     void tracksMultipleRemotesIndependently() {
         this.registry.recordFailure("remote-a");
         this.registry.recordFailure("remote-a");

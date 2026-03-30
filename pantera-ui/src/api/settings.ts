@@ -11,6 +11,12 @@ export async function getSettings(): Promise<Settings> {
   return data
 }
 
+// UI settings — available to all authenticated users, contains only grafana_url etc.
+export async function getUiSettings(): Promise<{ ui: { grafana_url?: string } }> {
+  const { data } = await getApiClient().get<{ ui: { grafana_url?: string } }>('/settings/ui')
+  return data
+}
+
 export async function updatePrefixes(prefixes: string[]): Promise<void> {
   await getApiClient().put('/settings/prefixes', { prefixes })
 }

@@ -184,6 +184,14 @@ public class RepositorySlices {
         this.tokens = tokens;
         this.cooldown = CooldownSupport.create(settings);
         this.cooldownMetadata = CooldownSupport.createMetadataService(this.cooldown, settings);
+        // Register per-repo cooldown durations from repo configurations
+        if (repos != null) {
+            for (final RepoConfig cfg : repos.configs()) {
+                cfg.cooldownDuration().ifPresent(duration ->
+                    settings.cooldown().setRepoNameOverride(cfg.name(), true, duration)
+                );
+            }
+        }
         this.sharedClients = new SharedJettyClients();
         this.slices = CacheBuilder.newBuilder()
             .maximumSize(500)
@@ -584,7 +592,8 @@ public class RepositorySlices {
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(cfg.members()),
-                    "npm-group"
+                    "npm-group",
+                    buildLeafMap(cfg.members())
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -647,7 +656,8 @@ public class RepositorySlices {
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(cfg.members()),
-                    cfg.type()
+                    cfg.type(),
+                    buildLeafMap(cfg.members())
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -674,7 +684,8 @@ public class RepositorySlices {
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(cfg.members()),
-                    "maven-group"
+                    "maven-group",
+                    buildLeafMap(cfg.members())
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -708,7 +719,8 @@ public class RepositorySlices {
                             java.util.Collections.emptyList(),
                             Optional.of(this.settings.artifactIndex()),
                             proxyMembers(cfg.members()),
-                            cfg.type()
+                            cfg.type(),
+                            buildLeafMap(cfg.members())
                         ),
                         authentication(),
                         tokens.auth(),
@@ -930,6 +942,55 @@ public class RepositorySlices {
             .orElse(false);
     }
 
+
+    /**
+     * Build a map from every leaf repo reachable through each direct member back to that
+     * direct member. Used by GroupSlice to route index hits through nested groups.
+     *
+     * <p>Example: libs-release has members [libs-release-local, ext-release-local, remote-repos].
+     * remote-repos is itself a group with members [jboss, maven-central, groovy-plugins-release].
+     * Result: {jboss → remote-repos, maven-central → remote-repos, ...}
+     * plus identity entries for leaf direct members.
+     *
+     * @param directMembers Direct member names of the group being constructed
+     * @return leaf-to-directMember map; empty if all members are leaves
+     */
+    private java.util.Map<String, String> buildLeafMap(final List<String> directMembers) {
+        final java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+        for (final String member : directMembers) {
+            map.put(member, member);
+            this.repos.config(member).ifPresent(cfg -> {
+                if (cfg.type() != null && cfg.type().endsWith("-group")) {
+                    collectLeaves(cfg.members(), member, map, new HashSet<>());
+                }
+            });
+        }
+        return map;
+    }
+
+    /**
+     * Recursively collect all leaf repo names reachable from {@code groupMembers},
+     * mapping each leaf to {@code directMember} (the top-level group member that roots this path).
+     */
+    private void collectLeaves(
+        final List<String> groupMembers,
+        final String directMember,
+        final java.util.Map<String, String> result,
+        final Set<String> visited
+    ) {
+        for (final String name : groupMembers) {
+            if (!visited.add(name)) {
+                continue;
+            }
+            this.repos.config(name).ifPresent(cfg -> {
+                if (cfg.type() != null && cfg.type().endsWith("-group")) {
+                    collectLeaves(cfg.members(), directMember, result, visited);
+                } else {
+                    result.putIfAbsent(name, directMember);
+                }
+            });
+        }
+    }
 
     /**
      * Slice's cache key.

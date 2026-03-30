@@ -318,6 +318,95 @@ final class JdbcCooldownServiceTest {
     }
 
 
+    @Test
+    void perRepoDurationBlocksArtifactReleasedWithinWindow() {
+        // Global: 72h; per-repo "my-pypi": P30D (30 days)
+        final CooldownSettings settings = CooldownSettings.defaults();
+        settings.setRepoNameOverride("my-pypi", true, Duration.ofDays(30));
+        final JdbcCooldownService svc = new JdbcCooldownService(
+            settings, this.repository, this.executor
+        );
+        // Artifact released 5 days ago — within the 30-day per-repo window, should be blocked
+        final Instant releaseDate = Instant.now().minus(Duration.ofDays(5));
+        final CooldownRequest request =
+            new CooldownRequest("pypi-proxy", "my-pypi", "requests", "2.31.0", "alice", Instant.now());
+        final CooldownInspector inspector = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.of(releaseDate));
+            }
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CooldownResult result = svc.evaluate(request, inspector).join();
+        MatcherAssert.assertThat(
+            "Artifact released 5 days ago must be blocked under 30-day per-repo cooldown",
+            result.blocked(), Matchers.is(true)
+        );
+    }
+
+    @Test
+    void perRepoDisabledOverridesGlobalEnabled() {
+        // Global: enabled; per-repo "internal-npm": disabled
+        final CooldownSettings settings = CooldownSettings.defaults();
+        settings.setRepoNameOverride("internal-npm", false, Duration.ofHours(72));
+        final JdbcCooldownService svc = new JdbcCooldownService(
+            settings, this.repository, this.executor
+        );
+        // Artifact released just now — would be blocked globally but repo override disables cooldown
+        final CooldownRequest request =
+            new CooldownRequest("npm-proxy", "internal-npm", "lodash", "4.17.21", "bob", Instant.now());
+        final CooldownInspector inspector = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.of(Instant.now()));
+            }
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CooldownResult result = svc.evaluate(request, inspector).join();
+        MatcherAssert.assertThat(
+            "Artifact must be allowed when per-repo cooldown is disabled",
+            result.blocked(), Matchers.is(false)
+        );
+    }
+
+    @Test
+    void perRepoDurationDoesNotAffectOtherRepos() {
+        // Per-repo "guarded-repo": 30 days; "other-repo": no override (global 72h)
+        final CooldownSettings settings = CooldownSettings.defaults();
+        settings.setRepoNameOverride("guarded-repo", true, Duration.ofDays(30));
+        final JdbcCooldownService svc = new JdbcCooldownService(
+            settings, this.repository, this.executor
+        );
+        // Artifact released 5 days ago — blocked in "guarded-repo" (30d) but NOT in "other-repo" (72h)
+        final Instant releaseDate = Instant.now().minus(Duration.ofDays(5));
+        final CooldownInspector inspector = new CooldownInspector() {
+            @Override
+            public CompletableFuture<Optional<Instant>> releaseDate(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(Optional.of(releaseDate));
+            }
+            @Override
+            public CompletableFuture<List<CooldownDependency>> dependencies(final String artifact, final String version) {
+                return CompletableFuture.completedFuture(List.of());
+            }
+        };
+        final CooldownResult guarded = svc.evaluate(
+            new CooldownRequest("maven-proxy", "guarded-repo", "com.example.lib", "1.0.0", "user", Instant.now()),
+            inspector
+        ).join();
+        final CooldownResult other = svc.evaluate(
+            new CooldownRequest("maven-proxy", "other-repo", "com.example.lib", "1.0.0", "user", Instant.now()),
+            inspector
+        ).join();
+        MatcherAssert.assertThat("guarded-repo blocks 5-day-old artifact", guarded.blocked(), Matchers.is(true));
+        MatcherAssert.assertThat("other-repo allows 5-day-old artifact (only 72h global)", other.blocked(), Matchers.is(false));
+    }
+
     private void truncate() {
         try (Connection conn = this.dataSource.getConnection();
             PreparedStatement stmt = conn.prepareStatement(
