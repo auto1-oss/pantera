@@ -111,11 +111,11 @@ function closeTokenDialog() {
       <!-- Before generation -->
       <div v-if="!generatedToken" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium mb-1.5 text-gray-300">Label</label>
+          <label class="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">Label</label>
           <InputText v-model="tokenLabel" placeholder="e.g. CI/CD Pipeline" class="w-full" />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1.5 text-gray-300">Expires in (days)</label>
+          <label class="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">Expires in (days)</label>
           <InputNumber v-model="tokenExpiryDays" :min="0" :max="365" class="w-full" />
           <p class="text-xs text-gray-500 mt-1">Set to 0 for a permanent token</p>
         </div>

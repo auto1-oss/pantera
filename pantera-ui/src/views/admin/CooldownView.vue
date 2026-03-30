@@ -174,15 +174,13 @@ onMounted(() => {
           </div>
         </template>
         <template #content>
-          <div class="mb-3">
-            <span class="p-input-icon-left w-full">
-              <i class="pi pi-search" />
-              <InputText
-                v-model="search"
-                placeholder="Search by package, version or repo..."
-                class="w-full"
-              />
-            </span>
+          <div class="relative mb-3">
+            <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <InputText
+              v-model="search"
+              placeholder="Search by package, version or repo..."
+              class="w-full !pl-10"
+            />
           </div>
           <DataTable
             :value="blocked"

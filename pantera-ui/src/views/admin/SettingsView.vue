@@ -432,7 +432,7 @@ async function saveProviderConfig() {
           <DataTable v-else :value="settings.credentials" stripedRows class="text-sm">
             <Column field="type" header="Type" style="width: 150px">
               <template #body="{ data }">
-                <span class="font-mono text-xs font-medium text-gray-200 whitespace-nowrap">{{ data.type }}</span>
+                <span class="font-mono text-xs font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{{ data.type }}</span>
               </template>
             </Column>
             <Column field="priority" header="Priority" style="width: 70px; text-align: center" />
