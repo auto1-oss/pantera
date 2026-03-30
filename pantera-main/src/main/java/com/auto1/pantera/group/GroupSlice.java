@@ -37,6 +37,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -795,6 +796,12 @@ public final class GroupSlice implements Slice {
         final CompletableFuture<Response> result,
         final RequestContext ctx
     ) {
+        if (err instanceof CancellationException) {
+            // Another member won the race and cancelled this future.
+            // This is not a real upstream failure — do not trip the circuit breaker.
+            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            return;
+        }
         ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
             .message("Member query failed: " + member.name())
             .eventCategory("repository")
