@@ -40,6 +40,15 @@ const currentPath = ref('/')
 const treeLoading = ref(false)
 const marker = ref<string | null>(null)
 const hasMore = ref(false)
+const sortAsc = ref(true)
+
+const sortedItems = computed(() => {
+  return [...treeItems.value].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+    const cmp = a.name.localeCompare(b.name)
+    return sortAsc.value ? cmp : -cmp
+  })
+})
 
 // Artifact detail dialog
 const detailVisible = ref(false)
@@ -265,7 +274,15 @@ function formatSize(bytes?: number): string {
         <template #title>
           <div class="flex items-center justify-between">
             <span>Artifacts</span>
-            <Button v-if="currentPath !== '/'" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
+            <div class="flex items-center gap-1">
+              <Button
+                :icon="sortAsc ? 'pi pi-sort-alpha-down' : 'pi pi-sort-alpha-up'"
+                :title="sortAsc ? 'A → Z' : 'Z → A'"
+                text size="small"
+                @click="sortAsc = !sortAsc"
+              />
+              <Button v-if="currentPath !== '/'" icon="pi pi-arrow-up" label="Up" text size="small" @click="goUp" />
+            </div>
           </div>
         </template>
         <template #content>
@@ -281,7 +298,7 @@ function formatSize(bytes?: number): string {
 
           <div v-else class="divide-y divide-gray-100 dark:divide-gray-700">
             <div
-              v-for="entry in treeItems"
+              v-for="entry in sortedItems"
               :key="entry.path"
               class="flex items-center gap-3 py-2 px-2 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer rounded"
               @click="navigateTree(entry)"
