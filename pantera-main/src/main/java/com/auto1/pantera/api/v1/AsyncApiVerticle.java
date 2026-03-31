@@ -21,6 +21,7 @@ import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.db.dao.RepositoryDao;
 import com.auto1.pantera.db.dao.StorageAliasDao;
@@ -272,7 +273,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             users,
             this.security.policy(),
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
-            this.dataSource != null ? new UserTokenDao(this.dataSource) : null
+            this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
+            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null
         );
         authHandler.register(router);
         // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth)

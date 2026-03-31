@@ -20,6 +20,7 @@ import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.auth.OktaAuthContext;
 import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
@@ -60,28 +61,42 @@ public final class AuthHandler {
      */
     private static final int DEFAULT_EXPIRY_DAYS = 30;
 
+    /**
+     * Auth settings key for maximum API token expiry in days.
+     */
+    private static final String SETTING_MAX_TOKEN_DAYS = "max_api_token_days";
+
     private final Tokens tokens;
     private final Authentication auth;
     private final CrudUsers users;
     private final Policy<?> policy;
     private final AuthProviderDao providerDao;
     private final UserTokenDao tokenDao;
+    private final AuthSettingsDao settingsDao;
 
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
-        final AuthProviderDao providerDao, final UserTokenDao tokenDao) {
+        final AuthProviderDao providerDao, final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao) {
         this.tokens = tokens;
         this.auth = auth;
         this.users = users;
         this.policy = policy;
         this.providerDao = providerDao;
         this.tokenDao = tokenDao;
+        this.settingsDao = settingsDao;
+    }
+
+    public AuthHandler(final Tokens tokens, final Authentication auth,
+        final CrudUsers users, final Policy<?> policy,
+        final AuthProviderDao providerDao, final UserTokenDao tokenDao) {
+        this(tokens, auth, users, policy, providerDao, tokenDao, null);
     }
 
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao) {
-        this(tokens, auth, users, policy, providerDao, null);
+        this(tokens, auth, users, policy, providerDao, null, null);
     }
 
     /**
@@ -136,11 +151,15 @@ public final class AuthHandler {
             if (ar.succeeded()) {
                 final Optional<AuthUser> user = ar.result();
                 if (user.isPresent()) {
-                    final String token = this.tokens.generate(user.get());
+                    final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Type", "application/json")
-                        .end(new JsonObject().put("token", token).encode());
+                        .end(new JsonObject()
+                            .put("token", pair.accessToken())
+                            .put("refresh_token", pair.refreshToken())
+                            .put("expires_in", pair.expiresIn())
+                            .encode());
                 } else {
                     ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid credentials");
                 }
@@ -281,7 +300,7 @@ public final class AuthHandler {
                 "Field 'callback_url' is required");
             return;
         }
-        ctx.vertx().<String>executeBlocking(
+        ctx.vertx().<Tokens.TokenPair>executeBlocking(
             () -> {
                 final javax.json.JsonObject prov = findProvider(provider);
                 if (prov == null) {
@@ -520,14 +539,18 @@ public final class AuthHandler {
                     .eventOutcome("success")
                     .field("user.name", username)
                     .log();
-                // Generate Pantera JWT
+                // Generate Pantera JWT pair
                 final AuthUser authUser = new AuthUser(username, provider);
-                return AuthHandler.this.tokens.generate(authUser);
+                return AuthHandler.this.tokens.generatePair(authUser);
             },
             false
-        ).onSuccess(token -> ctx.response().setStatusCode(200)
+        ).onSuccess(pair -> ctx.response().setStatusCode(200)
             .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", token).encode())
+            .end(new JsonObject()
+                .put("token", pair.accessToken())
+                .put("refresh_token", pair.refreshToken())
+                .put("expires_in", pair.expiresIn())
+                .encode())
         ).onFailure(err -> {
             final String msg = err.getMessage() != null ? err.getMessage() : "SSO callback failed";
             if (msg.contains("not found")) {
@@ -574,9 +597,24 @@ public final class AuthHandler {
         final JsonObject body = ctx.body().asJsonObject();
         final String label = body != null
             ? body.getString("label", "API Token") : "API Token";
-        final int expiryDays = body != null
+        final int requestedDays = body != null
             ? body.getInteger("expiry_days", DEFAULT_EXPIRY_DAYS)
             : DEFAULT_EXPIRY_DAYS;
+        // Enforce admin-configured maximum, if set (0 = unlimited/permanent is always allowed)
+        final int maxTokenDays = this.settingsDao != null
+            ? this.settingsDao.getInt(SETTING_MAX_TOKEN_DAYS, 0) : 0;
+        final int expiryDays;
+        if (maxTokenDays > 0 && requestedDays > 0 && requestedDays > maxTokenDays) {
+            expiryDays = maxTokenDays;
+            EcsLogger.info("com.auto1.pantera.auth")
+                .message("API token expiry capped by admin limit: requested=" + requestedDays
+                    + " max=" + maxTokenDays)
+                .eventCategory("authentication")
+                .eventAction("token_generate")
+                .log();
+        } else {
+            expiryDays = requestedDays;
+        }
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String context = ctx.user().principal().getString(
             AuthTokenRest.CONTEXT, "local"
@@ -612,14 +650,14 @@ public final class AuthHandler {
     }
 
     /**
-     * POST /api/v1/auth/refresh — issue a fresh session JWT for the current user.
+     * POST /api/v1/auth/refresh — issue a fresh session JWT pair for the current user.
      *
-     * <p>Requires a valid (non-expired) JWT in the Authorization header. Extracts the
-     * {@code sub} (username) and {@code context} (auth provider) from the existing token
-     * and generates a new JWT with a full fresh expiry window. This prevents UI logout
-     * caused by silent JWT expiry during active sessions.
+     * <p>Requires a valid (non-expired) refresh JWT in the Authorization header. Extracts
+     * the {@code sub} (username) and {@code context} (auth provider) from the existing
+     * token and generates a new access + refresh token pair with a full fresh expiry
+     * window. This prevents UI logout caused by silent JWT expiry during active sessions.
      *
-     * <p>Response: {@code {"token": "<new_jwt>"}}
+     * <p>Response: {@code {"token": "<access>", "refresh_token": "<refresh>", "expires_in": N}}
      *
      * @param ctx Routing context (user principal populated by JWT filter)
      */
@@ -630,7 +668,7 @@ public final class AuthHandler {
             ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "No subject in token");
             return;
         }
-        final String newToken = this.tokens.generate(new AuthUser(sub, context));
+        final Tokens.TokenPair pair = this.tokens.generatePair(new AuthUser(sub, context));
         EcsLogger.debug("com.auto1.pantera.auth")
             .message("JWT refresh issued for user: " + sub)
             .eventCategory("authentication")
@@ -640,7 +678,11 @@ public final class AuthHandler {
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", newToken).encode());
+            .end(new JsonObject()
+                .put("token", pair.accessToken())
+                .put("refresh_token", pair.refreshToken())
+                .put("expires_in", pair.expiresIn())
+                .encode());
     }
 
     /**
