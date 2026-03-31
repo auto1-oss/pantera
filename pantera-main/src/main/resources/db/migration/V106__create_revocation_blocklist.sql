@@ -10,8 +10,7 @@ CREATE INDEX IF NOT EXISTS idx_revocation_expires
     ON revocation_blocklist (expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_revocation_lookup
-    ON revocation_blocklist (entry_type, entry_value)
-    WHERE expires_at > NOW();
+    ON revocation_blocklist (entry_type, entry_value, expires_at);
 
 COMMENT ON TABLE revocation_blocklist IS 'Access token revocation entries for DB-polling fallback mode';
 COMMENT ON COLUMN revocation_blocklist.entry_type IS 'jti or username';
