@@ -5,6 +5,7 @@ import {
   getCooldownConfig, updateCooldownConfig, toggleAuthProvider,
   updateAuthProviderConfig,
 } from '@/api/settings'
+import { getAuthSettings, updateAuthSettings } from '@/api/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -41,6 +42,12 @@ const httpAcquireTimeout = ref(30000)
 const httpMaxConns = ref(64)
 const httpMaxQueued = ref(256)
 const httpServerTimeout = ref('PT2M')
+
+// Auth policy
+const authAccessTtl = ref(3600)
+const authRefreshTtl = ref(604800)
+const authApiMaxTtl = ref(7776000)
+const authAllowPermanent = ref(true)
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -100,6 +107,12 @@ onMounted(async () => {
       cooldownEnabled.value = cd.enabled
       cooldownAge.value = cd.minimum_allowed_age
     }
+    getAuthSettings().then(s => {
+      authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
+      authRefreshTtl.value = parseInt(s.refresh_token_ttl_seconds ?? '604800')
+      authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
+      authAllowPermanent.value = s.api_token_allow_permanent === 'true'
+    }).catch(() => {})
   } catch {
     notify.error('Failed to load settings')
   } finally {
@@ -157,6 +170,23 @@ function saveJwt() {
     expires: jwtExpires.value,
     expiry_seconds: jwtExpirySeconds.value,
   })
+}
+
+async function saveAuthSettings() {
+  saving.value = 'auth'
+  try {
+    await updateAuthSettings({
+      access_token_ttl_seconds: String(authAccessTtl.value),
+      refresh_token_ttl_seconds: String(authRefreshTtl.value),
+      api_token_max_ttl_seconds: String(authApiMaxTtl.value),
+      api_token_allow_permanent: String(authAllowPermanent.value),
+    })
+    notify.success('Authentication settings saved')
+  } catch {
+    notify.error('Failed to save authentication settings')
+  } finally {
+    saving.value = null
+  }
 }
 
 function saveHttpClient() {
@@ -414,6 +444,43 @@ async function saveProviderConfig() {
               size="small"
               :loading="saving === 'jwt'"
               @click="saveJwt"
+            />
+          </div>
+        </template>
+      </Card>
+
+      <!-- Authentication Policy -->
+      <Card class="shadow-sm">
+        <template #title>Authentication Policy</template>
+        <template #content>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Access Token TTL (seconds)</label>
+                <InputNumber v-model="authAccessTtl" :min="60" :max="86400" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 3600 (1 hour)</span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Refresh Token TTL (seconds)</label>
+                <InputNumber v-model="authRefreshTtl" :min="3600" :max="2592000" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 604800 (7 days)</span>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">API Token Max TTL (seconds)</label>
+                <InputNumber v-model="authApiMaxTtl" :min="86400" :max="31536000" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 7776000 (90 days)</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="authAllowPermanent" />
+              <span class="text-sm">Allow permanent API tokens (no expiry)</span>
+            </div>
+            <Button
+              label="Save Auth Settings"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'auth'"
+              @click="saveAuthSettings"
             />
           </div>
         </template>

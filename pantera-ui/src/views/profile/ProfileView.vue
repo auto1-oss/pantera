@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
-import { generateTokenForSession, listTokens, revokeToken, type ApiToken } from '@/api/auth'
+import { generateTokenForSession, listTokens, revokeToken, getAuthSettings, type ApiToken } from '@/api/auth'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
@@ -28,18 +28,31 @@ const permissionEntries = computed(() =>
 const generatedToken = ref('')
 const tokenLoading = ref(false)
 const selectedExpiry = ref(30)
-const expiryOptions = [
+const expiryOptions = ref([
   { label: '30 days', value: 30 },
   { label: '90 days', value: 90 },
-  { label: '1 year', value: 365 },
-  { label: 'Permanent (no expiry)', value: 0 },
-]
+])
 
 // Existing tokens
 const tokens = ref<ApiToken[]>([])
 const tokensLoading = ref(false)
 
-onMounted(() => loadTokens())
+onMounted(async () => {
+  loadTokens()
+  try {
+    const settings = await getAuthSettings()
+    const maxTtlDays = Math.floor(parseInt(settings.api_token_max_ttl_seconds ?? '7776000') / 86400)
+    const allowPermanent = settings.api_token_allow_permanent === 'true'
+    const opts = []
+    if (maxTtlDays >= 30) opts.push({ label: '30 days', value: 30 })
+    if (maxTtlDays >= 90) opts.push({ label: '90 days', value: 90 })
+    if (maxTtlDays >= 365) opts.push({ label: '1 year', value: 365 })
+    if (allowPermanent) opts.push({ label: 'Permanent (no expiry)', value: 0 })
+    if (opts.length > 0) expiryOptions.value = opts
+  } catch {
+    // Keep defaults if settings unavailable
+  }
+})
 
 async function loadTokens() {
   tokensLoading.value = true
