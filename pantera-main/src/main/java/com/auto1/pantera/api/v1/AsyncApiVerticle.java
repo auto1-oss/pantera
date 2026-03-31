@@ -122,19 +122,26 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final DataSource dataSource;
 
     /**
+     * JWT tokens provider (RS256). Used for token issuance and auth handler.
+     */
+    private final JwtTokens jwtTokens;
+
+    /**
      * Primary constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
      * @param port Port to run API on
      * @param security Pantera security
      * @param keystore KeyStore
-     * @param jwt JWT authentication provider
+     * @param jwt JWT authentication provider (Vert.x, for route protection)
      * @param events Artifact metadata events queue
      * @param cooldown Cooldown service
      * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance
      */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
     public AsyncApiVerticle(
         final PanteraCaches caches,
         final Storage configsStorage,
@@ -146,7 +153,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final CooldownService cooldown,
         final Settings settings,
         final ArtifactIndex artifactIndex,
-        final DataSource dataSource
+        final DataSource dataSource,
+        final JwtTokens jwtTokens
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -160,10 +168,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.settings = settings;
         this.artifactIndex = artifactIndex;
         this.dataSource = dataSource;
+        this.jwtTokens = jwtTokens;
     }
 
     /**
-     * Convenience constructor.
+     * Convenience constructor (no JwtTokens — creates a stub tokens provider).
      * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
@@ -178,7 +187,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             CooldownSupport.create(settings),
             settings,
             settings.artifactIndex(),
-            dataSource
+            dataSource,
+            null
         );
     }
 
@@ -257,7 +267,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         }
         // Auth handler routes (token generation + providers are public)
         final AuthHandler authHandler = new AuthHandler(
-            new JwtTokens(this.jwt, this.settings.jwtSettings()),
+            this.jwtTokens,
             this.security.authentication(),
             users,
             this.security.policy(),

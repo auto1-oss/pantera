@@ -50,9 +50,6 @@ import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
-import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.micrometer.MicrometerMetricsOptions;
 import io.vertx.micrometer.VertxPrometheusOptions;
 import io.vertx.micrometer.backends.BackendRegistries;
@@ -199,11 +196,19 @@ public final class VertxMain {
 
         this.vertx = VertxMain.vertx(settings.metrics());
         final com.auto1.pantera.settings.JwtSettings jwtSettings = settings.jwtSettings();
-        final JWTAuth jwt = JWTAuth.create(
-            this.vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
-            )
-        );
+        final com.auto1.pantera.auth.RsaKeyLoader rsaKeys =
+            new com.auto1.pantera.auth.RsaKeyLoader(
+                jwtSettings.privateKeyPath().orElseThrow(
+                    () -> new IllegalStateException(
+                        "JWT private key path not configured. Set meta.jwt.private-key-path."
+                    )
+                ),
+                jwtSettings.publicKeyPath().orElseThrow(
+                    () -> new IllegalStateException(
+                        "JWT public key path not configured. Set meta.jwt.public-key-path."
+                    )
+                )
+            );
         final Repositories repos;
         if (sharedDs.isPresent()) {
             repos = new DbRepositories(
@@ -217,8 +222,11 @@ public final class VertxMain {
         final com.auto1.pantera.db.dao.UserTokenDao userTokenDao = sharedDs
             .map(com.auto1.pantera.db.dao.UserTokenDao::new)
             .orElse(null);
+        final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null
+        );
         final RepositorySlices slices = new RepositorySlices(
-            settings, repos, new JwtTokens(jwt, jwtSettings, userTokenDao)
+            settings, repos, jwtTokens
         );
         if (settings.metrics().http()) {
             try {
@@ -374,7 +382,7 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
-            () -> new AsyncApiVerticle(settings, apiPort, jwt, sharedDs.orElse(null)),
+            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null)),
             deployOpts,
             result -> {
                 if (result.succeeded()) {

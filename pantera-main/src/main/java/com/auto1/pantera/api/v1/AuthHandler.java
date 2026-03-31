@@ -588,14 +588,14 @@ public final class AuthHandler {
         final UUID jti = UUID.randomUUID();
         final String token;
         if (this.tokens instanceof JwtTokens) {
-            token = ((JwtTokens) this.tokens).generate(authUser, expirySecs, jti);
+            token = ((JwtTokens) this.tokens).generateApiToken(authUser, expirySecs, jti, label);
         } else {
             token = expiryDays <= 0
                 ? this.tokens.generate(authUser, true)
                 : this.tokens.generate(authUser);
-        }
-        if (this.tokenDao != null) {
-            this.tokenDao.store(jti, sub, label, token, expiresAt);
+            if (this.tokenDao != null) {
+                this.tokenDao.store(jti, sub, label, token, expiresAt);
+            }
         }
         final JsonObject resp = new JsonObject()
             .put("token", token)

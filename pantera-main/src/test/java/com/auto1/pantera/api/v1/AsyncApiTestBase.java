@@ -105,6 +105,7 @@ public class AsyncApiTestBase {
             NoopCooldownService.INSTANCE,
             new TestSettings(),
             ArtifactIndex.NOP,
+            null,
             null
         );
         vertx.deployVerticle(verticle, ctx.succeedingThenComplete());

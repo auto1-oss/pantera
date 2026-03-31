@@ -92,12 +92,7 @@ public final class JwtTokens implements Tokens {
 
     @Override
     public TokenAuthentication auth() {
-        // UnifiedJwtAuthHandler will be created in Task 11
-        // For now, return a placeholder that uses this.publicKey
-        // This method will be updated in Task 11
-        return token -> java.util.concurrent.CompletableFuture.completedFuture(
-            java.util.Optional.empty()
-        );
+        return new UnifiedJwtAuthHandler(this.publicKey, this.tokenDao, this.blocklist);
     }
 
     @Override
@@ -114,13 +109,13 @@ public final class JwtTokens implements Tokens {
     }
 
     @Override
-    public TokenPair generatePair(final AuthUser user) {
+    public Tokens.TokenPair generatePair(final AuthUser user) {
         final String access = this.generateAccess(user);
         final String refresh = this.generateRefresh(user);
         final int ttl = this.settingsDao != null
             ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
             : this.defaultAccessTtl;
-        return new TokenPair(access, refresh, ttl);
+        return new Tokens.TokenPair(access, refresh, ttl);
     }
 
     /**

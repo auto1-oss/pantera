@@ -15,7 +15,6 @@ import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.settings.JwtSettings;
 import io.vertx.core.Vertx;
 import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -60,8 +59,8 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
     @Override
     public Authentication getAuthentication(final YamlMapping cfg) {
         final YamlMapping meta = cfg.yamlMapping("meta");
-        final JwtSettings settings = JwtSettings.fromYaml(meta);
-        final String secret = settings.secret();
+        final YamlMapping jwtYaml = meta != null ? meta.yamlMapping("jwt") : null;
+        final String secret = jwtYaml != null ? jwtYaml.string("secret") : null;
         if (secret == null || secret.isEmpty() || "some secret".equals(secret)) {
             EcsLogger.warn("com.auto1.pantera.auth")
                 .message("JWT-as-password auth enabled but using default secret - "
