@@ -324,6 +324,13 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        if (this.dataSource != null) {
+            new AdminAuthHandler(
+                new AuthSettingsDao(this.dataSource),
+                new UserTokenDao(this.dataSource),
+                this.jwtTokens != null ? this.jwtTokens.blocklist() : null
+            ).register(router);
+        }
         // Start server
         final HttpServer server;
         final String schema;
