@@ -49,12 +49,13 @@ public final class UserTokenDao {
      * @param label Human-readable label
      * @param tokenValue Raw JWT string (hashed before storage)
      * @param expiresAt Expiry timestamp, null for permanent
+     * @param tokenType Token type (e.g., "api", "browser", etc.)
      */
     public void store(final UUID id, final String username, final String label,
-        final String tokenValue, final Instant expiresAt) {
+        final String tokenValue, final Instant expiresAt, final String tokenType) {
         final String sql = String.join(" ",
-            "INSERT INTO user_tokens (id, username, label, token_hash, expires_at)",
-            "VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO user_tokens (id, username, label, token_hash, expires_at, token_type)",
+            "VALUES (?, ?, ?, ?, ?, ?)"
         );
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -67,10 +68,24 @@ public final class UserTokenDao {
             } else {
                 ps.setNull(5, java.sql.Types.TIMESTAMP);
             }
+            ps.setString(6, tokenType);
             ps.executeUpdate();
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to store token", ex);
         }
+    }
+
+    /**
+     * Store a newly issued token (backward-compatible overload).
+     * @param id Token UUID (same as jti claim)
+     * @param username Username
+     * @param label Human-readable label
+     * @param tokenValue Raw JWT string (hashed before storage)
+     * @param expiresAt Expiry timestamp, null for permanent
+     */
+    public void store(final UUID id, final String username, final String label,
+        final String tokenValue, final Instant expiresAt) {
+        this.store(id, username, label, tokenValue, expiresAt, "api");
     }
 
     /**
@@ -125,6 +140,23 @@ public final class UserTokenDao {
     }
 
     /**
+     * Revoke all active tokens for a user (bulk revocation).
+     * @param username Username
+     * @return Number of tokens revoked
+     */
+    public int revokeAllForUser(final String username) {
+        final String sql =
+            "UPDATE user_tokens SET revoked = TRUE WHERE username = ? AND revoked = FALSE";
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, username);
+            return ps.executeUpdate();
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to revoke all tokens for user", ex);
+        }
+    }
+
+    /**
      * Check if a token ID is valid (exists and not revoked).
      * @param id Token UUID (jti)
      * @return True if valid
@@ -138,6 +170,25 @@ public final class UserTokenDao {
             return ps.executeQuery().next();
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to check token validity", ex);
+        }
+    }
+
+    /**
+     * Check if a token ID is valid for a specific user (ownership + revocation check).
+     * @param id Token UUID (jti)
+     * @param username Username (ownership check)
+     * @return True if token is valid and belongs to the user
+     */
+    public boolean isValidForUser(final UUID id, final String username) {
+        final String sql =
+            "SELECT 1 FROM user_tokens WHERE id = ? AND username = ? AND revoked = FALSE";
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setObject(1, id);
+            ps.setString(2, username);
+            return ps.executeQuery().next();
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to check token validity for user", ex);
         }
     }
 
