@@ -25,6 +25,7 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.security.PermissionCollection;
 import java.util.Objects;
+import java.util.Set;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
@@ -68,6 +69,12 @@ public final class SearchHandler {
      */
     private static final int OVERFETCH_MULTIPLIER =
         ConfigDefaults.getInt("PANTERA_SEARCH_OVERFETCH", 10);
+
+    /**
+     * Allowed sort field values. Unknown values are treated as "relevance".
+     */
+    private static final Set<String> VALID_SORT_FIELDS =
+        Set.of("relevance", "name", "version", "created_at");
 
     /**
      * Artifact index.
@@ -114,11 +121,23 @@ public final class SearchHandler {
     }
 
     /**
-     * Paginated full-text search handler.
+     * Paginated full-text search handler with optional filtering and sorting.
      * Over-fetches from the index to compensate for post-query permission
      * filtering. Without over-fetching, users with access to a small subset
      * of repos may see empty results when the top-ranked rows all belong to
      * repos they cannot read.
+     *
+     * <p>Query parameters:</p>
+     * <ul>
+     *   <li>{@code q} — search query (required)</li>
+     *   <li>{@code page} — page number, 0-indexed (default: 0)</li>
+     *   <li>{@code size} — results per page (default: 20, max: 100)</li>
+     *   <li>{@code type} — filter by repo type base, e.g. "maven" (matches maven, maven-proxy, maven-group)</li>
+     *   <li>{@code repo} — filter by exact repository name</li>
+     *   <li>{@code sort} — sort field: relevance|name|version|created_at (default: relevance)</li>
+     *   <li>{@code sort_dir} — sort direction: asc|desc (default: asc)</li>
+     * </ul>
+     *
      * @param ctx Routing context
      */
     private void search(final RoutingContext ctx) {
@@ -135,29 +154,46 @@ public final class SearchHandler {
         }
         final int page = Math.min(SearchHandler.intParam(ctx, "page", 0), MAX_PAGE);
         final int size = Math.min(SearchHandler.intParam(ctx, "size", DEFAULT_SIZE), MAX_SIZE);
+        final String repoType = ctx.queryParams().get("type");
+        final String repoName = ctx.queryParams().get("repo");
+        // Validate sortBy against allowlist — unknown values fall back to relevance
+        final String rawSort = ctx.queryParams().get("sort");
+        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase())
+            ? rawSort.toLowerCase() : null;
+        final boolean sortAsc = !"desc".equalsIgnoreCase(ctx.queryParams().get("sort_dir"));
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
                 ctx.user().principal().getString(AuthTokenRest.SUB),
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
+        // Over-fetch from the real DB offset to compensate for permission filtering.
+        // The DB handles pagination via OFFSET; we over-fetch within that page window
+        // so that after removing unauthorized rows we can still fill the requested page.
         final int fetchSize = size * OVERFETCH_MULTIPLIER;
-        final int skip = page * size;
-        this.index.search(query, fetchSize, 0).whenComplete((result, error) -> {
-            if (error != null) {
-                ctx.response()
-                    .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
-                        .put("message", error.getMessage())
-                        .encode());
-            } else {
-                final java.util.List<JsonObject> allowed = new java.util.ArrayList<>();
-                result.documents().forEach(doc -> {
+        final int dbOffset = page * size;
+        this.index.search(query, fetchSize, dbOffset, repoType, repoName, sortBy, sortAsc)
+            .whenComplete((result, error) -> {
+                if (error != null) {
+                    ctx.response()
+                        .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
+                        .putHeader("Content-Type", "application/json")
+                        .end(new JsonObject()
+                            .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
+                            .put("message", error.getMessage())
+                            .encode());
+                    return;
+                }
+                // Permission-filter the overfetched results, then take the first page
+                final JsonArray items = new JsonArray();
+                int count = 0;
+                for (final var doc : result.documents()) {
                     if (!perms.implies(
                         new AdapterBasicPermission(doc.repoName(), "read"))) {
-                        return;
+                        continue;
+                    }
+                    if (count >= size) {
+                        break;
                     }
                     final JsonObject obj = new JsonObject()
                         .put("repo_type", doc.repoType())
@@ -176,27 +212,35 @@ public final class SearchHandler {
                     if (doc.owner() != null) {
                         obj.put("owner", doc.owner());
                     }
-                    allowed.add(obj);
-                });
-                final int total = allowed.size();
-                final boolean hasMore = total > skip + size;
-                final JsonArray items = new JsonArray();
-                allowed.stream()
-                    .skip(skip)
-                    .limit(size)
-                    .forEach(items::add);
+                    items.add(obj);
+                    count++;
+                }
+                // Total and hasMore come from DB-level count, which is pre-permission.
+                // This is acceptable — exact post-permission total is expensive to compute.
+                final long total = result.totalHits();
+                final boolean hasMore = dbOffset + size < total;
+                // Aggregation counts come from the DB, not from the overfetch window
+                final JsonObject typeCountsJson = new JsonObject();
+                result.typeCounts().entrySet().stream()
+                    .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                    .forEach(e -> typeCountsJson.put(e.getKey(), e.getValue()));
+                final JsonObject repoCountsJson = new JsonObject();
+                result.repoCounts().entrySet().stream()
+                    .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                    .forEach(e -> repoCountsJson.put(e.getKey(), e.getValue()));
                 ctx.response()
                     .setStatusCode(HttpStatus.OK_200)
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject()
                         .put("items", items)
+                        .put("type_counts", typeCountsJson)
+                        .put("repo_counts", repoCountsJson)
                         .put("page", page)
                         .put("size", size)
                         .put("total", total)
                         .put("hasMore", hasMore)
                         .encode());
-            }
-        });
+            });
     }
 
     /**

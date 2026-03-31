@@ -5,6 +5,8 @@ export interface PaginatedResponse<T> {
   size: number
   total: number
   hasMore: boolean
+  type_counts?: Record<string, number>
+  repo_counts?: Record<string, number>
 }
 
 export interface CursorResponse<T> {
