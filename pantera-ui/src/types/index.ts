@@ -242,4 +242,5 @@ export interface RuntimeConfig {
   apmServerUrl: string
   apmServiceName: string
   apmEnvironment: string
+  registryUrl: string
 }
