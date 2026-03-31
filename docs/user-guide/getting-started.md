@@ -6,6 +6,10 @@ This page covers the essentials you need before interacting with Pantera as a pa
 
 ---
 
+> **v2.1 upgrade notice:** JWT tokens have changed. All previously issued tokens are invalid. Log in again to obtain a new token. For CI/CD pipelines and build tools, generate a new API token. See your administrator or the [Upgrade Procedures](../admin-guide/upgrade-procedures.md#jwt-migration-hs256-to-rs256) for details.
+
+---
+
 ## What is Pantera
 
 Pantera is a universal artifact registry that hosts, proxies, and groups package repositories across 16 formats in a single deployment. It serves as the central gateway for all artifact traffic in your organization -- whether you are pulling open-source dependencies, pushing internal builds, or searching for artifacts across teams.
@@ -68,9 +72,9 @@ maven-group
 
 ## Obtaining Access
 
-### Step 1: Get a Session Token
+### Step 1: Get an Access Token
 
-Authenticate with your username and password to receive a JWT token:
+Authenticate with your username and password to receive a JWT access token and refresh token:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/token \
@@ -82,9 +86,13 @@ Response:
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIs..."
+  "token": "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
+  "expires_in": 3600
 }
 ```
+
+The `token` field is your **access token** (valid for 1 hour by default). The `refresh_token` lets you obtain a new access token without re-entering your password.
 
 If your organization uses Okta with MFA, include the `mfa_code` field:
 
@@ -96,14 +104,28 @@ If your organization uses Okta with MFA, include the `mfa_code` field:
 }
 ```
 
+> **Note:** All tokens are now signed with RS256 (asymmetric keys). Access tokens are short-lived (1 hour). For tools that need persistent credentials, use a long-lived API token (see below).
+
+### Refreshing Your Access Token
+
+When your access token expires, exchange the refresh token for a new one:
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+```
+
+The Management UI handles token refresh automatically. If you are scripting against the API, store the refresh token and call this endpoint when you receive a `401`.
+
 ### Step 2: Use the Token as Your Password
 
 In all client configurations (Maven `settings.xml`, `.npmrc`, `pip.conf`, Docker login, etc.), use:
 
 - **Username:** your Pantera username (e.g., `your-username` or `user@company.com`)
-- **Password:** the JWT token from Step 1
+- **Password:** the access token (or API token, for persistent configurations)
 
-This works because Pantera supports **JWT-as-Password** authentication: your token is validated locally without any external IdP call, making authentication fast.
+This works because Pantera supports **JWT-as-Password** authentication: your token is verified locally from the RS256 signature, making authentication fast with no external IdP call.
 
 ### SSO Login (Okta / Keycloak)
 
@@ -113,15 +135,15 @@ If your organization has configured SSO, you can also log in through the Managem
 
 ## Generating Long-Lived API Tokens
 
-Session tokens expire (default: 24 hours). For CI/CD pipelines and automated tools, generate a long-lived API token:
+Access tokens expire (default: 1 hour). For CI/CD pipelines and automated tools, generate a long-lived API token that does not expire on short intervals:
 
 ```bash
-# First, get a session token (see Step 1 above)
-SESSION_TOKEN="eyJhbGciOi..."
+# First, get an access token (see Step 1 above)
+ACCESS_TOKEN="eyJhbGciOi..."
 
 # Then generate a long-lived token
 curl -X POST http://pantera-host:8086/api/v1/auth/token/generate \
-  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"label": "CI Pipeline Token", "expiry_days": 90}'
 ```
@@ -130,7 +152,7 @@ Response:
 
 ```json
 {
-  "token": "eyJhbGciOi...",
+  "token": "eyJhbGciOiJSUzI1NiIs...",
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "label": "CI Pipeline Token",
   "expires_at": "2026-06-20T12:00:00Z",
@@ -138,7 +160,7 @@ Response:
 }
 ```
 
-Set `"expiry_days": 0` for a non-expiring token (if allowed by your administrator).
+Set `"expiry_days": 0` for a non-expiring token (if allowed by your administrator -- check with your Pantera admin if you are unsure).
 
 ### Managing Your Tokens
 

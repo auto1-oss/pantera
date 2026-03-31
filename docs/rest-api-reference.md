@@ -24,11 +24,12 @@ Repository-facing endpoints (health, version, import, artifact serving) are on p
 10. [Cooldown Management](#10-cooldown-management)
 11. [Settings](#11-settings)
 12. [Auth Provider Management](#12-auth-provider-management)
-13. [Dashboard](#13-dashboard)
-14. [Health and System](#14-health-and-system)
-15. [Import](#15-import)
-16. [Error Format](#16-error-format)
-17. [Pagination](#17-pagination)
+13. [Admin: Auth Settings](#13-admin-auth-settings)
+14. [Dashboard](#14-dashboard)
+15. [Health and System](#15-health-and-system)
+16. [Import](#16-import)
+17. [Error Format](#17-error-format)
+18. [Pagination](#18-pagination)
 
 ---
 
@@ -47,7 +48,7 @@ CORS is enabled for all `/api/v1/*` routes with `Access-Control-Allow-Origin: *`
 
 ### POST /api/v1/auth/token
 
-Generate a session JWT token by authenticating with username and password. Auth providers are tried in priority order (local, Okta, Keycloak).
+Authenticate with username and password. Returns an RS256-signed access token and a refresh token. Auth providers are tried in priority order (local, Okta, Keycloak).
 
 **Authentication:** None required.
 
@@ -71,9 +72,19 @@ Generate a session JWT token by authenticating with username and password. Auth 
 
 ```json
 {
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expires_in": 3600
 }
 ```
+
+| Field           | Type    | Description                                              |
+|-----------------|---------|----------------------------------------------------------|
+| `token`         | string  | RS256-signed access token (type: `access`). Use as Bearer or as JWT password. |
+| `refresh_token` | string  | RS256-signed refresh token (type: `refresh`). Store securely; used to obtain new access tokens. |
+| `expires_in`    | integer | Access token lifetime in seconds (matches `access-token-expiry-seconds`). |
+
+> **Breaking change from v2.0:** The response previously returned only `{"token": "..."}`. Clients that stored the token for long-lived use must now use API tokens (`POST /api/v1/auth/token/generate`) or refresh the access token via `POST /api/v1/auth/refresh`.
 
 **Response (401):**
 
@@ -91,6 +102,53 @@ Generate a session JWT token by authenticating with username and password. Auth 
 curl -X POST http://localhost:8086/api/v1/auth/token \
   -H "Content-Type: application/json" \
   -d '{"name": "admin", "pass": "password123"}'
+```
+
+---
+
+### POST /api/v1/auth/refresh
+
+Exchange a refresh token for a new access token. The refresh token must not be expired or revoked.
+
+**Authentication:** None required.
+
+**Request Body:**
+
+```json
+{
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs..."
+}
+```
+
+| Field           | Type   | Required | Description          |
+|-----------------|--------|----------|----------------------|
+| `refresh_token` | string | Yes      | Valid refresh token  |
+
+**Response (200):**
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIs...",
+  "expires_in": 3600
+}
+```
+
+**Response (401):**
+
+```json
+{
+  "error": "UNAUTHORIZED",
+  "message": "Refresh token expired or revoked",
+  "status": 401
+}
+```
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
 ```
 
 ---
@@ -176,7 +234,9 @@ Exchange an OAuth2 authorization code for a Pantera JWT. The server performs the
 
 ```json
 {
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expires_in": 3600
 }
 ```
 
@@ -1812,8 +1872,9 @@ Get the full Pantera configuration, including port, JWT settings, HTTP client/se
   "version": "2.0.0",
   "prefixes": ["test_prefix"],
   "jwt": {
-    "expires": true,
-    "expiry_seconds": 86400
+    "algorithm": "RS256",
+    "access_token_expiry_seconds": 3600,
+    "refresh_token_expiry_seconds": 604800
   },
   "http_client": {
     "proxy_timeout": 30000,
@@ -2018,7 +2079,128 @@ curl -X PUT http://localhost:8086/api/v1/auth-providers/2/config \
 
 ---
 
-## 13. Dashboard
+## 13. Admin: Auth Settings
+
+Admin endpoints for managing JWT token policy and performing user revocation. All endpoints require admin-level permissions.
+
+### GET /api/v1/admin/auth-settings
+
+Retrieve the current token policy settings.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:read`
+
+**Response (200):**
+
+```json
+{
+  "access_token_expiry_seconds": 3600,
+  "refresh_token_expiry_seconds": 604800,
+  "api_token_max_expiry_days": 90,
+  "allow_permanent_tokens": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `access_token_expiry_seconds` | integer | Access token TTL in seconds |
+| `refresh_token_expiry_seconds` | integer | Refresh token TTL in seconds |
+| `api_token_max_expiry_days` | integer | Maximum allowed `expiry_days` for user-generated API tokens |
+| `allow_permanent_tokens` | boolean | Whether users may request non-expiring API tokens (`expiry_days: 0`) |
+
+**curl example:**
+
+```bash
+curl http://localhost:8086/api/v1/admin/auth-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+### PUT /api/v1/admin/auth-settings
+
+Update token policy settings. Changes take effect immediately for all new tokens. Existing tokens are not invalidated.
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_role_permissions:update`
+
+**Request Body:**
+
+```json
+{
+  "access_token_expiry_seconds": 1800,
+  "refresh_token_expiry_seconds": 86400,
+  "api_token_max_expiry_days": 30,
+  "allow_permanent_tokens": false
+}
+```
+
+All fields are optional; omitted fields retain their current values.
+
+**Response (200):**
+
+```json
+{
+  "status": "saved"
+}
+```
+
+**curl example:**
+
+```bash
+curl -X PUT http://localhost:8086/api/v1/admin/auth-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"access_token_expiry_seconds": 1800, "allow_permanent_tokens": false}'
+```
+
+---
+
+### POST /api/v1/admin/revoke-user/:username
+
+Immediately revoke all tokens (access, refresh, and API) for the specified user. The revocation is propagated to all cluster nodes via Valkey pub/sub (sub-second propagation when Valkey is available; DB polling fallback otherwise).
+
+> Note: Access tokens (which are not DB-stored) are placed on an in-memory blocklist and will be rejected until they expire naturally. This makes the effective revocation window equal to the access token TTL (default: 1 hour).
+
+**Authentication:** JWT Bearer token required.
+**Permission:** `api_user_permissions:update`
+
+**Path Parameters:**
+
+| Parameter  | Description              |
+|------------|--------------------------|
+| `username` | Username to revoke       |
+
+**Response (200):**
+
+```json
+{
+  "status": "revoked",
+  "username": "jdoe",
+  "tokens_revoked": 3
+}
+```
+
+**Response (404):**
+
+```json
+{
+  "error": "NOT_FOUND",
+  "message": "User 'jdoe' not found",
+  "status": 404
+}
+```
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8086/api/v1/admin/revoke-user/jdoe \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+---
+
+## 14. Dashboard
 
 Dashboard endpoints provide aggregated statistics for the Pantera UI. Responses are served from a 30-second in-memory cache.
 
@@ -2115,7 +2297,7 @@ curl "http://localhost:8086/api/v1/dashboard/requests?period=7d" \
 
 ---
 
-## 14. Health and System
+## 15. Health and System
 
 These endpoints are served on the **repository port** (default 8080), not the management API port.
 
@@ -2206,7 +2388,7 @@ curl http://localhost:8087/metrics/vertx
 
 ---
 
-## 15. Import
+## 16. Import
 
 The import endpoint is served on the **repository port** (default 8080). It provides a bulk import mechanism for migrating artifacts from external registries into Pantera.
 
@@ -2323,7 +2505,7 @@ curl -X PUT http://localhost:8080/.import/maven-local/com/example/lib/1.0/lib-1.
 
 ---
 
-## 16. Error Format
+## 17. Error Format
 
 All API errors follow a consistent JSON format:
 
@@ -2356,7 +2538,7 @@ All API errors follow a consistent JSON format:
 
 ---
 
-## 17. Pagination
+## 18. Pagination
 
 All list endpoints use a consistent pagination format:
 

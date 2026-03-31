@@ -172,8 +172,7 @@ credentials:
 
 #### Provider: `jwt-password`
 
-No additional keys. Validates JWT tokens submitted as the password in HTTP Basic
-Authentication. The JWT must be signed with the secret configured in `meta.jwt.secret`.
+No additional keys. Validates JWT tokens (access tokens or API tokens) submitted as the password in HTTP Basic Authentication. Tokens are verified using the RS256 public key configured in `meta.jwt.public-key-path`. Access tokens are verified purely from the signature (no DB query). API tokens are additionally checked against the `user_tokens` table.
 
 ```yaml
 credentials:
@@ -236,21 +235,36 @@ See [Section 6 -- Role / Permission Files](#6-role--permission-files) for the fo
 
 ### 1.4 meta.jwt
 
-JSON Web Token settings for API token generation and validation.
+JSON Web Token settings for RS256 asymmetric signing and token lifecycle configuration.
+
+> **Breaking change (v2.1.0+):** The `secret` field (HS256) is no longer supported and will cause a startup failure if present. Migrate to `private-key-path` / `public-key-path`. See [Authentication](admin-guide/authentication.md#jwt-token-configuration) for key generation instructions.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `secret` | string | Yes | -- | HMAC signing key. Supports `${ENV_VAR}` syntax. |
-| `expires` | boolean | No | `true` | Whether tokens expire |
-| `expiry-seconds` | int | No | `86400` | Token lifetime in seconds (24 hours default) |
+| `private-key-path` | string | Yes | -- | Filesystem path to the RSA private key PEM file. Supports `${ENV_VAR}`. |
+| `public-key-path` | string | Yes | -- | Filesystem path to the RSA public key PEM file. Supports `${ENV_VAR}`. |
+| `access-token-expiry-seconds` | int | No | `3600` | Access token lifetime in seconds (1 hour default). Configurable at runtime via auth settings API. |
+| `refresh-token-expiry-seconds` | int | No | `604800` | Refresh token lifetime in seconds (7 days default). Configurable at runtime via auth settings API. |
 
 ```yaml
 meta:
   jwt:
-    secret: ${JWT_SECRET}
-    expires: true
-    expiry-seconds: 86400
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
 ```
+
+#### auth_settings table
+
+Token policy is also stored in the database (`auth_settings` table) and can be updated at runtime without restart via `PUT /api/v1/admin/auth-settings`. Database values take precedence over YAML values when present.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `access_token_expiry_seconds` | int | `3600` | Access token TTL |
+| `refresh_token_expiry_seconds` | int | `604800` | Refresh token TTL |
+| `api_token_max_expiry_days` | int | `90` | Maximum expiry days for user-generated API tokens |
+| `allow_permanent_tokens` | boolean | `false` | Whether users may generate non-expiring API tokens |
 
 ---
 
@@ -533,9 +547,10 @@ meta:
     path: /var/pantera/repo
 
   jwt:
-    secret: ${JWT_SECRET}
-    expires: true
-    expiry-seconds: 86400
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
 
   credentials:
     - type: keycloak
@@ -1353,7 +1368,8 @@ Java application directly (unless noted).
 
 | Variable | Description |
 |----------|-------------|
-| `JWT_SECRET` | HMAC key for JWT token signing |
+| `JWT_PRIVATE_KEY_PATH` | Path to the RSA private key PEM file (replaces `JWT_SECRET`) |
+| `JWT_PUBLIC_KEY_PATH` | Path to the RSA public key PEM file |
 | `KEYCLOAK_CLIENT_SECRET` | Keycloak OIDC client secret |
 | `POSTGRES_USER` | PostgreSQL username |
 | `POSTGRES_PASSWORD` | PostgreSQL password |
@@ -1463,7 +1479,8 @@ complete variable reference for the Docker Compose stack.
 | `GF_SERVER_ROOT_URL` | `http://localhost:3000` | Grafana root URL |
 | `GF_INSTALL_PLUGINS` | `grafana-piechart-panel` | Grafana plugins to install |
 | **Application Secrets** | | |
-| `JWT_SECRET` | -- | JWT signing key (required) |
+| `JWT_PRIVATE_KEY_PATH` | `/etc/pantera/jwt-private.pem` | Path to RSA private key PEM file (required) |
+| `JWT_PUBLIC_KEY_PATH` | `/etc/pantera/jwt-public.pem` | Path to RSA public key PEM file (required) |
 
 ---
 

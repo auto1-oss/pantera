@@ -181,13 +181,13 @@ credentials:
   - type: jwt-password
 ```
 
-No additional configuration keys are required. The JWT is validated locally using the shared secret from `meta.jwt.secret`, making this the highest-performance auth method -- no database queries or external IdP calls are needed.
+No additional configuration keys are required. The JWT signature is verified locally using the RS256 public key, making this the highest-performance auth method -- no database queries or external IdP calls are needed for access tokens.
 
 ### How It Works
 
-1. A user (or CI pipeline) obtains a JWT token via `POST /api/v1/auth/token` or `POST /api/v1/auth/token/generate`.
+1. A user (or CI pipeline) obtains an access token via `POST /api/v1/auth/token` or a long-lived API token via `POST /api/v1/auth/token/generate`.
 2. The token is used as the password in the client's Basic Auth configuration.
-3. Pantera validates the JWT signature and expiry locally.
+3. Pantera verifies the RS256 JWT signature and expiry locally (no DB hit for access tokens).
 
 ### Client Configuration Examples
 
@@ -197,71 +197,178 @@ No additional configuration keys are required. The JWT is validated locally usin
 <server>
   <id>pantera</id>
   <username>user@example.com</username>
-  <password>eyJhbGciOiJIUzI1NiIs...</password>
+  <password>eyJhbGciOiJSUzI1NiIs...</password>
 </server>
 ```
 
 **npm (.npmrc):**
 
 ```ini
-//pantera-host:8080/:_authToken=eyJhbGciOiJIUzI1NiIs...
+//pantera-host:8080/:_authToken=eyJhbGciOiJSUzI1NiIs...
 ```
 
 **Docker:**
 
 ```bash
-docker login pantera-host:8080 -u user@example.com -p eyJhbGciOiJIUzI1NiIs...
+docker login pantera-host:8080 -u user@example.com -p eyJhbGciOiJSUzI1NiIs...
 ```
 
 **pip (pip.conf):**
 
 ```ini
 [global]
-index-url = http://user:eyJhbGciOiJIUzI1NiIs...@pantera-host:8080/pypi-proxy/simple
+index-url = http://user:eyJhbGciOiJSUzI1NiIs...@pantera-host:8080/pypi-proxy/simple
 ```
 
 ---
 
 ## JWT Token Configuration
 
-Control token generation and expiry behavior in `pantera.yml`:
+Pantera uses RS256 asymmetric signing. The private key signs tokens; the public key verifies them. Both keys are loaded from PEM files at startup.
+
+> **Breaking change (v2.1.0+):** The `meta.jwt.secret` (HS256) field is no longer supported. Pantera will refuse to start if `secret` is present. Generate an RSA key pair and update your configuration.
+
+### Key Pair Generation
+
+```bash
+# Generate a 2048-bit RSA private key
+openssl genrsa -out /etc/pantera/jwt-private.pem 2048
+
+# Derive the public key
+openssl rsa -in /etc/pantera/jwt-private.pem -pubout -out /etc/pantera/jwt-public.pem
+
+# Restrict permissions (private key must not be world-readable)
+chmod 600 /etc/pantera/jwt-private.pem
+chmod 644 /etc/pantera/jwt-public.pem
+```
+
+### pantera.yml Configuration
 
 ```yaml
 meta:
   jwt:
-    expires: true           # true = tokens expire; false = permanent tokens
-    expiry-seconds: 86400   # Token lifetime in seconds (default: 24 hours)
-    secret: ${JWT_SECRET}   # Signing key (HMAC-SHA256)
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}   # Path to PEM private key file
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}      # Path to PEM public key file
+    access-token-expiry-seconds: 3600            # Access token TTL (default: 1 hour)
+    refresh-token-expiry-seconds: 604800         # Refresh token TTL (default: 7 days)
 ```
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `expires` | boolean | `true` | Whether tokens have an expiry time |
-| `expiry-seconds` | int | `86400` | Session token lifetime (24 hours) |
-| `secret` | string | -- | HMAC-SHA256 signing key (required) |
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `private-key-path` | string | Yes | -- | Path to RSA private key PEM file. Supports `${ENV_VAR}`. |
+| `public-key-path` | string | Yes | -- | Path to RSA public key PEM file. Supports `${ENV_VAR}`. |
+| `access-token-expiry-seconds` | int | No | `3600` | Access token lifetime (1 hour default) |
+| `refresh-token-expiry-seconds` | int | No | `604800` | Refresh token lifetime (7 days default) |
+
+### Token Architecture
+
+Pantera issues three types of tokens:
+
+| Token Type | TTL | Stored in DB | Use Case |
+|-----------|-----|-------------|----------|
+| **access** | 1 hour (configurable) | No | All API and proxy requests |
+| **refresh** | 7 days (configurable) | Yes | Obtain new access tokens |
+| **api** | User-chosen (or permanent) | Yes | CI/CD pipelines, build tools |
+
+Access tokens are verified entirely from the JWT signature -- no DB query. Refresh and API tokens are also checked against the `user_tokens` table.
+
+### Login Response Format
+
+`POST /api/v1/auth/token` now returns both an access token and a refresh token:
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJSUzI1NiIs...",
+  "expires_in": 3600
+}
+```
+
+### Token Refresh
+
+Exchange a refresh token for a new access token:
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "eyJhbGciOiJSUzI1NiIs..."}'
+```
 
 ### Generating API Tokens
 
-Session tokens (from `POST /api/v1/auth/token`) use the configured `expiry-seconds`. For long-lived tokens, use the token generation endpoint:
+For CI/CD and automated tools, generate a long-lived API token:
 
 ```bash
 curl -X POST http://pantera-host:8086/api/v1/auth/token/generate \
-  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"label":"CI Pipeline Token","expiry_days":90}'
 ```
 
-Set `expiry_days` to `0` for a non-expiring token (requires `expires: false` in JWT config or uses the custom token generation path).
+Set `expiry_days` to `0` for a non-expiring token (requires the admin to allow permanent tokens in the auth settings).
 
 ### Token Management
 
 | Action | API Endpoint |
 |--------|-------------|
-| Generate token | `POST /api/v1/auth/token/generate` |
+| Login | `POST /api/v1/auth/token` |
+| Refresh access token | `POST /api/v1/auth/refresh` |
+| Generate API token | `POST /api/v1/auth/token/generate` |
 | List tokens | `GET /api/v1/auth/tokens` |
 | Revoke token | `DELETE /api/v1/auth/tokens/:tokenId` |
 
 See the [REST API Reference](../rest-api-reference.md#3-api-token-management) for full details.
+
+---
+
+## Auth Settings (Admin)
+
+Administrators can configure token TTLs and permanent token policy without a server restart. Changes take effect immediately and are stored in the database.
+
+### View Auth Settings
+
+```bash
+curl http://pantera-host:8086/api/v1/admin/auth-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Response:
+
+```json
+{
+  "access_token_expiry_seconds": 3600,
+  "refresh_token_expiry_seconds": 604800,
+  "api_token_max_expiry_days": 90,
+  "allow_permanent_tokens": false
+}
+```
+
+### Update Auth Settings
+
+```bash
+curl -X PUT http://pantera-host:8086/api/v1/admin/auth-settings \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token_expiry_seconds": 1800,
+    "refresh_token_expiry_seconds": 86400,
+    "api_token_max_expiry_days": 30,
+    "allow_permanent_tokens": false
+  }'
+```
+
+### User Revocation
+
+Immediately invalidate all tokens for a user (access, refresh, and API tokens):
+
+```bash
+curl -X POST http://pantera-host:8086/api/v1/admin/revoke-user/jdoe \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+This publishes a revocation event via Valkey pub/sub, propagating to all cluster nodes within milliseconds. Nodes without Valkey fall back to polling the database every 30 seconds.
+
+The revocation blocklist is maintained in the `user_tokens` table and an in-memory cache. Access tokens (which are not stored in DB) are invalidated via the blocklist until they expire naturally.
 
 ---
 
@@ -291,5 +398,6 @@ The auth cache stores successful authentication results. After a password change
 
 - [Authorization](authorization.md) -- RBAC roles and permissions
 - [Configuration](configuration.md) -- Main pantera.yml structure
-- [Configuration Reference](../configuration-reference.md#12-metacredentials) -- Complete credentials key reference
-- [REST API Reference](../rest-api-reference.md#1-authentication) -- Auth API endpoints
+- [Configuration Reference](../configuration-reference.md#14-metajwt) -- JWT configuration key reference
+- [REST API Reference](../rest-api-reference.md#1-authentication) -- Auth API endpoints (including new refresh and admin endpoints)
+- [Upgrade Procedures](upgrade-procedures.md) -- Migration steps from HS256 to RS256
