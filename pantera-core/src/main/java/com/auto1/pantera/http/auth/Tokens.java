@@ -38,4 +38,18 @@ public interface Tokens {
     default String generate(AuthUser user, boolean permanent) {
         return generate(user);
     }
+
+    /**
+     * Generate an access + refresh token pair for login/callback.
+     * @param user Authenticated user
+     * @return Token pair (access token, refresh token, expiresIn)
+     */
+    default TokenPair generatePair(AuthUser user) {
+        throw new UnsupportedOperationException("Token pair generation not supported");
+    }
+
+    /**
+     * Token pair containing both access and refresh tokens.
+     */
+    record TokenPair(String accessToken, String refreshToken, int expiresIn) {}
 }

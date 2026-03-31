@@ -10,140 +10,212 @@
  */
 package com.auto1.pantera.auth;
 
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
 import com.auto1.pantera.api.AuthTokenRest;
+import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.TokenAuthentication;
 import com.auto1.pantera.http.auth.Tokens;
-import com.auto1.pantera.settings.JwtSettings;
-import io.vertx.core.json.JsonObject;
-import io.vertx.ext.auth.JWTOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Implementation to manage JWT tokens.
- * @since 0.29
+ * Implementation to manage JWT tokens using Auth0 java-jwt with RS256 signing.
+ * @since 2.1.0
  */
 public final class JwtTokens implements Tokens {
 
     /**
-     * Jwt auth provider.
+     * RS256 signing algorithm (wraps RSA key pair).
      */
-    private final JWTAuth provider;
+    private final Algorithm algorithm;
 
     /**
-     * JWT options for token generation (session tokens).
+     * RSA public key (exposed for auth handler construction in Task 11).
      */
-    private final JWTOptions options;
+    private final RSAPublicKey publicKey;
 
     /**
-     * Expiry in seconds for session tokens; 0 means permanent.
-     */
-    private final int expirySeconds;
-
-    /**
-     * Token DAO for persisting JTIs. Null in YAML-only (no-DB) mode.
+     * Token DAO for persisting JTIs. Null in no-DB mode.
      */
     private final UserTokenDao tokenDao;
 
     /**
-     * Ctor with default options (permanent tokens, no JTI enforcement).
-     * @param provider Jwt auth provider
+     * Auth settings DAO for TTL configuration. Null in no-DB mode.
      */
-    public JwtTokens(final JWTAuth provider) {
-        this(provider, new JwtSettings(), null);
-    }
+    private final AuthSettingsDao settingsDao;
 
     /**
-     * Ctor with JWT settings (no JTI enforcement — legacy / no-DB mode).
-     * @param provider Jwt auth provider
-     * @param settings JWT settings
+     * Revocation blocklist for token invalidation.
      */
-    public JwtTokens(final JWTAuth provider, final JwtSettings settings) {
-        this(provider, settings, null);
-    }
+    private final RevocationBlocklist blocklist;
 
     /**
-     * Ctor with JWT settings and token DAO.
-     * When {@code tokenDao} is non-null every generated token embeds a {@code jti}
-     * UUID that is stored in {@code user_tokens}, and every presented token must
-     * have its JTI validated against that table.
-     *
-     * @param provider Jwt auth provider
-     * @param settings JWT settings
+     * Default access token TTL in seconds (cached from settings on construction).
+     */
+    private final int defaultAccessTtl;
+
+    /**
+     * Default refresh token TTL in seconds (cached from settings on construction).
+     */
+    private final int defaultRefreshTtl;
+
+    /**
+     * Ctor.
+     * @param privateKey RSA private key for signing
+     * @param publicKey RSA public key for verification
      * @param tokenDao DAO for JTI persistence; {@code null} disables JTI enforcement
+     * @param settingsDao DAO for TTL configuration; {@code null} uses defaults
+     * @param blocklist Revocation blocklist; {@code null} disables revocation checks
      */
-    public JwtTokens(final JWTAuth provider, final JwtSettings settings,
-        final UserTokenDao tokenDao) {
-        this.provider = provider;
+    public JwtTokens(
+        final RSAPrivateKey privateKey,
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao,
+        final RevocationBlocklist blocklist
+    ) {
+        this.algorithm = Algorithm.RSA256(publicKey, privateKey);
+        this.publicKey = publicKey;
         this.tokenDao = tokenDao;
-        this.expirySeconds = settings.expires() ? settings.expirySeconds() : 0;
-        this.options = new JWTOptions();
-        if (settings.expires()) {
-            this.options.setExpiresInSeconds(settings.expirySeconds());
-        }
+        this.settingsDao = settingsDao;
+        this.blocklist = blocklist;
+        this.defaultAccessTtl = settingsDao != null
+            ? settingsDao.getInt("access_token_ttl_seconds", 3600) : 3600;
+        this.defaultRefreshTtl = settingsDao != null
+            ? settingsDao.getInt("refresh_token_ttl_seconds", 604800) : 604800;
     }
 
     @Override
     public TokenAuthentication auth() {
-        return new JwtTokenAuth(this.provider, this.tokenDao);
+        // UnifiedJwtAuthHandler will be created in Task 11
+        // For now, return a placeholder that uses this.publicKey
+        // This method will be updated in Task 11
+        return token -> java.util.concurrent.CompletableFuture.completedFuture(
+            java.util.Optional.empty()
+        );
     }
 
     @Override
     public String generate(final AuthUser user) {
-        return this.issue(user, this.options, this.expirySeconds);
+        return this.generateAccess(user);
     }
 
     @Override
     public String generate(final AuthUser user, final boolean permanent) {
-        final JWTOptions opts = permanent ? new JWTOptions() : this.options;
-        return this.issue(user, opts, permanent ? 0 : this.expirySeconds);
+        if (permanent) {
+            return this.generateApiToken(user, 0, UUID.randomUUID(), "API Token");
+        }
+        return this.generateAccess(user);
+    }
+
+    @Override
+    public TokenPair generatePair(final AuthUser user) {
+        final String access = this.generateAccess(user);
+        final String refresh = this.generateRefresh(user);
+        final int ttl = this.settingsDao != null
+            ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
+            : this.defaultAccessTtl;
+        return new TokenPair(access, refresh, ttl);
     }
 
     /**
-     * Generate token with a specific expiry and token ID for revocation support.
+     * Generate a named API token with a specific expiry and JTI.
      * When a DAO is present the JTI is persisted so the token can be validated and revoked.
      * @param user User to issue token for
      * @param expirySeconds Expiry in seconds (0 or negative = permanent)
      * @param jti Unique token ID for tracking/revocation
-     * @return String token
+     * @param label Human-readable label for the token
+     * @return Signed JWT string
      */
-    public String generate(final AuthUser user, final int expirySeconds, final UUID jti) {
-        final JWTOptions opts = new JWTOptions();
+    public String generateApiToken(
+        final AuthUser user, final int expirySeconds,
+        final UUID jti, final String label
+    ) {
+        final var builder = JWT.create()
+            .withSubject(user.name())
+            .withClaim(AuthTokenRest.CONTEXT, user.authContext())
+            .withClaim(AuthTokenRest.TYPE, TokenType.API.value())
+            .withJWTId(jti.toString())
+            .withIssuedAt(Instant.now());
+        final Instant expiresAt;
         if (expirySeconds > 0) {
-            opts.setExpiresInSeconds(expirySeconds);
+            expiresAt = Instant.now().plusSeconds(expirySeconds);
+            builder.withExpiresAt(expiresAt);
+        } else {
+            expiresAt = null;
         }
-        final String token = this.provider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, user.name())
-                .put(AuthTokenRest.CONTEXT, user.authContext())
-                .put("jti", jti.toString()),
-            opts
-        );
+        final String token = builder.sign(this.algorithm);
         if (this.tokenDao != null) {
-            final Instant exp = expirySeconds > 0 ? Instant.now().plusSeconds(expirySeconds) : null;
-            this.tokenDao.store(jti, user.name(), "API Token", token, exp);
+            this.tokenDao.store(jti, user.name(), label, token, expiresAt, "api");
         }
         return token;
     }
 
     /**
-     * Shared token issuance: always embeds a jti and stores it when a DAO is present.
+     * Expose the RSA public key for auth handler construction in Task 11.
+     * @return RSA public key
      */
-    private String issue(final AuthUser user, final JWTOptions opts, final int expSecs) {
+    public RSAPublicKey publicKey() {
+        return this.publicKey;
+    }
+
+    /**
+     * Expose the token DAO for auth handler use in Task 11.
+     * @return UserTokenDao, may be null
+     */
+    public UserTokenDao tokenDao() {
+        return this.tokenDao;
+    }
+
+    /**
+     * Expose the revocation blocklist for auth handler use in Task 11.
+     * @return RevocationBlocklist, may be null
+     */
+    public RevocationBlocklist blocklist() {
+        return this.blocklist;
+    }
+
+    /**
+     * Generate a short-lived access token.
+     */
+    private String generateAccess(final AuthUser user) {
+        final int ttl = this.settingsDao != null
+            ? this.settingsDao.getInt("access_token_ttl_seconds", 3600)
+            : this.defaultAccessTtl;
+        return JWT.create()
+            .withSubject(user.name())
+            .withClaim(AuthTokenRest.CONTEXT, user.authContext())
+            .withClaim(AuthTokenRest.TYPE, TokenType.ACCESS.value())
+            .withJWTId(UUID.randomUUID().toString())
+            .withIssuedAt(Instant.now())
+            .withExpiresAt(Instant.now().plusSeconds(ttl))
+            .sign(this.algorithm);
+    }
+
+    /**
+     * Generate a refresh token and persist its JTI when a DAO is present.
+     */
+    private String generateRefresh(final AuthUser user) {
+        final int ttl = this.settingsDao != null
+            ? this.settingsDao.getInt("refresh_token_ttl_seconds", 604800)
+            : this.defaultRefreshTtl;
         final UUID jti = UUID.randomUUID();
-        final String token = this.provider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, user.name())
-                .put(AuthTokenRest.CONTEXT, user.authContext())
-                .put("jti", jti.toString()),
-            opts
-        );
+        final Instant expiresAt = Instant.now().plusSeconds(ttl);
+        final String token = JWT.create()
+            .withSubject(user.name())
+            .withClaim(AuthTokenRest.CONTEXT, user.authContext())
+            .withClaim(AuthTokenRest.TYPE, TokenType.REFRESH.value())
+            .withJWTId(jti.toString())
+            .withIssuedAt(Instant.now())
+            .withExpiresAt(expiresAt)
+            .sign(this.algorithm);
         if (this.tokenDao != null) {
-            final Instant exp = expSecs > 0 ? Instant.now().plusSeconds(expSecs) : null;
-            this.tokenDao.store(jti, user.name(), "API Token", token, exp);
+            this.tokenDao.store(jti, user.name(), "Refresh Token", token, expiresAt, "refresh");
         }
         return token;
     }
