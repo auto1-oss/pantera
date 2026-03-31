@@ -402,6 +402,12 @@ SOFTWARE.
             <artifactId>vertx-junit5</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Auth0 java-jwt: battle-tested JWT library for RS256 signing/verification -->
+        <dependency>
+            <groupId>com.auth0</groupId>
+            <artifactId>java-jwt</artifactId>
+            <version>4.4.0</version>
+        </dependency>
     </dependencies>
     <build>
         <resources>
