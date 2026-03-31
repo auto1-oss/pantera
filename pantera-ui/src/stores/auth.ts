@@ -4,7 +4,11 @@ import type { UserInfo, AuthProvider } from '@/types'
 import * as authApi from '@/api/auth'
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(localStorage.getItem('jwt'))
+  // Migrate away from legacy HS256 jwt key — those tokens are invalid under the new RS256 scheme
+  localStorage.removeItem('jwt')
+
+  const token = ref<string | null>(localStorage.getItem('access_token'))
+  const refreshToken = ref<string | null>(localStorage.getItem('refresh_token'))
   const user = ref<UserInfo | null>(null)
   const providers = ref<AuthProvider[]>([])
   const loading = ref(false)
@@ -22,7 +26,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const resp = await authApi.login(uname, password)
       token.value = resp.token
-      localStorage.setItem('jwt', resp.token)
+      localStorage.setItem('access_token', resp.token)
+      if (resp.refresh_token) {
+        refreshToken.value = resp.refresh_token
+        localStorage.setItem('refresh_token', resp.refresh_token)
+      }
       await fetchUser()
     } finally {
       loading.value = false
@@ -73,7 +81,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const resp = await authApi.exchangeOAuthCode(code, provider, callbackUrl)
       token.value = resp.token
-      localStorage.setItem('jwt', resp.token)
+      localStorage.setItem('access_token', resp.token)
+      if (resp.refresh_token) {
+        refreshToken.value = resp.refresh_token
+        localStorage.setItem('refresh_token', resp.refresh_token)
+      }
       await fetchUser()
     } finally {
       loading.value = false
@@ -82,7 +94,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     token.value = null
+    refreshToken.value = null
     user.value = null
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
     localStorage.removeItem('jwt')
   }
 
@@ -100,7 +115,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    token, user, providers, loading,
+    token, refreshToken, user, providers, loading,
     isAuthenticated, isAdmin, username,
     login, logout, fetchUser, fetchProviders,
     ssoRedirect, handleOAuthCallback,

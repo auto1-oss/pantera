@@ -34,6 +34,8 @@ export interface AuthProvidersResponse {
 
 export interface TokenResponse {
   token: string
+  refresh_token?: string
+  expires_in?: number
 }
 
 export interface UserInfo {
