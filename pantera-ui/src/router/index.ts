@@ -20,6 +20,17 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/dashboard/DashboardView.vue'),
   },
   {
+    path: '/setup',
+    name: 'quick-setup',
+    component: () => import('@/views/setup/QuickSetupView.vue'),
+  },
+  {
+    path: '/setup/:tech',
+    name: 'tech-setup',
+    component: () => import('@/views/setup/TechSetupView.vue'),
+    props: true,
+  },
+  {
     path: '/repositories',
     name: 'repositories',
     component: () => import('@/views/repos/RepoListView.vue'),

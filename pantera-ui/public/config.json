@@ -6,5 +6,6 @@
   "apmEnabled": false,
   "apmServerUrl": "",
   "apmServiceName": "pantera-ui",
-  "apmEnvironment": "development"
+  "apmEnvironment": "development",
+  "registryUrl": ""
 }

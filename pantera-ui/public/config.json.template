@@ -6,5 +6,6 @@
   "apmEnabled": $APM_ENABLED,
   "apmServerUrl": "$APM_SERVER_URL",
   "apmServiceName": "$APM_SERVICE_NAME",
-  "apmEnvironment": "$APM_ENVIRONMENT"
+  "apmEnvironment": "$APM_ENVIRONMENT",
+  "registryUrl": "$REGISTRY_URL"
 }

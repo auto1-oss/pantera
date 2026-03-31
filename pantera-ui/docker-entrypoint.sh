@@ -10,6 +10,7 @@ export APM_ENABLED="${APM_ENABLED:-false}"
 export APM_SERVER_URL="${APM_SERVER_URL:-}"
 export APM_SERVICE_NAME="${APM_SERVICE_NAME:-pantera-ui}"
 export APM_ENVIRONMENT="${APM_ENVIRONMENT:-production}"
+export REGISTRY_URL="${REGISTRY_URL:-}"
 
 # Generate config.json from template with environment variable values
 envsubst < /usr/share/nginx/html/config.json.template \
