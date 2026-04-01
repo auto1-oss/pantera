@@ -10,8 +10,11 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
+import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.cooldown.NoopCooldownService;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
@@ -32,8 +35,14 @@ import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxExtension;
 import io.vertx.junit5.VertxTestContext;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Assertions;
@@ -57,13 +66,9 @@ public class AsyncApiTestBase {
     static final String HOST = "localhost";
 
     /**
-     * Hardcoded JWT token for test user "pantera" with context "test".
-     * Issued with HS256, secret "some secret", no expiry.
+     * RS256 test token, generated dynamically in setUp.
      */
-    static final String TEST_TOKEN =
-        "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9"
-        + ".eyJzdWIiOiJwYW50ZXJhIiwiY29udGV4dCI6InRlc3QiLCJpYXQiOjE2ODIwODgxNTh9"
-        + ".wWJgLLe4B_zjmhzKGstCFyHX-C2tE6ucu3WC4G5lEdk";
+    static String TEST_TOKEN;
 
     /**
      * Server port.
@@ -89,9 +94,30 @@ public class AsyncApiTestBase {
                 return Optional.of(storage);
             }
         };
+        // Generate RS256 key pair for tests
+        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+        gen.initialize(2048);
+        final KeyPair kp = gen.generateKeyPair();
+        final RSAPrivateKey privateKey = (RSAPrivateKey) kp.getPrivate();
+        final RSAPublicKey publicKey = (RSAPublicKey) kp.getPublic();
+        final Algorithm algorithm = Algorithm.RSA256(publicKey, privateKey);
+        // Generate a valid RS256 test token
+        TEST_TOKEN = JWT.create()
+            .withSubject("pantera")
+            .withClaim("context", "test")
+            .withClaim("type", "access")
+            .withJWTId(UUID.randomUUID().toString())
+            .withIssuedAt(Instant.now())
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(algorithm);
+        // JwtTokens needs RS256 keys — no DB, no settings, no blocklist for tests
+        final JwtTokens jwtTokens = new JwtTokens(
+            privateKey, publicKey, null, null, null
+        );
+        // Still need a JWTAuth for the Verticle constructor (legacy param, may be unused)
         final JWTAuth jwt = JWTAuth.create(
             vertx, new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("some secret")
+                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("unused-in-new-auth")
             )
         );
         final AsyncApiVerticle verticle = new AsyncApiVerticle(
@@ -106,7 +132,7 @@ public class AsyncApiTestBase {
             new TestSettings(),
             ArtifactIndex.NOP,
             null,
-            null
+            jwtTokens
         );
         vertx.deployVerticle(verticle, ctx.succeedingThenComplete());
         this.waitForActualPort(verticle);

@@ -60,11 +60,12 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
     public Authentication getAuthentication(final YamlMapping cfg) {
         final YamlMapping meta = cfg.yamlMapping("meta");
         final YamlMapping jwtYaml = meta != null ? meta.yamlMapping("jwt") : null;
-        final String secret = jwtYaml != null ? jwtYaml.string("secret") : null;
-        if (secret == null || secret.isEmpty() || "some secret".equals(secret)) {
+        String secret = jwtYaml != null ? jwtYaml.string("secret") : null;
+        if (secret == null || secret.isEmpty()) {
+            secret = "jwt-password-fallback-secret";
             EcsLogger.warn("com.auto1.pantera.auth")
-                .message("JWT-as-password auth enabled but using default secret - "
-                    + "please configure meta.jwt.secret for production")
+                .message("JWT-as-password auth: no secret configured, using fallback. "
+                    + "This mode is deprecated — migrate to RS256 key-based auth.")
                 .eventCategory("authentication")
                 .eventAction("jwt_password_init")
                 .eventOutcome("success")
