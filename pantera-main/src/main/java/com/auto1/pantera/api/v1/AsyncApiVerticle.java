@@ -277,16 +277,50 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null
         );
         authHandler.register(router);
-        // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth)
-        final io.vertx.ext.web.handler.AuthenticationHandler jwtHandler =
-            JWTAuthHandler.create(this.jwt);
+        // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).
+        // Uses UnifiedJwtAuthHandler (RS256 via Auth0 java-jwt) instead of Vert.x JWTAuthHandler.
+        // After validation, bridges the result into ctx.setUser() so all downstream handlers
+        // that read ctx.user().principal() continue to work unchanged.
+        final com.auto1.pantera.auth.UnifiedJwtAuthHandler unifiedAuth =
+            this.jwtTokens != null
+                ? (com.auto1.pantera.auth.UnifiedJwtAuthHandler) this.jwtTokens.auth()
+                : null;
         router.route("/api/v1/*").handler(ctx -> {
-            // Skip JWT for download-direct — it authenticates via HMAC token in query param
             if (ctx.request().path().contains("/artifact/download-direct")) {
                 ctx.next();
-            } else {
-                jwtHandler.handle(ctx);
+                return;
             }
+            if (unifiedAuth == null) {
+                // No RS256 keys configured — fall back to legacy Vert.x JWTAuth
+                JWTAuthHandler.create(this.jwt).handle(ctx);
+                return;
+            }
+            final String authHeader = ctx.request().getHeader("Authorization");
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Bearer token required");
+                return;
+            }
+            final String rawToken = authHeader.substring(7);
+            unifiedAuth.user(rawToken).toCompletableFuture()
+                .thenAccept(userOpt -> {
+                    if (userOpt.isPresent()) {
+                        final com.auto1.pantera.http.auth.AuthUser authUser = userOpt.get();
+                        // Bridge into Vert.x User so ctx.user().principal() works
+                        // for all downstream handlers (me, generate, list, settings, etc.)
+                        final io.vertx.core.json.JsonObject principal = new io.vertx.core.json.JsonObject()
+                            .put(com.auto1.pantera.api.AuthTokenRest.SUB, authUser.name())
+                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext());
+                        ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
+                        ctx.user().principal().mergeIn(principal);
+                        ctx.next();
+                    } else {
+                        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
+                    }
+                })
+                .exceptionally(err -> {
+                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Authentication failed");
+                    return null;
+                });
         });
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
