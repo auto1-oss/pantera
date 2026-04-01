@@ -386,7 +386,8 @@ final class ProxySlice implements Slice {
     ) {
         final AtomicReference<Headers> remote = new AtomicReference<>(Headers.EMPTY);
         final AtomicBoolean remoteSuccess = new AtomicBoolean(false);
-        final Key key = ProxySlice.keyFromPath(line);
+        final SimpleApiFormat format = SimpleApiFormat.fromHeaders(rqheaders);
+        final Key key = ProxySlice.keyFromPath(line, format);
         final RequestLine upstream = this.upstreamLine(line);
         // Stale-while-revalidate: check if we have stale cached content
         return this.asyncStorage.exists(key).thenCompose(exists -> {
@@ -394,7 +395,7 @@ final class ProxySlice implements Slice {
                 return this.indexCacheControl.validate(key, Remote.EMPTY).thenCompose(fresh -> {
                     if (!fresh) {
                         // Stale content - serve immediately + background refresh
-                        this.backgroundRefreshIndex(key, line, upstream, user);
+                        this.backgroundRefreshIndex(key, line, upstream, user, format);
                         return this.asyncStorage.value(key).thenCompose(cached ->
                             this.afterHit(line, rqheaders, key, cached, Headers.EMPTY, false)
                         );
@@ -407,7 +408,7 @@ final class ProxySlice implements Slice {
             }
             // Cache miss - fetch from upstream with write-time rewriting
             return this.fetchNonArtifact(
-                line, rqheaders, body, user, key, upstream, remote, remoteSuccess
+                line, rqheaders, body, user, key, upstream, remote, remoteSuccess, format
             );
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
@@ -429,14 +430,15 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Response> fetchNonArtifact(
         final RequestLine line, final Headers rqheaders, final Content body,
         final String user, final Key key, final RequestLine upstream,
-        final AtomicReference<Headers> remote, final AtomicBoolean remoteSuccess
+        final AtomicReference<Headers> remote, final AtomicBoolean remoteSuccess,
+        final SimpleApiFormat format
     ) {
         return this.cache.load(
             key,
             new Remote.WithErrorHandling(
                 () -> {
                     final CompletableFuture<Response> fetch =
-                        this.fetchFromUpstream(line, upstream);
+                        this.fetchFromUpstream(line, upstream, format);
                     return fetch.thenCompose(
                         (Response response) -> {
                             remote.set(response.headers());
@@ -500,9 +502,10 @@ final class ProxySlice implements Slice {
 
     /**
      * Fetch response from upstream (mirror, files.pythonhosted.org, or origin).
+     * For index pages, forwards the Accept header to support PEP 691 JSON negotiation.
      */
     private CompletableFuture<Response> fetchFromUpstream(
-        final RequestLine line, final RequestLine upstream
+        final RequestLine line, final RequestLine upstream, final SimpleApiFormat format
     ) {
         final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
         if (mirror != null) {
@@ -527,13 +530,25 @@ final class ProxySlice implements Slice {
                 .log();
             return this.fetchFromMirror(line, filesUri);
         }
+        final Headers upstreamHeaders = format == SimpleApiFormat.JSON
+            ? Headers.from(new Header("Accept", SimpleApiFormat.JSON.contentType()))
+            : Headers.EMPTY;
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Forwarding to primary upstream")
             .eventCategory("repository")
             .eventAction("proxy_request")
             .field("url.path", line.uri().getPath())
             .log();
-        return this.origin.response(upstream, Headers.EMPTY, Content.EMPTY);
+        return this.origin.response(upstream, upstreamHeaders, Content.EMPTY);
+    }
+
+    /**
+     * Fetch response from upstream without format negotiation (used for artifact fetches).
+     */
+    private CompletableFuture<Response> fetchFromUpstream(
+        final RequestLine line, final RequestLine upstream
+    ) {
+        return this.fetchFromUpstream(line, upstream, SimpleApiFormat.HTML);
     }
 
     /**
@@ -616,7 +631,7 @@ final class ProxySlice implements Slice {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefreshIndex(
         final Key key, final RequestLine line,
-        final RequestLine upstream, final String user
+        final RequestLine upstream, final String user, final SimpleApiFormat format
     ) {
         final String keyStr = key.string();
         if (!this.refreshing.add(keyStr)) {
@@ -626,9 +641,15 @@ final class ProxySlice implements Slice {
             try {
                 // Build request with conditional header if available
                 final String lm = this.lastModifiedCache.getIfPresent(keyStr);
-                final Headers extra = lm != null
+                Headers extra = lm != null
                     ? Headers.from(new Header("If-Modified-Since", lm))
                     : Headers.EMPTY;
+                // Include PEP 691 Accept header when client requested JSON
+                if (format == SimpleApiFormat.JSON) {
+                    extra = extra.copy().add(
+                        new Header("Accept", SimpleApiFormat.JSON.contentType())
+                    );
+                }
                 // Fetch from upstream
                 this.fetchFromUpstreamWithHeaders(line, upstream, extra)
                     .thenCompose(response -> {
@@ -1459,6 +1480,17 @@ final class ProxySlice implements Slice {
      * @return Instance of {@link Key}.
      */
     private static Key keyFromPath(final RequestLine line) {
+        return ProxySlice.keyFromPath(line, SimpleApiFormat.HTML);
+    }
+
+    /**
+     * Obtains key from request line with names normalization.
+     * For JSON format (PEP 691), appends ".json" suffix to avoid cache collisions with HTML.
+     * @param line Request line
+     * @param format Requested API format
+     * @return Instance of {@link Key}.
+     */
+    private static Key keyFromPath(final RequestLine line, final SimpleApiFormat format) {
         final URI uri = line.uri();
         Key res = new KeyFromPath(uri.getPath());
         final String last = new KeyLastPart(res).get();
@@ -1469,6 +1501,9 @@ final class ProxySlice implements Slice {
                     String.format("%s$", last), new NormalizedProjectName.Simple(last).value()
                 )
             );
+        }
+        if (format == SimpleApiFormat.JSON && !artifactPath && !last.endsWith(".metadata")) {
+            res = new Key.From(res.string() + ".json");
         }
         return res;
     }
