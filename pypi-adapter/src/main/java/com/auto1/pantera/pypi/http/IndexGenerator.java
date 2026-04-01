@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.rx.RxFuture;
+import com.auto1.pantera.pypi.meta.PypiSidecar;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Single;
@@ -93,12 +94,20 @@ public final class IndexGenerator {
                                 // It's a file, not a directory - process it directly
                                 return this.storage.value(key).thenCompose(
                                     value -> new ContentDigest(value, Digests.SHA256).hex()
-                                ).thenApply(
-                                    hex -> String.format(
-                                        "<a href=\"%s#sha256=%s\">%s</a><br/>",
-                                        String.format("%s/%s", this.prefix, key.string()),
-                                        hex,
-                                        new KeyLastPart(key).get()
+                                ).thenCompose(
+                                    hex -> PypiSidecar.read(this.storage, key).thenApply(
+                                        optMeta -> {
+                                            final String attrs = optMeta
+                                                .map(IndexGenerator::buildHtmlAttributes)
+                                                .orElse("");
+                                            return String.format(
+                                                "<a href=\"%s#sha256=%s\"%s>%s</a><br/>",
+                                                String.format("%s/%s", this.prefix, key.string()),
+                                                hex,
+                                                attrs,
+                                                new KeyLastPart(key).get()
+                                            );
+                                        }
                                     )
                                 );
                             } else {
@@ -109,22 +118,28 @@ public final class IndexGenerator {
                                         subKey -> RxFuture.single(
                                             this.storage.value(subKey).thenCompose(
                                                 value -> new ContentDigest(value, Digests.SHA256).hex()
-                                            ).thenApply(
-                                                hex -> {
-                                                    // Generate relative URL from package index to file
-                                                    // e.g., from /pypi/hello/ to /pypi/hello/1.0.0/hello-1.0.0.whl
-                                                    final String filename = new KeyLastPart(subKey).get();
-                                                    final String versionPath = new KeyLastPart(
-                                                        new Key.From(subKey.parent().get())
-                                                    ).get();
-                                                    return String.format(
-                                                        "<a href=\"%s/%s#sha256=%s\">%s</a><br/>",
-                                                        versionPath,
-                                                        filename,
-                                                        hex,
-                                                        filename
-                                                    );
-                                                }
+                                            ).thenCompose(
+                                                hex -> PypiSidecar.read(this.storage, subKey).thenApply(
+                                                    optMeta -> {
+                                                        // Generate relative URL from package index to file
+                                                        // e.g., from /pypi/hello/ to /pypi/hello/1.0.0/hello-1.0.0.whl
+                                                        final String filename = new KeyLastPart(subKey).get();
+                                                        final String versionPath = new KeyLastPart(
+                                                            new Key.From(subKey.parent().get())
+                                                        ).get();
+                                                        final String attrs = optMeta
+                                                            .map(IndexGenerator::buildHtmlAttributes)
+                                                            .orElse("");
+                                                        return String.format(
+                                                            "<a href=\"%s/%s#sha256=%s\"%s>%s</a><br/>",
+                                                            versionPath,
+                                                            filename,
+                                                            hex,
+                                                            attrs,
+                                                            filename
+                                                        );
+                                                    }
+                                                )
                                             )
                                         )
                                     )
@@ -218,5 +233,32 @@ public final class IndexGenerator {
                 }
             )
             .toCompletableFuture();
+    }
+
+    /**
+     * Builds HTML data-attribute string from sidecar metadata for PEP 503/592/658 compliance.
+     *
+     * @param meta Sidecar metadata
+     * @return Space-prefixed attribute string, or empty string if no attributes apply
+     */
+    private static String buildHtmlAttributes(final PypiSidecar.Meta meta) {
+        final StringBuilder attrs = new StringBuilder();
+        if (meta.requiresPython() != null && !meta.requiresPython().isEmpty()) {
+            attrs.append(String.format(
+                " data-requires-python=\"%s\"",
+                meta.requiresPython().replace(">", "&gt;").replace("<", "&lt;")
+            ));
+        }
+        if (meta.yanked()) {
+            final String reason = meta.yankedReason().orElse("");
+            attrs.append(String.format(" data-yanked=\"%s\"", reason));
+        }
+        if (meta.distInfoMetadata().isPresent()) {
+            attrs.append(String.format(
+                " data-dist-info-metadata=\"sha256=%s\"",
+                meta.distInfoMetadata().get()
+            ));
+        }
+        return attrs.toString();
     }
 }
