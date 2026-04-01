@@ -65,55 +65,43 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Full-text search SQL using tsvector/GIN index with relevance ranking.
-     * Falls back to LIKE if tsvector returns no results.
+     * Uses COUNT(*) OVER() window function to get the total hit count in a
+     * single index scan instead of a separate COUNT query.
      */
     private static final String FTS_SEARCH_SQL = String.join(
         " ",
         "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank",
+        "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank,",
+        "COUNT(*) OVER() AS total_count",
         "FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)",
         "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
     );
 
     /**
-     * Full-text count SQL using tsvector.
-     */
-    private static final String FTS_COUNT_SQL =
-        "SELECT COUNT(*) FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)";
-
-    /**
      * Prefix-matching FTS SQL using to_tsquery with ':*' suffix.
      * Matches words starting with query terms: "test" matches "test", "testing", etc.
+     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
      */
     private static final String PREFIX_FTS_SEARCH_SQL = String.join(
         " ",
         "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
-        "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank",
+        "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank,",
+        "COUNT(*) OVER() AS total_count",
         "FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)",
         "ORDER BY rank DESC, name, version LIMIT ? OFFSET ?"
     );
 
     /**
-     * Prefix-matching FTS count SQL.
-     */
-    private static final String PREFIX_FTS_COUNT_SQL =
-        "SELECT COUNT(*) FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)";
-
-    /**
      * Fallback search SQL with LIKE (used when tsvector is unavailable or returns 0 results).
+     * Uses COUNT(*) OVER() window function to avoid a separate COUNT query.
      */
     private static final String LIKE_SEARCH_SQL = String.join(
         " ",
-        "SELECT repo_type, repo_name, name, version, size, created_date, owner",
+        "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+        "COUNT(*) OVER() AS total_count",
         "FROM artifacts WHERE LOWER(name) LIKE LOWER(?)",
         "ORDER BY name, version LIMIT ? OFFSET ?"
     );
-
-    /**
-     * Fallback count SQL with LIKE.
-     */
-    private static final String LIKE_COUNT_SQL =
-        "SELECT COUNT(*) FROM artifacts WHERE LOWER(name) LIKE LOWER(?)";
 
     /**
      * Statement timeout for LIKE fallback queries.
@@ -286,6 +274,459 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     @Override
     public CompletableFuture<SearchResult> search(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            final boolean uselike = query.contains("%") || query.contains("_");
+            if (uselike) {
+                return DbArtifactIndex.searchFilteredLike(
+                    this.source, query, maxResults, offset, repoType, repoName, sortBy, sortAsc
+                );
+            }
+            try {
+                final SearchResult ftsResult = DbArtifactIndex.searchFilteredPrefixFts(
+                    this.source, query, maxResults, offset, repoType, repoName, sortBy, sortAsc
+                );
+                if (ftsResult.totalHits() == 0) {
+                    final SearchResult exact = DbArtifactIndex.searchFilteredFts(
+                        this.source, query, maxResults, offset, repoType, repoName, sortBy, sortAsc
+                    );
+                    if (exact.totalHits() == 0) {
+                        return DbArtifactIndex.searchFilteredLike(
+                            this.source, "%" + query + "%", maxResults, offset,
+                            repoType, repoName, sortBy, sortAsc
+                        );
+                    }
+                    return exact;
+                }
+                return ftsResult;
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.index")
+                    .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
+                    .eventCategory("search")
+                    .eventAction("db_fts_fallback")
+                    .error(ex)
+                    .log();
+                return DbArtifactIndex.searchFilteredLike(
+                    this.source, "%" + query + "%", maxResults, offset,
+                    repoType, repoName, sortBy, sortAsc
+                );
+            }
+        }, this.executor);
+    }
+
+    /**
+     * Build the ORDER BY clause based on sort parameters.
+     * For version sort, uses integer array comparison for natural ordering
+     * (4.1, 4.2, ..., 4.9, 4.10) instead of lexicographic.
+     *
+     * @param sortBy Sort field ("relevance", "name", "version", "created_at")
+     * @param sortAsc True for ascending order
+     * @param hasRank True when the SELECT includes a rank column (FTS queries)
+     * @return SQL ORDER BY clause (without "ORDER BY" keyword)
+     */
+    @SuppressWarnings("PMD.CyclomaticComplexity")
+    private static String buildOrderBy(
+        final String sortBy, final boolean sortAsc, final boolean hasRank
+    ) {
+        final String dir = sortAsc ? "ASC" : "DESC";
+        if (sortBy == null || "relevance".equalsIgnoreCase(sortBy)) {
+            return hasRank ? "rank DESC, name ASC" : "name ASC";
+        }
+        return switch (sortBy.toLowerCase()) {
+            case "name" -> "name " + dir;
+            case "version" ->
+                "CASE WHEN version ~ '^\\d+'"
+                + " THEN string_to_array("
+                + "REGEXP_REPLACE(version, '[^0-9.].*$', ''), '.')::int[]"
+                + " ELSE NULL END "
+                + dir + " NULLS LAST, version " + dir;
+            case "created_at" -> "created_date " + dir;
+            default -> hasRank ? "rank DESC, name ASC" : "name ASC";
+        };
+    }
+
+    /**
+     * Build optional WHERE filter clauses for type and repo.
+     * Type matching uses IN (?, ?, ?) for clarity and portability.
+     *
+     * @param repoType Base repo type (e.g. "maven"), or null
+     * @param repoName Exact repo name, or null
+     * @return SQL fragment starting with " AND ..." or empty string
+     */
+    private static String buildFilterClauses(final String repoType, final String repoName) {
+        final StringBuilder sb = new StringBuilder();
+        if (repoType != null && !repoType.isBlank()) {
+            sb.append(" AND repo_type IN (?, ?, ?)");
+        }
+        if (repoName != null && !repoName.isBlank()) {
+            sb.append(" AND repo_name = ?");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Build a type-only WHERE filter clause for aggregation queries.
+     *
+     * @param repoType Base repo type, or null
+     * @return SQL fragment starting with " AND ..." or empty string
+     */
+    private static String buildTypeFilterClause(final String repoType) {
+        if (repoType != null && !repoType.isBlank()) {
+            return " AND repo_type IN (?, ?, ?)";
+        }
+        return "";
+    }
+
+    /**
+     * Set filter parameters onto a PreparedStatement starting at the given index.
+     * Binds base type, base-proxy, and base-group as three separate Java strings.
+     *
+     * @param stmt PreparedStatement
+     * @param idx 1-based parameter index to start from
+     * @param repoType Base repo type filter, or null
+     * @param repoName Exact repo name filter, or null
+     * @return Next available parameter index
+     * @throws SQLException on SQL error
+     */
+    private static int setFilterParams(
+        final PreparedStatement stmt, final int idx,
+        final String repoType, final String repoName
+    ) throws SQLException {
+        int next = idx;
+        if (repoType != null && !repoType.isBlank()) {
+            next = setTypeFilterParams(stmt, next, repoType);
+        }
+        if (repoName != null && !repoName.isBlank()) {
+            stmt.setString(next++, repoName);
+        }
+        return next;
+    }
+
+    /**
+     * Set type filter parameters (base, base-proxy, base-group).
+     *
+     * @param stmt PreparedStatement
+     * @param idx 1-based parameter index to start from
+     * @param repoType Base repo type
+     * @return Next available parameter index
+     * @throws SQLException on SQL error
+     */
+    private static int setTypeFilterParams(
+        final PreparedStatement stmt, final int idx, final String repoType
+    ) throws SQLException {
+        int next = idx;
+        stmt.setString(next++, repoType);
+        stmt.setString(next++, repoType + "-proxy");
+        stmt.setString(next++, repoType + "-group");
+        return next;
+    }
+
+    /**
+     * Query type-level aggregation counts for FTS searches (unfiltered by type/repo).
+     * Groups by base repo type (stripping -proxy and -group suffixes).
+     *
+     * @param conn Open connection to reuse
+     * @param ftsWhere FTS WHERE clause with one ? for the query param
+     * @param queryParam The tsquery or plain-text query value
+     * @return Ordered map of base type to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryTypeCounts(
+        final Connection conn, final String ftsWhere, final String queryParam
+    ) throws SQLException {
+        final String sql = String.join(
+            " ",
+            "SELECT REGEXP_REPLACE(repo_type, '-(proxy|group)$', '') AS base_type,",
+            "COUNT(*) AS cnt",
+            "FROM artifacts WHERE", ftsWhere,
+            "GROUP BY base_type ORDER BY cnt DESC"
+        );
+        final Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, queryParam);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString("base_type"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Query repo-level aggregation counts for FTS searches (scoped to the active type filter).
+     * When no type filter is active, returns counts across all types.
+     *
+     * @param conn Open connection to reuse
+     * @param ftsWhere FTS WHERE clause with one ? for the query param
+     * @param queryParam The tsquery or plain-text query value
+     * @param repoType Active type filter, or null
+     * @return Ordered map of repo name to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryRepoCounts(
+        final Connection conn, final String ftsWhere, final String queryParam,
+        final String repoType
+    ) throws SQLException {
+        final String typeFilter = buildTypeFilterClause(repoType);
+        final String sql = String.join(
+            " ",
+            "SELECT repo_name, COUNT(*) AS cnt",
+            "FROM artifacts WHERE", ftsWhere, typeFilter,
+            "GROUP BY repo_name ORDER BY cnt DESC"
+        );
+        final Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, queryParam);
+            if (repoType != null && !repoType.isBlank()) {
+                setTypeFilterParams(stmt, 2, repoType);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Query type-level aggregation counts for LIKE searches (unfiltered by type/repo).
+     *
+     * @param conn Open connection to reuse
+     * @param likeWhere LIKE WHERE clause with one ? for the pattern
+     * @param pattern LIKE pattern
+     * @return Ordered map of base type to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryTypeCountsLike(
+        final Connection conn, final String likeWhere, final String pattern
+    ) throws SQLException {
+        final String sql = String.join(
+            " ",
+            "SELECT REGEXP_REPLACE(repo_type, '-(proxy|group)$', '') AS base_type,",
+            "COUNT(*) AS cnt",
+            "FROM artifacts WHERE", likeWhere,
+            "GROUP BY base_type ORDER BY cnt DESC"
+        );
+        final Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, pattern);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString("base_type"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Query repo-level aggregation counts for LIKE searches (scoped to active type filter).
+     *
+     * @param conn Open connection to reuse
+     * @param likeWhere LIKE WHERE clause with one ? for the pattern
+     * @param pattern LIKE pattern
+     * @param repoType Active type filter, or null
+     * @return Ordered map of repo name to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryRepoCountsLike(
+        final Connection conn, final String likeWhere, final String pattern,
+        final String repoType
+    ) throws SQLException {
+        final String typeFilter = buildTypeFilterClause(repoType);
+        final String sql = String.join(
+            " ",
+            "SELECT repo_name, COUNT(*) AS cnt",
+            "FROM artifacts WHERE", likeWhere, typeFilter,
+            "GROUP BY repo_name ORDER BY cnt DESC"
+        );
+        final Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, pattern);
+            if (repoType != null && !repoType.isBlank()) {
+                setTypeFilterParams(stmt, 2, repoType);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Filtered prefix-FTS search with aggregation counts.
+     */
+    private static SearchResult searchFilteredPrefixFts(
+        final DataSource source, final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc
+    ) throws SQLException {
+        final String tsquery = DbArtifactIndex.buildPrefixTsQuery(query);
+        if (tsquery.isEmpty()) {
+            return new SearchResult(java.util.Collections.emptyList(), 0, offset, null);
+        }
+        final String filter = buildFilterClauses(repoType, repoName);
+        final String orderBy = buildOrderBy(sortBy, sortAsc, true);
+        final String searchSql = String.join(
+            " ",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "ts_rank(search_tokens, to_tsquery('simple', ?)) AS rank,",
+            "COUNT(*) OVER() AS total_count",
+            "FROM artifacts WHERE search_tokens @@ to_tsquery('simple', ?)",
+            filter,
+            "ORDER BY", orderBy, "LIMIT ? OFFSET ?"
+        );
+        final String ftsWhere = "search_tokens @@ to_tsquery('simple', ?)";
+        long totalHits = 0;
+        final List<ArtifactDocument> docs = new ArrayList<>();
+        try (Connection conn = source.getConnection()) {
+            // Main search query with COUNT(*) OVER()
+            try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
+                stmt.setString(1, tsquery);
+                stmt.setString(2, tsquery);
+                final int next = setFilterParams(stmt, 3, repoType, repoName);
+                stmt.setInt(next, maxResults);
+                stmt.setInt(next + 1, offset);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        if (docs.isEmpty()) {
+                            totalHits = rs.getLong("total_count");
+                        }
+                        docs.add(fromResultSet(rs));
+                    }
+                }
+            }
+            // Aggregation queries for sidebar facets
+            final Map<String, Long> typeCounts = queryTypeCounts(conn, ftsWhere, tsquery);
+            final Map<String, Long> repoCounts = queryRepoCounts(
+                conn, ftsWhere, tsquery, repoType
+            );
+            return new SearchResult(docs, totalHits, offset, null, typeCounts, repoCounts);
+        }
+    }
+
+    /**
+     * Filtered exact-match FTS search with aggregation counts.
+     */
+    private static SearchResult searchFilteredFts(
+        final DataSource source, final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc
+    ) throws SQLException {
+        final String filter = buildFilterClauses(repoType, repoName);
+        final String orderBy = buildOrderBy(sortBy, sortAsc, true);
+        final String searchSql = String.join(
+            " ",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "ts_rank(search_tokens, plainto_tsquery('simple', ?)) AS rank,",
+            "COUNT(*) OVER() AS total_count",
+            "FROM artifacts WHERE search_tokens @@ plainto_tsquery('simple', ?)",
+            filter,
+            "ORDER BY", orderBy, "LIMIT ? OFFSET ?"
+        );
+        final String ftsWhere = "search_tokens @@ plainto_tsquery('simple', ?)";
+        long totalHits = 0;
+        final List<ArtifactDocument> docs = new ArrayList<>();
+        try (Connection conn = source.getConnection()) {
+            // Main search query with COUNT(*) OVER()
+            try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
+                stmt.setString(1, query);
+                stmt.setString(2, query);
+                final int next = setFilterParams(stmt, 3, repoType, repoName);
+                stmt.setInt(next, maxResults);
+                stmt.setInt(next + 1, offset);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        if (docs.isEmpty()) {
+                            totalHits = rs.getLong("total_count");
+                        }
+                        docs.add(fromResultSet(rs));
+                    }
+                }
+            }
+            // Aggregation queries for sidebar facets
+            final Map<String, Long> typeCounts = queryTypeCounts(conn, ftsWhere, query);
+            final Map<String, Long> repoCounts = queryRepoCounts(
+                conn, ftsWhere, query, repoType
+            );
+            return new SearchResult(docs, totalHits, offset, null, typeCounts, repoCounts);
+        }
+    }
+
+    /**
+     * Filtered LIKE search with aggregation counts.
+     * Wrapped in an explicit transaction so SET LOCAL statement_timeout applies.
+     */
+    private static SearchResult searchFilteredLike(
+        final DataSource source, final String pattern, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc
+    ) {
+        final String filter = buildFilterClauses(repoType, repoName);
+        final String orderBy = buildOrderBy(sortBy, sortAsc, false);
+        final String searchSql = String.join(
+            " ",
+            "SELECT repo_type, repo_name, name, version, size, created_date, owner,",
+            "COUNT(*) OVER() AS total_count",
+            "FROM artifacts WHERE LOWER(name) LIKE LOWER(?)",
+            filter,
+            "ORDER BY", orderBy, "LIMIT ? OFFSET ?"
+        );
+        final String likeWhere = "LOWER(name) LIKE LOWER(?)";
+        long totalHits = 0;
+        final List<ArtifactDocument> docs = new ArrayList<>();
+        Map<String, Long> typeCounts = Map.of();
+        Map<String, Long> repoCounts = Map.of();
+        try (Connection conn = source.getConnection()) {
+            // SET LOCAL requires an explicit transaction block
+            conn.setAutoCommit(false);
+            try {
+                try (java.sql.Statement guard = conn.createStatement()) {
+                    guard.execute(
+                        "SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'"
+                    );
+                }
+                // Main search query with COUNT(*) OVER()
+                try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
+                    stmt.setString(1, pattern);
+                    final int next = setFilterParams(stmt, 2, repoType, repoName);
+                    stmt.setInt(next, maxResults);
+                    stmt.setInt(next + 1, offset);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            if (docs.isEmpty()) {
+                                totalHits = rs.getLong("total_count");
+                            }
+                            docs.add(fromResultSet(rs));
+                        }
+                    }
+                }
+                // Aggregation queries for sidebar facets
+                typeCounts = queryTypeCountsLike(conn, likeWhere, pattern);
+                repoCounts = queryRepoCountsLike(conn, likeWhere, pattern, repoType);
+                conn.commit();
+            } catch (final SQLException inner) {
+                conn.rollback();
+                throw inner;
+            }
+        } catch (final SQLException ex) {
+            EcsLogger.error("com.auto1.pantera.index")
+                .message("Filtered LIKE search failed for pattern: " + pattern)
+                .eventCategory("search")
+                .eventAction("db_search_filtered_like")
+                .eventOutcome("failure")
+                .error(ex)
+                .log();
+            return SearchResult.EMPTY;
+        }
+        return new SearchResult(docs, totalHits, offset, null, typeCounts, repoCounts);
+    }
+
+    @Override
+    public CompletableFuture<SearchResult> search(
         final String query, final int maxResults, final int offset
     ) {
         return CompletableFuture.supplyAsync(() -> {
@@ -348,27 +789,20 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final DataSource source, final String query,
         final int maxResults, final int offset
     ) throws SQLException {
-        final long totalHits;
+        long totalHits = 0;
         final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection()) {
-            // Get total count using FTS
-            try (PreparedStatement countStmt = conn.prepareStatement(FTS_COUNT_SQL)) {
-                countStmt.setString(1, query);
-                try (ResultSet rs = countStmt.executeQuery()) {
-                    rs.next();
-                    totalHits = rs.getLong(1);
-                }
-            }
-            // Get paginated results with relevance ranking
-            try (PreparedStatement stmt = conn.prepareStatement(FTS_SEARCH_SQL)) {
-                stmt.setString(1, query);
-                stmt.setString(2, query);
-                stmt.setInt(3, maxResults);
-                stmt.setInt(4, offset);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        docs.add(fromResultSet(rs));
+        try (Connection conn = source.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(FTS_SEARCH_SQL)) {
+            stmt.setString(1, query);
+            stmt.setString(2, query);
+            stmt.setInt(3, maxResults);
+            stmt.setInt(4, offset);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    if (docs.isEmpty()) {
+                        totalHits = rs.getLong("total_count");
                     }
+                    docs.add(fromResultSet(rs));
                 }
             }
         }
@@ -396,27 +830,20 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 java.util.Collections.emptyList(), 0, offset, null
             );
         }
-        final long totalHits;
+        long totalHits = 0;
         final List<ArtifactDocument> docs = new ArrayList<>();
-        try (Connection conn = source.getConnection()) {
-            try (PreparedStatement countStmt =
-                conn.prepareStatement(PREFIX_FTS_COUNT_SQL)) {
-                countStmt.setString(1, tsquery);
-                try (ResultSet rs = countStmt.executeQuery()) {
-                    rs.next();
-                    totalHits = rs.getLong(1);
-                }
-            }
-            try (PreparedStatement stmt =
-                conn.prepareStatement(PREFIX_FTS_SEARCH_SQL)) {
-                stmt.setString(1, tsquery);
-                stmt.setString(2, tsquery);
-                stmt.setInt(3, maxResults);
-                stmt.setInt(4, offset);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        docs.add(fromResultSet(rs));
+        try (Connection conn = source.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(PREFIX_FTS_SEARCH_SQL)) {
+            stmt.setString(1, tsquery);
+            stmt.setString(2, tsquery);
+            stmt.setInt(3, maxResults);
+            stmt.setInt(4, offset);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    if (docs.isEmpty()) {
+                        totalHits = rs.getLong("total_count");
                     }
+                    docs.add(fromResultSet(rs));
                 }
             }
         }
@@ -459,31 +886,36 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final DataSource source, final String pattern,
         final int maxResults, final int offset
     ) {
-        final long totalHits;
+        long totalHits = 0;
         final List<ArtifactDocument> docs = new ArrayList<>();
         try (Connection conn = source.getConnection()) {
-            // Guard against runaway LIKE scans on large tables
-            try (java.sql.Statement guard = conn.createStatement()) {
-                guard.execute("SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'");
-            }
-            // Get total count
-            try (PreparedStatement countStmt = conn.prepareStatement(LIKE_COUNT_SQL)) {
-                countStmt.setString(1, pattern);
-                try (ResultSet rs = countStmt.executeQuery()) {
-                    rs.next();
-                    totalHits = rs.getLong(1);
+            // SET LOCAL requires an explicit transaction block to persist across statements
+            conn.setAutoCommit(false);
+            try {
+                // Guard against runaway LIKE scans on large tables
+                try (java.sql.Statement guard = conn.createStatement()) {
+                    guard.execute(
+                        "SET LOCAL statement_timeout = '" + LIKE_TIMEOUT_MS + "ms'"
+                    );
                 }
-            }
-            // Get paginated results
-            try (PreparedStatement stmt = conn.prepareStatement(LIKE_SEARCH_SQL)) {
-                stmt.setString(1, pattern);
-                stmt.setInt(2, maxResults);
-                stmt.setInt(3, offset);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        docs.add(fromResultSet(rs));
+                // Single query with COUNT(*) OVER() — avoids double index scan
+                try (PreparedStatement stmt = conn.prepareStatement(LIKE_SEARCH_SQL)) {
+                    stmt.setString(1, pattern);
+                    stmt.setInt(2, maxResults);
+                    stmt.setInt(3, offset);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            if (docs.isEmpty()) {
+                                totalHits = rs.getLong("total_count");
+                            }
+                            docs.add(fromResultSet(rs));
+                        }
                     }
                 }
+                conn.commit();
+            } catch (final SQLException inner) {
+                conn.rollback();
+                throw inner;
             }
         } catch (final SQLException ex) {
             EcsLogger.error("com.auto1.pantera.index")

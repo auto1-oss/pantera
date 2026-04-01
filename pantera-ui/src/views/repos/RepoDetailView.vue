@@ -45,7 +45,7 @@ const sortAsc = ref(true)
 const sortedItems = computed(() => {
   return [...treeItems.value].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-    const cmp = a.name.localeCompare(b.name)
+    const cmp = a.name.localeCompare(b.name, undefined, { numeric: true })
     return sortAsc.value ? cmp : -cmp
   })
 })
