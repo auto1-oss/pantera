@@ -21,6 +21,10 @@
 - **Admin auth settings (UI + API)** — new "Authentication Policy" section in the admin settings page. Configurable values: access token TTL, refresh token TTL, API token max TTL, and whether permanent tokens are allowed. Settings stored in the `auth_settings` DB table, editable at runtime without redeployment.
 - **Admin user revocation** — `POST /api/v1/admin/revoke-user/:username` immediately invalidates all tokens for a user across all nodes (DB revocation + blocklist broadcast). Available in the admin UI as a "Revoke All Tokens" action.
 - **Backend search filtering and sorting** — search filtering (by type, repo) and sorting (by name, version, date, relevance) now run as PostgreSQL queries instead of client-side JavaScript. Sidebar facet counts are computed via DB `GROUP BY` aggregations. Replaced separate `COUNT(*)` queries with `COUNT(*) OVER()` window functions to halve GIN index scans. Version sorting handles non-numeric suffixes (`-SNAPSHOT`, `-jre`). Natural numeric sort in the repository tree browser (6.2 before 6.10). (#22)
+- **PEP 691 JSON Simple API** — Pantera now serves the PEP 691 JSON format when clients request `Accept: application/vnd.pypi.simple.v1+json`. Includes `upload-time` per PEP 700, which fixes `uv lock --exclude-newer` failing against Pantera proxy repos. For proxy repos, JSON is fetched from upstream PyPI and cached with rewritten URLs. For hosted repos, JSON is generated from sidecar metadata.
+- **PEP 503 full compliance for hosted repos** — hosted PyPI repo index pages now include `data-requires-python`, `data-yanked`, and `data-dist-info-metadata` attributes on file links. Metadata is extracted from wheel `METADATA` / sdist `PKG-INFO` at upload time and stored in sidecar JSON files (`.pypi/metadata/{package}/{filename}.json`).
+- **Yank/unyank API and UI** — `POST /api/v1/pypi/:repo/:package/:version/yank` and `/unyank` endpoints for PEP 592 compliance. Yank/unyank buttons in the artifact browser UI with confirmation dialogs and optional reason field.
+- **PyPI metadata migration CLI** — `java -jar pantera-backfill.jar --mode pypi-metadata --storage-root <path> --repos <repo1,repo2>` backfills sidecar metadata for existing packages. Extracts `Requires-Python` from archives and sets `upload-time` to file last-modified. Supports `--dry-run`.
 
 ### Changed
 
@@ -36,6 +40,8 @@
 | `/api/v1/admin/auth-settings` | GET | Returns all auth settings |
 | `/api/v1/admin/auth-settings` | PUT | Updates auth settings |
 | `/api/v1/admin/revoke-user/:username` | POST | Revokes all tokens for a user |
+| `/api/v1/pypi/:repo/:package/:version/yank` | POST | Yank a PyPI package version (PEP 592) |
+| `/api/v1/pypi/:repo/:package/:version/unyank` | POST | Unyank a PyPI package version |
 
 ### Database Migrations
 
