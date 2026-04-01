@@ -358,6 +358,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        new PypiHandler(
+            crs, new RepoData(this.configsStorage, this.caches.storagesCache())
+        ).register(router);
         if (this.dataSource != null) {
             new AdminAuthHandler(
                 new AuthSettingsDao(this.dataSource),
