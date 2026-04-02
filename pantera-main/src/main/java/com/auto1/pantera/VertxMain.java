@@ -24,8 +24,19 @@ import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
 import com.auto1.pantera.misc.PanteraProperties;
+import com.auto1.pantera.scheduling.JobDataRegistry;
 import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.scheduling.ScriptScheduler;
+import com.auto1.pantera.vuln.DefaultVulnerabilityScanner;
+import com.auto1.pantera.vuln.VulnerabilityDao;
+import com.auto1.pantera.vuln.VulnerabilityScanJob;
+import com.auto1.pantera.vuln.VulnerabilitySettings;
+import com.auto1.pantera.vuln.backend.ScannerBackendFactory;
+import com.auto1.pantera.vuln.preparer.ComposerPreparer;
+import com.auto1.pantera.vuln.preparer.GoModulePreparer;
+import com.auto1.pantera.vuln.preparer.MavenPomArtifactPreparer;
+import com.auto1.pantera.vuln.preparer.NpmArtifactPreparer;
+import com.auto1.pantera.vuln.preparer.PypiSdistArtifactPreparer;
 import com.auto1.pantera.settings.ConfigFile;
 import com.auto1.pantera.settings.MetricsContext;
 import com.auto1.pantera.settings.Settings;
@@ -33,6 +44,11 @@ import com.auto1.pantera.settings.SettingsFromPath;
 import com.auto1.pantera.settings.repo.DbRepositories;
 import com.auto1.pantera.settings.repo.MapRepositories;
 import com.auto1.pantera.settings.repo.RepoConfig;
+import com.auto1.pantera.api.ManageRepoSettings;
+import com.auto1.pantera.asto.blocking.BlockingStorage;
+import com.auto1.pantera.db.dao.RepositoryDao;
+import com.auto1.pantera.settings.RepoData;
+import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.settings.repo.Repositories;
 import com.auto1.pantera.db.DbManager;
@@ -398,6 +414,51 @@ public final class VertxMain {
 
         quartz.start();
         new ScriptScheduler(quartz).loadCrontab(settings, repos);
+        final VulnerabilitySettings vsettings = settings.vulnerabilitySettings();
+        if (vsettings.enabled() && vsettings.cronExpression() != null) {
+            final CrudRepoSettings vulnCrs = sharedDs.isPresent()
+                ? new RepositoryDao(sharedDs.get())
+                : new ManageRepoSettings(
+                    new BlockingStorage(settings.configStorage())
+                );
+            final VulnerabilityDao vulnDao = sharedDs
+                .map(VulnerabilityDao::new).orElse(null);
+            JobDataRegistry.register(VulnerabilityScanJob.KEY_SCANNER,
+                new DefaultVulnerabilityScanner(
+                    ScannerBackendFactory.create(vsettings),
+                    java.util.List.of(
+                        new NpmArtifactPreparer(),
+                        new MavenPomArtifactPreparer(),
+                        new PypiSdistArtifactPreparer(),
+                        new GoModulePreparer(),
+                        new ComposerPreparer()
+                    ),
+                    vsettings
+                )
+            );
+            if (vulnDao != null) {
+                JobDataRegistry.register(VulnerabilityScanJob.KEY_DAO, vulnDao);
+            }
+            JobDataRegistry.register(VulnerabilityScanJob.KEY_CRS, vulnCrs);
+            JobDataRegistry.register(VulnerabilityScanJob.KEY_REPO_DATA,
+                new RepoData(settings.configStorage(), settings.caches().storagesCache())
+            );
+            JobDataRegistry.register(VulnerabilityScanJob.KEY_SETTINGS, vsettings);
+            try {
+                quartz.schedulePeriodicJob(
+                    vsettings.cronExpression(), VulnerabilityScanJob.class,
+                    new org.quartz.JobDataMap()
+                );
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Scheduled vulnerability scan job with cron: " + vsettings.cronExpression())
+                    .eventCategory("security")
+                    .eventAction("vulnerability_schedule")
+                    .eventOutcome("success")
+                    .log();
+            } catch (final org.quartz.SchedulerException ex) {
+                throw new PanteraException(ex);
+            }
+        }
 
         // JIT warmup: fire lightweight requests through group code paths so the
         // first real client request doesn't pay ~140ms JIT compilation penalty.

@@ -53,7 +53,32 @@ meta:
     repo_types:
       npm-proxy:
         enabled: true
-  
+
+  vulnerability:
+    # Set to true to enable on-demand vulnerability scanning.
+    # The scanner binary must be present in the container.
+    enabled: true
+    # Scanner backend type. Supported values: "trivy", "grype"
+    scanner_type: trivy
+    # Path to the scanner binary. Must be on PATH (both are installed in the container).
+    scanner_path: trivy
+    # Hours before a cached scan result is considered stale.
+    # Users will see a "stale" indicator and can click "Scan Now" to refresh.
+    cache_ttl_hours: 24
+    # Maximum seconds to allow a single scanner subprocess to run before killing it.
+    scan_timeout_seconds: 300
+    # Maximum number of artifacts scanned in parallel during a "Scan Repository" operation.
+    # Caps resource usage regardless of repository size. Rule of thumb: CPU cores / 2.
+    scan_concurrency: 4
+    # Maximum concurrent scans across ALL repositories at one time.
+    # Prevents scan-all floods from overwhelming the system. Default: 8.
+    max_global_concurrency: 8
+    # Optional cron expression for automatic full scans (Quartz format).
+    # If omitted, only on-demand scans are performed.
+    # Example: scan all repos every day at 2 AM
+    # cron: "0 0 2 * * ?"
+    cron: "0 0/2 * * * ?"
+
   artifacts_database:
     postgres_host: "pantera-db"
     postgres_port: 5432

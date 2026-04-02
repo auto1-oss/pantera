@@ -32,6 +32,7 @@ import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.cooldown.YamlCooldownSettings;
+import com.auto1.pantera.vuln.VulnerabilitySettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;
 import com.auto1.pantera.db.DbConsumer;
@@ -143,6 +144,11 @@ public final class YamlSettings implements Settings {
      * Cooldown settings.
      */
     private final CooldownSettings cooldown;
+
+    /**
+     * Vulnerability scanning settings.
+     */
+    private final VulnerabilitySettings vulnerability;
 
     /**
      * Artifacts database data source if configured.
@@ -301,6 +307,7 @@ public final class YamlSettings implements Settings {
         this.mctx = new MetricsContext(this.meta());
         this.lctx = new LoggingContext(this.meta());
         this.cooldown = YamlCooldownSettings.fromMeta(this.meta());
+        this.vulnerability = VulnerabilitySettings.fromMeta(this.meta());
         // Initialize artifact index
         final YamlMapping indexConfig = this.meta.yamlMapping("artifact_index");
         final boolean indexEnabled = indexConfig != null
@@ -405,6 +412,11 @@ public final class YamlSettings implements Settings {
     @Override
     public CooldownSettings cooldown() {
         return this.cooldown;
+    }
+
+    @Override
+    public VulnerabilitySettings vulnerabilitySettings() {
+        return this.vulnerability;
     }
 
     @Override

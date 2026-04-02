@@ -234,6 +234,53 @@ export interface HealthResponse {
   status: string
 }
 
+// Vulnerability scanning
+export type VulnSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN'
+
+export interface VulnerabilityFinding {
+  cve_id: string
+  severity: VulnSeverity
+  package_name: string
+  installed_version: string
+  fixed_version: string
+  title: string
+}
+
+export interface VulnerabilityReport {
+  repo_name: string
+  artifact_path: string
+  scanned_at: string
+  scanner: string
+  is_stale: boolean
+  vuln_count: number
+  critical: number
+  high: number
+  medium: number
+  low: number
+  unknown: number
+  findings: VulnerabilityFinding[]
+}
+
+export interface VulnerabilitySummary {
+  repo_name: string
+  scanned_artifacts: number
+  vuln_count: number
+  critical: number
+  high: number
+  medium: number
+  low: number
+  unknown: number
+  last_scanned: string | null
+}
+
+// A single finding row as returned by the /findings paginated endpoint
+// (includes repo_name, artifact_path, scanned_at in addition to finding fields)
+export interface VulnerabilityFindingRow extends VulnerabilityFinding {
+  repo_name: string
+  artifact_path: string
+  scanned_at: string
+}
+
 // Runtime config (config.json)
 export interface RuntimeConfig {
   apiBaseUrl: string

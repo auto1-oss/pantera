@@ -110,6 +110,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiredPermission: 'api_cooldown_permissions' },
   },
   {
+    path: '/vulnerabilities',
+    name: 'vulnerabilities',
+    component: () => import('@/views/vulns/VulnerabilityView.vue'),
+    meta: { requiredPermission: 'api_repository_permissions' },
+  },
+  {
     path: '/admin/settings',
     name: 'admin-settings',
     component: () => import('@/views/admin/SettingsView.vue'),
