@@ -50,6 +50,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>Metadata/unparseable URLs → direct fanout with NO index call at all</li>
  * </ol>
  *
+ * <p><b>Part 6A — log-level coverage note:</b> GroupSlice uses {@code EcsLogger.debug()} for
+ * individual member 404s and {@code EcsLogger.warn()} for aggregate 404s (all members missing)
+ * and server errors. These log levels cannot be captured directly because {@code EcsLogger} does
+ * not expose a test listener/appender API and does not bridge to a standard SLF4J/Log4j2
+ * backend in the test classpath.  Coverage is therefore behavioral: the tests below already
+ * verify 200 vs 404 response codes for the one-member-succeeds and all-members-404 scenarios,
+ * which is the observable side-effect of those code paths executing.  Log level correctness was
+ * verified by code inspection of GroupSlice lines 777 (DEBUG, member 404) and 861–889 (WARN,
+ * aggregate 404 / server error).
+ *
  * @since 1.21.0
  */
 @SuppressWarnings({"PMD.TooManyMethods", "PMD.AvoidDuplicateLiterals"})

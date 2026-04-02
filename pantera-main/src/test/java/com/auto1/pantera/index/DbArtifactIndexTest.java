@@ -39,7 +39,7 @@ import java.util.Map;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.TooManyStaticImports"})
 @Testcontainers
 class DbArtifactIndexTest {
 
@@ -559,6 +559,80 @@ class DbArtifactIndexTest {
             "Total hits from batch should be 5",
             result.totalHits(),
             new IsEqual<>(5L)
+        );
+    }
+
+    /**
+     * Fix 3: when offset is beyond all results the page is empty, but
+     * totalHits must still reflect the real document count via fallbackCount().
+     * Without Fix 3, totalHits would be 0 on a deep page because COUNT(*) OVER()
+     * returns no rows when the result set is empty.
+     */
+    @Test
+    void searchWithDeepOffsetReturnsCorrectTotal() throws Exception {
+        for (int idx = 0; idx < 3; idx++) {
+            this.index.index(new ArtifactDocument(
+                "pypi", "pypi-repo", "deep-item-" + idx, "deep-item-" + idx,
+                "1.0." + idx, 100L, Instant.now(), "user"
+            )).join();
+        }
+        // offset=100 is well beyond all 3 results — page must be empty
+        final SearchResult result = this.index.search(
+            "deep-item", 10, 100, null, null, "relevance", true
+        ).join();
+        MatcherAssert.assertThat(
+            "Items must be empty on a deep page",
+            result.documents().isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Total hits must equal 3 (not 0) via fallbackCount",
+            result.totalHits(),
+            new IsEqual<>(3L)
+        );
+    }
+
+    /**
+     * Fix 5: when allowedRepos is provided the SQL adds AND repo_name = ANY(?)
+     * so only results from permitted repos are returned.
+     */
+    @Test
+    void searchWithAllowedReposFiltersResults() throws Exception {
+        this.index.index(new ArtifactDocument(
+            "pypi", "pypi-proxy", "requests", "requests",
+            "2.31.0", 500L, Instant.now(), "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "maven-proxy", "requests", "requests",
+            "1.0.0", 200L, Instant.now(), "user"
+        )).join();
+        // Search without filter — should return both
+        final SearchResult all = this.index.search(
+            "requests", 10, 0, null, null, "relevance", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "Unfiltered search should find both repos",
+            all.totalHits(),
+            new IsEqual<>(2L)
+        );
+        // Search with allowedRepos restricted to pypi-proxy — should exclude maven-proxy
+        final SearchResult filtered = this.index.search(
+            "requests", 10, 0, null, null, "relevance", true, List.of("pypi-proxy")
+        ).join();
+        MatcherAssert.assertThat(
+            "allowedRepos filter must return only 1 result",
+            filtered.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "Allowed result must be from pypi-proxy",
+            filtered.documents().get(0).repoName(),
+            new IsEqual<>("pypi-proxy")
+        );
+        MatcherAssert.assertThat(
+            "Total hits with allowedRepos must be 1",
+            filtered.totalHits(),
+            new IsEqual<>(1L)
         );
     }
 }
