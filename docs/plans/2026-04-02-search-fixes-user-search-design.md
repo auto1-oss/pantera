@@ -339,7 +339,7 @@ Add entries for all six parts under appropriate sections.
 
 | Scenario | Level | ECS Fields | Message |
 |----------|-------|------------|---------|
-| Group fanout: single member 404 (expected) | `DEBUG` | `event.action: "group_fanout_miss"`, `event.outcome: "expected"` | "Group member {member} does not have {artifact}" |
+| Group fanout: single member 404 (expected) | `DEBUG` | `event.action: "group_fanout_miss"`, `event.outcome: "success"` | "Group member {member} does not have {artifact}" |
 | Group fanout: ALL members 404 (real miss) | `WARN` | `event.action: "group_lookup_miss"`, `event.outcome: "failure"` | "Artifact not found in any group member: {artifact}" |
 | Direct local/proxy repo: 404 | `INFO` | `event.action: "artifact_not_found"`, `event.outcome: "failure"` | "Artifact not found in {repo}: {path}" |
 | Client requests non-existent repo | `WARN` | `event.action: "repo_not_found"`, `event.outcome: "failure"` | "Repository not found: {repo}" |
