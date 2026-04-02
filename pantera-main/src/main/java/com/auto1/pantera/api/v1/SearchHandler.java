@@ -18,6 +18,8 @@ import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.DbArtifactIndex;
+import com.auto1.pantera.index.SearchQueryParser;
+import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.perms.FreePermissions;
 import com.auto1.pantera.security.policy.Policy;
@@ -161,8 +163,19 @@ public final class SearchHandler {
                     .encode());
             return;
         }
-        final String repoType = ctx.queryParams().get("type");
-        final String repoName = ctx.queryParams().get("repo");
+        // Parse structured query syntax: name:, version:, repo:, type:, AND/OR
+        final SearchQueryParser.SearchQuery parsed = SearchQueryParser.parse(query);
+        // Resolve effective type/repo: query field:value overrides URL params
+        final String queryRepoType = firstFilterValue(parsed, "type");
+        final String queryRepoName = firstFilterValue(parsed, "repo");
+        final String repoType = queryRepoType != null
+            ? queryRepoType : ctx.queryParams().get("type");
+        final String repoName = queryRepoName != null
+            ? queryRepoName : ctx.queryParams().get("repo");
+        // Field filters remaining after repo/type extraction (name, version)
+        final List<FieldFilter> fieldFilters = parsed.filters().stream()
+            .filter(f -> !"repo".equals(f.field()) && !"type".equals(f.field()))
+            .toList();
         // Validate sortBy against allowlist — unknown values fall back to relevance
         final String rawSort = ctx.queryParams().get("sort");
         final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase())
@@ -180,13 +193,23 @@ public final class SearchHandler {
         final List<String> allowedRepos = resolveAllowedRepos(perms);
         // Fix 1: map sort string to SortField enum for index
         final DbArtifactIndex.SortField sortField = DbArtifactIndex.toSortField(sortBy);
+        // Effective FTS query: bare terms only (field values are handled as filters)
+        final String ftsQuery = parsed.ftsQuery().isBlank() ? query : parsed.ftsQuery();
         // Fix 5: use the permission-filtered search method directly (no overfetch needed)
         final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
         if (this.index instanceof DbArtifactIndex) {
-            future = ((DbArtifactIndex) this.index).search(
-                query, size, dbOffset, repoType, repoName,
-                sortField.name().toLowerCase(), sortAsc, allowedRepos
-            );
+            if (fieldFilters.isEmpty() && parsed.ftsQuery().equals(query)) {
+                // No structured syntax used — fast path (backward compat)
+                future = ((DbArtifactIndex) this.index).search(
+                    query, size, dbOffset, repoType, repoName,
+                    sortField.name().toLowerCase(), sortAsc, allowedRepos
+                );
+            } else {
+                future = ((DbArtifactIndex) this.index).search(
+                    ftsQuery, size, dbOffset, repoType, repoName,
+                    sortField.name().toLowerCase(), sortAsc, allowedRepos, fieldFilters
+                );
+            }
         } else {
             future = this.index.search(
                 query, size, dbOffset, repoType, repoName,
@@ -391,6 +414,23 @@ public final class SearchHandler {
                     .end(json.encode());
             }
         });
+    }
+
+    /**
+     * Return the first value for a given field name from a parsed query, or null if absent.
+     *
+     * @param parsed Parsed search query
+     * @param field Field name to look up
+     * @return First value string, or null
+     */
+    private static String firstFilterValue(
+        final SearchQueryParser.SearchQuery parsed, final String field
+    ) {
+        return parsed.filters().stream()
+            .filter(f -> field.equals(f.field()))
+            .findFirst()
+            .map(f -> f.values().isEmpty() ? null : f.values().get(0))
+            .orElse(null);
     }
 
     /**

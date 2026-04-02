@@ -31,6 +31,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
+import com.auto1.pantera.index.SearchQueryParser.MatchType;
 
 /**
  * PostgreSQL-backed implementation of {@link ArtifactIndex}.
@@ -372,6 +374,82 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     /**
+     * Full-text search with structured field filters from {@link SearchQueryParser}.
+     * Field filters (name, version) are appended as additional SQL predicates.
+     * The repo and type parameters take precedence; callers should already have
+     * extracted repo/type values from the parsed query and passed them here.
+     *
+     * @param query FTS query string (bare terms only, from SearchQuery.ftsQuery())
+     * @param maxResults Maximum results to return
+     * @param offset Starting offset for pagination
+     * @param repoType Optional repo type base filter (from URL param or query repo:)
+     * @param repoName Optional exact repository name filter
+     * @param sortBy Sort field string
+     * @param sortAsc True for ascending, false for descending
+     * @param allowedRepos Allowed repository names; null means no restriction
+     * @param fieldFilters Additional field filters (name:, version:) from parsed query
+     * @return Search result with matching documents
+     */
+    @SuppressWarnings("PMD.ParameterNumber")
+    public CompletableFuture<SearchResult> search(
+        final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
+        final List<String> allowedRepos, final List<FieldFilter> fieldFilters
+    ) {
+        final boolean includeFacets = offset == 0;
+        return CompletableFuture.supplyAsync(() -> {
+            final String fts = query == null ? "" : query;
+            final boolean uselike = fts.contains("%") || fts.contains("_");
+            if (uselike) {
+                return DbArtifactIndex.searchFilteredLike(
+                    this.source, fts, maxResults, offset, repoType, repoName,
+                    sortBy, sortAsc, includeFacets, allowedRepos, fieldFilters
+                );
+            }
+            if (fts.isBlank() && (fieldFilters == null || !fieldFilters.isEmpty())) {
+                // No FTS term — run a filter-only LIKE search with a match-all pattern
+                return DbArtifactIndex.searchFilteredLike(
+                    this.source, "%", maxResults, offset, repoType, repoName,
+                    sortBy, sortAsc, includeFacets, allowedRepos, fieldFilters
+                );
+            }
+            try {
+                final SearchResult ftsResult = DbArtifactIndex.searchFilteredPrefixFts(
+                    this.source, fts, maxResults, offset, repoType, repoName,
+                    sortBy, sortAsc, includeFacets, allowedRepos, fieldFilters
+                );
+                if (ftsResult.totalHits() == 0) {
+                    final SearchResult exact = DbArtifactIndex.searchFilteredFts(
+                        this.source, fts, maxResults, offset, repoType, repoName,
+                        sortBy, sortAsc, includeFacets, allowedRepos, fieldFilters
+                    );
+                    if (exact.totalHits() == 0) {
+                        return DbArtifactIndex.searchFilteredLike(
+                            this.source, "%" + fts + "%", maxResults, offset,
+                            repoType, repoName, sortBy, sortAsc, includeFacets,
+                            allowedRepos, fieldFilters
+                        );
+                    }
+                    return exact;
+                }
+                return ftsResult;
+            } catch (final SQLException ex) {
+                EcsLogger.warn("com.auto1.pantera.index")
+                    .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
+                    .eventCategory("search")
+                    .eventAction("db_fts_fallback")
+                    .error(ex)
+                    .log();
+                return DbArtifactIndex.searchFilteredLike(
+                    this.source, "%" + fts + "%", maxResults, offset,
+                    repoType, repoName, sortBy, sortAsc, includeFacets,
+                    allowedRepos, fieldFilters
+                );
+            }
+        }, this.executor);
+    }
+
+    /**
      * Build the ORDER BY clause based on sort parameters.
      * Fix 1: accepts {@link SortField} enum instead of raw String.
      * For version sort, uses integer array comparison for natural ordering
@@ -470,6 +548,106 @@ public final class DbArtifactIndex implements ArtifactIndex {
             return " AND repo_type IN (?, ?, ?)";
         }
         return "";
+    }
+
+    /**
+     * Build additional WHERE clauses for structured field filters (name, version, etc.).
+     * Each filter with one value produces one predicate; multiple values become OR clauses.
+     * The column mapping is: name→name, version→version, repo→repo_name, type→repo_type.
+     *
+     * @param fieldFilters List of field filters from SearchQueryParser (may be empty)
+     * @return SQL fragment starting with " AND ..." or empty string
+     */
+    private static String buildFieldFilterClauses(final List<FieldFilter> fieldFilters) {
+        if (fieldFilters == null || fieldFilters.isEmpty()) {
+            return "";
+        }
+        final StringBuilder sb = new StringBuilder();
+        for (final FieldFilter filter : fieldFilters) {
+            final String col = fieldToColumn(filter.field());
+            if (col == null) {
+                continue;
+            }
+            if (filter.values().size() == 1) {
+                sb.append(singleValuePredicate(col, filter.matchType()));
+            } else {
+                // Multiple values → OR within a field: AND (col PRED ? OR col PRED ?)
+                sb.append(" AND (");
+                for (int i = 0; i < filter.values().size(); i++) {
+                    if (i > 0) {
+                        sb.append(" OR ");
+                    }
+                    sb.append(singleValuePredicate(col, filter.matchType()).trim());
+                }
+                sb.append(')');
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Build a single predicate fragment (without leading " AND ") for a column.
+     *
+     * @param col SQL column name
+     * @param matchType Match type
+     * @return SQL predicate fragment
+     */
+    private static String singleValuePredicate(final String col, final MatchType matchType) {
+        return switch (matchType) {
+            case EXACT -> " AND " + col + " = ?";
+            case PREFIX -> " AND " + col + " LIKE ?";
+            default -> " AND LOWER(" + col + ") LIKE ?";
+        };
+    }
+
+    /**
+     * Map a SearchQueryParser field name to the SQL column name.
+     *
+     * @param field Parser field name
+     * @return SQL column name, or null if unknown
+     */
+    private static String fieldToColumn(final String field) {
+        return switch (field) {
+            case "name" -> "name";
+            case "version" -> "version";
+            case "repo" -> "repo_name";
+            case "type" -> "repo_type";
+            default -> null;
+        };
+    }
+
+    /**
+     * Bind field filter parameter values to a PreparedStatement.
+     * Values are bound in the same order as {@link #buildFieldFilterClauses(List)}.
+     * ILIKE wraps the value in %; PREFIX appends %; EXACT binds as-is.
+     *
+     * @param stmt PreparedStatement
+     * @param idx 1-based parameter index to start from
+     * @param fieldFilters Field filters from SearchQueryParser
+     * @return Next available parameter index
+     * @throws SQLException on SQL error
+     */
+    private static int setFieldFilterParams(
+        final PreparedStatement stmt, final int idx, final List<FieldFilter> fieldFilters
+    ) throws SQLException {
+        if (fieldFilters == null || fieldFilters.isEmpty()) {
+            return idx;
+        }
+        int next = idx;
+        for (final FieldFilter filter : fieldFilters) {
+            if (fieldToColumn(filter.field()) == null) {
+                continue;
+            }
+            for (final String value : filter.values()) {
+                final String bound = switch (filter.matchType()) {
+                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case PREFIX -> value + "%";
+                    default -> value;
+                };
+                stmt.setString(next++, bound);
+            }
+        }
+        return next;
     }
 
     /**
@@ -768,12 +946,31 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
         final boolean includeFacets, final List<String> allowedRepos
     ) throws SQLException {
+        return searchFilteredPrefixFts(
+            source, query, maxResults, offset, repoType, repoName,
+            sortBy, sortAsc, includeFacets, allowedRepos, null
+        );
+    }
+
+    /**
+     * Filtered prefix-FTS search with field filters.
+     *
+     * @param fieldFilters Additional structured field filters; may be null
+     */
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
+    private static SearchResult searchFilteredPrefixFts(
+        final DataSource source, final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
+        final boolean includeFacets, final List<String> allowedRepos,
+        final List<FieldFilter> fieldFilters
+    ) throws SQLException {
         final String tsquery = DbArtifactIndex.buildPrefixTsQuery(query);
         if (tsquery.isEmpty()) {
             return new SearchResult(java.util.Collections.emptyList(), 0, offset, null);
         }
         final SortField field = toSortField(sortBy);
-        final String filter = buildFilterClauses(repoType, repoName, allowedRepos);
+        final String filter = buildFilterClauses(repoType, repoName, allowedRepos)
+            + buildFieldFilterClauses(fieldFilters);
         final String orderBy = buildOrderBy(field, sortAsc, true);
         final String searchSql = String.join(
             " ",
@@ -795,7 +992,8 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
                     stmt.setString(1, tsquery);
                     stmt.setString(2, tsquery);
-                    final int next = setFilterParams(stmt, 3, repoType, repoName, allowedRepos, conn);
+                    int next = setFilterParams(stmt, 3, repoType, repoName, allowedRepos, conn);
+                    next = setFieldFilterParams(stmt, next, fieldFilters);
                     stmt.setInt(next, maxResults);
                     stmt.setInt(next + 1, offset);
                     try (ResultSet rs = stmt.executeQuery()) {
@@ -813,6 +1011,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     final List<Object> countParams = buildCountParams(
                         tsquery, repoType, repoName, allowedRepos, conn
                     );
+                    appendFieldFilterCountParams(countParams, fieldFilters);
                     totalHits = fallbackCount(conn, countWhere, countParams.toArray());
                 }
                 // Fix 2: skip facets on pages other than first
@@ -857,8 +1056,27 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
         final boolean includeFacets, final List<String> allowedRepos
     ) throws SQLException {
+        return searchFilteredFts(
+            source, query, maxResults, offset, repoType, repoName,
+            sortBy, sortAsc, includeFacets, allowedRepos, null
+        );
+    }
+
+    /**
+     * Filtered exact-match FTS search with field filters.
+     *
+     * @param fieldFilters Additional structured field filters; may be null
+     */
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
+    private static SearchResult searchFilteredFts(
+        final DataSource source, final String query, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
+        final boolean includeFacets, final List<String> allowedRepos,
+        final List<FieldFilter> fieldFilters
+    ) throws SQLException {
         final SortField field = toSortField(sortBy);
-        final String filter = buildFilterClauses(repoType, repoName, allowedRepos);
+        final String filter = buildFilterClauses(repoType, repoName, allowedRepos)
+            + buildFieldFilterClauses(fieldFilters);
         final String orderBy = buildOrderBy(field, sortAsc, true);
         final String searchSql = String.join(
             " ",
@@ -879,7 +1097,8 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
                     stmt.setString(1, query);
                     stmt.setString(2, query);
-                    final int next = setFilterParams(stmt, 3, repoType, repoName, allowedRepos, conn);
+                    int next = setFilterParams(stmt, 3, repoType, repoName, allowedRepos, conn);
+                    next = setFieldFilterParams(stmt, next, fieldFilters);
                     stmt.setInt(next, maxResults);
                     stmt.setInt(next + 1, offset);
                     try (ResultSet rs = stmt.executeQuery()) {
@@ -897,6 +1116,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     final List<Object> countParams = buildCountParams(
                         query, repoType, repoName, allowedRepos, conn
                     );
+                    appendFieldFilterCountParams(countParams, fieldFilters);
                     totalHits = fallbackCount(conn, countWhere, countParams.toArray());
                 }
                 // Fix 2: skip facets on pages other than first
@@ -940,8 +1160,27 @@ public final class DbArtifactIndex implements ArtifactIndex {
         final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
         final boolean includeFacets, final List<String> allowedRepos
     ) {
+        return searchFilteredLike(
+            source, pattern, maxResults, offset, repoType, repoName,
+            sortBy, sortAsc, includeFacets, allowedRepos, null
+        );
+    }
+
+    /**
+     * Filtered LIKE search with field filters.
+     *
+     * @param fieldFilters Additional structured field filters; may be null
+     */
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.ParameterNumber"})
+    private static SearchResult searchFilteredLike(
+        final DataSource source, final String pattern, final int maxResults, final int offset,
+        final String repoType, final String repoName, final String sortBy, final boolean sortAsc,
+        final boolean includeFacets, final List<String> allowedRepos,
+        final List<FieldFilter> fieldFilters
+    ) {
         final SortField field = toSortField(sortBy);
-        final String filter = buildFilterClauses(repoType, repoName, allowedRepos);
+        final String filter = buildFilterClauses(repoType, repoName, allowedRepos)
+            + buildFieldFilterClauses(fieldFilters);
         final String orderBy = buildOrderBy(field, sortAsc, false);
         final String searchSql = String.join(
             " ",
@@ -968,7 +1207,8 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 // Main search query with COUNT(*) OVER()
                 try (PreparedStatement stmt = conn.prepareStatement(searchSql)) {
                     stmt.setString(1, pattern);
-                    final int next = setFilterParams(stmt, 2, repoType, repoName, allowedRepos, conn);
+                    int next = setFilterParams(stmt, 2, repoType, repoName, allowedRepos, conn);
+                    next = setFieldFilterParams(stmt, next, fieldFilters);
                     stmt.setInt(next, maxResults);
                     stmt.setInt(next + 1, offset);
                     try (ResultSet rs = stmt.executeQuery()) {
@@ -986,6 +1226,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     final List<Object> countParams = buildCountParams(
                         pattern, repoType, repoName, allowedRepos, conn
                     );
+                    appendFieldFilterCountParams(countParams, fieldFilters);
                     totalHits = fallbackCount(conn, countWhere, countParams.toArray());
                 }
                 // Fix 2: skip facets on pages other than first
@@ -1042,6 +1283,34 @@ public final class DbArtifactIndex implements ArtifactIndex {
             params.add(conn.createArrayOf("text", allowedRepos.toArray(new String[0])));
         }
         return params;
+    }
+
+    /**
+     * Append field filter count parameters to an existing param list.
+     * Mirrors the value binding order of {@link #setFieldFilterParams(PreparedStatement, int, List)}.
+     *
+     * @param params Existing parameter list (modified in place)
+     * @param fieldFilters Field filters; may be null or empty
+     */
+    private static void appendFieldFilterCountParams(
+        final List<Object> params, final List<FieldFilter> fieldFilters
+    ) {
+        if (fieldFilters == null || fieldFilters.isEmpty()) {
+            return;
+        }
+        for (final FieldFilter filter : fieldFilters) {
+            if (fieldToColumn(filter.field()) == null) {
+                continue;
+            }
+            for (final String value : filter.values()) {
+                final String bound = switch (filter.matchType()) {
+                    case ILIKE -> "%" + value.toLowerCase() + "%";
+                    case PREFIX -> value + "%";
+                    default -> value;
+                };
+                params.add(bound);
+            }
+        }
     }
 
     @Override
