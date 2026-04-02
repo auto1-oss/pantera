@@ -4,6 +4,45 @@
 
 ## v2.1.0 (April 2026)
 
+### Performance
+
+- **GroupSlice proxy-only fanout on index miss** — when the artifact index cannot resolve a name (metadata endpoints, unknown paths), the fallback fanout is now restricted to proxy members of the group. Hosted (local) members are skipped because an absent index entry means the artifact was never uploaded there. This eliminates unnecessary connections and 404 log noise from hosted members on every group metadata request.
+
+### Added
+
+- **Structured search query syntax** — the `GET /api/v1/search` `q` parameter now accepts field-prefixed filters:
+  - `name:value` — case-insensitive substring match on artifact name
+  - `version:value` — case-insensitive substring match on version
+  - `repo:value` — exact match on repository name
+  - `type:value` — prefix match on repository type (strips `-proxy`/`-group`)
+  - Combine with `AND` / `OR` and parentheses: `name:pydantic AND (version:2.12 OR version:2.11)`
+  - Fully backward-compatible: plain text queries (no prefixes) work as before.
+  - Implemented by `SearchQueryParser` (`pantera-main/.../index/SearchQueryParser.java`).
+
+- **Server-side search, sort, and pagination for users and roles** — `GET /api/v1/users` and `GET /api/v1/roles` now accept:
+  - `q` — case-insensitive substring filter on username/email (users) or role name (roles)
+  - `sort` — sort field: `username`, `email`, `enabled`, `auth_provider` (users); `name`, `enabled` (roles)
+  - `sort_dir` — `asc` or `desc`
+  - Filtering and sorting run as SQL queries using `COUNT(*) OVER()` window functions for single-pass pagination.
+
+### Fixed
+
+- **Search backend scalability** (7 fixes in `DbArtifactIndex` / `SearchHandler`):
+  1. `SortField` enum replaces raw `String` in `buildOrderBy` — prevents SQL injection on sort parameter.
+  2. Facet aggregations only computed on page 0 (`includeFacets` flag) — avoids expensive `GROUP BY` on every page change.
+  3. Fallback `COUNT(*)` when result is empty and offset is non-zero — correctly reports total on deep pages.
+  4. `MAX_OFFSET = 10,000` — caps the effective SQL `OFFSET`; requests exceeding this return `400 Bad Request`.
+  5. Permission-aware SQL filtering — passes `repo_name = ANY(?)` to PostgreSQL instead of overfetching and filtering in Java.
+  6. `SET LOCAL statement_timeout` on the FTS aggregation path — prevents runaway facet queries.
+  7. `GROUP BY repo_type` in SQL, suffix merging in Java — reduces `GROUP BY` cardinality for facet counts.
+  - Bonus: `getStats()` reads the `mv_artifact_totals` materialized view instead of `COUNT(*)` on the full table.
+
+- **Smart 404 log levels in GroupSlice** — individual 404 responses from group members during fanout are now logged at `DEBUG` instead of `INFO`. A single member miss is not actionable and was generating high log volume at busy installations. Server errors (5xx) remain at `WARN`.
+
+- **ECS-compliant HTTP request logging** — `EcsLoggingSlice` now emits proper ECS fields (`http.request.method`, `url.original`, `http.response.status_code`) instead of a raw `"GET /path 404"` message string. This fixes Elasticsearch field-type conflicts when ingesting Pantera logs.
+
+- **`package.release_date` ECS field fix** — four package processors (Composer, Go, PyPI proxies and Go `CachedProxySlice`) emitted the string `"unknown"` as the `package.release_date` ECS field when the release date was unavailable. Elasticsearch rejected these as invalid date values. The field is now omitted entirely when no release date is known.
+
 ### Security
 
 - **RS256 asymmetric JWT signing** — replaced the HS256 shared secret (which was publicly visible in the OSS repo) with RS256 asymmetric key pairs using the [Auth0 java-jwt](https://github.com/auth0/java-jwt) library. The private key signs tokens; the public key verifies them. Even if the public key is exposed, tokens cannot be forged. This is a **breaking change** — all existing tokens are invalidated on upgrade. See the [upgrade guide](admin-guide/upgrade-procedures.md) for migration steps.

@@ -1,6 +1,6 @@
 # Pantera REST API Reference
 
-**Version:** 2.0.0
+**Version:** 2.1.0
 **Base URL:** `http://localhost:8086/api/v1`
 **Repository Port:** `8080` (artifact operations, health, version, import)
 **Metrics Port:** `8087` (Prometheus metrics)
@@ -666,17 +666,20 @@ curl http://localhost:8086/api/v1/repositories/maven-group/members \
 
 ### GET /api/v1/users
 
-List all users with pagination.
+List all users with pagination, optional search, and server-side sorting.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_user_permissions:read`
 
 **Query Parameters:**
 
-| Parameter | Type    | Default | Description              |
-|-----------|---------|---------|--------------------------|
-| `page`    | integer | 0       | Zero-based page number   |
-| `size`    | integer | 20      | Items per page (max 100) |
+| Parameter  | Type    | Default    | Description                                                       |
+|------------|---------|------------|-------------------------------------------------------------------|
+| `page`     | integer | 0          | Zero-based page number                                            |
+| `size`     | integer | 20         | Items per page (max 100)                                          |
+| `q`        | string  | --         | Search filter (case-insensitive substring on username and email)  |
+| `sort`     | string  | `username` | Sort field: `username`, `email`, `enabled`, or `auth_provider`   |
+| `sort_dir` | string  | `asc`      | Sort direction: `asc` or `desc`                                   |
 
 **Response (200):**
 
@@ -697,6 +700,10 @@ List all users with pagination.
 
 ```bash
 curl "http://localhost:8086/api/v1/users?page=0&size=50" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+
+# Search for users whose name or email contains "alice", sorted by email descending
+curl "http://localhost:8086/api/v1/users?q=alice&sort=email&sort_dir=desc" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
 
@@ -904,17 +911,20 @@ curl -X POST http://localhost:8086/api/v1/users/jdoe/disable \
 
 ### GET /api/v1/roles
 
-List all roles with pagination.
+List all roles with pagination, optional search, and server-side sorting.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_role_permissions:read`
 
 **Query Parameters:**
 
-| Parameter | Type    | Default | Description              |
-|-----------|---------|---------|--------------------------|
-| `page`    | integer | 0       | Zero-based page number   |
-| `size`    | integer | 20      | Items per page (max 100) |
+| Parameter  | Type    | Default | Description                                                |
+|------------|---------|---------|------------------------------------------------------------|
+| `page`     | integer | 0       | Zero-based page number                                     |
+| `size`     | integer | 20      | Items per page (max 100)                                   |
+| `q`        | string  | --      | Search filter (case-insensitive substring on role name)    |
+| `sort`     | string  | `name`  | Sort field: `name` or `enabled`                            |
+| `sort_dir` | string  | `asc`   | Sort direction: `asc` or `desc`                            |
 
 **Response (200):**
 
@@ -935,6 +945,10 @@ List all roles with pagination.
 
 ```bash
 curl "http://localhost:8086/api/v1/roles?page=0&size=50" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+
+# Search for roles whose name contains "dev", sorted by name
+curl "http://localhost:8086/api/v1/roles?q=dev&sort=name&sort_dir=asc" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
 
@@ -1500,18 +1514,45 @@ curl -X DELETE http://localhost:8086/api/v1/repositories/maven-local/packages \
 
 ### GET /api/v1/search
 
-Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository.
+Full-text search across all indexed artifacts. Results are filtered by the caller's `read` permission on each repository. Supports plain full-text search and structured field filters.
 
 **Authentication:** JWT Bearer token required.
 **Permission:** `api_search_permissions:read`
 
 **Query Parameters:**
 
-| Parameter | Type    | Default | Description                                   |
-|-----------|---------|---------|-----------------------------------------------|
-| `q`       | string  | --      | Search query (required)                       |
-| `page`    | integer | 0       | Zero-based page number (max 500)              |
-| `size`    | integer | 20      | Items per page (max 100)                      |
+| Parameter | Type    | Default | Description                                                   |
+|-----------|---------|---------|---------------------------------------------------------------|
+| `q`       | string  | --      | Search query (required). Supports plain text and field filters (see below). |
+| `page`    | integer | 0       | Zero-based page number                                        |
+| `size`    | integer | 20      | Items per page (max 100)                                      |
+
+**Structured Query Syntax:**
+
+The `q` parameter supports field-prefixed filters in addition to plain full-text search:
+
+| Prefix | Match type | Example |
+|--------|-----------|---------|
+| `name:value` | Case-insensitive substring on artifact name | `name:spring-boot` |
+| `version:value` | Case-insensitive substring on version | `version:3.2` |
+| `repo:value` | Exact match on repository name | `repo:maven-central` |
+| `type:value` | Prefix match on repository type (strips `-proxy`/`-group`) | `type:maven` |
+
+Combine with `AND` / `OR` and parentheses:
+
+```
+name:pydantic AND version:2.12
+name:pydantic AND (version:2.12 OR version:2.11)
+repo:pypi-proxy AND type:pypi
+```
+
+Plain text without prefixes triggers full-text search as before:
+
+```
+spring boot
+```
+
+**Pagination limits:** The effective SQL offset (`page * size`) is capped at 10,000. Requests exceeding this limit are rejected with `400 Bad Request`. Use field filters to narrow results instead of paginating deeply.
 
 **Response (200):**
 
@@ -1548,7 +1589,12 @@ Full-text search across all indexed artifacts. Results are filtered by the calle
 **curl example:**
 
 ```bash
+# Plain full-text search
 curl "http://localhost:8086/api/v1/search?q=guava&page=0&size=10" \
+  -H "Authorization: Bearer eyJhbGciOi..."
+
+# Structured search: name filter + version OR
+curl "http://localhost:8086/api/v1/search?q=name%3Aguava+AND+%28version%3A32.1+OR+version%3A33.0%29&page=0&size=10" \
   -H "Authorization: Bearer eyJhbGciOi..."
 ```
 

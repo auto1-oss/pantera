@@ -22,6 +22,9 @@
 12. [Development Setup](#12-development-setup)
 13. [Build System](#13-build-system)
 14. [Adding Features](#14-adding-features)
+    - [14.4 Adding a New Search Field](#144-adding-a-new-search-field)
+    - [14.5 PagedResult and Server-Side Pagination](#145-pagedresult-and-server-side-pagination)
+    - [14.6 GroupSlice: Proxy-Only Fanout on Index Miss](#146-groupslice-proxy-only-fanout-on-index-miss)
 15. [Testing](#15-testing)
 16. [Debugging](#16-debugging)
 
@@ -916,6 +919,90 @@ router.get("/api/v1/my-feature")
 3. Implement `StorageFactory` to create instances from YAML configuration.
 4. Register the factory in the storage factory chain.
 5. Run the `StorageWhiteboxVerification` test harness against your implementation to ensure compliance with the `Storage` contract.
+
+### 14.4 Adding a New Search Field
+
+The search query parser is in `pantera-main/src/main/java/com/auto1/pantera/index/SearchQueryParser.java`. It translates a structured query string into a `SearchQuery` record containing FTS terms and typed `FieldFilter` instances.
+
+**To add a new filterable field (e.g., `owner:alice`):**
+
+1. Register the field in `SearchQueryParser.FIELD_MATCH_TYPES`:
+
+```java
+private static final Map<String, MatchType> FIELD_MATCH_TYPES = Map.of(
+    "name",    MatchType.ILIKE,
+    "version", MatchType.ILIKE,
+    "repo",    MatchType.EXACT,
+    "type",    MatchType.PREFIX,
+    "owner",   MatchType.ILIKE   // new
+);
+```
+
+2. Handle the new field in `DbArtifactIndex` when building the SQL `WHERE` clause. The `FieldFilter` record exposes `field()`, `values()`, and `matchType()`.
+
+3. Add unit tests to `SearchQueryParserTest` for the new field. Test plain FTS, single filter, OR grouping, and mixed queries.
+
+**`SearchQuery` record:**
+
+```java
+record SearchQuery(String ftsQuery, List<FieldFilter> filters) { }
+record FieldFilter(String field, List<String> values, MatchType matchType) { }
+```
+
+`ftsQuery` is passed to the existing PostgreSQL `tsvector` path. `filters` generate additional `WHERE` clauses appended with `AND`.
+
+### 14.5 PagedResult and Server-Side Pagination
+
+Endpoints that return paginated lists of users or roles use the shared `PagedResult<T>` record:
+
+```java
+// pantera-main/src/main/java/com/auto1/pantera/db/dao/PagedResult.java
+public record PagedResult<T>(List<T> items, int total) {}
+```
+
+DAO methods follow this signature pattern:
+
+```java
+public PagedResult<JsonObject> listPaged(
+    String query,       // case-insensitive substring filter (null = no filter)
+    String sortField,   // validated against an allowlist before use in SQL
+    String sortDir,     // "asc" or "desc"
+    int page,
+    int size
+) { ... }
+```
+
+The SQL uses `COUNT(*) OVER()` window functions so both the total count and the page rows are retrieved in a single query. Sort fields are validated against an explicit allowlist before being interpolated into SQL to prevent injection.
+
+**Relevant files:**
+- `pantera-main/src/main/java/com/auto1/pantera/db/dao/UserDao.java`
+- `pantera-main/src/main/java/com/auto1/pantera/db/dao/RoleDao.java`
+- `pantera-main/src/main/java/com/auto1/pantera/api/v1/UserHandler.java`
+- `pantera-main/src/main/java/com/auto1/pantera/api/v1/RoleHandler.java`
+
+### 14.6 GroupSlice: Proxy-Only Fanout on Index Miss
+
+When `GroupSlice` cannot resolve an artifact name from the URL (metadata endpoints, unknown paths), it falls back to direct fanout instead of querying the artifact index. As of v2.1.0, this fallback fans out only to **proxy members** of the group, not to hosted (local) repositories.
+
+The rationale: if the artifact index does not contain the artifact, it was never uploaded to a hosted member. Proxy members may still have it from upstream. Fanning out to hosted members wastes connections and generates 404 log noise.
+
+**Implementation:**
+
+```java
+// GroupSlice.java (~line 449)
+final List<MemberSlice> proxyOnly = this.members.stream()
+    .filter(m -> this.proxyMembers.contains(m.name()))
+    .collect(toList());
+if (proxyOnly.isEmpty()) {
+    // fall back to all members if no proxies are configured
+    return queryTargetedMembers(this.members, line, headers, body, ctx);
+}
+return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
+```
+
+`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type.
+
+To ensure a new adapter type is included in proxy fanout, register it as a proxy type in `RepositorySlices` when building the `GroupSlice`.
 
 ---
 
