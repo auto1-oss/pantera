@@ -72,9 +72,9 @@ public final class RoleDao implements CrudRoles {
         final String sql = String.join(" ",
             "SELECT name, permissions, enabled, COUNT(*) OVER() AS total_count",
             "FROM roles",
-            "WHERE ($1::text IS NULL OR LOWER(name) LIKE $1)",
+            "WHERE (? IS NULL OR LOWER(name) LIKE ?)",
             "ORDER BY " + col + " " + dir,
-            "LIMIT $2 OFFSET $3"
+            "LIMIT ? OFFSET ?"
         );
         final String pattern = query == null ? null : "%" + query.toLowerCase() + "%";
         final List<JsonObject> items = new ArrayList<>();
@@ -82,8 +82,9 @@ public final class RoleDao implements CrudRoles {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, pattern);
-            ps.setInt(2, limit);
-            ps.setInt(3, offset);
+            ps.setString(2, pattern);
+            ps.setInt(3, limit);
+            ps.setInt(4, offset);
             final ResultSet rs = ps.executeQuery();
             while (rs.next()) {
                 if (total == 0) {

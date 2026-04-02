@@ -83,10 +83,10 @@ public final class UserDao implements CrudUsers {
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
             "LEFT JOIN roles r ON ur.role_id = r.id",
-            "WHERE ($1::text IS NULL OR LOWER(u.username) LIKE $1 OR LOWER(u.email) LIKE $1)",
+            "WHERE (? IS NULL OR LOWER(u.username) LIKE ? OR LOWER(u.email) LIKE ?)",
             "GROUP BY u.id",
             "ORDER BY u." + col + " " + dir,
-            "LIMIT $2 OFFSET $3"
+            "LIMIT ? OFFSET ?"
         );
         final String pattern = query == null ? null : "%" + query.toLowerCase() + "%";
         final List<JsonObject> items = new ArrayList<>();
@@ -94,8 +94,10 @@ public final class UserDao implements CrudUsers {
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, pattern);
-            ps.setInt(2, limit);
-            ps.setInt(3, offset);
+            ps.setString(2, pattern);
+            ps.setString(3, pattern);
+            ps.setInt(4, limit);
+            ps.setInt(5, offset);
             final ResultSet rs = ps.executeQuery();
             while (rs.next()) {
                 if (total == 0) {
