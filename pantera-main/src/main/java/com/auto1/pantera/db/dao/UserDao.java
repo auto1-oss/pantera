@@ -15,7 +15,10 @@ import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonArray;
 import javax.json.JsonArrayBuilder;
@@ -57,6 +60,53 @@ public final class UserDao implements CrudUsers {
             throw new IllegalStateException("Failed to list users", ex);
         }
         return arr.build();
+    }
+
+    /**
+     * Return a paginated, filtered, sorted page of users.
+     * @param query Optional search string matched against username and email (ILIKE).
+     * @param sortField Column to sort by; validated against allowlist, defaults to "username".
+     * @param ascending Sort direction.
+     * @param limit Page size.
+     * @param offset Row offset.
+     * @return PagedResult containing the requested page and the unfiltered total count.
+     */
+    public PagedResult<JsonObject> listPaged(final String query, final String sortField,
+        final boolean ascending, final int limit, final int offset) {
+        final Set<String> allowed = Set.of("username", "email", "enabled", "auth_provider");
+        final String col = allowed.contains(sortField) ? sortField : "username";
+        final String dir = ascending ? "ASC" : "DESC";
+        final String sql = String.join(" ",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider,",
+            "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles,",
+            "COUNT(*) OVER() AS total_count",
+            "FROM users u",
+            "LEFT JOIN user_roles ur ON u.id = ur.user_id",
+            "LEFT JOIN roles r ON ur.role_id = r.id",
+            "WHERE ($1::text IS NULL OR LOWER(u.username) LIKE $1 OR LOWER(u.email) LIKE $1)",
+            "GROUP BY u.id",
+            "ORDER BY u." + col + " " + dir,
+            "LIMIT $2 OFFSET $3"
+        );
+        final String pattern = query == null ? null : "%" + query.toLowerCase() + "%";
+        final List<JsonObject> items = new ArrayList<>();
+        int total = 0;
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, pattern);
+            ps.setInt(2, limit);
+            ps.setInt(3, offset);
+            final ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                if (total == 0) {
+                    total = rs.getInt("total_count");
+                }
+                items.add(userFromRow(rs));
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to list users (paged)", ex);
+        }
+        return new PagedResult<>(items, total);
     }
 
     @Override

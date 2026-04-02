@@ -15,6 +15,8 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.api.perms.ApiUserPermission.UserAction;
 import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.db.dao.PagedResult;
+import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.security.policy.Policy;
@@ -26,8 +28,8 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.security.PermissionCollection;
-import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -134,6 +136,7 @@ public final class UserHandler {
 
     /**
      * GET /api/v1/users — paginated list of users.
+     * Supports query params: page, size, q (search), sort (field), sort_dir (asc|desc).
      * @param ctx Routing context
      */
     private void listUsers(final RoutingContext ctx) {
@@ -145,25 +148,30 @@ public final class UserHandler {
                 ctx.queryParam("size").stream().findFirst().orElse(null), 20
             )
         );
-        ctx.vertx().<javax.json.JsonArray>executeBlocking(
-            this.users::list,
+        final String query = ctx.queryParam("q").stream().findFirst().orElse(null);
+        final Set<String> userSortFields = Set.of("username", "email", "enabled", "auth_provider");
+        final String rawSort = ctx.queryParam("sort").stream().findFirst().orElse("username");
+        final String sortField = userSortFields.contains(rawSort) ? rawSort : "username";
+        final String sortDir = ctx.queryParam("sort_dir").stream().findFirst().orElse("asc");
+        final boolean ascending = !"desc".equalsIgnoreCase(sortDir);
+        if (!(this.users instanceof UserDao)) {
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Paged listing not supported");
+            return;
+        }
+        final UserDao dao = (UserDao) this.users;
+        ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
+            () -> dao.listPaged(query, sortField, ascending, size, page * size),
             false
         ).onSuccess(
-            all -> {
-                final List<io.vertx.core.json.JsonObject> flat =
-                    new java.util.ArrayList<>(all.size());
-                for (int i = 0; i < all.size(); i++) {
-                    flat.add(
-                        new io.vertx.core.json.JsonObject(
-                            all.getJsonObject(i).toString()
-                        )
-                    );
+            result -> {
+                final JsonArray items = new JsonArray();
+                for (final JsonObject obj : result.items()) {
+                    items.add(new io.vertx.core.json.JsonObject(obj.toString()));
                 }
-                final JsonArray items = ApiResponse.sliceToArray(flat, page, size);
                 ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
-                    .end(ApiResponse.paginated(items, page, size, flat.size()).encode());
+                    .end(ApiResponse.paginated(items, page, size, result.total()).encode());
             }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())

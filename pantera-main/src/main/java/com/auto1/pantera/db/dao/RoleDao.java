@@ -14,7 +14,10 @@ import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonArray;
 import javax.json.JsonArrayBuilder;
@@ -50,6 +53,48 @@ public final class RoleDao implements CrudRoles {
             throw new IllegalStateException("Failed to list roles", ex);
         }
         return arr.build();
+    }
+
+    /**
+     * Return a paginated, filtered, sorted page of roles.
+     * @param query Optional search string matched against name (ILIKE).
+     * @param sortField Column to sort by; validated against allowlist, defaults to "name".
+     * @param ascending Sort direction.
+     * @param limit Page size.
+     * @param offset Row offset.
+     * @return PagedResult containing the requested page and the unfiltered total count.
+     */
+    public PagedResult<JsonObject> listPaged(final String query, final String sortField,
+        final boolean ascending, final int limit, final int offset) {
+        final Set<String> allowed = Set.of("name", "enabled");
+        final String col = allowed.contains(sortField) ? sortField : "name";
+        final String dir = ascending ? "ASC" : "DESC";
+        final String sql = String.join(" ",
+            "SELECT name, permissions, enabled, COUNT(*) OVER() AS total_count",
+            "FROM roles",
+            "WHERE ($1::text IS NULL OR LOWER(name) LIKE $1)",
+            "ORDER BY " + col + " " + dir,
+            "LIMIT $2 OFFSET $3"
+        );
+        final String pattern = query == null ? null : "%" + query.toLowerCase() + "%";
+        final List<JsonObject> items = new ArrayList<>();
+        int total = 0;
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, pattern);
+            ps.setInt(2, limit);
+            ps.setInt(3, offset);
+            final ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                if (total == 0) {
+                    total = rs.getInt("total_count");
+                }
+                items.add(roleFromRow(rs));
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to list roles (paged)", ex);
+        }
+        return new PagedResult<>(items, total);
     }
 
     @Override
