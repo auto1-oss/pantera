@@ -185,9 +185,23 @@ public final class CombinedAuthzSlice implements Slice {
             .findFirst()
             .map(
                 header -> {
-                    final Authorization auth = new Authorization(header);
-                    final String scheme = auth.scheme();
-                    
+                    final Authorization auth;
+                    final String scheme;
+                    try {
+                        auth = new Authorization(header);
+                        scheme = auth.scheme();
+                    } catch (final IllegalStateException ex) {
+                        // Malformed Authorization header (e.g., bare "Bearer" with no token,
+                        // empty credentials, or unrecognized format). Treat as anonymous
+                        // so the permission check returns a proper 401 instead of a 500.
+                        return CompletableFuture.completedFuture(
+                            AuthScheme.result(
+                                AuthUser.ANONYMOUS,
+                                String.format("%s realm=\"pantera\", %s realm=\"pantera\"",
+                                    BasicAuthScheme.NAME, BearerAuthScheme.NAME)
+                            )
+                        );
+                    }
                     if (BasicAuthScheme.NAME.equals(scheme)) {
                         return this.authenticateBasic(auth);
                     } else if (BearerAuthScheme.NAME.equals(scheme)) {
