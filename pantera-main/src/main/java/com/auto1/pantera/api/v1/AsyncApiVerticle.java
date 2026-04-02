@@ -286,7 +286,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 ? (com.auto1.pantera.auth.UnifiedJwtAuthHandler) this.jwtTokens.auth()
                 : null;
         router.route("/api/v1/*").handler(ctx -> {
-            if (ctx.request().path().contains("/artifact/download-direct")) {
+            final String path = ctx.request().path();
+            // Skip JWT auth for public endpoints (registered before this filter)
+            if (path.contains("/artifact/download-direct")
+                || path.endsWith("/auth/token")
+                || path.endsWith("/auth/callback")
+                || path.endsWith("/auth/providers")
+                || path.contains("/auth/providers/")
+                || path.endsWith("/health")) {
                 ctx.next();
                 return;
             }
