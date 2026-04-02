@@ -773,12 +773,12 @@ public final class GroupSlice implements Slice {
             // Always decrement (same two-phase logic as 2xx success above)
             completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
         } else if (status == RsStatus.NOT_FOUND) {
-            // 404: try next member
-            ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
-                .message("Member '" + member.name() + "' returned 404")
-                .eventCategory("repository")
-                .eventAction("group_query")
-                .eventOutcome("not_found")
+            // 404: try next member — individual miss is DEBUG noise, not actionable
+            ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
+                .message("Group member " + member.name() + " does not have " + pathKey.string())
+                .eventCategory("group")
+                .eventAction("group_fanout_miss")
+                .eventOutcome("success")
                 .field("repository.name", this.group)
                 .field("url.path", pathKey.string()))
                 .log();
@@ -879,9 +879,9 @@ public final class GroupSlice implements Slice {
                     .textBody("Some members temporarily unavailable, retry later").build());
             } else {
                 ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                    .message("All members exhausted, returning 404")
-                    .eventCategory("repository")
-                    .eventAction("group_query")
+                    .message("Artifact not found in any group member: " + ctx.packageName())
+                    .eventCategory("group")
+                    .eventAction("group_lookup_miss")
                     .eventOutcome("failure")
                     .field("repository.name", this.group))
                     .log();
