@@ -442,16 +442,36 @@ public final class GroupSlice implements Slice {
                             return queryTargetedMembers(targeted, line, headers, body, ctx);
                         }
                     }
-                    // Index miss: fall back to querying all members
+                    // Index miss: hosted repos are fully indexed so the artifact
+                    // cannot exist in any hosted member.  Only proxy members need
+                    // to be queried (they cache on first fetch and may not yet be
+                    // in the index).
+                    final List<MemberSlice> proxyOnly = this.members.stream()
+                        .filter(MemberSlice::isProxy)
+                        .toList();
+                    if (proxyOnly.isEmpty()) {
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("Index miss with no proxy members, returning 404"
+                                + " (name: " + parsedName.get() + ")")
+                            .eventCategory("repository")
+                            .eventAction("group_index_miss")
+                            .field("repository.name", this.group)
+                            .field("url.path", path)
+                            .log();
+                        return CompletableFuture.completedFuture(
+                            ResponseBuilder.notFound().build()
+                        );
+                    }
                     EcsLogger.debug("com.auto1.pantera.group")
-                        .message("Index miss: falling back to all members"
+                        .message("Index miss: fanning out to "
+                            + proxyOnly.size() + " proxy member(s) only"
                             + " (name: " + parsedName.get() + ")")
                         .eventCategory("repository")
                         .eventAction("group_index_miss")
                         .field("repository.name", this.group)
                         .field("url.path", path)
                         .log();
-                    return queryAllMembersInParallel(line, headers, body, ctx);
+                    return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
                 })
                 .whenComplete((resp, err) -> {
                     final long duration = System.currentTimeMillis() - requestStartTime;

@@ -203,10 +203,72 @@ final class GroupSliceIndexRoutingTest {
         assertEquals(0, otherCount.get(), "Other member must NOT receive request on index hit");
     }
 
-    // ---- Index miss → all members queried (fanout) ----
+    // ---- Index miss → only proxy members queried (not all members) ----
 
     @Test
-    void indexMissTriggersFanout() {
+    void indexMissQueriesOnlyProxyMembers() {
+        final RecordingIndex idx = new RecordingIndex(List.of()); // empty → miss
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        final AtomicInteger hostedCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put("maven-proxy", countingSlice(proxyCount));
+        slices.put("maven-hosted", countingSlice(hostedCount));
+        final GroupSlice slice = new GroupSlice(
+            new MapResolver(slices),
+            "maven-group",
+            List.of("maven-hosted", "maven-proxy"),
+            8080, 0, 0,
+            Collections.emptyList(),
+            Optional.of(idx),
+            Set.of("maven-proxy"), // only maven-proxy is a proxy member
+            "maven-group"
+        );
+        slice.response(
+            new RequestLine("GET", "/com/example/unknown/1.0/unknown-1.0.jar"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(1, proxyCount.get(),
+            "Proxy member must receive request on index miss");
+        assertEquals(0, hostedCount.get(),
+            "Hosted member must NOT receive request on index miss (fully indexed)");
+        assertFalse(idx.locateByNameCalls.isEmpty(), "locateByName() still called on index miss");
+        assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
+    }
+
+    @Test
+    void indexMissWithAllHostedMembersReturns404Immediately() {
+        final RecordingIndex idx = new RecordingIndex(List.of()); // empty → miss
+        final AtomicInteger hostedACount = new AtomicInteger(0);
+        final AtomicInteger hostedBCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put("hosted-a", countingSlice(hostedACount));
+        slices.put("hosted-b", countingSlice(hostedBCount));
+        final GroupSlice slice = new GroupSlice(
+            new MapResolver(slices),
+            "maven-group",
+            List.of("hosted-a", "hosted-b"),
+            8080, 0, 0,
+            Collections.emptyList(),
+            Optional.of(idx),
+            Collections.emptySet(), // no proxy members
+            "maven-group"
+        );
+        final Response resp = slice.response(
+            new RequestLine("GET", "/com/example/unknown/1.0/unknown-1.0.jar"),
+            Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertEquals(404, resp.status().code(),
+            "Must return 404 immediately when no proxy members exist on index miss");
+        assertEquals(0, hostedACount.get(),
+            "hosted-a must NOT receive any request (all-hosted group, index miss)");
+        assertEquals(0, hostedBCount.get(),
+            "hosted-b must NOT receive any request (all-hosted group, index miss)");
+        assertFalse(idx.locateByNameCalls.isEmpty(), "locateByName() still called on index miss");
+        assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
+    }
+
+    @Test
+    void indexMissTriggersFanoutWhenAllMembersAreProxy() {
         final RecordingIndex idx = new RecordingIndex(List.of()); // empty → miss
         final AtomicInteger memberACount = new AtomicInteger(0);
         final AtomicInteger memberBCount = new AtomicInteger(0);
@@ -220,15 +282,17 @@ final class GroupSliceIndexRoutingTest {
             8080, 0, 0,
             Collections.emptyList(),
             Optional.of(idx),
-            Set.of("member-a", "member-b"),
+            Set.of("member-a", "member-b"), // all are proxy members
             "maven-group"
         );
         slice.response(
             new RequestLine("GET", "/com/example/unknown/1.0/unknown-1.0.jar"),
             Headers.EMPTY, Content.EMPTY
         ).join();
-        assertEquals(1, memberACount.get(), "member-a must receive request on index miss");
-        assertEquals(1, memberBCount.get(), "member-b must receive request on index miss");
+        assertEquals(1, memberACount.get(),
+            "member-a must receive request on index miss (all-proxy group)");
+        assertEquals(1, memberBCount.get(),
+            "member-b must receive request on index miss (all-proxy group)");
         assertFalse(idx.locateByNameCalls.isEmpty(), "locateByName() still called on index miss");
         assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
     }
