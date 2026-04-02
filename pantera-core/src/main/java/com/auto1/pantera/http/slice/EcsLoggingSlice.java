@@ -125,6 +125,7 @@ public final class EcsLoggingSlice implements Slice {
                     .httpVersion(line.version())
                     .httpStatus(response.status())
                     .urlPath(line.uri().getPath())
+                    .urlOriginal(line.uri().toString())
                     .userAgent(headers)
                     .duration(duration);
 
