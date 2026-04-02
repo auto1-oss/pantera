@@ -16,6 +16,8 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.db.DbManager;
+import com.auto1.pantera.db.PostgreSQLTestConfig;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.index.ArtifactIndex;
@@ -23,6 +25,8 @@ import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.test.TestPanteraCaches;
 import com.auto1.pantera.test.TestSettings;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
@@ -45,15 +49,27 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Test base for AsyncApiVerticle integration tests.
  */
 @ExtendWith(VertxExtension.class)
+@Testcontainers
 public class AsyncApiTestBase {
+
+    @Container
+    static final PostgreSQLContainer<?> PG = PostgreSQLTestConfig.createContainer();
+
+    private static HikariDataSource sharedDs;
 
     /**
      * Test timeout in seconds.
@@ -74,6 +90,25 @@ public class AsyncApiTestBase {
      * Server port.
      */
     private int port;
+
+    @BeforeAll
+    static void initDb() {
+        final HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(PG.getJdbcUrl());
+        cfg.setUsername(PG.getUsername());
+        cfg.setPassword(PG.getPassword());
+        cfg.setMaximumPoolSize(4);
+        cfg.setMinimumIdle(1);
+        sharedDs = new HikariDataSource(cfg);
+        DbManager.migrate(sharedDs);
+    }
+
+    @AfterAll
+    static void closeDb() {
+        if (sharedDs != null) {
+            sharedDs.close();
+        }
+    }
 
     @BeforeEach
     final void setUp(final Vertx vertx, final VertxTestContext ctx) throws Exception {
@@ -131,7 +166,7 @@ public class AsyncApiTestBase {
             NoopCooldownService.INSTANCE,
             new TestSettings(),
             ArtifactIndex.NOP,
-            null,
+            sharedDs,
             jwtTokens
         );
         vertx.deployVerticle(verticle, ctx.succeedingThenComplete());
