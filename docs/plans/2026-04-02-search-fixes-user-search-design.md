@@ -355,24 +355,58 @@ Add entries for all six parts under appropriate sections.
 
 ### Fix B: `package.release_date` Ingestion Failures
 
-**Problem:** The cooldown inspector sets `release_date` to the string `"unknown"` when it can't determine the upstream release date. The Elasticsearch index maps `package.release_date` as a `date` type. The string `"unknown"` fails date parsing, producing ingestion errors: `failed to parse field [package.release_date] of type [date]`.
+**Problem:** Four package processor classes log `release.map(Object::toString).orElse("unknown")` as the value of a `package.release_date` ECS field. Elasticsearch maps this field as `date` type. The string `"unknown"` fails date parsing, producing ingestion errors: `failed to parse field [package.release_date] of type [date]`.
 
-**Fix:** Never emit `"unknown"` as a date value. Two changes:
+**Root cause confirmed by audit:** The string `"unknown"` is NEVER stored in the database (`artifacts.release_date` is `BIGINT`, falls back to `createdDate`). The problem is exclusively in ECS log field values.
 
-1. **Source fix:** In `PyProxyCooldownInspector` (and any other inspector that sets `release_date`), when the date is unavailable, **omit the field entirely** instead of setting it to `"unknown"`. Use `Optional<Instant>` — only add the ECS field when present.
+**Exact locations (4 files):**
 
-2. **Log field fix:** In any `EcsLogger` call that includes `package.release_date`, only add the field when the value is a valid ISO timestamp. Add a guard:
-   ```java
-   if (releaseDate != null) {
-       logger.field("package.release_date", releaseDate.toString());
-   }
-   // Never: logger.field("package.release_date", "unknown");
-   ```
+| File | Line | Current code |
+|------|------|-------------|
+| `go-adapter/src/main/java/com/auto1/pantera/http/CachedProxySlice.java` | ~558 | `release.map(Object::toString).orElse("unknown")` |
+| `go-adapter/src/main/java/com/auto1/pantera/goproxy/GoProxyPackageProcessor.java` | ~227 | Same pattern |
+| `pypi-adapter/src/main/java/com/auto1/pantera/pypi/PyProxyPackageProcessor.java` | ~186 | Same pattern |
+| `composer-adapter/src/main/java/com/auto1/pantera/composer/http/proxy/ComposerProxyPackageProcessor.java` | ~152 | Same pattern |
 
-**Files:**
-- Modify: `pypi-adapter/src/main/java/com/auto1/pantera/pypi/http/PyProxyCooldownInspector.java`
-- Search all adapters for `release_date` + `"unknown"` pattern and fix each occurrence
-- Grep: `field.*release_date.*unknown` across all `*Inspector.java` and `*CooldownInspector.java` files
+**Fix (all 4 files):** Only emit the ECS field when a valid date exists. When unavailable, omit the field entirely and log a structured debug message:
+
+```java
+// Before:
+.field("package.release_date", release.map(Object::toString).orElse("unknown"))
+
+// After:
+// Only emit field when date exists — "unknown" breaks ES date parsing
+release.ifPresent(r -> logger.field("package.release_date", r.toString()));
+
+// Separately, when release date is unavailable:
+if (release.isEmpty()) {
+    EcsLogger.debug("com.auto1.pantera")
+        .message("Release date unavailable, using creation date")
+        .field("package.name", artifactName)
+        .field("event.action", "release_date_fallback")
+        .field("event.outcome", "unknown")
+        .log();
+}
+```
+
+**Per-adapter release date extraction audit (all confirmed correct):**
+
+| Adapter | Source | Format | Fallback | Status |
+|---------|--------|--------|----------|--------|
+| npm | `time` object in registry JSON | ISO 8601 | `Optional.empty()` → createdDate | OK |
+| pypi | `/pypi/{pkg}/{ver}/json` → `upload_time_iso_8601` | ISO 8601 | `Optional.empty()` → createdDate | OK |
+| maven | `Last-Modified` HTTP header (POM → JAR fallback) | RFC 1123 | `Optional.empty()` → createdDate | OK |
+| go | `Last-Modified` from `.info` then `.mod` file | RFC 1123 | `Optional.empty()` → createdDate | OK |
+| composer | Packagist v2 API → `time` field | RFC 3339 | `Optional.empty()` → createdDate | OK |
+| docker | Injected externally via cache | N/A | `Optional.empty()` → createdDate | OK |
+| files | `Last-Modified` HTTP header | RFC 1123 | `Optional.empty()` → createdDate | OK |
+| gem, helm, debian, rpm, nuget, conda, conan, hex | No inspector | N/A | Always createdDate | By design |
+
+**Files to modify:**
+- `go-adapter/src/main/java/com/auto1/pantera/http/CachedProxySlice.java`
+- `go-adapter/src/main/java/com/auto1/pantera/goproxy/GoProxyPackageProcessor.java`
+- `pypi-adapter/src/main/java/com/auto1/pantera/pypi/PyProxyPackageProcessor.java`
+- `composer-adapter/src/main/java/com/auto1/pantera/composer/http/proxy/ComposerProxyPackageProcessor.java`
 
 ### Fix C: ECS-Compliant HTTP Request Logging
 
@@ -465,8 +499,10 @@ EcsLogger.info("com.auto1.pantera.http")
 - **Fix A:** Group fanout: verify individual member 404s logged at DEBUG, aggregate miss at WARN
 - **Fix A:** Direct repo 404: verify logged at INFO with `event.action: "artifact_not_found"`
 - **Fix A:** Group fanout with 1 hit: verify no WARN logged (artifact was found)
-- **Fix B:** Cooldown inspector with unknown release date: verify `package.release_date` field is absent (not `"unknown"`)
-- **Fix B:** Cooldown inspector with valid date: verify field is present with ISO timestamp
+- **Fix B:** All 4 package processors with empty release date: verify `package.release_date` field is absent from log output (not `"unknown"`)
+- **Fix B:** All 4 package processors with valid date: verify field is present with ISO timestamp
+- **Fix B:** Verify debug log emitted with `event.action: "release_date_fallback"` when date unavailable
+- **Fix B:** Grep codebase for `.orElse("unknown")` on release date — zero remaining occurrences
 - **Fix C:** HTTP request log: verify `http.request.method`, `url.original`, `http.response.status_code` are separate ECS fields
 - **Fix C:** HTTP 404 log: verify `message` is `"Not found"`, not the raw request line
 - **Fix C:** HTTP 200 log: verify `message` is `"Request completed"`
