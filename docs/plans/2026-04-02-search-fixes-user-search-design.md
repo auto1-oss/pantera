@@ -325,7 +325,101 @@ Update all relevant guides to cover the changes in Parts 1-4:
 
 ### Changelog (v2.1.0)
 
-Add entries for all four parts under appropriate sections.
+Add entries for all six parts under appropriate sections.
+
+---
+
+## Part 6: Observability Fixes
+
+### Fix A: Smart 404 Log Levels (Group Fanout vs Real Miss)
+
+**Problem:** Every group fanout generates N-1 404 log entries at INFO/WARN level. A group with 20 members produces ~19 "404" log lines per request. Elastic gets flooded with noise, making real 404s invisible.
+
+**Fix:** Introduce context-aware 404 logging in `GroupSlice`:
+
+| Scenario | Level | ECS Fields | Message |
+|----------|-------|------------|---------|
+| Group fanout: single member 404 (expected) | `DEBUG` | `event.action: "group_fanout_miss"`, `event.outcome: "expected"` | "Group member {member} does not have {artifact}" |
+| Group fanout: ALL members 404 (real miss) | `WARN` | `event.action: "group_lookup_miss"`, `event.outcome: "failure"` | "Artifact not found in any group member: {artifact}" |
+| Direct local/proxy repo: 404 | `INFO` | `event.action: "artifact_not_found"`, `event.outcome: "failure"` | "Artifact not found in {repo}: {path}" |
+| Client requests non-existent repo | `WARN` | `event.action: "repo_not_found"`, `event.outcome: "failure"` | "Repository not found: {repo}" |
+
+**Implementation:**
+- `GroupSlice.java`: In the fan-out response handler, log individual member 404s at `DEBUG`. After all members respond, if no member had the artifact, log a single `WARN` with the aggregate result.
+- `RepositorySlices.java` / `SliceByPath.java`: Direct repo 404s stay at `INFO`.
+- `EcsLoggingSlice.java`: If the final response is 404 from a group slice, don't log again (GroupSlice already logged the aggregate).
+
+**Files:**
+- Modify: `pantera-main/src/main/java/com/auto1/pantera/group/GroupSlice.java`
+- Modify: `pantera-main/src/main/java/com/auto1/pantera/http/slice/EcsLoggingSlice.java` (avoid double-logging group 404s)
+
+### Fix B: `package.release_date` Ingestion Failures
+
+**Problem:** The cooldown inspector sets `release_date` to the string `"unknown"` when it can't determine the upstream release date. The Elasticsearch index maps `package.release_date` as a `date` type. The string `"unknown"` fails date parsing, producing ingestion errors: `failed to parse field [package.release_date] of type [date]`.
+
+**Fix:** Never emit `"unknown"` as a date value. Two changes:
+
+1. **Source fix:** In `PyProxyCooldownInspector` (and any other inspector that sets `release_date`), when the date is unavailable, **omit the field entirely** instead of setting it to `"unknown"`. Use `Optional<Instant>` — only add the ECS field when present.
+
+2. **Log field fix:** In any `EcsLogger` call that includes `package.release_date`, only add the field when the value is a valid ISO timestamp. Add a guard:
+   ```java
+   if (releaseDate != null) {
+       logger.field("package.release_date", releaseDate.toString());
+   }
+   // Never: logger.field("package.release_date", "unknown");
+   ```
+
+**Files:**
+- Modify: `pypi-adapter/src/main/java/com/auto1/pantera/pypi/http/PyProxyCooldownInspector.java`
+- Search all adapters for `release_date` + `"unknown"` pattern and fix each occurrence
+- Grep: `field.*release_date.*unknown` across all `*Inspector.java` and `*CooldownInspector.java` files
+
+### Fix C: ECS-Compliant HTTP Request Logging
+
+**Problem:** The request log message dumps raw HTTP info into the `message` field:
+```
+GET /artifactory/libs-fixed-revs-local/software/amazon/awssdk/bom/2.31.54/bom-2.31.54.pom 404
+```
+
+Per ECS, `message` should be human-readable. HTTP components belong in structured fields.
+
+**Fix:** Update `EcsLoggingSlice.java` to use proper ECS fields:
+
+**Before:**
+```java
+EcsLogger.info("com.auto1.pantera.http")
+    .message("GET /artifactory/.../bom-2.31.54.pom 404")
+    .log();
+```
+
+**After:**
+```java
+EcsLogger.info("com.auto1.pantera.http")
+    .message("Artifact request completed")
+    .field("http.request.method", "GET")
+    .field("url.original", "/artifactory/libs-fixed-revs-local/.../bom-2.31.54.pom")
+    .field("http.response.status_code", 404)
+    .field("url.domain", request.host())
+    .field("event.duration", durationNanos)
+    .field("event.action", "http_request")
+    .field("event.outcome", statusCode < 400 ? "success" : "failure")
+    .log();
+```
+
+**Message field values by status:**
+
+| Status | Message |
+|--------|---------|
+| 200 | "Request completed" |
+| 304 | "Not modified" |
+| 401 | "Authentication required" |
+| 403 | "Access denied" |
+| 404 | "Not found" |
+| 500 | "Internal server error" |
+
+**Files:**
+- Modify: `pantera-main/src/main/java/com/auto1/pantera/http/slice/EcsLoggingSlice.java`
+- Verify: existing ECS fields already emitted aren't duplicated
 
 ---
 
@@ -366,3 +460,13 @@ Add entries for all four parts under appropriate sections.
 - All docs build/render without broken links
 - Search syntax examples in user guide match actual parser behavior
 - API reference examples are curl-testable
+
+### Part 6 Tests
+- **Fix A:** Group fanout: verify individual member 404s logged at DEBUG, aggregate miss at WARN
+- **Fix A:** Direct repo 404: verify logged at INFO with `event.action: "artifact_not_found"`
+- **Fix A:** Group fanout with 1 hit: verify no WARN logged (artifact was found)
+- **Fix B:** Cooldown inspector with unknown release date: verify `package.release_date` field is absent (not `"unknown"`)
+- **Fix B:** Cooldown inspector with valid date: verify field is present with ISO timestamp
+- **Fix C:** HTTP request log: verify `http.request.method`, `url.original`, `http.response.status_code` are separate ECS fields
+- **Fix C:** HTTP 404 log: verify `message` is `"Not found"`, not the raw request line
+- **Fix C:** HTTP 200 log: verify `message` is `"Request completed"`
