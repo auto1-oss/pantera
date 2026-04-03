@@ -471,11 +471,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         return switch (field) {
             case NAME -> "name " + dir;
             case VERSION ->
-                "CASE WHEN version ~ '^\\d+'"
-                + " THEN string_to_array("
-                + "REGEXP_REPLACE(version, '[^0-9.].*$', ''), '.')::int[]"
-                + " ELSE NULL END "
-                + dir + " NULLS LAST, version " + dir;
+                "version_sort " + dir + " NULLS LAST, version " + dir;
             case DATE -> "created_date " + dir;
             default -> hasRank ? "rank DESC, name ASC" : "name ASC";
         };

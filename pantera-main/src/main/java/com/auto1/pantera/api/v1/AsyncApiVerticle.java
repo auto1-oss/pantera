@@ -173,14 +173,16 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     }
 
     /**
-     * Convenience constructor (no JwtTokens — creates a stub tokens provider).
+     * Convenience constructor for deployment from VertxMain.
      * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance, nullable
      */
     public AsyncApiVerticle(final Settings settings, final int port,
-        final JWTAuth jwt, final DataSource dataSource) {
+        final JWTAuth jwt, final DataSource dataSource,
+        final JwtTokens jwtTokens) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
@@ -189,7 +191,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             settings,
             settings.artifactIndex(),
             dataSource,
-            null
+            jwtTokens
         );
     }
 

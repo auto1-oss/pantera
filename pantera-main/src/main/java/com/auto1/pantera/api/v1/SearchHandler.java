@@ -193,8 +193,10 @@ public final class SearchHandler {
         final List<String> allowedRepos = resolveAllowedRepos(perms);
         // Fix 1: map sort string to SortField enum for index
         final DbArtifactIndex.SortField sortField = DbArtifactIndex.toSortField(sortBy);
-        // Effective FTS query: bare terms only (field values are handled as filters)
-        final String ftsQuery = parsed.ftsQuery().isBlank() ? query : parsed.ftsQuery();
+        // Effective FTS query: bare terms only (field values are handled as filters).
+        // When blank (pure field-filter query like "name:pydantic"), DbArtifactIndex
+        // switches to the filter-only LIKE path automatically.
+        final String ftsQuery = parsed.ftsQuery();
         // Fix 5: use the permission-filtered search method directly (no overfetch needed)
         final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
         if (this.index instanceof DbArtifactIndex) {

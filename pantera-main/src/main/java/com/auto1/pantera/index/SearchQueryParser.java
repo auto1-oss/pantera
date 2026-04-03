@@ -134,14 +134,29 @@ public final class SearchQueryParser {
             }
             final int colon = token.indexOf(':');
             if (colon > 0 && colon < token.length() - 1) {
+                // field:value (no space after colon)
                 final String field = token.substring(0, colon).toLowerCase();
                 final String value = token.substring(colon + 1);
                 if (KNOWN_FIELDS.contains(field)) {
-                    fieldValues.computeIfAbsent(field, k -> new ArrayList<>()).add(value);
+                    fieldValues.computeIfAbsent(field, k -> new ArrayList<>())
+                        .add(normalizeValue(field, value));
                 } else {
-                    // Unknown field prefix — treat whole token as FTS
                     ftsTerms.add(token);
                 }
+            } else if (colon > 0 && colon == token.length() - 1) {
+                // field: value (space after colon) — peek at next non-operator token
+                final String field = token.substring(0, colon).toLowerCase();
+                if (KNOWN_FIELDS.contains(field) && i + 1 < tokens.size()) {
+                    final String next = tokens.get(i + 1);
+                    if (!"AND".equals(next) && !"OR".equals(next)
+                        && !"(".equals(next) && !")".equals(next)) {
+                        fieldValues.computeIfAbsent(field, k -> new ArrayList<>())
+                            .add(normalizeValue(field, next));
+                        i++;
+                        continue;
+                    }
+                }
+                ftsTerms.add(token);
             } else {
                 ftsTerms.add(token);
             }
@@ -156,6 +171,23 @@ public final class SearchQueryParser {
         }
         final String ftsQuery = String.join(" ", ftsTerms);
         return new SearchQuery(ftsQuery, List.copyOf(filters));
+    }
+
+    /**
+     * Normalize a field value. Strips the leading {@code v} or {@code V} from
+     * version values since the DB stores bare version numbers (e.g. {@code 0.1.65}
+     * not {@code v0.1.65}).
+     *
+     * @param field Field name
+     * @param value Raw value from the query
+     * @return Normalized value
+     */
+    private static String normalizeValue(final String field, final String value) {
+        if ("version".equals(field) && value.length() > 1
+            && (value.charAt(0) == 'v' || value.charAt(0) == 'V')) {
+            return value.substring(1);
+        }
+        return value;
     }
 
     /**

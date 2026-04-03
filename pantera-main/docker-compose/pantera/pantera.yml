@@ -5,13 +5,10 @@ meta:
   
   # JWT token settings (RS256 — RSA key pair)
   jwt:
-    # Set to true for tokens that expire, false for permanent tokens
-    expires: true
-    # Token lifetime in seconds (default: 86400 = 24 hours)
-    expiry-seconds: 86400
-    # RS256 key pair paths (PEM files mounted into the container)
     private-key-path: ${JWT_PRIVATE_KEY_PATH}
     public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
   
   credentials:
     # - type: env

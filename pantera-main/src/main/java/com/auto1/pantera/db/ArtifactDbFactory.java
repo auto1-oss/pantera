@@ -393,6 +393,40 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_path_prefix ON artifacts (path_prefix, repo_name) WHERE path_prefix IS NOT NULL"
             );
+            // Migration: stored generated column for natural version sorting.
+            // Computed once at INSERT/UPDATE — avoids per-query regex cost.
+            try {
+                statement.executeUpdate(
+                    String.join("\n",
+                        "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS version_sort bigint[]",
+                        "GENERATED ALWAYS AS (",
+                        "  CASE WHEN version ~ '^[0-9]+\\.[0-9]'",
+                        "    THEN string_to_array(",
+                        "      REGEXP_REPLACE(",
+                        "        REGEXP_REPLACE(version, '[^0-9.].*$', ''),",
+                        "        '(^\\.|\\.\\.+|\\.$)', '', 'g'), '.')::bigint[]",
+                        "    ELSE NULL",
+                        "  END",
+                        ") STORED"
+                    )
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to add version_sort column (may already exist)")
+                    .error(ex)
+                    .log();
+            }
+            try {
+                statement.executeUpdate(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_version_sort"
+                        + " ON artifacts(version_sort)"
+                );
+            } catch (final SQLException ex) {
+                EcsLogger.debug("com.auto1.pantera.db")
+                    .message("Failed to create idx_artifacts_version_sort (may already exist)")
+                    .error(ex)
+                    .log();
+            }
             // Migration: Add tsvector column for full-text search (B1)
             // Uses 'simple' config to avoid language-specific stemming on artifact names
             try {

@@ -382,7 +382,7 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
-            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null)),
+            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null), jwtTokens),
             deployOpts,
             result -> {
                 if (result.succeeded()) {

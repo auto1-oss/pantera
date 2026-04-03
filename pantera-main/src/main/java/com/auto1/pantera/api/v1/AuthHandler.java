@@ -553,6 +553,13 @@ public final class AuthHandler {
                 .encode())
         ).onFailure(err -> {
             final String msg = err.getMessage() != null ? err.getMessage() : "SSO callback failed";
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("SSO callback failed: " + msg)
+                .eventCategory("authentication")
+                .eventAction("sso_callback")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
             if (msg.contains("not found")) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND", msg);
             } else {

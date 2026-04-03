@@ -143,6 +143,9 @@ public final class BackfillCli {
                 cmd.hasOption("dry-run")
             );
         }
+        if ("version-repair".equals(mode)) {
+            return runVersionRepair(cmd);
+        }
         final boolean hasBulkFlags =
             cmd.hasOption("config-dir") || cmd.hasOption("storage-root");
         final boolean hasSingleFlags =
@@ -257,6 +260,38 @@ public final class BackfillCli {
         } catch (final IOException ex) {
             LOG.error("Bulk backfill failed: {}", ex.getMessage(), ex);
             return 1;
+        } finally {
+            closeDataSource(dataSource);
+        }
+    }
+
+    /**
+     * Run version-repair mode: update rows whose version is UNKNOWN by
+     * inferring the version from the artifact name column.
+     *
+     * @param cmd Parsed CLI arguments
+     * @return Exit code
+     */
+    private static int runVersionRepair(final CommandLine cmd) {
+        final String dbUrl = cmd.getOptionValue("db-url");
+        final boolean dryRun = cmd.hasOption("dry-run");
+        if (!dryRun && (dbUrl == null || dbUrl.isEmpty())) {
+            LOG.error("--db-url is required unless --dry-run is set");
+            return 1;
+        }
+        final String table = cmd.getOptionValue("table", "artifacts");
+        final String filterRepoType = cmd.getOptionValue("filter-repo-type");
+        final String dbUser = cmd.getOptionValue("db-user", DEFAULT_DB_USER);
+        final String dbPassword =
+            cmd.getOptionValue("db-password", DEFAULT_DB_PASSWORD);
+        DataSource dataSource = null;
+        if (!dryRun) {
+            dataSource = buildDataSource(dbUrl, dbUser, dbPassword);
+        }
+        try {
+            return new VersionRepairRunner(
+                dataSource, table, filterRepoType, dryRun
+            ).run();
         } finally {
             closeDataSource(dataSource);
         }
@@ -473,7 +508,23 @@ public final class BackfillCli {
             Option.builder("m").longOpt("mode")
                 .hasArg().argName("MODE")
                 .desc("Backfill mode: pypi-metadata — write missing PyPI "
-                    + "sidecar JSON files for existing packages")
+                    + "sidecar JSON files for existing packages; "
+                    + "version-repair — infer version for UNKNOWN rows from name")
+                .build()
+        );
+        options.addOption(
+            Option.builder().longOpt("table")
+                .hasArg().argName("TABLE")
+                .desc("Table name to repair (default: artifacts) "
+                    + "— used with --mode version-repair")
+                .build()
+        );
+        options.addOption(
+            Option.builder().longOpt("filter-repo-type")
+                .hasArg().argName("TYPE")
+                .desc("Only repair rows with this repo_type "
+                    + "(default: all UNKNOWN rows) "
+                    + "— used with --mode version-repair")
                 .build()
         );
         options.addOption(
