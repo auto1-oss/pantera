@@ -26,6 +26,7 @@ import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
 import javax.sql.DataSource;
 import com.auto1.pantera.settings.users.CrudUsers;
+import org.mindrot.jbcrypt.BCrypt;
 
 /**
  * PostgreSQL-backed user storage.
@@ -149,14 +150,16 @@ public final class UserDao implements CrudUsers {
         try (Connection conn = this.source.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                final String pass;
+                final String rawPass;
                 if (info.containsKey("pass")) {
-                    pass = info.getString("pass");
+                    rawPass = info.getString("pass");
                 } else if (info.containsKey("password")) {
-                    pass = info.getString("password");
+                    rawPass = info.getString("password");
                 } else {
-                    pass = null;
+                    rawPass = null;
                 }
+                final String pass = rawPass != null
+                    ? BCrypt.hashpw(rawPass, BCrypt.gensalt()) : null;
                 final String email = info.containsKey("email")
                     ? info.getString("email") : null;
                 // Map password format types (plain, sha256) to "local" provider.
@@ -217,11 +220,12 @@ public final class UserDao implements CrudUsers {
     @Override
     public void alterPassword(final String uname, final JsonObject info) {
         final String newPass = info.getString("new_pass");
+        final String hashed = BCrypt.hashpw(newPass, BCrypt.gensalt());
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "UPDATE users SET password_hash = ?, updated_at = NOW() WHERE username = ?"
              )) {
-            ps.setString(1, newPass);
+            ps.setString(1, hashed);
             ps.setString(2, uname);
             final int rows = ps.executeUpdate();
             if (rows == 0) {

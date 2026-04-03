@@ -374,7 +374,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             new AdminAuthHandler(
                 new AuthSettingsDao(this.dataSource),
                 new UserTokenDao(this.dataSource),
-                this.jwtTokens != null ? this.jwtTokens.blocklist() : null
+                this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
+                this.security.policy()
             ).register(router);
         }
         // Start server

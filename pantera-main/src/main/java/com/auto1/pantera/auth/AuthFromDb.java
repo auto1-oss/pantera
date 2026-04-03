@@ -74,15 +74,11 @@ public final class AuthFromDb implements Authentication {
                 if (!AuthFromDb.ARTIPIE.equals(provider)) {
                     return Optional.empty();
                 }
-                // Bcrypt match (password hashed during migration)
+                // Bcrypt match
                 if (hash.startsWith("$2") && BCrypt.checkpw(pass, hash)) {
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
-                // Plain-text match (password stored as-is)
-                if (hash.equals(pass)) {
-                    return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
-                }
-                // SHA-256 match (password stored as hex digest)
+                // SHA-256 match (legacy passwords from YAML migration)
                 if (hash.equals(DigestUtils.sha256Hex(pass))) {
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }

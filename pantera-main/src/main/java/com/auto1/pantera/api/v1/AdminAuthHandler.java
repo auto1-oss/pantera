@@ -10,10 +10,13 @@
  */
 package com.auto1.pantera.api.v1;
 
+import com.auto1.pantera.api.AuthzHandler;
+import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -52,26 +55,41 @@ public final class AdminAuthHandler {
     private final RevocationBlocklist blocklist;
 
     /**
+     * Security policy for authorization checks.
+     */
+    private final Policy<?> policy;
+
+    /**
      * Ctor.
      * @param settingsDao Auth settings DAO
      * @param tokenDao User token DAO
      * @param blocklist Revocation blocklist
+     * @param policy Security policy
      */
     public AdminAuthHandler(final AuthSettingsDao settingsDao,
-        final UserTokenDao tokenDao, final RevocationBlocklist blocklist) {
+        final UserTokenDao tokenDao, final RevocationBlocklist blocklist,
+        final Policy<?> policy) {
         this.settingsDao = settingsDao;
         this.tokenDao = tokenDao;
         this.blocklist = blocklist;
+        this.policy = policy;
     }
 
     /**
-     * Register admin auth routes (all require JWT authentication).
+     * Register admin auth routes. All require JWT authentication (via global
+     * filter) AND admin-level authorization (ApiUserPermission.DELETE).
      * @param router Router
      */
     public void register(final Router router) {
-        router.get("/api/v1/admin/auth-settings").handler(this::getSettings);
-        router.put("/api/v1/admin/auth-settings").handler(this::updateSettings);
-        router.post("/api/v1/admin/revoke-user/:username").handler(this::revokeUser);
+        final AuthzHandler adminAuthz = new AuthzHandler(
+            this.policy, new ApiUserPermission(ApiUserPermission.UserAction.DELETE)
+        );
+        router.get("/api/v1/admin/auth-settings")
+            .handler(adminAuthz).handler(this::getSettings);
+        router.put("/api/v1/admin/auth-settings")
+            .handler(adminAuthz).handler(this::updateSettings);
+        router.post("/api/v1/admin/revoke-user/:username")
+            .handler(adminAuthz).handler(this::revokeUser);
     }
 
     /**
