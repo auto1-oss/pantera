@@ -568,12 +568,13 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 sb.append(singleValuePredicate(col, filter.matchType()));
             } else {
                 // Multiple values → OR within a field: AND (col PRED ? OR col PRED ?)
+                final String bare = bareValuePredicate(col, filter.matchType());
                 sb.append(" AND (");
                 for (int i = 0; i < filter.values().size(); i++) {
                     if (i > 0) {
                         sb.append(" OR ");
                     }
-                    sb.append(singleValuePredicate(col, filter.matchType()).trim());
+                    sb.append(bare);
                 }
                 sb.append(')');
             }
@@ -582,17 +583,30 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     /**
-     * Build a single predicate fragment (without leading " AND ") for a column.
+     * Build a single predicate fragment with leading " AND " for a column.
+     * Used for single-value filters in a WHERE clause.
      *
      * @param col SQL column name
      * @param matchType Match type
-     * @return SQL predicate fragment
+     * @return SQL predicate fragment with leading " AND "
      */
     private static String singleValuePredicate(final String col, final MatchType matchType) {
+        return " AND " + bareValuePredicate(col, matchType);
+    }
+
+    /**
+     * Build a bare predicate (no leading AND) for a column.
+     * Used inside multi-value OR groups.
+     *
+     * @param col SQL column name
+     * @param matchType Match type
+     * @return SQL predicate without leading AND
+     */
+    private static String bareValuePredicate(final String col, final MatchType matchType) {
         return switch (matchType) {
-            case EXACT -> " AND " + col + " = ?";
-            case PREFIX -> " AND " + col + " LIKE ?";
-            default -> " AND LOWER(" + col + ") LIKE ?";
+            case EXACT -> col + " = ?";
+            case PREFIX -> col + " LIKE ?";
+            default -> "LOWER(" + col + ") LIKE ?";
         };
     }
 
@@ -899,6 +913,82 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     /**
+     * Query type-level aggregation with multiple bind parameters.
+     * Used when field filters add extra WHERE clauses beyond the base FTS/LIKE.
+     *
+     * @param conn Open connection
+     * @param whereClause Full WHERE clause (may contain multiple ?)
+     * @param params Parameters to bind in order
+     * @return Ordered map of base type to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryTypeCountsMultiParam(
+        final Connection conn, final String whereClause, final List<Object> params
+    ) throws SQLException {
+        try (java.sql.Statement guard = conn.createStatement()) {
+            guard.execute("SET LOCAL statement_timeout = '" + FTS_AGG_TIMEOUT_MS + "ms'");
+        }
+        final String sql = "SELECT repo_type, COUNT(*) AS cnt FROM artifacts WHERE "
+            + whereClause + " GROUP BY repo_type ORDER BY cnt DESC";
+        final Map<String, Long> rawCounts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            for (int i = 0; i < params.size(); i++) {
+                if (params.get(i) instanceof String) {
+                    stmt.setString(i + 1, (String) params.get(i));
+                } else if (params.get(i) instanceof java.sql.Array) {
+                    stmt.setArray(i + 1, (java.sql.Array) params.get(i));
+                }
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    rawCounts.put(rs.getString("repo_type"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return mergeTypeSuffixes(rawCounts);
+    }
+
+    /**
+     * Query repo-level aggregation with multiple bind parameters.
+     * Used when field filters add extra WHERE clauses beyond the base FTS/LIKE.
+     *
+     * @param conn Open connection
+     * @param whereClause Full WHERE clause (may contain multiple ?)
+     * @param params Parameters to bind in order
+     * @param repoType Active type filter, or null
+     * @return Ordered map of repo name to count
+     * @throws SQLException on DB error
+     */
+    private static Map<String, Long> queryRepoCountsMultiParam(
+        final Connection conn, final String whereClause, final List<Object> params,
+        final String repoType
+    ) throws SQLException {
+        final String typeFilter = buildTypeFilterClause(repoType);
+        final String sql = "SELECT repo_name, COUNT(*) AS cnt FROM artifacts WHERE "
+            + whereClause + typeFilter + " GROUP BY repo_name ORDER BY cnt DESC";
+        final Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            int pos = 1;
+            for (int i = 0; i < params.size(); i++) {
+                if (params.get(i) instanceof String) {
+                    stmt.setString(pos++, (String) params.get(i));
+                } else if (params.get(i) instanceof java.sql.Array) {
+                    stmt.setArray(pos++, (java.sql.Array) params.get(i));
+                }
+            }
+            if (repoType != null && !repoType.isBlank()) {
+                setTypeFilterParams(stmt, pos, repoType);
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    counts.put(rs.getString("repo_name"), rs.getLong("cnt"));
+                }
+            }
+        }
+        return counts;
+    }
+
+    /**
      * Run a fallback COUNT(*) query with the same WHERE clause to get totalHits.
      * Fix 3: used when main result set is empty AND offset > 0.
      *
@@ -1016,8 +1106,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 if (includeFacets) {
                     // Fix 6: queryTypeCounts sets timeout internally
                     try {
-                        typeCounts = queryTypeCounts(conn, ftsWhere, tsquery);
-                        repoCounts = queryRepoCounts(conn, ftsWhere, tsquery, repoType);
+                        final String facetWhere = ftsWhere
+                            + buildFieldFilterClauses(fieldFilters);
+                        final List<Object> facetParams = new ArrayList<>();
+                        facetParams.add(tsquery);
+                        appendFieldFilterCountParams(facetParams, fieldFilters);
+                        typeCounts = queryTypeCountsMultiParam(
+                            conn, facetWhere, facetParams
+                        );
+                        repoCounts = queryRepoCountsMultiParam(
+                            conn, facetWhere, facetParams, repoType
+                        );
                     } catch (final SQLException ex) {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
@@ -1120,8 +1219,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 Map<String, Long> repoCounts = Map.of();
                 if (includeFacets) {
                     try {
-                        typeCounts = queryTypeCounts(conn, ftsWhere, query);
-                        repoCounts = queryRepoCounts(conn, ftsWhere, query, repoType);
+                        final String facetWhere = ftsWhere
+                            + buildFieldFilterClauses(fieldFilters);
+                        final List<Object> facetParams = new ArrayList<>();
+                        facetParams.add(query);
+                        appendFieldFilterCountParams(facetParams, fieldFilters);
+                        typeCounts = queryTypeCountsMultiParam(
+                            conn, facetWhere, facetParams
+                        );
+                        repoCounts = queryRepoCountsMultiParam(
+                            conn, facetWhere, facetParams, repoType
+                        );
                     } catch (final SQLException ex) {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
@@ -1227,8 +1335,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 }
                 // Fix 2: skip facets on pages other than first
                 if (includeFacets) {
-                    typeCounts = queryTypeCountsLike(conn, likeWhere, pattern);
-                    repoCounts = queryRepoCountsLike(conn, likeWhere, pattern, repoType);
+                    final String facetWhere = likeWhere
+                        + buildFieldFilterClauses(fieldFilters);
+                    final List<Object> facetParams = new ArrayList<>();
+                    facetParams.add(pattern);
+                    appendFieldFilterCountParams(facetParams, fieldFilters);
+                    typeCounts = queryTypeCountsMultiParam(
+                        conn, facetWhere, facetParams
+                    );
+                    repoCounts = queryRepoCountsMultiParam(
+                        conn, facetWhere, facetParams, repoType
+                    );
                 }
                 conn.commit();
             } catch (final SQLException inner) {
