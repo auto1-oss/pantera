@@ -79,7 +79,9 @@ public final class AuthFromDb implements Authentication {
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
                 // SHA-256 match (legacy passwords from YAML migration)
+                // Transparently upgrade to bcrypt on successful login.
                 if (hash.equals(DigestUtils.sha256Hex(pass))) {
+                    this.upgradeHashToBcrypt(name, pass);
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
             }
@@ -94,6 +96,42 @@ public final class AuthFromDb implements Authentication {
                 .error(ex)
                 .log();
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Transparently upgrade a legacy SHA-256 hash to bcrypt.
+     * Runs asynchronously to avoid slowing down the login response.
+     *
+     * @param username User whose hash to upgrade
+     * @param plaintext Current plaintext password (already verified)
+     */
+    private void upgradeHashToBcrypt(final String username, final String plaintext) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "UPDATE users SET password_hash = ?, updated_at = NOW() "
+                     + "WHERE username = ? AND password_hash = ?"
+             )) {
+            final String bcryptHash = BCrypt.hashpw(plaintext, BCrypt.gensalt());
+            ps.setString(1, bcryptHash);
+            ps.setString(2, username);
+            ps.setString(3, DigestUtils.sha256Hex(plaintext));
+            ps.executeUpdate();
+            EcsLogger.info("com.auto1.pantera.auth")
+                .message("Upgraded password hash from SHA-256 to bcrypt")
+                .eventCategory("authentication")
+                .eventAction("hash_upgrade")
+                .field("user.name", username)
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("Failed to upgrade password hash to bcrypt")
+                .eventCategory("authentication")
+                .eventAction("hash_upgrade")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .error(ex)
+                .log();
         }
     }
 

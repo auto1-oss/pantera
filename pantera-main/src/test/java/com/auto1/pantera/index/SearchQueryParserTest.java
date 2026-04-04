@@ -242,6 +242,110 @@ class SearchQueryParserTest {
     }
 
     @Test
+    void spaceAfterColonIsParsed() {
+        final SearchQuery result = SearchQueryParser.parse("name: pydantic");
+        MatcherAssert.assertThat(
+            "space-after-colon: ftsQuery should be empty",
+            result.ftsQuery(),
+            new IsEqual<>("")
+        );
+        MatcherAssert.assertThat(
+            "space-after-colon: should produce 1 filter",
+            result.filters(),
+            Matchers.hasSize(1)
+        );
+        MatcherAssert.assertThat(
+            "space-after-colon: field should be name",
+            result.filters().get(0).field(),
+            new IsEqual<>("name")
+        );
+        MatcherAssert.assertThat(
+            "space-after-colon: value should be pydantic",
+            result.filters().get(0).values(),
+            new IsEqual<>(List.of("pydantic"))
+        );
+    }
+
+    @Test
+    void spaceAfterColonWithMultipleFields() {
+        final SearchQuery result = SearchQueryParser.parse(
+            "name: pydantic AND version: 2.12"
+        );
+        MatcherAssert.assertThat(
+            "should have 2 filters",
+            result.filters(),
+            Matchers.hasSize(2)
+        );
+        MatcherAssert.assertThat(
+            "first filter field",
+            result.filters().get(0).field(),
+            new IsEqual<>("name")
+        );
+        MatcherAssert.assertThat(
+            "second filter field",
+            result.filters().get(1).field(),
+            new IsEqual<>("version")
+        );
+    }
+
+    @Test
+    void versionPrefixVStripped() {
+        final SearchQuery result = SearchQueryParser.parse("version:v1.0.0");
+        MatcherAssert.assertThat(
+            "v prefix should be stripped",
+            result.filters().get(0).values(),
+            new IsEqual<>(List.of("1.0.0"))
+        );
+    }
+
+    @Test
+    void versionPrefixUpperVStripped() {
+        final SearchQuery result = SearchQueryParser.parse("version:V2.3.4");
+        MatcherAssert.assertThat(
+            "V prefix should be stripped",
+            result.filters().get(0).values(),
+            new IsEqual<>(List.of("2.3.4"))
+        );
+    }
+
+    @Test
+    void versionWithoutVPrefixUnchanged() {
+        final SearchQuery result = SearchQueryParser.parse("version:2.12");
+        MatcherAssert.assertThat(
+            "version without v should be unchanged",
+            result.filters().get(0).values(),
+            new IsEqual<>(List.of("2.12"))
+        );
+    }
+
+    @Test
+    void nameFieldVPrefixNotStripped() {
+        final SearchQuery result = SearchQueryParser.parse("name:vscode");
+        MatcherAssert.assertThat(
+            "v prefix should NOT be stripped for name field",
+            result.filters().get(0).values(),
+            new IsEqual<>(List.of("vscode"))
+        );
+    }
+
+    @Test
+    void spaceAfterColonOrGrouping() {
+        final SearchQuery result = SearchQueryParser.parse(
+            "name: pydantic AND (version: v2.12 OR version: v2.11)"
+        );
+        MatcherAssert.assertThat(
+            "should have 2 filters",
+            result.filters(),
+            Matchers.hasSize(2)
+        );
+        MatcherAssert.assertThat(
+            "version values should have v stripped and be OR'd",
+            result.filters().get(1).values(),
+            new IsEqual<>(List.of("2.12", "2.11"))
+        );
+    }
+
+    @Test
     void fullComplexQuery() {
         final SearchQuery result = SearchQueryParser.parse(
             "name:pydantic AND (version:2.12 OR version:2.11) AND repo:pypi-proxy"

@@ -87,11 +87,8 @@ public final class RepositoryEvents {
     }
 
     /**
-     * Infer a version for file-type repositories from the dotted artifact
-     * name. The name is the storage path with {@code /} replaced by {@code .},
-     * e.g. {@code a.b.1.5.0-SNAPSHOT.artifact-1.5.0.jar}. The first
-     * contiguous run of dot-tokens starting with a digit is treated as the
-     * version directory and returned.
+     * Infer a version for file-type repositories from the dotted artifact name.
+     * Delegates to {@link FileVersionDetector#detect(String)}.
      *
      * <p>Returns {@code "UNKNOWN"} for non-file repo types or when no
      * version-like token run is found.</p>
@@ -104,65 +101,7 @@ public final class RepositoryEvents {
         if (!"file".equals(rtype) && !"file-proxy".equals(rtype)) {
             return RepositoryEvents.VERSION;
         }
-        if (name == null || name.isEmpty()) {
-            return RepositoryEvents.VERSION;
-        }
-        final String[] tokens = name.split("\\.");
-        int start = -1;
-        int end = -1;
-        for (int i = 0; i < tokens.length; i++) {
-            final String tok = tokens[i];
-            if (!tok.isEmpty() && isVersionToken(tok)) {
-                if (start == -1) {
-                    start = i;
-                }
-                end = i;
-            } else if (start != -1) {
-                break;
-            }
-        }
-        if (start == -1) {
-            return RepositoryEvents.VERSION;
-        }
-        // Check if preceding token ends with -{digits} — those digits are
-        // the real version start, split away by dot tokenization.
-        // e.g. "elinks-current-0" + "11" → version = "0.11"
-        final StringBuilder sb = new StringBuilder();
-        if (start > 0) {
-            final String prev = tokens[start - 1];
-            final int lastHyphen = prev.lastIndexOf('-');
-            if (lastHyphen >= 0 && lastHyphen < prev.length() - 1) {
-                final String tail = prev.substring(lastHyphen + 1);
-                if (isVersionToken(tail)) {
-                    sb.append(tail).append('.');
-                }
-            }
-        }
-        for (int i = start; i <= end; i++) {
-            if (i > start) {
-                sb.append('.');
-            }
-            sb.append(tokens[i]);
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Returns true if the dot-split token looks like part of a version:
-     * starts with a digit, or starts with {@code v} followed by a digit.
-     * @param token Token to check
-     * @return True if version-like
-     */
-    private static boolean isVersionToken(final String token) {
-        if (token.isEmpty()) {
-            return false;
-        }
-        final char first = token.charAt(0);
-        if (Character.isDigit(first)) {
-            return true;
-        }
-        return first == 'v' && token.length() > 1
-            && Character.isDigit(token.charAt(1));
+        return FileVersionDetector.detect(name);
     }
 
     /**

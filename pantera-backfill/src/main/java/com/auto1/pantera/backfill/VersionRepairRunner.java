@@ -279,6 +279,10 @@ public final class VersionRepairRunner {
      *   <li>{@code v1.0.0.app.tar.gz} → {@code v1.0.0}</li>
      * </ul>
      *
+     * <p>This method mirrors {@code FileVersionDetector.detect()} in
+     * pantera-core. The backfill module does not depend on pantera-core
+     * to keep the CLI lightweight, so the logic is duplicated here.</p>
+     *
      * @param name Dotted artifact name from the DB
      * @return Detected version or {@code "UNKNOWN"}
      */

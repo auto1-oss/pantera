@@ -11,7 +11,7 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.api.AuthzHandler;
-import com.auto1.pantera.api.perms.ApiUserPermission;
+import com.auto1.pantera.api.perms.ApiAdminPermission;
 import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
@@ -82,7 +82,7 @@ public final class AdminAuthHandler {
      */
     public void register(final Router router) {
         final AuthzHandler adminAuthz = new AuthzHandler(
-            this.policy, new ApiUserPermission(ApiUserPermission.UserAction.DELETE)
+            this.policy, ApiAdminPermission.ADMIN
         );
         router.get("/api/v1/admin/auth-settings")
             .handler(adminAuthz).handler(this::getSettings);
