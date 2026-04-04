@@ -275,8 +275,9 @@ public final class BackfillCli {
     private static int runVersionRepair(final CommandLine cmd) {
         final String dbUrl = cmd.getOptionValue("db-url");
         final boolean dryRun = cmd.hasOption("dry-run");
-        if (!dryRun && (dbUrl == null || dbUrl.isEmpty())) {
-            LOG.error("--db-url is required unless --dry-run is set");
+        if (dbUrl == null || dbUrl.isEmpty()) {
+            LOG.error("--db-url is required for --mode version-repair "
+                + "(reads rows even in --dry-run mode)");
             return 1;
         }
         final String table = cmd.getOptionValue("table", "artifacts");
@@ -284,10 +285,8 @@ public final class BackfillCli {
         final String dbUser = cmd.getOptionValue("db-user", DEFAULT_DB_USER);
         final String dbPassword =
             cmd.getOptionValue("db-password", DEFAULT_DB_PASSWORD);
-        DataSource dataSource = null;
-        if (!dryRun) {
-            dataSource = buildDataSource(dbUrl, dbUser, dbPassword);
-        }
+        // Always need a DB connection — dry-run reads rows to compute versions.
+        final DataSource dataSource = buildDataSource(dbUrl, dbUser, dbPassword);
         try {
             return new VersionRepairRunner(
                 dataSource, table, filterRepoType, dryRun

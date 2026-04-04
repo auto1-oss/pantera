@@ -1107,9 +1107,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     // Fix 6: queryTypeCounts sets timeout internally
                     try {
                         final String facetWhere = ftsWhere
+                            + buildFilterClauses(null, null, allowedRepos)
                             + buildFieldFilterClauses(fieldFilters);
                         final List<Object> facetParams = new ArrayList<>();
                         facetParams.add(tsquery);
+                        if (allowedRepos != null) {
+                            facetParams.add(conn.createArrayOf("varchar",
+                                allowedRepos.toArray(new String[0])));
+                        }
                         appendFieldFilterCountParams(facetParams, fieldFilters);
                         typeCounts = queryTypeCountsMultiParam(
                             conn, facetWhere, facetParams
@@ -1220,9 +1225,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 if (includeFacets) {
                     try {
                         final String facetWhere = ftsWhere
+                            + buildFilterClauses(null, null, allowedRepos)
                             + buildFieldFilterClauses(fieldFilters);
                         final List<Object> facetParams = new ArrayList<>();
                         facetParams.add(query);
+                        if (allowedRepos != null) {
+                            facetParams.add(conn.createArrayOf("varchar",
+                                allowedRepos.toArray(new String[0])));
+                        }
                         appendFieldFilterCountParams(facetParams, fieldFilters);
                         typeCounts = queryTypeCountsMultiParam(
                             conn, facetWhere, facetParams
@@ -1336,9 +1346,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 // Fix 2: skip facets on pages other than first
                 if (includeFacets) {
                     final String facetWhere = likeWhere
+                        + buildFilterClauses(null, null, allowedRepos)
                         + buildFieldFilterClauses(fieldFilters);
                     final List<Object> facetParams = new ArrayList<>();
                     facetParams.add(pattern);
+                    if (allowedRepos != null) {
+                        facetParams.add(conn.createArrayOf("varchar",
+                            allowedRepos.toArray(new String[0])));
+                    }
                     appendFieldFilterCountParams(facetParams, fieldFilters);
                     typeCounts = queryTypeCountsMultiParam(
                         conn, facetWhere, facetParams
