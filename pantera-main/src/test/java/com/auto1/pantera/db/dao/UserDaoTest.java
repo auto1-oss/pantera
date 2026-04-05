@@ -123,14 +123,19 @@ class UserDaoTest {
             .add("new_type", "sha256")
             .build();
         this.dao.alterPassword("frank", passInfo);
-        // Verify internally that password was changed
+        // Verify password was bcrypt-hashed (not stored as plaintext)
         try (var conn = ds.getConnection();
              var ps = conn.prepareStatement(
                  "SELECT password_hash FROM users WHERE username = ?")) {
             ps.setString(1, "frank");
             var rs = ps.executeQuery();
             assertTrue(rs.next());
-            assertEquals("updated_hash", rs.getString("password_hash"));
+            final String stored = rs.getString("password_hash");
+            assertTrue(stored.startsWith("$2a$"), "should be bcrypt hash");
+            assertTrue(
+                org.mindrot.jbcrypt.BCrypt.checkpw("updated_hash", stored),
+                "bcrypt hash should verify against original password"
+            );
         } catch (final Exception ex) {
             fail(ex);
         }
