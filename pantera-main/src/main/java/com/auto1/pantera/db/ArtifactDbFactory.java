@@ -514,10 +514,12 @@ public final class ArtifactDbFactory {
             }
             // Materialized views for dashboard aggregates — sub-millisecond reads vs seq scans.
             // Refreshed externally by pg_cron; see docs/admin-guide/installation.md.
+            // NOTE: managed by Flyway V110 + V115. Kept here only as a safety
+            // net for code paths that bypass Flyway (e.g. DbNodeRegistryTest).
             try {
                 statement.executeUpdate(
                     "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_artifact_totals AS "
-                        + "SELECT COUNT(*) AS artifact_count, "
+                        + "SELECT 1::int AS id, COUNT(*) AS artifact_count, "
                         + "COALESCE(SUM(size), 0) AS total_size FROM artifacts"
                 );
             } catch (final SQLException ex) {
@@ -526,12 +528,12 @@ public final class ArtifactDbFactory {
                     .eventCategory("database").eventAction("mv_create").eventOutcome("failure")
                     .error(ex).log();
             }
-            // Single-row MV: unique index on constant expression — required for CONCURRENTLY.
-            // Kept in a separate try so a pre-existing MV without the index still gets it.
+            // Unique index on the synthetic id column — required for CONCURRENTLY
+            // refresh. Expression indexes like ((1)) are NOT accepted.
             try {
                 statement.executeUpdate(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_artifact_totals "
-                        + "ON mv_artifact_totals ((1))"
+                        + "ON mv_artifact_totals(id)"
                 );
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.db")
