@@ -220,11 +220,13 @@ class YamlToDbMigratorTest {
     @Test
     void skipsIfAlreadyMigrated() throws Exception {
         final SettingsDao settings = new SettingsDao(ds);
+        // Must equal MIGRATION_VERSION in YamlToDbMigrator. Bump this when
+        // the migrator version is bumped.
         settings.put(
             "migration_completed",
             Json.createObjectBuilder()
                 .add("completed", true)
-                .add("version", 4)
+                .add("version", 5)
                 .build(),
             "system"
         );
