@@ -95,3 +95,15 @@ export async function toggleAuthProvider(id: number, enabled: boolean): Promise<
 export async function updateAuthProviderConfig(id: number, config: Record<string, unknown>): Promise<void> {
   await getApiClient().put(`/auth-providers/${id}/config`, config)
 }
+
+export async function createAuthProvider(payload: {
+  type: string
+  priority?: number
+  config?: Record<string, unknown>
+}): Promise<void> {
+  await getApiClient().post('/auth-providers', payload)
+}
+
+export async function deleteAuthProvider(id: number): Promise<void> {
+  await getApiClient().delete(`/auth-providers/${id}`)
+}

@@ -119,6 +119,12 @@ public final class SettingsHandler {
         // behind ApiAdminPermission.ADMIN, not the weaker ROLE_UPDATE.
         final com.auto1.pantera.api.perms.ApiAdminPermission admin =
             com.auto1.pantera.api.perms.ApiAdminPermission.ADMIN;
+        router.post("/api/v1/auth-providers")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::createAuthProvider);
+        router.delete("/api/v1/auth-providers/:id")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::deleteAuthProvider);
         router.put("/api/v1/auth-providers/:id/toggle")
             .handler(new AuthzHandler(this.policy, admin))
             .handler(this::toggleAuthProvider);
@@ -379,6 +385,96 @@ public final class SettingsHandler {
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
+    }
+
+    /**
+     * POST /api/v1/auth-providers — create a new auth provider.
+     * Body: {"type": "okta", "priority": 10, "config": {...}}
+     * Type is required and must be unique. Priority defaults to 100.
+     * Config defaults to {}.
+     * @param ctx Routing context
+     */
+    private void createAuthProvider(final RoutingContext ctx) {
+        if (this.authProviderDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Database not configured");
+            return;
+        }
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.getString("type") == null
+            || body.getString("type").isBlank()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "'type' is required");
+            return;
+        }
+        final String type = body.getString("type").trim();
+        final int priority = body.getInteger("priority", 100);
+        final JsonObject config = body.getJsonObject("config", new JsonObject());
+        ctx.vertx().<Void>executeBlocking(
+            () -> {
+                final javax.json.JsonObject jcfg = Json.createReader(
+                    new java.io.StringReader(config.encode())
+                ).readObject();
+                this.authProviderDao.put(type, priority, jcfg);
+                return null;
+            },
+            false
+        ).onSuccess(
+            ignored -> ctx.response().setStatusCode(201)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject()
+                    .put("status", "created")
+                    .put("type", type)
+                    .encode())
+        ).onFailure(
+            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
+        );
+    }
+
+    /**
+     * DELETE /api/v1/auth-providers/:id — delete an auth provider.
+     * Refuses to delete the {@code local} provider so the admin always
+     * has a way to log in via username/password if SSO breaks.
+     * @param ctx Routing context
+     */
+    private void deleteAuthProvider(final RoutingContext ctx) {
+        if (this.authProviderDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Database not configured");
+            return;
+        }
+        final int providerId;
+        try {
+            providerId = Integer.parseInt(ctx.pathParam("id"));
+        } catch (final NumberFormatException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid provider ID");
+            return;
+        }
+        ctx.vertx().<Void>executeBlocking(
+            () -> {
+                final String type = this.authProviderDao.typeOf(providerId);
+                if (type == null) {
+                    throw new IllegalArgumentException("not_found");
+                }
+                if ("local".equals(type)) {
+                    throw new IllegalArgumentException("local_protected");
+                }
+                this.authProviderDao.delete(providerId);
+                return null;
+            },
+            false
+        ).onSuccess(
+            ignored -> ctx.response().setStatusCode(204).end()
+        ).onFailure(err -> {
+            final String msg = err.getCause() != null
+                ? err.getCause().getMessage() : err.getMessage();
+            if ("not_found".equals(msg)) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+            } else if ("local_protected".equals(msg)) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Cannot delete the 'local' provider — it is required for "
+                        + "username/password fallback access.");
+            } else {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            }
+        });
     }
 
     /**

@@ -375,10 +375,19 @@ public final class YamlToDbMigrator {
                     }
                 }
             }
-            // Migrate auth providers (credentials list)
+            // Migrate auth providers (credentials list).
+            // Always seed the default `local` provider so a fresh install
+            // has at least one auth method available; ensureExists is a
+            // no-op if the row already exists, preserving any admin edits.
+            final AuthProviderDao authDao = new AuthProviderDao(this.source);
+            final boolean localInserted = authDao.ensureExists(
+                "local", 0, Json.createObjectBuilder().build()
+            );
+            if (localInserted) {
+                LOG.info("Bootstrapped default 'local' auth provider");
+            }
             final YamlSequence creds = meta.yamlSequence("credentials");
             if (creds != null) {
-                final AuthProviderDao authDao = new AuthProviderDao(this.source);
                 int priority = 1;
                 for (final YamlNode node : creds) {
                     final YamlMapping provider = node.asMapping();

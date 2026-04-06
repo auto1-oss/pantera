@@ -4,12 +4,22 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import Chips from 'primevue/chips'
 import Textarea from 'primevue/textarea'
 import Tag from 'primevue/tag'
-import { getSettings, toggleAuthProvider, updateAuthProviderConfig } from '@/api/settings'
+import Dialog from 'primevue/dialog'
+import Select from 'primevue/select'
+import {
+  getSettings,
+  toggleAuthProvider,
+  updateAuthProviderConfig,
+  createAuthProvider,
+  deleteAuthProvider,
+} from '@/api/settings'
 import { useNotificationStore } from '@/stores/notifications'
+import { useConfirmDelete } from '@/composables/useConfirmDelete'
 
 interface Provider {
   id: number
@@ -20,9 +30,73 @@ interface Provider {
 }
 
 const notify = useNotificationStore()
+const { visible: delVisible, targetName, confirm: confirmDel, accept: acceptDel, reject: rejectDel } = useConfirmDelete()
+
 const providers = ref<Provider[]>([])
 const loading = ref(true)
 const savingId = ref<number | null>(null)
+
+// Add provider dialog state
+const addVisible = ref(false)
+const addSaving = ref(false)
+const addType = ref<string>('okta')
+const addPriority = ref<number>(100)
+const PROVIDER_TYPES = [
+  { label: 'Okta (OIDC SSO)', value: 'okta' },
+  { label: 'Keycloak (OIDC SSO)', value: 'keycloak' },
+  { label: 'JWT Password', value: 'jwt-password' },
+]
+
+function openAddDialog() {
+  addType.value = 'okta'
+  addPriority.value = 100
+  addVisible.value = true
+}
+
+async function submitAdd() {
+  if (!addType.value) return
+  // Block creating a duplicate type — backend uses UPSERT but the UI
+  // semantics are "create new", so block it client-side for clarity.
+  if (providers.value.some(p => p.type === addType.value)) {
+    notify.error(
+      `Provider '${addType.value}' already exists`,
+      'Edit the existing provider instead.'
+    )
+    return
+  }
+  addSaving.value = true
+  try {
+    await createAuthProvider({
+      type: addType.value,
+      priority: addPriority.value,
+      config: {},
+    })
+    notify.success(`Created ${addType.value} provider`)
+    addVisible.value = false
+    await load()
+  } catch (e: unknown) {
+    notify.error('Failed to create provider', e instanceof Error ? e.message : '')
+  } finally {
+    addSaving.value = false
+  }
+}
+
+async function handleDelete(p: Provider) {
+  if (p.type === 'local') {
+    notify.error('Cannot delete the local provider', 'It is required for username/password fallback.')
+    return
+  }
+  const ok = await confirmDel(`${p.type} (id ${p.id})`)
+  if (!ok) return
+  try {
+    await deleteAuthProvider(p.id)
+    notify.success(`Deleted ${p.type} provider`)
+    providers.value = providers.value.filter(x => x.id !== p.id)
+    delete drafts.value[p.id]
+  } catch (e: unknown) {
+    notify.error('Failed to delete provider', e instanceof Error ? e.message : '')
+  }
+}
 // Per-provider draft state (keyed by provider id)
 interface GroupRolePair { group: string; role: string }
 const drafts = ref<Record<number, {
@@ -254,14 +328,23 @@ const sortedProviders = computed(() =>
 <template>
   <AppLayout>
     <div class="max-w-5xl space-y-5">
-      <div>
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Authentication Providers</h1>
-        <p class="text-sm text-gray-500 mt-1">
-          Configure SSO providers (Okta, Keycloak) and local auth. Provider data
-          is stored in the database — changes here take effect immediately.
-          Setting <span class="font-mono text-orange-500">allowed-groups</span>
-          restricts SSO login to users in the listed IdP groups.
-        </p>
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Authentication Providers</h1>
+          <p class="text-sm text-gray-500 mt-1">
+            Configure SSO providers (Okta, Keycloak) and local auth. Provider data
+            is stored in the database — changes here take effect immediately.
+            Setting <span class="font-mono text-orange-500">allowed-groups</span>
+            restricts SSO login to users in the listed IdP groups.
+          </p>
+        </div>
+        <Button
+          label="Add Provider"
+          icon="pi pi-plus"
+          size="small"
+          class="!rounded-lg flex-shrink-0"
+          @click="openAddDialog"
+        />
       </div>
 
       <div v-if="loading" class="text-center py-10 text-gray-400">
@@ -271,7 +354,7 @@ const sortedProviders = computed(() =>
       <div v-else-if="sortedProviders.length === 0" class="text-center py-16 text-gray-400">
         <i class="pi pi-user-plus text-4xl text-gray-700 mb-3" />
         <p>No auth providers configured</p>
-        <p class="text-xs text-gray-600 mt-1">Providers are initially imported from pantera.yml on first startup.</p>
+        <p class="text-xs text-gray-600 mt-1">Click "Add Provider" or check pantera.yml for initial import.</p>
       </div>
 
       <Card v-for="p in sortedProviders" :key="p.id" class="shadow-sm">
@@ -309,6 +392,15 @@ const sortedProviders = computed(() =>
               size="small"
               outlined
               @click="drafts[p.id].expanded = !drafts[p.id].expanded"
+            />
+            <Button
+              icon="pi pi-trash"
+              severity="danger"
+              size="small"
+              outlined
+              :disabled="p.type === 'local'"
+              :title="p.type === 'local' ? 'Cannot delete the local provider' : 'Delete provider'"
+              @click="handleDelete(p)"
             />
           </div>
 
@@ -454,6 +546,57 @@ const sortedProviders = computed(() =>
           </div>
         </template>
       </Card>
+
+      <!-- Add Provider Dialog -->
+      <Dialog v-model:visible="addVisible" header="Add Auth Provider" modal class="w-[450px]">
+        <div class="space-y-4 pt-2">
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
+              Provider Type
+            </label>
+            <Select
+              v-model="addType"
+              :options="PROVIDER_TYPES"
+              optionLabel="label"
+              optionValue="value"
+              class="w-full"
+            />
+            <p class="text-xs text-gray-500 mt-1">
+              The provider is created with empty config. Use the Edit form
+              after creation to set issuer, client-id, allowed-groups, etc.
+            </p>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
+              Priority
+            </label>
+            <InputNumber v-model="addPriority" :min="0" :max="999" class="w-full" />
+            <p class="text-xs text-gray-500 mt-1">
+              Lower values are tried first. The local provider is at priority 0.
+            </p>
+          </div>
+        </div>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" outlined @click="addVisible = false" />
+          <Button label="Create" icon="pi pi-check" :loading="addSaving" @click="submitAdd" />
+        </template>
+      </Dialog>
+
+      <!-- Delete Confirmation Dialog -->
+      <Dialog v-model:visible="delVisible" header="Delete Auth Provider" modal class="w-[420px]">
+        <p class="text-sm text-gray-300">
+          Delete provider <span class="font-mono text-orange-500">{{ targetName }}</span>?
+        </p>
+        <p class="text-xs text-gray-500 mt-2">
+          Existing user sessions are not affected. Users currently logged in via
+          this provider stay logged in until their tokens expire — but they will
+          not be able to refresh or re-authenticate.
+        </p>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" outlined @click="rejectDel" />
+          <Button label="Delete" severity="danger" icon="pi pi-trash" @click="acceptDel" />
+        </template>
+      </Dialog>
     </div>
   </AppLayout>
 </template>
