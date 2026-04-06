@@ -17,7 +17,6 @@ import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import javax.sql.DataSource;
@@ -394,11 +393,9 @@ public final class ArtifactDbFactory {
             statement.executeUpdate(
                 "CREATE INDEX IF NOT EXISTS idx_artifacts_path_prefix ON artifacts (path_prefix, repo_name) WHERE path_prefix IS NOT NULL"
             );
-            // Migration: version_sort_key function + stored generated column.
-            // v2: text type with zero-padded segments. Covers numeric versions,
-            // dates (YYYY-MM-DD), v-prefixed, bare integers, and git hashes.
-            // Only UNKNOWN stays NULL.
-            migrateVersionSort(statement);
+            // NOTE: version_sort column and function are now managed by
+            // Flyway migration V111__artifacts_version_sort.sql which runs
+            // after createStructure() via DbManager.migrate().
             // Migration: Add tsvector column for full-text search (B1)
             // Uses 'simple' config to avoid language-specific stemming on artifact names
             try {
@@ -684,108 +681,6 @@ public final class ArtifactDbFactory {
             );
         } catch (final SQLException error) {
             throw new PanteraException(error);
-        }
-    }
-
-    /**
-     * Migrate the {@code version_sort} column to v2 (text type with zero-padded
-     * segments). Drops any existing v1 {@code bigint[]} column and recreates it
-     * as {@code text} backed by the {@code version_sort_key} SQL function.
-     *
-     * <p>The function handles all version forms:
-     * <ul>
-     *   <li>Numeric with separators: {@code 1.5.0-SNAPSHOT} → zero-padded segments</li>
-     *   <li>Dates: {@code 2019-08-23} → same (hyphens normalized to dots)</li>
-     *   <li>v-prefixed: {@code v0.0.3-SNAPSHOT} → v stripped, then normalized</li>
-     *   <li>Bare integers: {@code 5007235} → single zero-padded segment</li>
-     *   <li>Git hashes / other: stored as-is for lexical sort</li>
-     *   <li>{@code UNKNOWN}: NULL (falls to end via NULLS LAST)</li>
-     * </ul>
-     *
-     * @param statement Open JDBC statement
-     */
-    private static void migrateVersionSort(final Statement statement) {
-        // 1. Create the IMMUTABLE helper function (idempotent via OR REPLACE).
-        try {
-            statement.executeUpdate(
-                "CREATE OR REPLACE FUNCTION version_sort_key(v text) RETURNS text "
-                    + "IMMUTABLE LANGUAGE sql AS $func$ "
-                    + "SELECT CASE "
-                    + "  WHEN v IS NULL OR v = 'UNKNOWN' THEN NULL "
-                    + "  WHEN REGEXP_REPLACE(v, '^[vV]', '') ~ '^[0-9]+([.-][0-9]+)+' "
-                    + "    THEN (SELECT string_agg(lpad(s, 20, '0'), '.') "
-                    + "          FROM unnest(string_to_array("
-                    + "            REGEXP_REPLACE("
-                    + "              REPLACE("
-                    + "                REGEXP_REPLACE("
-                    + "                  REGEXP_REPLACE(v, '^[vV]', ''),"
-                    + "                  '[^0-9.\\-].*$', ''),"
-                    + "                '-', '.'),"
-                    + "              '(^\\.|\\.\\.+|\\.$)', '', 'g'),"
-                    + "            '.')) AS s) "
-                    + "  WHEN v ~ '^[0-9]+$' THEN lpad(v, 20, '0') "
-                    + "  ELSE v "
-                    + "END $func$"
-            );
-        } catch (final SQLException ex) {
-            EcsLogger.warn("com.auto1.pantera.db")
-                .message("Failed to create version_sort_key function")
-                .error(ex)
-                .log();
-            return;
-        }
-        // 2. Detect whether the existing version_sort column is v1 (bigint[]) or
-        //    missing. If v1 exists, drop and recreate with v2 (text).
-        boolean needRecreate = true;
-        try (ResultSet rs = statement.executeQuery(
-            "SELECT data_type FROM information_schema.columns "
-                + "WHERE table_name = 'artifacts' AND column_name = 'version_sort'"
-        )) {
-            if (rs.next()) {
-                final String type = rs.getString(1);
-                // "text" == already migrated; "ARRAY" == v1 bigint[], needs drop
-                needRecreate = !"text".equalsIgnoreCase(type);
-            }
-        } catch (final SQLException ex) {
-            EcsLogger.debug("com.auto1.pantera.db")
-                .message("Failed to detect version_sort column type")
-                .error(ex)
-                .log();
-        }
-        if (needRecreate) {
-            try {
-                statement.executeUpdate(
-                    "ALTER TABLE artifacts DROP COLUMN IF EXISTS version_sort"
-                );
-            } catch (final SQLException ex) {
-                EcsLogger.warn("com.auto1.pantera.db")
-                    .message("Failed to drop old version_sort column")
-                    .error(ex)
-                    .log();
-            }
-            try {
-                statement.executeUpdate(
-                    "ALTER TABLE artifacts ADD COLUMN version_sort text "
-                        + "GENERATED ALWAYS AS (version_sort_key(version)) STORED"
-                );
-            } catch (final SQLException ex) {
-                EcsLogger.warn("com.auto1.pantera.db")
-                    .message("Failed to add version_sort column")
-                    .error(ex)
-                    .log();
-            }
-        }
-        // 3. Index for ORDER BY version_sort queries.
-        try {
-            statement.executeUpdate(
-                "CREATE INDEX IF NOT EXISTS idx_artifacts_version_sort "
-                    + "ON artifacts(version_sort)"
-            );
-        } catch (final SQLException ex) {
-            EcsLogger.debug("com.auto1.pantera.db")
-                .message("Failed to create idx_artifacts_version_sort")
-                .error(ex)
-                .log();
         }
     }
 }

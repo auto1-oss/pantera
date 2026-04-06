@@ -123,7 +123,12 @@ services:
       - pantera-net
 
   pantera-db:
-    image: postgres:17.8-alpine
+    # Custom image: postgres:17 + pg_cron extension for scheduled jobs
+    # (materialized view refresh, expired cooldown cleanup).
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    image: pantera-db:17-pgcron
     container_name: pantera-db
     restart: unless-stopped
     networks:
@@ -133,6 +138,13 @@ services:
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    # pg_cron requires shared_preload_libraries; cron.database_name pins
+    # the scheduler to the pantera DB so jobs created in other DBs are
+    # ignored. Both flags are mandatory — pg_cron will not load otherwise.
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_cron
+      -c cron.database_name=pantera
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
