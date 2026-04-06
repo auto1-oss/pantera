@@ -393,6 +393,9 @@ public final class AuthHandler {
                 if (username == null || username.isEmpty()) {
                     throw new IllegalStateException("Cannot determine username from id_token");
                 }
+                // Case-normalize so SSO logins always reference the same DB row
+                // regardless of how Okta capitalizes preferred_username.
+                username = username.toLowerCase(java.util.Locale.ROOT);
                 // Extract email from id_token
                 final String email = claims.getString("email", null);
                 // Extract groups from id_token using the configured groups-claim
@@ -425,6 +428,73 @@ public final class AuthHandler {
                     .eventAction("sso_groups")
                     .field("user.name", username)
                     .log();
+                // ACCESS GATE 1: allowed-groups check.
+                // If meta.auth.providers[*].allowed-groups is configured,
+                // the user's id_token MUST carry at least one matching group,
+                // otherwise the SSO login is rejected with no DB row created.
+                // This is the primary control point for "who can access Pantera".
+                // If allowed-groups is NOT configured, JIT provisioning is open
+                // (any IdP user can log in) — preserved for backward compat,
+                // but logged as a warning so admins notice.
+                final List<String> allowedGroups = new ArrayList<>();
+                if (config.containsKey("allowed-groups")) {
+                    final javax.json.JsonValue agVal = config.get("allowed-groups");
+                    if (agVal.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
+                        final javax.json.JsonArray agArr = config.getJsonArray("allowed-groups");
+                        for (int ai = 0; ai < agArr.size(); ai++) {
+                            allowedGroups.add(agArr.getString(ai, ""));
+                        }
+                    }
+                }
+                if (!allowedGroups.isEmpty()) {
+                    final boolean intersects = groups.stream().anyMatch(allowedGroups::contains);
+                    if (!intersects) {
+                        EcsLogger.warn("com.auto1.pantera.api.v1")
+                            .message("SSO login rejected: user not in any allowed group")
+                            .eventCategory("authentication")
+                            .eventAction("sso_callback")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .field("user.groups", String.join(",", groups))
+                            .field("allowed_groups", String.join(",", allowedGroups))
+                            .log();
+                        throw new IllegalStateException(
+                            "Access denied: user is not in any allowed group for this provider"
+                        );
+                    }
+                } else {
+                    EcsLogger.warn("com.auto1.pantera.api.v1")
+                        .message("SSO provider '" + provider + "' has no allowed-groups "
+                            + "configured — any authenticated IdP user will be provisioned. "
+                            + "This is insecure; configure meta.auth.providers["
+                            + provider + "].allowed-groups to restrict access.")
+                        .eventCategory("authentication")
+                        .eventAction("sso_callback")
+                        .field("user.name", username)
+                        .log();
+                }
+                // ACCESS GATE 2: enabled check.
+                // If the user already exists in the DB and is disabled, refuse
+                // the login regardless of what Okta says. This lets admins
+                // revoke a user's access without needing to remove them from
+                // the IdP. New users (no DB row yet) pass this check.
+                if (AuthHandler.this.users != null) {
+                    final Optional<javax.json.JsonObject> existing =
+                        AuthHandler.this.users.get(username);
+                    if (existing.isPresent()
+                        && !existing.get().getBoolean("enabled", true)) {
+                        EcsLogger.warn("com.auto1.pantera.api.v1")
+                            .message("SSO login rejected: user is disabled in Pantera")
+                            .eventCategory("authentication")
+                            .eventAction("sso_callback")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .log();
+                        throw new IllegalStateException(
+                            "Access denied: user is disabled"
+                        );
+                    }
+                }
                 // Map Okta/IdP groups to Pantera roles using group-roles config.
                 // Groups with an explicit mapping use the mapped role name.
                 // Groups without a mapping use the group name as the role name
@@ -488,8 +558,12 @@ public final class AuthHandler {
                         .field("user.name", username)
                         .log();
                 }
-                // If no roles mapped, apply default role "reader" if configured
-                if (roles.isEmpty()) {
+                // If Okta sent groups but none mapped to a role AND there's
+                // a configured default-role, fall back to that. Note: if
+                // Okta sent NO groups at all, we deliberately skip default-role
+                // for existing users to preserve any manually-assigned roles.
+                final boolean idTokenHasGroups = !groups.isEmpty();
+                if (roles.isEmpty() && idTokenHasGroups) {
                     final String defaultRole = config.getString("default-role", "reader");
                     if (defaultRole != null && !defaultRole.isEmpty()) {
                         roles.add(defaultRole);
@@ -501,27 +575,45 @@ public final class AuthHandler {
                             .log();
                     }
                 }
-                // Provision user in the database/storage
+                // Provision user in the database/storage.
+                //
+                // CRITICAL: only include "roles" in the userInfo when Okta
+                // actually sent a groups claim. UserDao.addOrUpdate hard-deletes
+                // existing user_roles before reinserting, so passing an empty
+                // or stale role list would wipe any roles a Pantera admin
+                // assigned manually via the UI. By omitting the key entirely,
+                // existing role assignments are preserved.
                 if (AuthHandler.this.users != null) {
-                    final javax.json.JsonArrayBuilder rolesArr = Json.createArrayBuilder();
-                    for (final String role : roles) {
-                        rolesArr.add(role);
-                    }
                     final javax.json.JsonObjectBuilder userInfo = Json.createObjectBuilder()
-                        .add("type", type)
-                        .add("roles", rolesArr.build());
+                        .add("type", type);
+                    if (idTokenHasGroups) {
+                        final javax.json.JsonArrayBuilder rolesArr = Json.createArrayBuilder();
+                        for (final String role : roles) {
+                            rolesArr.add(role);
+                        }
+                        userInfo.add("roles", rolesArr.build());
+                    }
                     if (email != null && !email.isEmpty()) {
                         userInfo.add("email", email);
                     }
                     EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO provisioning user with roles via provider=" + provider
+                        .message("SSO provisioning user via provider=" + provider
                             + " roles=[" + String.join(",", roles) + "]"
-                            + " roles_count=" + roles.size())
+                            + " roles_count=" + roles.size()
+                            + " preserve_existing_roles=" + (!idTokenHasGroups))
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
                         .log();
                     AuthHandler.this.users.addOrUpdate(userInfo.build(), username);
+                    // Invalidate the cached UserPermissions so the next /me
+                    // call sees fresh role/permission data instead of waiting
+                    // 3 minutes for the cache to expire.
+                    if (AuthHandler.this.policy
+                        instanceof com.auto1.pantera.security.policy.CachedDbPolicy) {
+                        ((com.auto1.pantera.security.policy.CachedDbPolicy)
+                            AuthHandler.this.policy).invalidate(username);
+                    }
                 } else {
                     EcsLogger.warn("com.auto1.pantera.api.v1")
                         .message("SSO cannot provision user - users store is null")
@@ -779,6 +871,21 @@ public final class AuthHandler {
                         )
                     );
                 }
+            } else {
+                // Authenticated JWT but no matching DB row — this is the
+                // root cause of "/me returns empty permissions". Most
+                // likely a username case/format mismatch between the
+                // SSO callback's preferred_username and the row created
+                // earlier (or the row was deleted out from under the JWT).
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("/me: authenticated user has no DB row — "
+                        + "permissions will be empty")
+                    .eventCategory("authentication")
+                    .eventAction("me_user_lookup")
+                    .eventOutcome("failure")
+                    .field("user.name", sub)
+                    .field("user.context", context != null ? context : "local")
+                    .log();
             }
         }
         ctx.response()

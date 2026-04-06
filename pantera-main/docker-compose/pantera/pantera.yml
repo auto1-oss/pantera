@@ -30,6 +30,14 @@ meta:
       redirect-uri: ${OKTA_REDIRECT_URI}
       scope: "openid email profile groups"
       groups-claim: "groups"
+      # ACCESS GATE: if set, the user's id_token MUST carry at least one
+      # of these groups or SSO login is rejected (403). This is the
+      # primary "who can access Pantera" control. Without it, ANY
+      # authenticated Okta user gets auto-provisioned as a reader —
+      # insecure for production. Groups are matched case-sensitively.
+      allowed-groups:
+        - pantera_readers
+        - pantera_admins
       group-roles:
          - pantera_readers: "reader"
          - pantera_admins: "admin"

@@ -297,30 +297,52 @@ public final class UserDao implements CrudUsers {
                 .field("user.name", uname)
                 .field("user.id", userId)
                 .log();
-            // Auto-create roles that don't exist yet (e.g. SSO default "reader")
-            // Uses batch INSERT instead of N individual round-trips
+            // Filter to only roles that actually exist in the DB. Previously
+            // we auto-created missing roles with permissions='{}', which
+            // silently produced "user has role X but X grants nothing" —
+            // a confusing source of permission bugs. Now unknown roles are
+            // logged and skipped instead.
+            final java.util.List<String> existingRoleNames = new java.util.ArrayList<>();
             try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO roles (name, permissions) VALUES (?, '{}'::jsonb) "
-                + "ON CONFLICT (name) DO NOTHING")) {
-                for (final String roleName : roleNames) {
-                    ps.setString(1, roleName);
-                    ps.addBatch();
+                "SELECT name FROM roles WHERE name = ANY(?)")) {
+                final java.sql.Array sqlArr = conn.createArrayOf(
+                    "varchar", roleNames.toArray(new String[0])
+                );
+                ps.setArray(1, sqlArr);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        existingRoleNames.add(rs.getString(1));
+                    }
                 }
-                ps.executeBatch();
             }
-            // Batch assign all roles in one round-trip per role
-            // (uses addBatch to minimize network overhead)
+            final java.util.List<String> unknown = new java.util.ArrayList<>(roleNames);
+            unknown.removeAll(existingRoleNames);
+            if (!unknown.isEmpty()) {
+                EcsLogger.warn("com.auto1.pantera.db")
+                    .message("updateUserRoles: skipping unknown roles "
+                        + "(must be pre-created with permissions): ["
+                        + String.join(",", unknown) + "]")
+                    .eventCategory("user")
+                    .eventAction("role_assignment")
+                    .eventOutcome("failure")
+                    .field("user.name", uname)
+                    .log();
+            }
+            if (existingRoleNames.isEmpty()) {
+                return;
+            }
+            // Batch-assign all known roles in one round-trip per role.
             try (PreparedStatement ps = conn.prepareStatement(
                 "INSERT INTO user_roles (user_id, role_id) "
                 + "SELECT ?, id FROM roles WHERE name = ?")) {
-                for (final String roleName : roleNames) {
+                for (final String roleName : existingRoleNames) {
                     ps.setInt(1, userId);
                     ps.setString(2, roleName);
                     ps.addBatch();
                 }
                 final int[] results = ps.executeBatch();
                 EcsLogger.info("com.auto1.pantera.db")
-                    .message("updateUserRoles: batch role assignment complete, batch_size=" + results.length + " roles=[" + String.join(",", roleNames) + "]")
+                    .message("updateUserRoles: batch role assignment complete, batch_size=" + results.length + " roles=[" + String.join(",", existingRoleNames) + "]")
                     .eventCategory("user")
                     .eventAction("role_assignment")
                     .field("user.name", uname)
