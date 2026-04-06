@@ -24,13 +24,46 @@ const providers = ref<Provider[]>([])
 const loading = ref(true)
 const savingId = ref<number | null>(null)
 // Per-provider draft state (keyed by provider id)
+interface GroupRolePair { group: string; role: string }
 const drafts = ref<Record<number, {
   config: Record<string, unknown>
   allowedGroups: string[]
+  groupRoles: GroupRolePair[]
   rawJson: string
   advanced: boolean
   expanded: boolean
 }>>({})
+
+/**
+ * group-roles in YAML/DB is an array of single-key objects:
+ *   [{ pantera_readers: "reader" }, { pantera_admins: "admin" }]
+ * Convert to/from a flat list of pairs for the UI.
+ */
+function groupRolesFromConfig(cfg: Record<string, unknown>): GroupRolePair[] {
+  const raw = cfg['group-roles']
+  const out: GroupRolePair[] = []
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (entry && typeof entry === 'object') {
+        for (const [group, role] of Object.entries(entry)) {
+          out.push({ group, role: String(role ?? '') })
+        }
+      }
+    }
+  } else if (raw && typeof raw === 'object') {
+    // Legacy nested-object form: { group: role, ... }
+    for (const [group, role] of Object.entries(raw)) {
+      out.push({ group, role: String(role ?? '') })
+    }
+  }
+  return out
+}
+
+function groupRolesToConfig(pairs: GroupRolePair[]): Array<Record<string, string>> {
+  return pairs
+    .filter(p => p.group.trim() && p.role.trim())
+    .map(p => ({ [p.group.trim()]: p.role.trim() }))
+}
 
 const SENSITIVE_KEYS = ['secret', 'password', 'token', 'key', 'credential']
 function isSensitive(key: string): boolean {
@@ -59,8 +92,9 @@ async function load() {
       drafts.value[p.id] = {
         config: JSON.parse(JSON.stringify(p.config)),
         allowedGroups: Array.isArray(p.config['allowed-groups'])
-          ? (p.config['allowed-groups'] as string[])
+          ? [...(p.config['allowed-groups'] as string[])]
           : [],
+        groupRoles: groupRolesFromConfig(p.config),
         rawJson: JSON.stringify(p.config, null, 2),
         advanced: false,
         expanded: false,
@@ -133,6 +167,12 @@ async function save(p: Provider) {
       } else {
         delete cfg['allowed-groups']
       }
+      const grPairs = groupRolesToConfig(draft.groupRoles)
+      if (grPairs.length > 0) {
+        cfg['group-roles'] = grPairs
+      } else {
+        delete cfg['group-roles']
+      }
       // Strip masked secret values so we don't overwrite real values with "ab***cd"
       for (const [k, v] of Object.entries(cfg)) {
         if (isSensitive(k) && typeof v === 'string' && v.includes('***')) {
@@ -143,6 +183,10 @@ async function save(p: Provider) {
     await updateAuthProviderConfig(p.id, cfg)
     p.config = cfg
     draft.config = JSON.parse(JSON.stringify(cfg))
+    draft.allowedGroups = Array.isArray(cfg['allowed-groups'])
+      ? [...(cfg['allowed-groups'] as string[])]
+      : []
+    draft.groupRoles = groupRolesFromConfig(cfg)
     draft.rawJson = JSON.stringify(cfg, null, 2)
     notify.success(`${p.type} configuration updated`)
     draft.expanded = false
@@ -164,6 +208,7 @@ function toggleAdvanced(p: Provider) {
       draft.allowedGroups = Array.isArray(parsed['allowed-groups'])
         ? parsed['allowed-groups']
         : []
+      draft.groupRoles = groupRolesFromConfig(parsed)
     } catch {
       notify.error('Cannot leave advanced mode: invalid JSON')
       return
@@ -174,9 +219,27 @@ function toggleAdvanced(p: Provider) {
     if (draft.allowedGroups.length > 0) {
       cfg['allowed-groups'] = draft.allowedGroups
     }
+    const grPairs = groupRolesToConfig(draft.groupRoles)
+    if (grPairs.length > 0) {
+      cfg['group-roles'] = grPairs
+    }
     draft.rawJson = JSON.stringify(cfg, null, 2)
   }
   draft.advanced = !draft.advanced
+}
+
+function addGroupRolePair(p: Provider) {
+  const draft = drafts.value[p.id]
+  if (draft) {
+    draft.groupRoles.push({ group: '', role: '' })
+  }
+}
+
+function removeGroupRolePair(p: Provider, idx: number) {
+  const draft = drafts.value[p.id]
+  if (draft) {
+    draft.groupRoles.splice(idx, 1)
+  }
 }
 
 const newFieldKey = ref<Record<number, string>>({})
@@ -321,17 +384,54 @@ const sortedProviders = computed(() =>
                 </div>
               </div>
 
-              <!-- Group-roles hint (not editable here, use advanced) -->
-              <div v-if="GROUP_ROLES_KEY in (drafts[p.id]?.config ?? {})">
+              <!-- Group → Role mapping (separate from access gate) -->
+              <div v-if="p.type === 'okta' || p.type === 'keycloak'">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
-                  Group Roles Mapping
+                  Group → Role Mapping
+                  <span class="text-blue-400 normal-case font-normal ml-1">(role assignment)</span>
                 </label>
-                <div class="text-xs font-mono bg-gray-100 dark:bg-gray-800 rounded p-2 text-gray-500">
-                  {{ JSON.stringify(drafts[p.id].config[GROUP_ROLES_KEY]) }}
-                </div>
-                <p class="text-xs text-gray-500 mt-1">
-                  Use <span class="font-mono">Advanced (raw JSON)</span> mode to edit group → role mappings.
+                <p class="text-xs text-gray-500 mb-2">
+                  Maps an IdP group name to a Pantera role name. The Pantera role
+                  must already exist (create one under
+                  <router-link to="/admin/roles" class="text-orange-500 hover:underline">Roles &amp; Permissions</router-link>).
+                  Distinct from <span class="font-mono text-orange-500">allowed-groups</span>:
+                  the access gate decides <em>who</em> can log in,
+                  this mapping decides <em>which permissions they get</em>.
                 </p>
+                <div class="space-y-2">
+                  <div
+                    v-for="(pair, idx) in drafts[p.id].groupRoles"
+                    :key="idx"
+                    class="flex items-center gap-2"
+                  >
+                    <InputText
+                      v-model="pair.group"
+                      placeholder="IdP group (e.g. pantera_admins)"
+                      class="flex-1 text-sm font-mono"
+                    />
+                    <span class="text-gray-500 text-xs">→</span>
+                    <InputText
+                      v-model="pair.role"
+                      placeholder="Pantera role (e.g. admin)"
+                      class="flex-1 text-sm font-mono"
+                    />
+                    <Button
+                      icon="pi pi-trash"
+                      text
+                      size="small"
+                      severity="danger"
+                      @click="removeGroupRolePair(p, idx)"
+                    />
+                  </div>
+                </div>
+                <Button
+                  label="Add mapping"
+                  icon="pi pi-plus"
+                  size="small"
+                  outlined
+                  class="mt-2"
+                  @click="addGroupRolePair(p)"
+                />
               </div>
             </div>
 

@@ -2,8 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   getSettings, updatePrefixes, updateSettingsSection,
-  getCooldownConfig, updateCooldownConfig, toggleAuthProvider,
-  updateAuthProviderConfig,
+  getCooldownConfig, updateCooldownConfig,
 } from '@/api/settings'
 import { getAuthSettings, updateAuthSettings } from '@/api/auth'
 import { useConfigStore } from '@/stores/config'
@@ -16,10 +15,6 @@ import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import AutoComplete from 'primevue/autocomplete'
 import Tag from 'primevue/tag'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Dialog from 'primevue/dialog'
-import Textarea from 'primevue/textarea'
 import type { Settings, CooldownConfig } from '@/types'
 
 const config = useConfigStore()
@@ -207,16 +202,6 @@ function saveHttpServer() {
   })
 }
 
-async function handleToggleProvider(prov: { id: number; enabled: boolean }) {
-  try {
-    await toggleAuthProvider(prov.id, !prov.enabled)
-    prov.enabled = !prov.enabled
-    notify.success(`Provider ${prov.enabled ? 'enabled' : 'disabled'}`)
-  } catch {
-    notify.error('Failed to toggle provider')
-  }
-}
-
 async function saveCooldown() {
   saving.value = 'cooldown'
   try {
@@ -303,74 +288,6 @@ async function saveExternalLinks() {
   }
 }
 
-const SENSITIVE_KEYS = ['secret', 'password', 'token', 'key', 'credential']
-function isSensitiveKey(key: string): boolean {
-  const lower = key.toLowerCase()
-  return SENSITIVE_KEYS.some(s => lower.includes(s))
-}
-function formatConfigVal(val: unknown): string {
-  if (val === null || val === undefined) return '—'
-  if (typeof val === 'object') return JSON.stringify(val)
-  return String(val)
-}
-
-// Auth provider editing
-const editingProvider = ref<{ id: number; type: string; config: Record<string, unknown> } | null>(null)
-const editProviderVisible = ref(false)
-const editProviderFields = ref<{ key: string; value: string }[]>([])
-const editProviderAdvanced = ref(false)
-const editProviderJson = ref('')
-const savingProvider = ref(false)
-
-function openEditProvider(prov: { id: number; type: string; config?: Record<string, unknown> }) {
-  editingProvider.value = { id: prov.id, type: prov.type, config: prov.config ?? {} }
-  const cfg = prov.config ?? {}
-  editProviderFields.value = Object.entries(cfg).map(([key, value]) => ({
-    key,
-    value: typeof value === 'object' ? JSON.stringify(value) : String(value ?? ''),
-  }))
-  editProviderJson.value = JSON.stringify(cfg, null, 2)
-  editProviderAdvanced.value = false
-  editProviderVisible.value = true
-}
-
-function addProviderField() {
-  editProviderFields.value.push({ key: '', value: '' })
-}
-
-function removeProviderField(index: number) {
-  editProviderFields.value.splice(index, 1)
-}
-
-async function saveProviderConfig() {
-  if (!editingProvider.value) return
-  savingProvider.value = true
-  try {
-    let cfg: Record<string, unknown>
-    if (editProviderAdvanced.value) {
-      cfg = JSON.parse(editProviderJson.value)
-    } else {
-      cfg = {}
-      for (const f of editProviderFields.value) {
-        if (f.key) {
-          try { cfg[f.key] = JSON.parse(f.value) } catch { cfg[f.key] = f.value }
-        }
-      }
-    }
-    await updateAuthProviderConfig(editingProvider.value.id, cfg)
-    // Update local state
-    if (settings.value?.credentials) {
-      const p = (settings.value.credentials as any[]).find((c: any) => c.id === editingProvider.value!.id)
-      if (p) p.config = cfg
-    }
-    notify.success('Provider config updated')
-    editProviderVisible.value = false
-  } catch (e: unknown) {
-    notify.error('Failed to update provider config', e instanceof Error ? e.message : '')
-  } finally {
-    savingProvider.value = false
-  }
-}
 </script>
 
 <template>
@@ -483,118 +400,6 @@ async function saveProviderConfig() {
               @click="saveAuthSettings"
             />
           </div>
-        </template>
-      </Card>
-
-      <!-- Authentication Providers -->
-      <Card v-if="settings?.credentials" class="shadow-sm">
-        <template #title>Authentication Providers</template>
-        <template #content>
-          <div
-            v-if="settings.credentials.length === 0"
-            class="text-gray-400 text-sm"
-          >
-            No authentication providers configured
-          </div>
-          <DataTable v-else :value="settings.credentials" stripedRows class="text-sm">
-            <Column field="type" header="Type" style="width: 150px">
-              <template #body="{ data }">
-                <span class="font-mono text-xs font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{{ data.type }}</span>
-              </template>
-            </Column>
-            <Column field="priority" header="Priority" style="width: 70px; text-align: center" />
-            <Column field="enabled" header="Status" style="width: 80px">
-              <template #body="{ data }">
-                <InputSwitch
-                  :modelValue="data.enabled"
-                  @update:modelValue="handleToggleProvider(data)"
-                />
-              </template>
-            </Column>
-            <Column header="Configuration">
-              <template #body="{ data }">
-                <div v-if="data.config && Object.keys(data.config).length > 0" class="flex flex-wrap gap-x-6 gap-y-1">
-                  <div
-                    v-for="(val, key) in data.config"
-                    :key="key"
-                    class="flex items-center gap-1.5 text-xs"
-                  >
-                    <span class="text-gray-500 font-mono">{{ key }}:</span>
-                    <span class="text-gray-300 font-mono">{{ isSensitiveKey(String(key)) ? '••••••••' : formatConfigVal(val) }}</span>
-                  </div>
-                </div>
-                <span v-else class="text-gray-500 text-xs">—</span>
-              </template>
-            </Column>
-            <Column header="" style="width: 50px">
-              <template #body="{ data }">
-                <Button
-                  icon="pi pi-pencil"
-                  text
-                  size="small"
-                  @click="openEditProvider(data)"
-                />
-              </template>
-            </Column>
-          </DataTable>
-          <p class="text-xs text-gray-400 mt-3">
-            Toggle the switch to enable/disable providers. Click the edit button to modify config.
-            Secret values are masked in the table but editable in the dialog.
-          </p>
-
-          <!-- Edit Provider Dialog -->
-          <Dialog v-model:visible="editProviderVisible" :header="`Edit ${editingProvider?.type ?? ''} Configuration`" modal class="w-[600px]">
-            <div class="space-y-4">
-              <div class="flex items-center gap-2 mb-3">
-                <input type="checkbox" id="provAdvMode" v-model="editProviderAdvanced" class="cursor-pointer" />
-                <label for="provAdvMode" class="text-sm text-gray-500 cursor-pointer">Advanced mode (raw JSON)</label>
-              </div>
-
-              <!-- Advanced JSON mode -->
-              <div v-if="editProviderAdvanced">
-                <Textarea v-model="editProviderJson" rows="10" class="w-full font-mono text-sm" />
-              </div>
-
-              <!-- Form-based editing -->
-              <div v-else class="space-y-2">
-                <div
-                  v-for="(field, idx) in editProviderFields"
-                  :key="idx"
-                  class="flex items-center gap-2"
-                >
-                  <InputText
-                    v-model="field.key"
-                    placeholder="Key"
-                    class="w-40 text-sm font-mono"
-                  />
-                  <InputText
-                    v-model="field.value"
-                    placeholder="Value"
-                    class="flex-1 text-sm"
-                    :type="field.key.toLowerCase().includes('secret') || field.key.toLowerCase().includes('password') ? 'password' : 'text'"
-                  />
-                  <Button
-                    icon="pi pi-trash"
-                    text
-                    size="small"
-                    severity="danger"
-                    @click="removeProviderField(idx)"
-                  />
-                </div>
-                <Button
-                  label="Add Field"
-                  icon="pi pi-plus"
-                  text
-                  size="small"
-                  @click="addProviderField"
-                />
-              </div>
-            </div>
-            <template #footer>
-              <Button label="Cancel" severity="secondary" text @click="editProviderVisible = false" />
-              <Button label="Save" icon="pi pi-save" :loading="savingProvider" @click="saveProviderConfig" />
-            </template>
-          </Dialog>
         </template>
       </Card>
 
