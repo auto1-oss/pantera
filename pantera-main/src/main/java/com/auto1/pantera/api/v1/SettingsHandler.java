@@ -114,12 +114,16 @@ public final class SettingsHandler {
         router.put("/api/v1/settings/:section")
             .handler(new AuthzHandler(this.policy, update))
             .handler(this::updateSection);
-        // Auth provider management
+        // Auth provider management — admin-only. Modifying SSO providers
+        // can completely change who can access Pantera, so this is gated
+        // behind ApiAdminPermission.ADMIN, not the weaker ROLE_UPDATE.
+        final com.auto1.pantera.api.perms.ApiAdminPermission admin =
+            com.auto1.pantera.api.perms.ApiAdminPermission.ADMIN;
         router.put("/api/v1/auth-providers/:id/toggle")
-            .handler(new AuthzHandler(this.policy, update))
+            .handler(new AuthzHandler(this.policy, admin))
             .handler(this::toggleAuthProvider);
         router.put("/api/v1/auth-providers/:id/config")
-            .handler(new AuthzHandler(this.policy, update))
+            .handler(new AuthzHandler(this.policy, admin))
             .handler(this::updateAuthProviderConfig);
     }
 
@@ -225,31 +229,11 @@ public final class SettingsHandler {
                     .put("type", prov.getString("type"))
                     .put("priority", prov.getInt("priority"))
                     .put("enabled", prov.getBoolean("enabled"));
-                // Include safe config (strip secrets, handle nested values)
+                // Include safe config (strip secrets, preserve structure for
+                // nested arrays/objects so the UI sees real JSON, not strings)
                 final javax.json.JsonObject cfg = prov.getJsonObject("config");
                 if (cfg != null) {
-                    final JsonObject safeConfig = new JsonObject();
-                    for (final String key : cfg.keySet()) {
-                        final javax.json.JsonValue jval = cfg.get(key);
-                        if (jval.getValueType() == javax.json.JsonValue.ValueType.STRING) {
-                            final String val = cfg.getString(key);
-                            if (isSecret(key)) {
-                                safeConfig.put(key, maskValue(val));
-                            } else {
-                                safeConfig.put(key, val);
-                            }
-                        } else if (jval.getValueType() == javax.json.JsonValue.ValueType.OBJECT
-                            || jval.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
-                            if (isSecret(key)) {
-                                safeConfig.put(key, "***");
-                            } else {
-                                safeConfig.put(key, jval.toString());
-                            }
-                        } else {
-                            safeConfig.put(key, jval.toString());
-                        }
-                    }
-                    entry.put("config", safeConfig);
+                    entry.put("config", safeConfigToVertxJson(cfg));
                 }
                 providersArr.add(entry);
             }
@@ -464,5 +448,53 @@ public final class SettingsHandler {
             return "***";
         }
         return value.substring(0, 2) + "***" + value.substring(value.length() - 2);
+    }
+
+    /**
+     * Convert a {@code javax.json.JsonObject} auth-provider config to a
+     * Vert.x {@link JsonObject}, preserving nested arrays and objects
+     * while masking secret keys.
+     *
+     * @param cfg Source config
+     * @return Vert.x JsonObject with secrets masked
+     */
+    private static JsonObject safeConfigToVertxJson(final javax.json.JsonObject cfg) {
+        final JsonObject out = new JsonObject();
+        for (final String key : cfg.keySet()) {
+            final javax.json.JsonValue jval = cfg.get(key);
+            final boolean secret = isSecret(key);
+            switch (jval.getValueType()) {
+                case STRING:
+                    final String val = cfg.getString(key);
+                    out.put(key, secret ? maskValue(val) : val);
+                    break;
+                case NUMBER:
+                    out.put(key, cfg.getJsonNumber(key).longValue());
+                    break;
+                case TRUE:
+                    out.put(key, true);
+                    break;
+                case FALSE:
+                    out.put(key, false);
+                    break;
+                case ARRAY:
+                    if (secret) {
+                        out.put(key, "***");
+                    } else {
+                        out.put(key, new JsonArray(cfg.getJsonArray(key).toString()));
+                    }
+                    break;
+                case OBJECT:
+                    if (secret) {
+                        out.put(key, "***");
+                    } else {
+                        out.put(key, new JsonObject(cfg.getJsonObject(key).toString()));
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return out;
     }
 }

@@ -58,8 +58,14 @@ public final class YamlToDbMigrator {
      * Current migration version. Bump this when new migration logic
      * is added. The migration re-runs (idempotently) when the stored
      * version is lower than this value.
+     *
+     * <p>v5: re-import auth providers so existing installs pick up the
+     * new {@code allowed-groups} field and any other fields admins
+     * added to pantera.yml since initial provisioning. The re-import
+     * is a DO NOTHING on conflict in AuthProviderDao for name fields
+     * but replaces the {@code config} JSONB entirely.
      */
-    private static final int MIGRATION_VERSION = 4;
+    private static final int MIGRATION_VERSION = 5;
 
     /**
      * DataSource for DB access.

@@ -218,7 +218,9 @@ export interface Settings {
     type: string
     priority: number
     enabled: boolean
-    config?: Record<string, string>
+    // Nested arrays (allowed-groups) and objects (group-roles) are
+    // serialized as real JSON by the backend — not strings.
+    config?: Record<string, unknown>
   }>
   database?: {
     configured: boolean
