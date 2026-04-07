@@ -6,6 +6,48 @@ Pantera supports multiple authentication providers that can be combined in a pri
 
 ---
 
+## ⚠ Default Admin Credentials (Fresh Install)
+
+On a fresh install with an empty `users` table, Pantera bootstraps a single default user so you can log in and complete setup:
+
+| Field | Value |
+|---|---|
+| **Username** | `admin` |
+| **Password** | `admin` |
+| **Role** | `admin` (all permissions) |
+| **Must change password** | `true` |
+
+**On first login the server refuses every other API call** and the UI redirects to a forced-password-change page until you pick a compliant password. The complexity rules (enforced server-side in `PasswordPolicy.java` and mirrored in the UI) are:
+
+- At least **12 characters**
+- At least one **uppercase** letter
+- At least one **lowercase** letter
+- At least one **digit**
+- At least one **special character** (`!@#$%^&*()-_=+[]{};:,.<>?/|~` etc.)
+- **Not** equal to the username
+- **Not** in the well-known weak-password list (`password`, `admin`, `changeme`, ...)
+
+⚠ **Change this password immediately in production.** The default is logged at WARN level during startup so operators see it. The bootstrap only runs when the `users` table is empty, so it will not overwrite an existing admin account.
+
+---
+
+## Protected Providers
+
+Two provider types are **protected** and cannot be disabled or deleted via the UI or API:
+
+- **`local`** — username/password authentication against the `users` table. Required for fallback access if SSO breaks.
+- **`jwt-password`** — API token authentication. Required for the REST API and client-tool integrations.
+
+The UI disables the toggle and delete buttons for these providers with an explanatory tooltip. The backend also refuses the operations with HTTP 400:
+
+```
+{"code": 400, "message": "Cannot disable the 'local' provider — it is required for fallback access."}
+```
+
+Both providers are auto-created on a fresh install if they don't already exist, so every Pantera instance always has a working fallback.
+
+---
+
 ## Provider Evaluation Order
 
 Pantera evaluates authentication providers in the order listed in `meta.credentials`. The first provider that recognizes the credentials authenticates the request. If no provider matches, the request is rejected with HTTP 401.

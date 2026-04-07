@@ -57,6 +57,25 @@ curl http://localhost:8080/.health
 # {"status":"ok"}
 ```
 
+### First Login
+
+On a fresh install Pantera creates a default admin user automatically:
+
+| Username | Password |
+|---|---|
+| `admin` | `admin` |
+
+The `must_change_password` flag is set, so the very first login goes to a forced password-change screen. The new password must meet these rules (server-side `PasswordPolicy.java`):
+
+- Minimum 12 characters
+- Uppercase + lowercase + digit + special character
+- Not equal to the username
+- Not a well-known weak password (`admin`, `password`, `changeme`, etc.)
+
+**Change the default immediately in production.** Any non-compliant password is rejected with HTTP 400 `WEAK_PASSWORD`.
+
+The bootstrap only runs when the `users` table is empty, so an existing install is never overwritten.
+
 ### Ports
 
 | Port | Purpose |

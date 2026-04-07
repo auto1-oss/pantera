@@ -72,6 +72,23 @@ maven-group
 
 ## Obtaining Access
 
+### First login after a fresh install
+
+A brand-new Pantera install ships with a **default admin user**:
+
+| Username | Password | Notes |
+|---|---|---|
+| `admin` | `admin` | **Must** change on first login. The server refuses every other API call until a compliant password is set. |
+
+Your first login goes to the built-in force-password-change screen. The new password must meet these rules:
+
+- ≥ 12 characters
+- At least one uppercase, lowercase, digit, and special character
+- Not equal to the username
+- Not in the well-known weak-password list
+
+These rules are enforced server-side, so a direct API call with a weak password is rejected with `400 WEAK_PASSWORD`. **Change the default immediately in production.**
+
 ### Step 1: Get an Access Token
 
 Authenticate with your username and password to receive a JWT access token and refresh token:
