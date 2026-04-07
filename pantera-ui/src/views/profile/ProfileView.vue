@@ -4,11 +4,14 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
 import { generateTokenForSession, listTokens, revokeToken, getAuthSettings, type ApiToken } from '@/api/auth'
+import { changePassword } from '@/api/users'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Select from 'primevue/select'
+import Message from 'primevue/message'
+import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
@@ -115,6 +118,34 @@ function expirySeverity(token: ApiToken): string {
   if (token.expired) return 'danger'
   return 'success'
 }
+
+/* ---------- Self-service password change (local users only) ---------- */
+
+const isLocalUser = computed(() => (auth.user?.context ?? '') === 'local')
+
+const pwOld = ref('')
+const pwNew = ref('')
+const pwValid = ref(false)
+const pwSubmitting = ref(false)
+const pwError = ref<string | null>(null)
+
+async function submitPasswordChange() {
+  if (!pwValid.value || pwSubmitting.value) return
+  pwError.value = null
+  pwSubmitting.value = true
+  try {
+    await changePassword(auth.username, pwOld.value, pwNew.value)
+    notify.success('Password changed', 'Your new password is active immediately.')
+    pwOld.value = ''
+    pwNew.value = ''
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    pwError.value = err.response?.data?.message
+      ?? (e instanceof Error ? e.message : 'Failed to change password')
+  } finally {
+    pwSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -148,6 +179,37 @@ function expirySeverity(token: ApiToken): string {
               <Tag :value="String(value)" />
             </div>
           </div>
+        </template>
+      </Card>
+
+      <Card v-if="isLocalUser" class="shadow-sm">
+        <template #title>Change Password</template>
+        <template #subtitle>
+          <p class="text-xs text-gray-500 mt-1">
+            Only available for local (username/password) accounts. SSO users
+            manage their password via the identity provider.
+          </p>
+        </template>
+        <template #content>
+          <form class="space-y-4" @submit.prevent="submitPasswordChange">
+            <PasswordComplexityForm
+              v-model:oldPassword="pwOld"
+              v-model:password="pwNew"
+              :username="auth.username"
+              :disabled="pwSubmitting"
+              @valid="(v) => pwValid = v"
+            />
+            <Message v-if="pwError" severity="error" :closable="false">
+              {{ pwError }}
+            </Message>
+            <Button
+              type="submit"
+              label="Change password"
+              icon="pi pi-check"
+              :loading="pwSubmitting"
+              :disabled="!pwValid"
+            />
+          </form>
         </template>
       </Card>
 

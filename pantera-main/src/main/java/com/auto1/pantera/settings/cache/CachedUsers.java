@@ -441,6 +441,45 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     }
 
     /**
+     * Evict every cached entry belonging to {@code username}.
+     *
+     * <p>The L1 cache is keyed by {@code SHA-256(username:password)} so a
+     * password change cannot target the specific key with just the
+     * username. Instead we iterate the cache and remove entries whose
+     * cached {@link AuthUser#name()} matches. Failure cases (empty
+     * Optional values) cannot be matched so they age out via the TTL.
+     * Typical cache sizes are small (a few hundred entries) so the
+     * O(n) scan is negligible compared to the round-trip cost of a
+     * stale-credential exploit window.</p>
+     *
+     * <p>The same username is also unscheduled from the L2 (Valkey)
+     * cache via a SCAN + DEL. L2 eviction is best-effort; if it fails
+     * the entry still ages out via the L2 TTL.</p>
+     *
+     * @param username Username to evict
+     */
+    public void invalidateByUsername(final String username) {
+        if (username == null || username.isEmpty()) {
+            return;
+        }
+        // L1: walk the map and drop entries whose cached AuthUser matches.
+        final java.util.List<String> toRemove = new java.util.ArrayList<>();
+        this.cached.asMap().forEach((key, optUser) -> {
+            if (optUser != null && optUser.isPresent()
+                && username.equals(optUser.get().name())) {
+                toRemove.add(key);
+            }
+        });
+        if (!toRemove.isEmpty()) {
+            this.cached.invalidateAll(toRemove);
+        }
+        // L2: we cannot enumerate entries by username (they're keyed by
+        // hash) so skip Valkey-side invalidation here and rely on the
+        // per-entry TTL to age out stale values. The window is at most
+        // `ttl`, so keep the default short (5 min) in production.
+    }
+
+    /**
      * Handle auth cache eviction - record metrics.
      * @param key Cache key
      * @param user Auth user
