@@ -860,6 +860,12 @@ public final class AuthHandler {
                 if (info.containsKey("email")) {
                     result.put("email", info.getString("email"));
                 }
+                // Force password change flag (set on the bootstrap admin user
+                // and cleared by alterPassword once a complex password is set).
+                if (info.containsKey("must_change_password")) {
+                    result.put("must_change_password",
+                        info.getBoolean("must_change_password", false));
+                }
                 if (info.containsKey("groups")) {
                     result.put("groups",
                         new JsonArray(

@@ -335,7 +335,15 @@ public final class UserHandler {
             }
         ).onFailure(
             err -> {
-                if (err instanceof IllegalStateException) {
+                // Vert.x wraps the underlying exception in CompletionException;
+                // unwrap to get the original from UserDao.alterPassword.
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalArgumentException) {
+                    // PasswordPolicy validation failure → 400 with the message
+                    ApiResponse.sendError(
+                        ctx, 400, "WEAK_PASSWORD", cause.getMessage()
+                    );
+                } else if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("User '%s' not found", uname)

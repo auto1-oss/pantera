@@ -45,6 +45,17 @@ import org.eclipse.jetty.http.HttpStatus;
 public final class SettingsHandler {
 
     /**
+     * Auth provider types that cannot be disabled or deleted via the API.
+     * These are bootstrap providers required for fallback access:
+     *   - local: username/password against the users table
+     *   - jwt-password: API token verification
+     * Locking these prevents an admin from accidentally severing their own
+     * ability to log in (e.g. by disabling all SSO + local in one go).
+     */
+    private static final java.util.Set<String> PROTECTED_PROVIDERS =
+        java.util.Set.of("local", "jwt-password");
+
+    /**
      * Pantera port.
      */
     private final int port;
@@ -370,6 +381,17 @@ public final class SettingsHandler {
         final boolean enabled = body.getBoolean("enabled");
         ctx.vertx().<Void>executeBlocking(
             () -> {
+                // Refuse to disable protected providers (local, jwt-password).
+                // Enable is always allowed since it just restores the default.
+                if (!enabled) {
+                    final String type = this.authProviderDao.typeOf(providerId);
+                    if (type == null) {
+                        throw new IllegalArgumentException("not_found");
+                    }
+                    if (PROTECTED_PROVIDERS.contains(type)) {
+                        throw new IllegalArgumentException("protected:" + type);
+                    }
+                }
                 if (enabled) {
                     this.authProviderDao.enable(providerId);
                 } else {
@@ -382,9 +404,19 @@ public final class SettingsHandler {
             ignored -> ctx.response().setStatusCode(200)
                 .putHeader("Content-Type", "application/json")
                 .end(new JsonObject().put("status", "saved").encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        ).onFailure(err -> {
+            final String msg = err.getCause() != null
+                ? err.getCause().getMessage() : err.getMessage();
+            if ("not_found".equals(msg)) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+            } else if (msg != null && msg.startsWith("protected:")) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Cannot disable the '" + msg.substring("protected:".length())
+                        + "' provider — it is required for fallback access.");
+            } else {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            }
+        });
     }
 
     /**
@@ -431,8 +463,8 @@ public final class SettingsHandler {
 
     /**
      * DELETE /api/v1/auth-providers/:id — delete an auth provider.
-     * Refuses to delete the {@code local} provider so the admin always
-     * has a way to log in via username/password if SSO breaks.
+     * Refuses to delete protected providers (local, jwt-password) so
+     * the admin always has fallback access if SSO breaks.
      * @param ctx Routing context
      */
     private void deleteAuthProvider(final RoutingContext ctx) {
@@ -453,8 +485,8 @@ public final class SettingsHandler {
                 if (type == null) {
                     throw new IllegalArgumentException("not_found");
                 }
-                if ("local".equals(type)) {
-                    throw new IllegalArgumentException("local_protected");
+                if (PROTECTED_PROVIDERS.contains(type)) {
+                    throw new IllegalArgumentException("protected:" + type);
                 }
                 this.authProviderDao.delete(providerId);
                 return null;
@@ -467,10 +499,10 @@ public final class SettingsHandler {
                 ? err.getCause().getMessage() : err.getMessage();
             if ("not_found".equals(msg)) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
-            } else if ("local_protected".equals(msg)) {
+            } else if (msg != null && msg.startsWith("protected:")) {
                 ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
-                    "Cannot delete the 'local' provider — it is required for "
-                        + "username/password fallback access.");
+                    "Cannot delete the '" + msg.substring("protected:".length())
+                        + "' provider — it is required for fallback access.");
             } else {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
             }

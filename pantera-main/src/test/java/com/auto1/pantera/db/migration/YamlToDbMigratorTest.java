@@ -226,7 +226,7 @@ class YamlToDbMigratorTest {
             "migration_completed",
             Json.createObjectBuilder()
                 .add("completed", true)
-                .add("version", 5)
+                .add("version", 6)
                 .build(),
             "system"
         );

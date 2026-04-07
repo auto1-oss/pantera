@@ -44,7 +44,7 @@ public final class UserDao implements CrudUsers {
     public JsonArray list() {
         final JsonArrayBuilder arr = Json.createArrayBuilder();
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -78,7 +78,7 @@ public final class UserDao implements CrudUsers {
         final String col = allowed.contains(sortField) ? sortField : "username";
         final String dir = ascending ? "ASC" : "DESC";
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles,",
             "COUNT(*) OVER() AS total_count",
             "FROM users u",
@@ -115,7 +115,7 @@ public final class UserDao implements CrudUsers {
     @Override
     public Optional<JsonObject> get(final String uname) {
         final String sql = String.join(" ",
-            "SELECT u.username, u.email, u.enabled, u.auth_provider,",
+            "SELECT u.username, u.email, u.enabled, u.auth_provider, u.must_change_password,",
             "COALESCE(json_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '[]') AS roles",
             "FROM users u",
             "LEFT JOIN user_roles ur ON u.id = ur.user_id",
@@ -220,10 +220,18 @@ public final class UserDao implements CrudUsers {
     @Override
     public void alterPassword(final String uname, final JsonObject info) {
         final String newPass = info.getString("new_pass");
+        // Server-side complexity validation. Throws IllegalArgumentException
+        // (mapped to 400 by the handler) on policy failure.
+        final String policyFailure =
+            com.auto1.pantera.auth.PasswordPolicy.validate(uname, newPass);
+        if (policyFailure != null) {
+            throw new IllegalArgumentException(policyFailure);
+        }
         final String hashed = BCrypt.hashpw(newPass, BCrypt.gensalt());
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                 "UPDATE users SET password_hash = ?, updated_at = NOW() WHERE username = ?"
+                 "UPDATE users SET password_hash = ?, must_change_password = FALSE, "
+                     + "updated_at = NOW() WHERE username = ?"
              )) {
             ps.setString(1, hashed);
             ps.setString(2, uname);
@@ -235,6 +243,30 @@ public final class UserDao implements CrudUsers {
             throw ex;
         } catch (final Exception ex) {
             throw new IllegalStateException("Failed to alter password: " + uname, ex);
+        }
+    }
+
+    /**
+     * Check if the given user has the {@code must_change_password} flag set.
+     * Returns false if the user is not found (so absent users don't gate the
+     * caller — auth failure is reported separately by the auth chain).
+     *
+     * @param uname Username
+     * @return true if the user must change their password before any other action
+     */
+    public boolean mustChangePassword(final String uname) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT must_change_password FROM users WHERE username = ?"
+             )) {
+            ps.setString(1, uname);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getBoolean(1);
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException(
+                "Failed to read must_change_password for user: " + uname, ex
+            );
         }
     }
 
@@ -362,7 +394,8 @@ public final class UserDao implements CrudUsers {
         final JsonObjectBuilder bld = Json.createObjectBuilder()
             .add("name", rs.getString("username"))
             .add("enabled", rs.getBoolean("enabled"))
-            .add("auth_provider", rs.getString("auth_provider"));
+            .add("auth_provider", rs.getString("auth_provider"))
+            .add("must_change_password", rs.getBoolean("must_change_password"));
         final String email = rs.getString("email");
         if (email != null) {
             bld.add("email", email);
