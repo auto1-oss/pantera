@@ -118,26 +118,51 @@ class UserDaoTest {
     @Test
     void altersPassword() {
         addTestUser("frank");
+        // Must satisfy PasswordPolicy: ≥12 chars, upper, lower, digit, special,
+        // not equal to username, not in weak list.
+        final String compliant = "ValidPass!234";
         final JsonObject passInfo = Json.createObjectBuilder()
-            .add("new_pass", "updated_hash")
+            .add("new_pass", compliant)
             .add("new_type", "sha256")
             .build();
         this.dao.alterPassword("frank", passInfo);
         // Verify password was bcrypt-hashed (not stored as plaintext)
         try (var conn = ds.getConnection();
              var ps = conn.prepareStatement(
-                 "SELECT password_hash FROM users WHERE username = ?")) {
+                 "SELECT password_hash, must_change_password FROM users WHERE username = ?")) {
             ps.setString(1, "frank");
             var rs = ps.executeQuery();
             assertTrue(rs.next());
             final String stored = rs.getString("password_hash");
             assertTrue(stored.startsWith("$2a$"), "should be bcrypt hash");
             assertTrue(
-                org.mindrot.jbcrypt.BCrypt.checkpw("updated_hash", stored),
+                org.mindrot.jbcrypt.BCrypt.checkpw(compliant, stored),
                 "bcrypt hash should verify against original password"
+            );
+            assertFalse(
+                rs.getBoolean("must_change_password"),
+                "must_change_password should be cleared after a successful change"
             );
         } catch (final Exception ex) {
             fail(ex);
+        }
+    }
+
+    @Test
+    void rejectsWeakPassword() {
+        addTestUser("grace");
+        // Too short, no upper/special — should be rejected by PasswordPolicy
+        final JsonObject passInfo = Json.createObjectBuilder()
+            .add("new_pass", "short")
+            .build();
+        try {
+            this.dao.alterPassword("grace", passInfo);
+            fail("Expected IllegalArgumentException for weak password");
+        } catch (final IllegalArgumentException ex) {
+            assertTrue(
+                ex.getMessage().contains("at least 12"),
+                "error should mention min length"
+            );
         }
     }
 
