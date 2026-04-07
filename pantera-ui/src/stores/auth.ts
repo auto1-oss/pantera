@@ -20,6 +20,14 @@ export const useAuthStore = defineStore('auth', () => {
       || hasAction('api_role_permissions', 'write')
   })
   const username = computed(() => user.value?.name ?? '')
+  /**
+   * True when the backend has flagged this user as required to change
+   * their password before any other action. Set on the bootstrap admin
+   * (admin/admin) until they pick a compliant password.
+   */
+  const mustChangePassword = computed(
+    () => user.value?.must_change_password === true,
+  )
 
   async function login(uname: string, password: string) {
     loading.value = true
@@ -116,7 +124,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     token, refreshToken, user, providers, loading,
-    isAuthenticated, isAdmin, username,
+    isAuthenticated, isAdmin, username, mustChangePassword,
     login, logout, fetchUser, fetchProviders,
     ssoRedirect, handleOAuthCallback,
     hasAction,

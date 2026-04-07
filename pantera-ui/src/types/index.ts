@@ -45,6 +45,12 @@ export interface UserInfo {
   can_delete_artifacts?: boolean
   email?: string
   groups?: string[]
+  /**
+   * When true, the user is forced to change their password before any
+   * other action succeeds. Set on the bootstrap admin user; cleared by
+   * the backend once a sufficiently complex password is submitted.
+   */
+  must_change_password?: boolean
 }
 
 export interface RepoListItem {
