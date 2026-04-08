@@ -743,6 +743,15 @@ public final class YamlSettings implements Settings {
         } else {
             res = new AuthFromEnv();
         }
+        // Shared cache of currently-enabled auth_providers.type values.
+        // Every dynamic provider (SSO, jwt-password, ...) is wrapped in
+        // DbGatedAuth with a reference to this cache so UI-driven
+        // enable/disable/delete takes effect within seconds (5s TTL)
+        // without requiring a server restart.
+        final com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache enabledCache =
+            dataSource != null
+                ? new com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache(dataSource)
+                : null;
         // Add YAML-configured providers as fallbacks (SSO, env, etc.)
         final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
         if (creds != null && !creds.isEmpty()) {
@@ -755,7 +764,13 @@ public final class YamlSettings implements Settings {
                 }
                 try {
                     final Authentication auth = loader.newObject(type, settings);
-                    res = new Authentication.Joined(res, auth);
+                    // Wrap in DbGatedAuth so disable/delete via the UI
+                    // actually takes effect on the running chain.
+                    final Authentication gated = enabledCache != null && type != null
+                        ? new com.auto1.pantera.auth.DbGatedAuth(
+                            auth, type, enabledCache)
+                        : auth;
+                    res = new Authentication.Joined(res, gated);
                 } catch (final Exception ex) {
                     EcsLogger.warn("com.auto1.pantera.security")
                         .message("Failed to load auth provider: " + type)

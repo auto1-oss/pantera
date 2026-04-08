@@ -58,6 +58,46 @@ public final class AuthFromDb implements Authentication {
         this.source = source;
     }
 
+    /**
+     * SQL query to check whether a username exists as a local-provider
+     * user. Used by {@link #isAuthoritative(String)} to tell the
+     * authentication chain that SSO fallthrough is forbidden for this
+     * username.
+     */
+    private static final String EXISTS_SQL = String.join(" ",
+        "SELECT 1 FROM users",
+        "WHERE username = ? AND enabled = true AND auth_provider = 'local'",
+        "LIMIT 1"
+    );
+
+    @Override
+    public boolean isAuthoritative(final String name) {
+        // Claim authority over every enabled local-auth user in the DB so
+        // the Joined chain stops on failure instead of falling through to
+        // SSO providers that might accept a weak password for the same
+        // username. Non-local users (SSO-provisioned) and unknown usernames
+        // return false — the chain continues through SSO providers for them.
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(AuthFromDb.EXISTS_SQL)) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("isAuthoritative lookup failed — defaulting to false")
+                .eventCategory("authentication")
+                .eventAction("db_auth_authoritative")
+                .field("user.name", name)
+                .error(ex)
+                .log();
+            return false;
+        }
+    }
+
     @Override
     public Optional<AuthUser> user(final String name, final String pass) {
         try (Connection conn = this.source.getConnection();

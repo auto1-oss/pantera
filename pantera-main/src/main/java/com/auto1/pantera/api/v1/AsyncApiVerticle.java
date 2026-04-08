@@ -355,7 +355,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         ).register(router);
         new SettingsHandler(
             this.port, this.settings, manageRepo, this.dataSource,
-            this.security.policy()
+            this.security.policy(),
+            // Pass the auth chain so provider toggle/delete/edit can
+            // flush the credential cache and take effect immediately.
+            this.security.authentication()
+                instanceof com.auto1.pantera.asto.misc.Cleanable
+                ? (com.auto1.pantera.asto.misc.Cleanable<String>)
+                    this.security.authentication()
+                : null
         ).register(router);
         new DashboardHandler(crs, this.dataSource).register(router);
         new ArtifactHandler(

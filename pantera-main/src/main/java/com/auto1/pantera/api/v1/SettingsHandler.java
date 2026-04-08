@@ -86,7 +86,37 @@ public final class SettingsHandler {
     private final Policy<?> policy;
 
     /**
+     * Auth cache — flushed on provider toggle/delete/config change so
+     * previously-cached successful logins from a now-disabled provider
+     * cannot be replayed.
+     */
+    private final com.auto1.pantera.asto.misc.Cleanable<String> authCache;
+
+    /**
      * Ctor.
+     * @param port Pantera port
+     * @param settings Pantera settings
+     * @param manageRepo Repository settings manager
+     * @param dataSource Database data source (nullable)
+     * @param policy Security policy
+     * @param authCache Auth cache to flush on provider changes (nullable)
+     * @checkstyle ParameterNumberCheck (6 lines)
+     */
+    public SettingsHandler(final int port, final Settings settings,
+        final ManageRepoSettings manageRepo, final DataSource dataSource,
+        final Policy<?> policy,
+        final com.auto1.pantera.asto.misc.Cleanable<String> authCache) {
+        this.port = port;
+        this.settings = settings;
+        this.manageRepo = manageRepo;
+        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
+        this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
+        this.policy = policy;
+        this.authCache = authCache;
+    }
+
+    /**
+     * Backward-compat ctor without auth cache.
      * @param port Pantera port
      * @param settings Pantera settings
      * @param manageRepo Repository settings manager
@@ -97,12 +127,22 @@ public final class SettingsHandler {
     public SettingsHandler(final int port, final Settings settings,
         final ManageRepoSettings manageRepo, final DataSource dataSource,
         final Policy<?> policy) {
-        this.port = port;
-        this.settings = settings;
-        this.manageRepo = manageRepo;
-        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
-        this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
-        this.policy = policy;
+        this(port, settings, manageRepo, dataSource, policy, null);
+    }
+
+    /**
+     * Flush the auth credential cache so a just-changed provider
+     * cannot serve a stale success result. Called after every provider
+     * mutation (create / toggle / update config / delete).
+     */
+    private void flushAuthCache() {
+        if (this.authCache
+            instanceof com.auto1.pantera.settings.cache.CachedUsers) {
+            ((com.auto1.pantera.settings.cache.CachedUsers) this.authCache)
+                .invalidateByUsername("*");
+        } else if (this.authCache != null) {
+            this.authCache.invalidateAll();
+        }
     }
 
     /**
@@ -401,9 +441,12 @@ public final class SettingsHandler {
             },
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
         ).onFailure(err -> {
             final String msg = err.getCause() != null
                 ? err.getCause().getMessage() : err.getMessage();
@@ -450,12 +493,15 @@ public final class SettingsHandler {
             },
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(201)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject()
-                    .put("status", "created")
-                    .put("type", type)
-                    .encode())
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(201)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("status", "created")
+                        .put("type", type)
+                        .encode());
+            }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
@@ -493,7 +539,10 @@ public final class SettingsHandler {
             },
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(204).end()
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(204).end();
+            }
         ).onFailure(err -> {
             final String msg = err.getCause() != null
                 ? err.getCause().getMessage() : err.getMessage();
@@ -541,9 +590,12 @@ public final class SettingsHandler {
             },
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
