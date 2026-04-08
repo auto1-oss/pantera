@@ -79,6 +79,84 @@ final class CachedUsersTest {
     }
 
     @Test
+    void invalidateByKeyFlushesEntireCache() {
+        // Populate the cache with a successful auth
+        this.users.user("jane", "any");
+        MatcherAssert.assertThat(
+            "Cache should have 1 entry after a successful auth",
+            this.cache.estimatedSize(),
+            new IsEqual<>(1L)
+        );
+        // CachedUsers cache key is SHA-256(user:pass), so callers have no
+        // way to target a specific entry by plain-text key. invalidate(k)
+        // must flush the entire cache as the only safe behavior. Previously
+        // this was a no-op (the bug behind "old password still works after
+        // change") because callers passed usernames that never matched the
+        // SHA-256 keys.
+        this.users.invalidate("jane");
+        MatcherAssert.assertThat(
+            "Cache must be fully flushed after invalidate(key)",
+            this.cache.estimatedSize(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void invalidateByUsernameFlushesEntireCache() {
+        // Populate for multiple users
+        this.users.user("jane", "pass1");
+        this.users.user("jane", "pass2");
+        MatcherAssert.assertThat(
+            "Cache should have 2 entries (different passwords → different keys)",
+            this.cache.estimatedSize(),
+            new IsEqual<>(2L)
+        );
+        this.users.invalidateByUsername("jane");
+        MatcherAssert.assertThat(
+            "Cache must be fully flushed",
+            this.cache.estimatedSize(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
+    void nextAuthHitsOriginAfterInvalidate() {
+        this.users.user("jane", "any");
+        MatcherAssert.assertThat(
+            "First auth hit the origin once",
+            this.auth.cnt.get(),
+            new IsEqual<>(1)
+        );
+        // Cached hit — origin not called
+        this.users.user("jane", "any");
+        MatcherAssert.assertThat(
+            "Second auth served from cache",
+            this.auth.cnt.get(),
+            new IsEqual<>(1)
+        );
+        // After invalidate, the next call MUST go to origin.
+        this.users.invalidate("jane");
+        this.users.user("jane", "any");
+        MatcherAssert.assertThat(
+            "Post-invalidate auth re-consults the origin",
+            this.auth.cnt.get(),
+            new IsEqual<>(2)
+        );
+    }
+
+    @Test
+    void invalidateAllFlushesEntireCache() {
+        this.users.user("jane", "pass1");
+        MatcherAssert.assertThat(this.cache.estimatedSize(), new IsEqual<>(1L));
+        this.users.invalidateAll();
+        MatcherAssert.assertThat(
+            "invalidateAll must empty the cache",
+            this.cache.estimatedSize(),
+            new IsEqual<>(0L)
+        );
+    }
+
+    @Test
     void doesNotCacheFailedAuth() {
         MatcherAssert.assertThat(
             "David was not authenticated on the first call",
