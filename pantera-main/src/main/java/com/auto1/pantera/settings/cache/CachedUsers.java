@@ -441,42 +441,56 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
     }
 
     /**
-     * Evict every cached entry belonging to {@code username}.
+     * Nuke every cached auth entry. Called on any password change so
+     * the stale credential window is zero regardless of L1/L2 state.
      *
-     * <p>The L1 cache is keyed by {@code SHA-256(username:password)} so a
-     * password change cannot target the specific key with just the
-     * username. Instead we iterate the cache and remove entries whose
-     * cached {@link AuthUser#name()} matches. Failure cases (empty
-     * Optional values) cannot be matched so they age out via the TTL.
-     * Typical cache sizes are small (a few hundred entries) so the
-     * O(n) scan is negligible compared to the round-trip cost of a
-     * stale-credential exploit window.</p>
+     * <p>The cache key is {@code SHA-256(username:password)} — a
+     * one-way function. We cannot reverse it to find entries for a
+     * specific user, so trying to invalidate only the affected rows is
+     * error-prone (the username-matching scan below misses failure
+     * cases and races). A full wipe is simpler and always correct.</p>
      *
-     * <p>The same username is also unscheduled from the L2 (Valkey)
-     * cache via a SCAN + DEL. L2 eviction is best-effort; if it fails
-     * the entry still ages out via the L2 TTL.</p>
+     * <p>Cost: L1 is small (≤10K entries) and re-populates with one
+     * DB query per subsequent login. L2 is flushed via a {@code KEYS
+     * auth:*} + {@code DEL} round trip — blocking but run on the
+     * worker thread of the password-change request, not the hot path.</p>
      *
-     * @param username Username to evict
+     * <p>The username parameter is kept only for the log line, not
+     * for filtering. Every cache entry is dropped.</p>
+     *
+     * @param username Username whose password just changed (used for logging)
      */
     public void invalidateByUsername(final String username) {
-        if (username == null || username.isEmpty()) {
-            return;
-        }
-        // L1: walk the map and drop entries whose cached AuthUser matches.
-        final java.util.List<String> toRemove = new java.util.ArrayList<>();
-        this.cached.asMap().forEach((key, optUser) -> {
-            if (optUser != null && optUser.isPresent()
-                && username.equals(optUser.get().name())) {
-                toRemove.add(key);
+        // L1: blow away everything. Cheap and bullet-proof.
+        this.cached.invalidateAll();
+        // L2: best-effort scan + delete every auth:* key.
+        if (this.twoTier && this.l2 != null) {
+            try {
+                final java.util.List<String> keys = this.l2.keys("auth:*")
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                if (keys != null && !keys.isEmpty()) {
+                    this.l2.del(keys.toArray(new String[0]))
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.settings.cache")
+                    .message("Failed to flush L2 auth cache on password change "
+                        + "— stale entries will age out via TTL")
+                    .eventCategory("cache")
+                    .eventAction("invalidate_by_username")
+                    .eventOutcome("failure")
+                    .field("user.name", username)
+                    .error(ex)
+                    .log();
             }
-        });
-        if (!toRemove.isEmpty()) {
-            this.cached.invalidateAll(toRemove);
         }
-        // L2: we cannot enumerate entries by username (they're keyed by
-        // hash) so skip Valkey-side invalidation here and rely on the
-        // per-entry TTL to age out stale values. The window is at most
-        // `ttl`, so keep the default short (5 min) in production.
+        EcsLogger.info("com.auto1.pantera.settings.cache")
+            .message("Auth cache flushed after password change")
+            .eventCategory("cache")
+            .eventAction("invalidate_by_username")
+            .eventOutcome("success")
+            .field("user.name", username)
+            .log();
     }
 
     /**

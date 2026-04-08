@@ -173,7 +173,21 @@ public interface Authentication {
                 // Provider can handle this user - try authentication
                 final Optional<AuthUser> result = auth.user(user, pass);
                 if (result.isPresent()) {
-                    // Success - return immediately
+                    // Success — log which provider matched so admins can
+                    // diagnose situations like "password changed but old
+                    // one still works" (they'll see exactly which provider
+                    // accepted the credentials).
+                    com.auto1.pantera.http.log.EcsLogger.info(
+                        "com.auto1.pantera.http.auth")
+                        .message("Authentication succeeded via "
+                            + auth.getClass().getSimpleName())
+                        .eventCategory("authentication")
+                        .eventAction("provider_match")
+                        .eventOutcome("success")
+                        .field("user.name", user)
+                        .field("event.provider",
+                            auth.getClass().getSimpleName())
+                        .log();
                     return result;
                 }
                 // Provider matched domain but auth failed
