@@ -330,18 +330,14 @@ public final class UserHandler {
             false
         ).onSuccess(
             ignored -> {
-                // CachedUsers is keyed by SHA-256(username:password), so
-                // calling .invalidate(username) is a no-op — the old
-                // password entry stayed live until TTL expiry, letting
-                // users log in with the OLD password for up to 5 minutes
-                // after a change. Use invalidateByUsername when available.
-                if (this.ucache
-                    instanceof com.auto1.pantera.settings.cache.CachedUsers) {
-                    ((com.auto1.pantera.settings.cache.CachedUsers) this.ucache)
-                        .invalidateByUsername(uname);
-                } else {
-                    this.ucache.invalidate(uname);
-                }
+                // ucache is a PublishingCleanable wrapping CachedUsers, so
+                // an instanceof check on CachedUsers is always false here.
+                // Cleanable.invalidate(key) delegates to CachedUsers.invalidate
+                // which now does a full L1+L2 flush — the only safe option
+                // because the cache is keyed by SHA-256(username:password)
+                // and we don't have the hash. The pub/sub layer broadcasts
+                // the flush to other Pantera instances in the cluster.
+                this.ucache.invalidate(uname);
                 // Policy cache may contain stale role/enabled state for this
                 // user; invalidate that too so subsequent requests see fresh data.
                 this.pcache.invalidate(uname);

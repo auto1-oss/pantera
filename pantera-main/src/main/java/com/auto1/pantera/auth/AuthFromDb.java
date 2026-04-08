@@ -60,23 +60,33 @@ public final class AuthFromDb implements Authentication {
 
     /**
      * SQL query to check whether a username exists as a local-provider
-     * user. Used by {@link #isAuthoritative(String)} to tell the
-     * authentication chain that SSO fallthrough is forbidden for this
-     * username.
+     * user with an actual password set. Used by {@link #isAuthoritative}
+     * to tell the authentication chain that SSO fallthrough is forbidden
+     * for this username.
+     *
+     * <p>Critically requires {@code password_hash IS NOT NULL AND <> ''}.
+     * Users provisioned by SSO (e.g. Okta callback) live in the
+     * {@code users} table with {@code auth_provider='local'} OR a
+     * specific provider name, but with an empty password_hash. We must
+     * NOT claim authority over those users — that would block them from
+     * authenticating via the SSO provider that owns them.</p>
      */
     private static final String EXISTS_SQL = String.join(" ",
         "SELECT 1 FROM users",
-        "WHERE username = ? AND enabled = true AND auth_provider = 'local'",
+        "WHERE username = ?",
+        "  AND enabled = true",
+        "  AND auth_provider = 'local'",
+        "  AND password_hash IS NOT NULL",
+        "  AND password_hash <> ''",
         "LIMIT 1"
     );
 
     @Override
     public boolean isAuthoritative(final String name) {
-        // Claim authority over every enabled local-auth user in the DB so
-        // the Joined chain stops on failure instead of falling through to
-        // SSO providers that might accept a weak password for the same
-        // username. Non-local users (SSO-provisioned) and unknown usernames
-        // return false — the chain continues through SSO providers for them.
+        // Claim authority ONLY over local users who have an actual password
+        // hash set. This blocks SSO fall-through for "real" local accounts
+        // (e.g. the bootstrap admin) while still letting SSO authenticate
+        // users whose local row is just a placeholder with no password.
         if (name == null || name.isEmpty()) {
             return false;
         }
