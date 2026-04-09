@@ -162,7 +162,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.7</version>
+            <version>42.7.10</version>
         </dependency>
         <dependency>
             <groupId>com.zaxxer</groupId>
@@ -207,7 +207,7 @@ SOFTWARE.
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-authz-client</artifactId>
-            <version>26.0.2</version>
+            <version>26.0.8</version>
         </dependency>
         <dependency>
             <groupId>org.quartz-scheduler</groupId>
@@ -406,7 +406,7 @@ SOFTWARE.
         <dependency>
             <groupId>com.auth0</groupId>
             <artifactId>java-jwt</artifactId>
-            <version>4.4.0</version>
+            <version>4.5.1</version>
         </dependency>
     </dependencies>
     <build>
