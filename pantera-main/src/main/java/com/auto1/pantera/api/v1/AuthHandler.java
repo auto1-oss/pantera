@@ -161,10 +161,15 @@ public final class AuthHandler {
                             .put("expires_in", pair.expiresIn())
                             .encode());
                 } else {
-                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid credentials");
+                    // Generic message — never disclose whether the user
+                    // exists, the password is wrong, or MFA failed. Detail
+                    // is in the server logs from the auth chain.
+                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                        "Sign-in failed. Check your credentials and try again.");
                 }
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Authentication failed");
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                    "Sign-in is temporarily unavailable. Please try again.");
             }
         });
     }
@@ -264,17 +269,31 @@ public final class AuthHandler {
         ).onSuccess(result -> {
             if (result == null) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND",
-                    String.format("Provider '%s' not found", name));
+                    "Sign-in provider is not configured.");
             } else if (result.containsKey("error")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", result.getString("error"));
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("SSO redirect rejected: " + result.getString("error"))
+                    .eventCategory("authentication")
+                    .eventAction("sso_redirect")
+                    .log();
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Sign-in provider is not configured correctly.");
             } else {
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(result.encode());
             }
-        }).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        }).onFailure(err -> {
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("SSO redirect failed: "
+                    + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
+                .eventCategory("authentication")
+                .eventAction("sso_redirect")
+                .error(err)
+                .log();
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                "Sign-in is temporarily unavailable. Please try again.");
+        });
     }
 
     /**
@@ -644,18 +663,27 @@ public final class AuthHandler {
                 .put("expires_in", pair.expiresIn())
                 .encode())
         ).onFailure(err -> {
-            final String msg = err.getMessage() != null ? err.getMessage() : "SSO callback failed";
+            // Detailed reason logged server-side for ops/forensics. The
+            // client always gets a single generic message: revealing
+            // "user is disabled" / "not in allowed group" / "token
+            // exchange failed" lets attackers enumerate accounts and
+            // probe IdP configuration. The only exception is a missing
+            // provider (admin misconfig, not security-sensitive).
+            final String detail = err.getMessage() != null
+                ? err.getMessage() : "SSO callback failed";
             EcsLogger.error("com.auto1.pantera.api.v1")
-                .message("SSO callback failed: " + msg)
+                .message("SSO callback failed: " + detail)
                 .eventCategory("authentication")
                 .eventAction("sso_callback")
                 .eventOutcome("failure")
                 .error(err)
                 .log();
-            if (msg.contains("not found")) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", msg);
+            if (detail.contains("Provider '") && detail.contains("not found")) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                    "Sign-in provider is not configured.");
             } else {
-                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", msg);
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                    "Sign-in failed. Please try again or contact your administrator.");
             }
         });
     }
