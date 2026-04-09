@@ -17,6 +17,7 @@ import {
   createAuthProvider,
   deleteAuthProvider,
 } from '@/api/settings'
+import { listRoles } from '@/api/roles'
 import { useNotificationStore } from '@/stores/notifications'
 import { useConfirmDelete } from '@/composables/useConfirmDelete'
 import {
@@ -62,6 +63,15 @@ const providers = ref<Provider[]>([])
 const loading = ref(true)
 const savingId = ref<number | null>(null)
 const drafts = ref<Record<number, Draft>>({})
+
+/**
+ * Full list of Pantera role names, fetched on mount. Used to populate
+ * the Group → Role mapping dropdowns so admins pick an existing role
+ * instead of typing a name that may not exist. The dropdown is kept
+ * editable so operators can still forward-declare a role that will
+ * be created later (e.g. imported from SSO for the first time).
+ */
+const availableRoles = ref<string[]>([])
 
 /* ---------- Schema helpers ---------- */
 
@@ -146,12 +156,22 @@ function draftToConfig(p: Provider, draft: Draft): Record<string, unknown> {
 async function load() {
   loading.value = true
   try {
-    const s = await getSettings()
+    // Fetch providers and the role catalogue in parallel. Roles feed
+    // the Group → Role mapping dropdowns so admins pick from actual
+    // Pantera roles instead of free-typing names that might be typos.
+    const [s, rolesResp] = await Promise.all([
+      getSettings(),
+      listRoles({ size: 500 }).catch(() => ({ items: [] as { name: string }[] })),
+    ])
     providers.value = ((s.credentials as unknown as Provider[]) ?? []).map(p => ({
       ...p,
       config: p.config ?? {},
     }))
     providers.value.forEach(p => { drafts.value[p.id] = buildDraft(p) })
+    availableRoles.value = (rolesResp.items ?? [])
+      .map(r => r.name)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
   } catch (e: unknown) {
     notify.error('Failed to load auth providers', e instanceof Error ? e.message : '')
   } finally {
@@ -467,10 +487,14 @@ onMounted(load)
                     class="flex-1 text-sm font-mono"
                   />
                   <span class="text-gray-500 text-xs">→</span>
-                  <InputText
+                  <Select
                     v-model="pair.role"
-                    placeholder="Pantera role (e.g. admin)"
-                    class="flex-1 text-sm font-mono"
+                    :options="availableRoles"
+                    placeholder="Select a Pantera role"
+                    filter
+                    editable
+                    class="flex-1 text-sm"
+                    :pt="{ root: { class: 'w-full' } }"
                   />
                   <Button
                     icon="pi pi-trash"
@@ -487,6 +511,11 @@ onMounted(load)
                   outlined
                   @click="addGroupRolePair(p)"
                 />
+                <p class="text-xs text-gray-500">
+                  Role choices come from your Pantera role catalog. You
+                  can type a name that isn't in the list yet if you plan
+                  to create the role afterwards.
+                </p>
               </div>
 
               <p v-if="f.help" class="text-xs text-gray-500 mt-1">{{ f.help }}</p>
@@ -587,10 +616,14 @@ onMounted(load)
                   class="flex-1 text-sm font-mono"
                 />
                 <span class="text-gray-500 text-xs">→</span>
-                <InputText
+                <Select
                   v-model="pair.role"
-                  placeholder="Pantera role"
-                  class="flex-1 text-sm font-mono"
+                  :options="availableRoles"
+                  placeholder="Select a Pantera role"
+                  filter
+                  editable
+                  class="flex-1 text-sm"
+                  :pt="{ root: { class: 'w-full' } }"
                 />
                 <Button
                   icon="pi pi-trash"
@@ -607,6 +640,10 @@ onMounted(load)
                 outlined
                 @click="addAddGroupRolePair"
               />
+              <p class="text-xs text-gray-500">
+                Role choices come from your Pantera role catalog. You
+                can type a name that isn't in the list yet.
+              </p>
             </div>
             <p v-if="f.help" class="text-xs text-gray-500 mt-1">{{ f.help }}</p>
           </div>
