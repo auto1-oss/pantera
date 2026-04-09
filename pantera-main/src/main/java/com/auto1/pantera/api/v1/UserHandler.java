@@ -319,7 +319,16 @@ public final class UserHandler {
         final String oldPass = body.getString("old_pass", "");
         final Optional<AuthUser> verified = this.auth.user(uname, oldPass);
         if (verified.isEmpty()) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid old password");
+            // 403 instead of 401: the caller already has a valid session
+            // (the JWT filter let them in). "Invalid old password" is an
+            // application-level authorization failure for the mutation,
+            // not a session-expiry signal — the axios interceptor must
+            // not try to silently refresh the session and retry the
+            // request, which would loop forever because the old password
+            // is still wrong after any number of refreshes.
+            ApiResponse.sendError(
+                ctx, 403, "FORBIDDEN", "Current password is incorrect."
+            );
             return;
         }
         ctx.vertx().executeBlocking(

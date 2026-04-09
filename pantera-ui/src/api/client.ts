@@ -1,4 +1,22 @@
-import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
+import axios, {
+  type AxiosInstance,
+  type InternalAxiosRequestConfig,
+  type AxiosRequestConfig,
+} from 'axios'
+
+/**
+ * Axios config shape extended with a private retry marker.
+ * Used by the response interceptor to guarantee that any single
+ * request is only retried once after a silent token refresh.
+ * Without this guard, an endpoint that legitimately returns 401
+ * for reasons other than session expiry (e.g. a password-change
+ * endpoint rejecting the current password) would loop the
+ * interceptor forever: refresh succeeds, retry fires, 401 again,
+ * interceptor queues, never resolves.
+ */
+interface RetryableRequestConfig extends AxiosRequestConfig {
+  _retriedAfterRefresh?: boolean
+}
 
 let apiClient: AxiosInstance | null = null
 
@@ -53,12 +71,24 @@ export function initApiClient(baseUrl: string): AxiosInstance {
       if (AUTH_BYPASS_URLS.some((bypass) => url.includes(bypass))) {
         return Promise.reject(error)
       }
+      // Retry guard: if this request has already been retried once
+      // after a silent refresh and STILL came back 401, the 401 is
+      // not a session-expiry signal — it's an application-level
+      // authorization failure for the operation itself (e.g. a
+      // password-change endpoint rejecting the current password).
+      // Propagate the error to the caller instead of looping the
+      // interceptor forever.
+      const cfg = error.config as RetryableRequestConfig
+      if (cfg._retriedAfterRefresh) {
+        return Promise.reject(error)
+      }
       // If a refresh is already in-flight, queue this request to retry after it completes
       if (isRefreshing) {
-        return new Promise<unknown>((resolve) => {
+        return new Promise<unknown>((resolve, reject) => {
           pendingRefreshQueue.push((newToken: string) => {
             error.config.headers.Authorization = `Bearer ${newToken}`
-            resolve(apiClient!.request(error.config))
+            cfg._retriedAfterRefresh = true
+            apiClient!.request(error.config).then(resolve).catch(reject)
           })
         })
       }
@@ -81,8 +111,11 @@ export function initApiClient(baseUrl: string): AxiosInstance {
           localStorage.setItem('refresh_token', resp.data.refresh_token)
         }
         flushPendingQueue(newToken)
-        // Retry the original failed request with the new token
+        // Retry the original failed request with the new token.
+        // Mark it first so that if the retry STILL returns 401 we
+        // propagate instead of looping back through the refresh path.
         error.config.headers.Authorization = `Bearer ${newToken}`
+        cfg._retriedAfterRefresh = true
         return apiClient!.request(error.config)
       } catch {
         // Refresh itself failed — token is truly expired or revoked
