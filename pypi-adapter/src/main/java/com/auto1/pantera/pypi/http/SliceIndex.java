@@ -48,9 +48,14 @@ final class SliceIndex implements Slice {
     private static final String PYPI_METADATA = ".pypi";
 
     /**
-     * Simple index filename for repo-level index.
+     * Simple index filename for repo-level index (HTML).
      */
     private static final String SIMPLE_HTML = "simple.html";
+
+    /**
+     * Simple index filename for repo-level index (JSON, PEP 691).
+     */
+    private static final String SIMPLE_JSON = "simple.json";
 
     /**
      * Pantera artifacts storage.
@@ -79,11 +84,18 @@ final class SliceIndex implements Slice {
         final String prefix = new RequestLinePrefix(pathForPrefix, headers).get();
 
         final boolean repoIndex = isRepoIndexRequest(segments);
+        // Resolve the persisted cache key for the requested format.
+        // IndexGenerator writes both <pkg>.html (PEP 503) and
+        // <pkg>.json (PEP 691) side-by-side so either can be served
+        // directly from storage without regenerating per request.
         final Key indexKey;
         final Key listKey;
         final String packageName;
         if (repoIndex) {
-            indexKey = new Key.From(PYPI_METADATA, SIMPLE_HTML);
+            indexKey = new Key.From(
+                PYPI_METADATA,
+                format == SimpleApiFormat.JSON ? SIMPLE_JSON : SIMPLE_HTML
+            );
             listKey = Key.ROOT;
             packageName = "";
         } else {
@@ -103,11 +115,22 @@ final class SliceIndex implements Slice {
             // all resolve to the same normalized storage path
             packageName = new NormalizedProjectName.Simple(rawPackageName).value();
             listKey = new Key.From(packageName);
-            indexKey = new Key.From(PYPI_METADATA, packageName, packageName + ".html");
+            final String indexFilename = packageName
+                + (format == SimpleApiFormat.JSON ? ".json" : ".html");
+            indexKey = new Key.From(PYPI_METADATA, packageName, indexFilename);
         }
 
         return this.storage.exists(indexKey).thenCompose(
             exists -> {
+                // Fast path: the requested format is already persisted.
+                // Both HTML and JSON can land here because IndexGenerator
+                // writes them side-by-side on every upload. If a legacy
+                // installation only has the HTML cache (pre-PEP-691
+                // upload flow), the JSON fast path misses and we fall
+                // through to the dynamic generator below, which also
+                // populates nothing — the JSON cache will be created
+                // the next time that package is uploaded to or
+                // reindexed.
                 if (exists) {
                     return this.storage.value(indexKey).thenApply(
                         content -> ResponseBuilder.ok()
