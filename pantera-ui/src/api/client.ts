@@ -43,9 +43,14 @@ export function initApiClient(baseUrl: string): AxiosInstance {
         return Promise.reject(error)
       }
       const url: string = error.config?.url ?? ''
-      // Never attempt refresh for the auth boundary endpoints themselves
+      // Auth-boundary endpoints are the ones the user hits BEFORE they
+      // have a session (login, providers list, SSO callback, refresh).
+      // A 401 from these is not a session-expiry signal — it means the
+      // attempt itself failed and the calling view owns the error UX.
+      // We must NOT force a redirect here, otherwise a failed login on
+      // the /login page triggers a full reload that wipes the inline
+      // error banner before the user ever sees it.
       if (AUTH_BYPASS_URLS.some((bypass) => url.includes(bypass))) {
-        redirectToLogin()
         return Promise.reject(error)
       }
       // If a refresh is already in-flight, queue this request to retry after it completes
