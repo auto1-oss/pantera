@@ -8,9 +8,10 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
-import InputText from 'primevue/inputtext'
+import Message from 'primevue/message'
 import MultiSelect from 'primevue/multiselect'
 import Dialog from 'primevue/dialog'
+import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
 import type { User } from '@/types'
 
 const props = defineProps<{ name: string }>()
@@ -25,10 +26,17 @@ const availableRoles = ref<string[]>([])
 const selectedRoles = ref<string[]>([])
 const savingRoles = ref(false)
 
-// Password change
+// Password reset (admin path: no old password required — the caller
+// is changing someone ELSE's password and the route-level change_password
+// permission is authorization enough).
 const pwdVisible = ref(false)
-const oldPassword = ref('')
 const newPassword = ref('')
+const pwdValid = ref(false)
+const pwdSubmitting = ref(false)
+const pwdError = ref<string | null>(null)
+// Unused sentinel for PasswordComplexityForm's required oldPassword prop
+// — the form ignores this value when hide-old-password is set.
+const unusedOldPassword = ref('')
 
 onMounted(async () => {
   try {
@@ -63,13 +71,30 @@ async function saveRoles() {
 }
 
 async function handlePasswordChange() {
+  if (!pwdValid.value || pwdSubmitting.value) return
+  pwdError.value = null
+  pwdSubmitting.value = true
   try {
-    await changePassword(props.name, oldPassword.value, newPassword.value)
-    notify.success('Password changed')
+    // Admin reset: pass null for oldPass so the API omits it from
+    // the request body. The backend sees uname !== caller and skips
+    // the current-password check.
+    await changePassword(props.name, null, newPassword.value)
+    notify.success('Password reset', `New password set for ${props.name}.`)
     pwdVisible.value = false
-    oldPassword.value = ''
     newPassword.value = ''
-  } catch { notify.error('Failed to change password') }
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    pwdError.value = err.response?.data?.message
+      ?? (e instanceof Error ? e.message : 'Failed to reset password')
+  } finally {
+    pwdSubmitting.value = false
+  }
+}
+
+function closePwdDialog() {
+  pwdVisible.value = false
+  newPassword.value = ''
+  pwdError.value = null
 }
 
 async function toggleEnabled() {
@@ -108,7 +133,7 @@ async function toggleEnabled() {
             <div><strong>Auth Provider:</strong> {{ user.auth_provider || 'local' }}</div>
           </div>
           <div class="flex gap-2 mt-6">
-            <Button label="Change Password" icon="pi pi-key" severity="secondary" @click="pwdVisible = true" />
+            <Button label="Reset Password" icon="pi pi-key" severity="secondary" @click="pwdVisible = true" />
             <Button :label="user.enabled !== false ? 'Disable' : 'Enable'"
               :icon="user.enabled !== false ? 'pi pi-ban' : 'pi pi-check-circle'"
               :severity="user.enabled !== false ? 'warn' : 'success'" @click="toggleEnabled" />
@@ -137,14 +162,41 @@ async function toggleEnabled() {
         </template>
       </Card>
 
-      <Dialog v-model:visible="pwdVisible" header="Change Password" modal class="w-96">
+      <Dialog
+        v-model:visible="pwdVisible"
+        :header="`Reset password for ${user?.name ?? ''}`"
+        modal
+        class="w-[28rem]"
+        :closable="!pwdSubmitting"
+        @hide="closePwdDialog"
+      >
         <div class="space-y-3">
-          <InputText v-model="oldPassword" type="password" placeholder="Current password" class="w-full" />
-          <InputText v-model="newPassword" type="password" placeholder="New password" class="w-full" />
+          <p class="text-xs text-gray-500">
+            You are resetting another user's password. The current password
+            is not required — your admin permission is authorization enough.
+            The user should change this password on their next sign-in.
+          </p>
+          <PasswordComplexityForm
+            v-model:oldPassword="unusedOldPassword"
+            v-model:password="newPassword"
+            :username="user?.name ?? ''"
+            :disabled="pwdSubmitting"
+            hide-old-password
+            @valid="(v) => pwdValid = v"
+          />
+          <Message v-if="pwdError" severity="error" :closable="false">
+            {{ pwdError }}
+          </Message>
         </div>
         <template #footer>
-          <Button label="Cancel" severity="secondary" text @click="pwdVisible = false" />
-          <Button label="Change" :disabled="!oldPassword || !newPassword" @click="handlePasswordChange" />
+          <Button label="Cancel" severity="secondary" text :disabled="pwdSubmitting" @click="closePwdDialog" />
+          <Button
+            label="Reset password"
+            icon="pi pi-key"
+            :loading="pwdSubmitting"
+            :disabled="!pwdValid"
+            @click="handlePasswordChange"
+          />
         </template>
       </Dialog>
     </div>

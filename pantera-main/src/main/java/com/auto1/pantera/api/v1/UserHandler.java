@@ -15,10 +15,13 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.api.perms.ApiUserPermission.UserAction;
 import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.db.dao.PagedResult;
 import com.auto1.pantera.db.dao.UserDao;
+import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.cache.PanteraCaches;
@@ -82,6 +85,20 @@ public final class UserHandler {
     private final Policy<?> policy;
 
     /**
+     * Token blocklist. Used to immediately revoke access tokens when
+     * an administrator disables a user. May be {@code null} in no-DB
+     * test deployments.
+     */
+    private final RevocationBlocklist blocklist;
+
+    /**
+     * Token DAO. Used to revoke long-lived refresh and API tokens when
+     * an administrator disables a user. May be {@code null} in no-DB
+     * test deployments.
+     */
+    private final UserTokenDao tokenDao;
+
+    /**
      * Ctor.
      * @param users Crud users object
      * @param caches Pantera caches
@@ -89,11 +106,29 @@ public final class UserHandler {
      */
     public UserHandler(final CrudUsers users, final PanteraCaches caches,
         final PanteraSecurity security) {
+        this(users, caches, security, null, null);
+    }
+
+    /**
+     * Full ctor with token revocation wiring.
+     * @param users Crud users object
+     * @param caches Pantera caches
+     * @param security Pantera security
+     * @param blocklist Revocation blocklist for access-token revocation
+     *     on user disable; may be {@code null}
+     * @param tokenDao Token DAO for refresh / API token revocation on
+     *     user disable; may be {@code null}
+     */
+    public UserHandler(final CrudUsers users, final PanteraCaches caches,
+        final PanteraSecurity security, final RevocationBlocklist blocklist,
+        final UserTokenDao tokenDao) {
         this.users = users;
         this.ucache = caches.usersCache();
         this.pcache = caches.policyCache();
         this.auth = security.authentication();
         this.policy = security.policy();
+        this.blocklist = blocklist;
+        this.tokenDao = tokenDao;
     }
 
     /**
@@ -316,20 +351,35 @@ public final class UserHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
-        final String oldPass = body.getString("old_pass", "");
-        final Optional<AuthUser> verified = this.auth.user(uname, oldPass);
-        if (verified.isEmpty()) {
-            // 403 instead of 401: the caller already has a valid session
-            // (the JWT filter let them in). "Invalid old password" is an
-            // application-level authorization failure for the mutation,
-            // not a session-expiry signal — the axios interceptor must
-            // not try to silently refresh the session and retry the
-            // request, which would loop forever because the old password
-            // is still wrong after any number of refreshes.
-            ApiResponse.sendError(
-                ctx, 403, "FORBIDDEN", "Current password is incorrect."
-            );
-            return;
+        // Distinguish self-service vs admin-reset.
+        //   - Self-service: caller is changing THEIR OWN password. They
+        //     must prove knowledge of the current password.
+        //   - Admin-reset: caller is an administrator with the
+        //     api_user_permissions change_password permission (enforced
+        //     by the AuthzHandler on this route) changing someone ELSE'S
+        //     password. They do not — and cannot — know the target
+        //     user's current password. The permission check on the route
+        //     is authorization enough.
+        final String caller = ctx.user() != null && ctx.user().principal() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB, "") : "";
+        final boolean selfService = uname.equals(caller);
+        if (selfService) {
+            final String oldPass = body.getString("old_pass", "");
+            final Optional<AuthUser> verified = this.auth.user(uname, oldPass);
+            if (verified.isEmpty()) {
+                // 403 instead of 401: the caller already has a valid
+                // session (the JWT filter let them in). "Invalid old
+                // password" is an application-level authorization
+                // failure for the mutation, not a session-expiry signal
+                // — the axios interceptor must not try to silently
+                // refresh the session and retry the request, which
+                // would loop forever because the old password is still
+                // wrong after any number of refreshes.
+                ApiResponse.sendError(
+                    ctx, 403, "FORBIDDEN", "Current password is incorrect."
+                );
+                return;
+            }
         }
         ctx.vertx().executeBlocking(
             () -> {
@@ -415,6 +465,29 @@ public final class UserHandler {
         ctx.vertx().executeBlocking(
             () -> {
                 this.users.disable(uname);
+                // Immediate token revocation — without this, the
+                // user's existing access tokens, refresh tokens, and
+                // API tokens would keep working until expiry. The
+                // per-request isEnabled check in UnifiedJwtAuthHandler
+                // is the safety net (fires on the next request), but
+                // explicit revocation is cheaper, synchronous, and
+                // cluster-wide via the blocklist pub/sub.
+                if (this.blocklist != null) {
+                    // 7 days covers the default refresh-token TTL; any
+                    // access token older than that is already expired
+                    // by the JWT's own exp claim.
+                    this.blocklist.revokeUser(uname, 7 * 24 * 3600);
+                }
+                if (this.tokenDao != null) {
+                    final int revoked = this.tokenDao.revokeAllForUser(uname);
+                    EcsLogger.info("com.auto1.pantera.api.v1")
+                        .message("User disabled: revoked " + revoked + " tokens")
+                        .eventCategory("iam")
+                        .eventAction("user_disable")
+                        .eventOutcome("success")
+                        .field("user.name", uname)
+                        .log();
+                }
                 return null;
             },
             false

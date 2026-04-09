@@ -52,6 +52,12 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
     private final RevocationBlocklist blocklist;
 
     /**
+     * Per-request enabled-state gate. Never null — defaults to
+     * {@link UserEnabledCheck#ALWAYS_ENABLED} when not supplied.
+     */
+    private final UserEnabledCheck enabledCheck;
+
+    /**
      * Ctor.
      * @param publicKey RSA public key used for RS256 verification
      * @param tokenDao DAO for JTI validation; {@code null} disables JTI enforcement
@@ -62,6 +68,24 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
         final UserTokenDao tokenDao,
         final RevocationBlocklist blocklist
     ) {
+        this(publicKey, tokenDao, blocklist, UserEnabledCheck.ALWAYS_ENABLED);
+    }
+
+    /**
+     * Ctor with explicit enabled-state gate.
+     * @param publicKey RSA public key used for RS256 verification
+     * @param tokenDao DAO for JTI validation; {@code null} disables JTI enforcement
+     * @param blocklist Revocation blocklist; {@code null} disables revocation checks
+     * @param enabledCheck Per-request check that the subject is still
+     *     enabled. Pass {@link UserEnabledCheck#ALWAYS_ENABLED} to skip
+     *     the check (not recommended in production).
+     */
+    public UnifiedJwtAuthHandler(
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck
+    ) {
         this.verifier = JWT.require(Algorithm.RSA256(publicKey))
             .withClaimPresence(AuthTokenRest.JTI)
             .withClaimPresence(AuthTokenRest.TYPE)
@@ -70,6 +94,8 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
             .build();
         this.tokenDao = tokenDao;
         this.blocklist = blocklist;
+        this.enabledCheck = enabledCheck != null
+            ? enabledCheck : UserEnabledCheck.ALWAYS_ENABLED;
     }
 
     @Override
@@ -154,6 +180,21 @@ public final class UnifiedJwtAuthHandler implements TokenAuthentication {
                 break;
             default:
                 return Optional.empty();
+        }
+        // Per-request enabled-state gate. If the subject has been
+        // disabled in Pantera since the token was issued, reject here.
+        // This is the only check that lets an admin revoke live
+        // sessions and long-lived API tokens instantly: the token
+        // itself is still valid on paper, but the check dismisses it.
+        if (!this.enabledCheck.isEnabled(sub)) {
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("Token rejected: user is disabled")
+                .eventCategory("authentication")
+                .eventAction("token_validate")
+                .eventOutcome("failure")
+                .field("user.name", sub)
+                .log();
+            return Optional.empty();
         }
         return Optional.of(new AuthUser(sub, context));
     }

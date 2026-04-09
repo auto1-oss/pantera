@@ -342,7 +342,18 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.vertx.eventBus()
         ).register(router);
         if (users != null) {
-            new UserHandler(users, this.caches, this.security).register(router);
+            // Wire the revocation blocklist + token DAO so that
+            // disabling a user via the admin UI also immediately
+            // blocks any existing access/refresh/API tokens — not
+            // just the session cache, which only covers the current
+            // login's L1 entry.
+            final com.auto1.pantera.auth.RevocationBlocklist blocklist =
+                this.jwtTokens != null ? this.jwtTokens.blocklist() : null;
+            final com.auto1.pantera.db.dao.UserTokenDao utDao =
+                this.dataSource != null
+                    ? new com.auto1.pantera.db.dao.UserTokenDao(this.dataSource) : null;
+            new UserHandler(users, this.caches, this.security, blocklist, utDao)
+                .register(router);
         }
         if (roles != null) {
             new RoleHandler(

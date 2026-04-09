@@ -782,6 +782,17 @@ public final class YamlSettings implements Settings {
                 }
             }
         }
+        // Final enabled-state gate on the whole chain. Rejects any
+        // successful authentication whose local user row is disabled.
+        // This closes the hole where a user disabled in Pantera is
+        // still authenticated via basic auth (CLI pulls) using their
+        // upstream Keycloak / Okta credentials — AuthFromDb already
+        // checks enabled for local users, but SSO providers do not.
+        // Order matters: wrap BEFORE CachedUsers so a stale cache
+        // entry cannot let a just-disabled user through.
+        if (dataSource != null) {
+            res = new com.auto1.pantera.auth.LocalEnabledFilter(res, dataSource);
+        }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {
             EcsLogger.info("com.auto1.pantera.settings")

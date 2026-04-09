@@ -157,4 +157,100 @@ class UnifiedJwtAuthHandlerTest {
             new IsEqual<>(true)
         );
     }
+
+    // -----------------------------------------------------------
+    // Enabled-state gate (added in 2.1.0 to close the "disabled
+    // user can still use an existing session/API token" bug)
+    // -----------------------------------------------------------
+
+    @Test
+    void validTokenIsRejectedWhenUserIsDisabled() {
+        // Any technically-valid token must fail validation when the
+        // configured UserEnabledCheck says the subject is disabled.
+        // This is how admin disable takes effect on existing sessions
+        // without waiting for the JWT to expire.
+        final UnifiedJwtAuthHandler disabledHandler = new UnifiedJwtAuthHandler(
+            this.publicKey, null, null, username -> false
+        );
+        final String token = JWT.create()
+            .withSubject("disabled-user")
+            .withClaim("context", "jwt")
+            .withClaim("type", "access")
+            .withJWTId("00000000-0000-0000-0000-000000000005")
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+        MatcherAssert.assertThat(
+            disabledHandler.user(token).toCompletableFuture().join().isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void enabledCheckIsNotConsultedForInvalidTokens() {
+        // The enabled check must only run AFTER all the cheap static
+        // checks (signature, required claims, expiry) have passed.
+        // If an expired token consulted the DB on every request we
+        // would trivially DoS the DB from any unauthenticated client.
+        final java.util.concurrent.atomic.AtomicInteger calls =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final UnifiedJwtAuthHandler counted = new UnifiedJwtAuthHandler(
+            this.publicKey, null, null, username -> {
+                calls.incrementAndGet();
+                return true;
+            }
+        );
+        final String expired = JWT.create()
+            .withSubject("alice")
+            .withClaim("context", "jwt")
+            .withClaim("type", "access")
+            .withJWTId("00000000-0000-0000-0000-000000000006")
+            .withExpiresAt(Instant.now().minusSeconds(60))
+            .sign(this.algorithm);
+        counted.user(expired).toCompletableFuture().join();
+        MatcherAssert.assertThat(calls.get(), new IsEqual<>(0));
+    }
+
+    @Test
+    void enabledCheckCalledForValidToken() {
+        final java.util.concurrent.atomic.AtomicInteger calls =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final UnifiedJwtAuthHandler counted = new UnifiedJwtAuthHandler(
+            this.publicKey, null, null, username -> {
+                calls.incrementAndGet();
+                return true;
+            }
+        );
+        final String token = JWT.create()
+            .withSubject("alice")
+            .withClaim("context", "jwt")
+            .withClaim("type", "access")
+            .withJWTId("00000000-0000-0000-0000-000000000007")
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+        final Optional<AuthUser> result =
+            counted.user(token).toCompletableFuture().join();
+        MatcherAssert.assertThat(result.isPresent(), new IsEqual<>(true));
+        MatcherAssert.assertThat(calls.get(), new IsEqual<>(1));
+    }
+
+    @Test
+    void defaultEnabledCheckIsAlwaysEnabled() {
+        // The legacy 3-arg ctor must default to ALWAYS_ENABLED so
+        // existing tests and deployments that don't wire the check
+        // continue to work unchanged.
+        final UnifiedJwtAuthHandler legacy = new UnifiedJwtAuthHandler(
+            this.publicKey, null, null
+        );
+        final String token = JWT.create()
+            .withSubject("alice")
+            .withClaim("context", "jwt")
+            .withClaim("type", "access")
+            .withJWTId("00000000-0000-0000-0000-000000000008")
+            .withExpiresAt(Instant.now().plusSeconds(3600))
+            .sign(this.algorithm);
+        MatcherAssert.assertThat(
+            legacy.user(token).toCompletableFuture().join().isPresent(),
+            new IsEqual<>(true)
+        );
+    }
 }

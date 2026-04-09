@@ -152,6 +152,47 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
         }
     }
 
+    /**
+     * Check whether a user is enabled in the database.
+     *
+     * <p>Loads via the same cache that backs permission lookups, so
+     * repeated calls for the same user on subsequent requests are
+     * O(1) cache hits. When an administrator disables a user via the
+     * UI, {@link #invalidate(String)} drops the cached entry and the
+     * next call re-reads from the database.</p>
+     *
+     * <p>Fails closed: returns {@code false} on any lookup error or
+     * for unknown users. Intended as a per-request gate in the JWT
+     * validator — an error must not let a disabled user through.</p>
+     *
+     * @param username Username to check
+     * @return {@code true} iff the user exists and is enabled
+     */
+    public boolean isEnabled(final String username) {
+        if (username == null || username.isEmpty()) {
+            return false;
+        }
+        try {
+            final User cached = this.users.get(
+                username, key -> new DbUser(
+                    this.source,
+                    new com.auto1.pantera.http.auth.AuthUser(key, null)
+                )
+            );
+            return cached instanceof DbUser && !((DbUser) cached).disabled();
+        } catch (final Exception err) {
+            EcsLogger.warn("com.auto1.pantera.security")
+                .message("isEnabled check failed; failing closed")
+                .eventCategory("authentication")
+                .eventAction("user_enabled_check")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .error(err)
+                .log();
+            return false;
+        }
+    }
+
     @Override
     public void invalidateAll() {
         this.cache.invalidateAll();
@@ -268,12 +309,20 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
         private final Collection<String> uroles;
 
         /**
+         * Whether the user is disabled in the database.
+         * Preserved so the enclosing policy can answer
+         * {@link CachedDbPolicy#isEnabled(String)} without a second DB hit.
+         */
+        private final boolean disabled;
+
+        /**
          * Ctor.
          * @param ds Data source
          * @param user Authenticated user
          */
         DbUser(final DataSource ds, final AuthUser user) {
             final UserRecord rec = DbUser.loadFromDb(ds, user.name());
+            this.disabled = rec.disabled;
             if (rec.disabled) {
                 this.perms = EmptyPermissions.INSTANCE;
                 this.uroles = Collections.emptyList();
@@ -285,6 +334,11 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 }
                 this.uroles = rlist;
             }
+        }
+
+        /** @return true if the user is disabled in the database */
+        boolean disabled() {
+            return this.disabled;
         }
 
         @Override

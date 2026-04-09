@@ -55,6 +55,12 @@ public final class JwtTokens implements Tokens {
     private final RevocationBlocklist blocklist;
 
     /**
+     * Per-request enabled-state gate. Never null — defaults to
+     * {@link UserEnabledCheck#ALWAYS_ENABLED} when not supplied.
+     */
+    private final UserEnabledCheck enabledCheck;
+
+    /**
      * Default access token TTL in seconds (cached from settings on construction).
      */
     private final int defaultAccessTtl;
@@ -79,11 +85,35 @@ public final class JwtTokens implements Tokens {
         final AuthSettingsDao settingsDao,
         final RevocationBlocklist blocklist
     ) {
+        this(privateKey, publicKey, tokenDao, settingsDao, blocklist,
+            UserEnabledCheck.ALWAYS_ENABLED);
+    }
+
+    /**
+     * Ctor with explicit enabled-state gate.
+     * @param privateKey RSA private key for signing
+     * @param publicKey RSA public key for verification
+     * @param tokenDao DAO for JTI persistence; {@code null} disables JTI enforcement
+     * @param settingsDao DAO for TTL configuration; {@code null} uses defaults
+     * @param blocklist Revocation blocklist; {@code null} disables revocation checks
+     * @param enabledCheck Per-request enabled-state check applied
+     *     inside {@link #auth()} when validating tokens
+     */
+    public JwtTokens(
+        final RSAPrivateKey privateKey,
+        final RSAPublicKey publicKey,
+        final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao,
+        final RevocationBlocklist blocklist,
+        final UserEnabledCheck enabledCheck
+    ) {
         this.algorithm = Algorithm.RSA256(publicKey, privateKey);
         this.publicKey = publicKey;
         this.tokenDao = tokenDao;
         this.settingsDao = settingsDao;
         this.blocklist = blocklist;
+        this.enabledCheck = enabledCheck != null
+            ? enabledCheck : UserEnabledCheck.ALWAYS_ENABLED;
         this.defaultAccessTtl = settingsDao != null
             ? settingsDao.getInt("access_token_ttl_seconds", 3600) : 3600;
         this.defaultRefreshTtl = settingsDao != null
@@ -92,7 +122,9 @@ public final class JwtTokens implements Tokens {
 
     @Override
     public TokenAuthentication auth() {
-        return new UnifiedJwtAuthHandler(this.publicKey, this.tokenDao, this.blocklist);
+        return new UnifiedJwtAuthHandler(
+            this.publicKey, this.tokenDao, this.blocklist, this.enabledCheck
+        );
     }
 
     @Override

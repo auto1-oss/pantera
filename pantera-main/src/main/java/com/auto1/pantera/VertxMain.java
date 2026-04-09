@@ -222,8 +222,21 @@ public final class VertxMain {
         final com.auto1.pantera.db.dao.UserTokenDao userTokenDao = sharedDs
             .map(com.auto1.pantera.db.dao.UserTokenDao::new)
             .orElse(null);
+        // Per-request enabled-state gate for the JWT filter. When the
+        // security Policy is a CachedDbPolicy (i.e. DB-backed), delegate
+        // to its cached isEnabled() method — any user disabled via the
+        // admin UI has their sessions and API tokens rejected on the
+        // next request, even if the token itself hasn't expired. In
+        // non-DB modes we fall back to the always-enabled default.
+        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck;
+        if (settings.authz().policy()
+            instanceof com.auto1.pantera.security.policy.CachedDbPolicy cachedPolicy) {
+            enabledCheck = cachedPolicy::isEnabled;
+        } else {
+            enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
+        }
         final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
-            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null, enabledCheck
         );
         final RepositorySlices slices = new RepositorySlices(
             settings, repos, jwtTokens
