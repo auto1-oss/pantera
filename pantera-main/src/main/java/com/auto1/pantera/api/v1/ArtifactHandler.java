@@ -198,10 +198,16 @@ public final class ArtifactHandler {
                         || name.endsWith(".tar.bz2")
                         || name.endsWith(".zip");
                     if (isPypiFile) {
-                        final Key sidecar =
+                        // repoData.repoStorage returns top-level storage
+                        // where all keys are prefixed with the repo name.
+                        // PypiSidecar.sidecarKey returns a repo-relative
+                        // key, so prepend the repo name.
+                        final Key sidecar = new Key.From(
+                            repoName,
                             com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(
                                 new Key.From(itemPath)
-                            );
+                            ).string()
+                        );
                         fileFutures.add(
                             asto.exists(sidecar).thenCompose(exists -> {
                                 if (!exists) {
@@ -308,10 +314,12 @@ public final class ArtifactHandler {
                     || filename.endsWith(".zip")
                     || filename.endsWith(".egg");
                 if (isPypi) {
-                    final Key sidecarKey =
+                    final Key sidecarKey = new Key.From(
+                        repoName,
                         com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(
                             new Key.From(path)
-                        );
+                        ).string()
+                    );
                     return asto.exists(sidecarKey).thenCompose(exists -> {
                         if (!exists) {
                             return java.util.concurrent.CompletableFuture
