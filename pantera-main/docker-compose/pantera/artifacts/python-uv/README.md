@@ -66,8 +66,13 @@ before the test date. Adjust it to your deployment timeline:
 exclude-newer = "2026-03-10T00:00:00Z"  # packages published before this date
 ```
 
+The date must be **after** the `hello` package's upload timestamp
+(check `.pypi/metadata/hello/*.json` for the exact `upload-time`),
+otherwise uv will correctly filter it out — which is actually the
+proof that PEP 700 is working! If `uv lock` fails with *"hello was
+filtered by exclude-newer"*, that means upload-time parsing works;
+just bump the date past the upload.
+
 Set it far enough back that `requests` and `pydantic` still resolve
 (they've been on PyPI for years), but recent enough that `hello`
-(uploaded today) is included. If `hello` was uploaded after the cutoff
-and exclude-newer is working correctly, `uv lock` will fail to resolve
-`hello>=0.2.0` — that's the correctness signal that PEP 700 is working.
+(uploaded today) is included.

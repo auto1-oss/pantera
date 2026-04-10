@@ -31,4 +31,4 @@ index-url = "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simpl
 #
 # Set to ~30 days ago from your test date. uv requires an RFC 3339
 # timestamp, not a relative duration. Example for April 2026:
-exclude-newer = "2026-03-10T00:00:00Z"
+exclude-newer = "2026-04-11T00:00:00Z"
