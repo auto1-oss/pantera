@@ -1460,16 +1460,28 @@ final class ProxySlice implements Slice {
                 .map(Header::new)
             ).orElseGet(
                 () -> {
-                    Header res = new Header(name, "text/html");
                     final String ext = line.uri().toString();
                     if (ext.matches(ProxySlice.FORMATS)) {
-                        res = new Header(
+                        return new Header(
                             name,
                             Optional.ofNullable(URLConnection.guessContentTypeFromName(ext))
                                 .orElse("*")
                         );
                     }
-                    return res;
+                    // For index pages (non-artifact, non-metadata): the
+                    // cache stores JSON and HTML variants under different
+                    // keys (.json suffix vs plain). When serving a cached
+                    // JSON response the remote headers are empty, so we
+                    // must infer the content type from the cache key.
+                    // Without this, cached PEP 691 JSON is served with
+                    // Content-Type: text/html, which causes uv and other
+                    // strict clients to fail to parse it.
+                    if (ext.endsWith(".json") || ext.endsWith(".json/")) {
+                        return new Header(
+                            name, SimpleApiFormat.JSON.contentType()
+                        );
+                    }
+                    return new Header(name, "text/html");
                 }
             );
     }

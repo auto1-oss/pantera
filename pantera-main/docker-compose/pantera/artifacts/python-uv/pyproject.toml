@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "Tests Pantera's PEP 691 JSON Simple API via uv resolver"
 requires-python = ">=3.10"
 dependencies = [
-    # Only proxied packages with a long publish history.
-    # These were published years ago and will always resolve
+    # Proxied packages with a long publish history — resolve
     # regardless of exclude-newer cutoff.
     "requests>=2.28",
     "pydantic>=2.0",
