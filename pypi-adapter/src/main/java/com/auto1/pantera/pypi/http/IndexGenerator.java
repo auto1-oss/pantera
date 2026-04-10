@@ -249,9 +249,14 @@ public final class IndexGenerator {
     private static String renderJson(final String packageName, final List<Entry> entries) {
         final List<SimpleJsonRenderer.FileEntry> files = new ArrayList<>(entries.size());
         for (final Entry entry : entries) {
+            // PEP 691: "It is RECOMMENDED that the value of url be a
+            // relative URL". Using the same relative href as the HTML
+            // anchor avoids the protocol-relative URL bug where a
+            // prefix of "/" + key "hello/..." produced "//hello/..."
+            // which pip resolved as http://hello:80/... (hostname).
             files.add(new SimpleJsonRenderer.FileEntry(
                 entry.filename,
-                entry.absoluteUrl,
+                entry.relativeHref,
                 entry.sha256,
                 entry.meta.map(PypiSidecar.Meta::requiresPython).orElse(null),
                 entry.meta.map(PypiSidecar.Meta::uploadTime).orElse(null),

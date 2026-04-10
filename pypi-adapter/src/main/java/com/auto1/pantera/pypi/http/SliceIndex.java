@@ -260,7 +260,12 @@ final class SliceIndex implements Slice {
                     return Single.just(ResponseBuilder.notFound().build());
                 }
                 if (format == SimpleApiFormat.JSON) {
-                    // JSON path: collect FileEntry objects for each file
+                    // JSON path: collect FileEntry objects for each file.
+                    // PEP 691 recommends relative URLs. We use the same
+                    // relative href pattern as the HTML path (key.string()
+                    // relative to the package dir), NOT prefix + key which
+                    // can produce protocol-relative "//pkg/..." URLs when
+                    // the prefix is "/".
                     return Flowable.fromIterable(keys)
                         .concatMapSingle(
                             key -> RxFuture.single(
@@ -276,7 +281,7 @@ final class SliceIndex implements Slice {
                                                         final List<SimpleJsonRenderer.FileEntry> result = new ArrayList<>(1);
                                                         result.add(buildJsonEntry(
                                                             new KeyLastPart(key).get(),
-                                                            String.format("%s/%s", prefix, key.string()),
+                                                            key.string(),
                                                             hex,
                                                             meta
                                                         ));
@@ -293,12 +298,18 @@ final class SliceIndex implements Slice {
                                                             value -> new ContentDigest(value, Digests.SHA256).hex()
                                                         ).thenCompose(
                                                             hex -> PypiSidecar.read(this.storage, subKey).thenApply(
-                                                                meta -> buildJsonEntry(
-                                                                    new KeyLastPart(subKey).get(),
-                                                                    String.format("%s/%s", prefix, subKey.string()),
-                                                                    hex,
-                                                                    meta
-                                                                )
+                                                                meta -> {
+                                                                    final String versionPath = new KeyLastPart(
+                                                                        new Key.From(subKey.parent().get())
+                                                                    ).get();
+                                                                    final String filename = new KeyLastPart(subKey).get();
+                                                                    return buildJsonEntry(
+                                                                        filename,
+                                                                        String.format("%s/%s", versionPath, filename),
+                                                                        hex,
+                                                                        meta
+                                                                    );
+                                                                }
                                                             )
                                                         )
                                                     )
