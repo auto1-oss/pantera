@@ -1,0 +1,34 @@
+[project]
+name = "pantera-pypi-uv-test"
+version = "0.1.0"
+description = "Tests Pantera's PEP 691 JSON Simple API via uv resolver"
+requires-python = ">=3.10"
+dependencies = [
+    # Packages resolved through the Pantera proxy (pypi_group).
+    # Each exercises a different resolution path:
+    #   - requests: popular, many transitive deps
+    #   - hello: hosted on the local Pantera instance (not proxied)
+    #   - pydantic: deep dep tree, version constraints
+    "requests>=2.28",
+    "hello>=0.2.0",
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+# Point uv at the Pantera PyPI group (proxy + hosted combined).
+# Replace with your actual Pantera URL and credentials.
+index-url = "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/"
+
+# --exclude-newer locks resolution to packages published before this
+# timestamp. This is the key PEP 691 test: uv needs the JSON Simple
+# API with upload-time metadata (PEP 700) to evaluate the cutoff.
+# If the JSON response is malformed, missing, or has wrong URLs, uv
+# will fail with a resolver error.
+#
+# Set to ~30 days ago from your test date. uv requires an RFC 3339
+# timestamp, not a relative duration. Example for April 2026:
+exclude-newer = "2026-03-10T00:00:00Z"
