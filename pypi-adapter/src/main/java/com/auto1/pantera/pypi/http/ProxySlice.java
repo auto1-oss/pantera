@@ -891,7 +891,17 @@ final class ProxySlice implements Slice {
                 );
                 return CompletableFuture.completedFuture(builder.build());
             }
-            final Header ctype = ProxySlice.contentType(remote, line);
+            // For cache hits, remote headers are empty so contentType()
+            // falls back to text/html. But if the client asked for JSON
+            // (PEP 691), we must serve the cached JSON body with the
+            // correct Content-Type — otherwise strict clients like uv
+            // will try to parse the JSON as HTML and find zero packages.
+            final Header ctype;
+            if (SimpleApiFormat.fromHeaders(rqheaders) == SimpleApiFormat.JSON) {
+                ctype = new Header("content-type", SimpleApiFormat.JSON.contentType());
+            } else {
+                ctype = ProxySlice.contentType(remote, line);
+            }
             // For cache hits: rewrite may be needed for pre-optimization cached content.
             // For post-optimization cached content, rewrite patterns won't match (no-op).
             return this.rewriteIndex(content, ctype, line)
@@ -1466,19 +1476,6 @@ final class ProxySlice implements Slice {
                             name,
                             Optional.ofNullable(URLConnection.guessContentTypeFromName(ext))
                                 .orElse("*")
-                        );
-                    }
-                    // For index pages (non-artifact, non-metadata): the
-                    // cache stores JSON and HTML variants under different
-                    // keys (.json suffix vs plain). When serving a cached
-                    // JSON response the remote headers are empty, so we
-                    // must infer the content type from the cache key.
-                    // Without this, cached PEP 691 JSON is served with
-                    // Content-Type: text/html, which causes uv and other
-                    // strict clients to fail to parse it.
-                    if (ext.endsWith(".json") || ext.endsWith(".json/")) {
-                        return new Header(
-                            name, SimpleApiFormat.JSON.contentType()
                         );
                     }
                     return new Header(name, "text/html");
