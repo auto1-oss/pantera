@@ -89,8 +89,8 @@ echo ""
 # ------------------------------------------------------------------
 # Test 3: exclude-newer PINS a proxied package to an old version
 #
-# requests 2.28.0 published 2022-06-29, 2.28.1 published 2022-08-29.
-# With cutoff 2022-07-01, uv must resolve exactly 2.28.0. If the
+# requests 2.28.0 published 2022-06-09, 2.28.1 published 2022-06-29.
+# With cutoff 2022-06-15, uv must resolve exactly 2.28.0. If the
 # proxy doesn't forward upload-time, uv resolves latest instead.
 # ------------------------------------------------------------------
 echo "--- Test 3: exclude-newer pins proxied package version ---"
@@ -109,7 +109,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 index-url = "${PANTERA_URL}"
-exclude-newer = "2022-07-01T00:00:00Z"
+exclude-newer = "2022-06-15T00:00:00Z"
 PYPROJECT
 
 if uv lock --directory "$TMPDIR" 2>&1 | tail -3; then

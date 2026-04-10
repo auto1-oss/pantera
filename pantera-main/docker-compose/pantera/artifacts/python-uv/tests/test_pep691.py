@@ -121,8 +121,14 @@ def test_proxied_json_has_upload_time():
 
 def test_exclude_newer_pins_proxied_package_version():
     """
-    requests 2.28.0 published 2022-06-29, 2.28.1 published 2022-08-29.
-    With cutoff 2022-07-01, uv must resolve exactly 2.28.0.
+    Actual upstream upload timestamps (from PyPI's PEP 691 JSON):
+      requests 2.28.0  →  2022-06-09
+      requests 2.28.1  →  2022-06-29
+      requests 2.28.2  →  2023-01-12
+
+    With cutoff 2022-06-15, uv must resolve exactly 2.28.0 (published
+    June 9, before the cutoff) and refuse 2.28.1 (published June 29,
+    after the cutoff).
 
     If the proxy doesn't forward upload-time, uv resolves latest and
     the version check fails.
@@ -140,10 +146,10 @@ def test_exclude_newer_pins_proxied_package_version():
         '\n'
         '[tool.uv]\n'
         f'index-url = "{PANTERA_GROUP}"\n'
-        'exclude-newer = "2022-07-01T00:00:00Z"\n'
+        'exclude-newer = "2022-06-15T00:00:00Z"\n'
     )
     assert result.returncode == 0, (
-        f"uv lock with exclude-newer 2022-07-01 failed:\n{result.stderr}"
+        f"uv lock with exclude-newer 2022-06-15 failed:\n{result.stderr}"
     )
     match = re.search(
         r'name\s*=\s*"requests"\s*\n\s*version\s*=\s*"([^"]+)"',
@@ -151,8 +157,8 @@ def test_exclude_newer_pins_proxied_package_version():
     )
     assert match, "requests not found in lockfile"
     assert match.group(1) == "2.28.0", (
-        f"Expected requests==2.28.0 (published 2022-06-29, cutoff "
-        f"2022-07-01), got {match.group(1)}. Proxy is not forwarding "
+        f"Expected requests==2.28.0 (published 2022-06-09, cutoff "
+        f"2022-06-15), got {match.group(1)}. Proxy is not forwarding "
         f"upload-time."
     )
 
