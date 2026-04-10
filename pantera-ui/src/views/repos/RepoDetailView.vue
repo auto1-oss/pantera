@@ -400,14 +400,14 @@ function formatSize(bytes?: number): string {
                 v-if="(selectedArtifact as Record<string, unknown>).yanked"
                 icon="pi pi-undo"
                 label="Unyank"
-                severity="warn"
+                severity="secondary"
                 @click="handleUnyank(selectedArtifact!, $event); detailVisible = false"
               />
               <Button
                 v-else
                 icon="pi pi-ban"
                 label="Yank"
-                severity="warn"
+                severity="secondary"
                 outlined
                 @click="detailVisible = false; openYankDialog(selectedArtifact!, $event)"
               />

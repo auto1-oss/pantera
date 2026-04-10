@@ -151,8 +151,7 @@ public final class ArtifactHandler {
             prefix = new Key.From(repoName, clean);
         }
         this.repoData.repoStorage(rname, this.crs)
-            .thenCompose(asto -> asto.list(prefix, "/"))
-            .thenAccept(listing -> {
+            .thenCompose(asto -> asto.list(prefix, "/").thenCompose(listing -> {
                 final JsonArray items = new JsonArray();
                 final String prefixStr = prefix.string();
                 final int prefixLen = prefixStr.isEmpty() ? 0 : prefixStr.length() + 1;
@@ -176,26 +175,85 @@ public final class ArtifactHandler {
                         .put("path", itemPath)
                         .put("type", "directory"));
                 }
-                // Then files
+                // Then files — for PyPI artifacts, check sidecar for
+                // yanked status so the tree can show a "Yanked" badge.
+                final java.util.List<java.util.concurrent.CompletableFuture<JsonObject>>
+                    fileFutures = new java.util.ArrayList<>();
                 for (final Key file : listing.files()) {
                     final String fileStr = file.string();
                     final String name = fileStr.contains("/")
                         ? fileStr.substring(fileStr.lastIndexOf('/') + 1) : fileStr;
                     final String repoPrefix = repoName + "/";
-                    String itemPath = fileStr.startsWith(repoPrefix)
+                    final String itemPath = fileStr.startsWith(repoPrefix)
                         ? fileStr.substring(repoPrefix.length()) : fileStr;
-                    items.add(new JsonObject()
+                    final JsonObject entry = new JsonObject()
                         .put("name", name)
                         .put("path", itemPath)
-                        .put("type", "file"));
+                        .put("type", "file");
+                    // Check sidecar for pypi artifacts (cheap: one
+                    // exists() + one small read per file; typical pypi
+                    // version dirs have 2-5 files).
+                    final boolean isPypiFile = name.endsWith(".whl")
+                        || name.endsWith(".tar.gz")
+                        || name.endsWith(".tar.bz2")
+                        || name.endsWith(".zip");
+                    if (isPypiFile) {
+                        final Key sidecar =
+                            com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(
+                                new Key.From(itemPath)
+                            );
+                        fileFutures.add(
+                            asto.exists(sidecar).thenCompose(exists -> {
+                                if (!exists) {
+                                    return java.util.concurrent.CompletableFuture
+                                        .completedFuture(entry);
+                                }
+                                return asto.value(sidecar)
+                                    .thenCompose(
+                                        com.auto1.pantera.asto.Content::asBytesFuture
+                                    )
+                                    .thenApply(bytes -> {
+                                        try (javax.json.JsonReader reader =
+                                            javax.json.Json.createReader(
+                                                new java.io.StringReader(
+                                                    new String(bytes,
+                                                        java.nio.charset.StandardCharsets.UTF_8)
+                                                )
+                                            )) {
+                                            final javax.json.JsonObject sc =
+                                                reader.readObject();
+                                            entry.put("yanked",
+                                                sc.getBoolean("yanked", false));
+                                        } catch (final Exception ignored) {
+                                            // skip
+                                        }
+                                        return entry;
+                                    });
+                            })
+                        );
+                    } else {
+                        fileFutures.add(
+                            java.util.concurrent.CompletableFuture
+                                .completedFuture(entry)
+                        );
+                    }
                 }
-                ctx.response().setStatusCode(200)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("items", items)
-                        .put("marker", (String) null)
-                        .put("hasMore", false).encode());
-            })
+                return java.util.concurrent.CompletableFuture.allOf(
+                    fileFutures.toArray(
+                        new java.util.concurrent.CompletableFuture[0]
+                    )
+                ).thenAccept(ignored -> {
+                    for (final var f : fileFutures) {
+                        items.add(f.join());
+                    }
+                    ctx.response().setStatusCode(200)
+                        .putHeader("Content-Type", "application/json")
+                        .end(new JsonObject()
+                            .put("items", items)
+                            .put("marker", (String) null)
+                            .put("hasMore", false).encode());
+                });
+            }))
             .exceptionally(err -> {
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
                     err.getCause() != null ? err.getCause().getMessage() : err.getMessage());
@@ -220,8 +278,7 @@ public final class ArtifactHandler {
             : path;
         final Key artifactKey = new Key.From(repoName, path);
         this.repoData.repoStorage(rname, this.crs)
-            .thenCompose(asto -> asto.metadata(artifactKey))
-            .thenAccept(meta -> {
+            .thenCompose(asto -> asto.metadata(artifactKey).thenCompose(meta -> {
                 final long size = meta.read(Meta.OP_SIZE)
                     .map(Long::longValue).orElse(0L);
                 final JsonObject result = new JsonObject()
@@ -242,11 +299,60 @@ public final class ArtifactHandler {
                     md5 -> result.put("checksums",
                         new JsonObject().put("md5", md5))
                 );
+                // For PyPI artifacts, include the yanked status from
+                // the sidecar metadata so the UI can show the correct
+                // Yank / Unyank button and the "Yanked" badge.
+                final boolean isPypi = filename.endsWith(".whl")
+                    || filename.endsWith(".tar.gz")
+                    || filename.endsWith(".tar.bz2")
+                    || filename.endsWith(".zip")
+                    || filename.endsWith(".egg");
+                if (isPypi) {
+                    final Key sidecarKey =
+                        com.auto1.pantera.pypi.meta.PypiSidecar.sidecarKey(
+                            new Key.From(path)
+                        );
+                    return asto.exists(sidecarKey).thenCompose(exists -> {
+                        if (!exists) {
+                            return java.util.concurrent.CompletableFuture
+                                .completedFuture(result);
+                        }
+                        return asto.value(sidecarKey)
+                            .thenCompose(
+                                com.auto1.pantera.asto.Content::asBytesFuture
+                            )
+                            .thenApply(bytes -> {
+                                try (javax.json.JsonReader reader =
+                                    javax.json.Json.createReader(
+                                        new java.io.StringReader(
+                                            new String(bytes,
+                                                java.nio.charset.StandardCharsets.UTF_8)
+                                        )
+                                    )) {
+                                    final javax.json.JsonObject sc =
+                                        reader.readObject();
+                                    result.put("yanked",
+                                        sc.getBoolean("yanked", false));
+                                    if (!sc.isNull("yanked-reason")) {
+                                        result.put("yanked_reason",
+                                            sc.getString("yanked-reason", ""));
+                                    }
+                                } catch (final Exception ignored) {
+                                    // Sidecar parse error — omit yanked field
+                                }
+                                return result;
+                            });
+                    });
+                }
+                return java.util.concurrent.CompletableFuture
+                    .completedFuture(result);
+            }))
+            .thenAccept(result ->
                 ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
-                    .end(result.encode());
-            })
+                    .end(result.encode())
+            )
             .exceptionally(err -> {
                 // If metadata fails (e.g. file not found), return basic info
                 ctx.response()
