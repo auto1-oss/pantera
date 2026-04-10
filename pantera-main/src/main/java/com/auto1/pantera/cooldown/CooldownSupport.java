@@ -153,7 +153,7 @@ public final class CooldownSupport {
             .eventAction("metadata_service_init")
             .log();
         
-        return new CooldownMetadataServiceImpl(
+        final CooldownMetadataServiceImpl metadataService = new CooldownMetadataServiceImpl(
             cooldownService,
             settings.cooldown(),
             jdbc.cache(),
@@ -161,6 +161,26 @@ public final class CooldownSupport {
             COOLDOWN_EXECUTOR,
             50 // max versions to evaluate
         );
+        // Wire the metadata-cache invalidation callback so that when
+        // a cooldown block EXPIRES naturally, the filtered metadata
+        // cache is flushed. Without this, clients see stale metadata
+        // (with the version stripped out) until the cache TTL expires
+        // — which could be hours, and L2 purge doesn't clear L1.
+        jdbc.setOnBlockRemoved((repoType, repoName, artifact, version) -> {
+            try {
+                metadataService.invalidate(repoType, repoName, artifact);
+            } catch (final Exception err) {
+                EcsLogger.warn("com.auto1.pantera.cooldown")
+                    .message("onBlockRemoved: metadata invalidation failed")
+                    .eventCategory("cooldown")
+                    .eventAction("metadata_cache_invalidate")
+                    .eventOutcome("failure")
+                    .field("package.name", artifact)
+                    .error(err)
+                    .log();
+            }
+        });
+        return metadataService;
     }
 
     /**
