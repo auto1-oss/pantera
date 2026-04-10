@@ -70,9 +70,9 @@ if [[ "${1:-}" == "--json-only" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Test 2: uv lock (PEP 691 + PEP 700 exclude-newer)
+# Test 2: uv lock (PEP 691 basic resolution)
 # ------------------------------------------------------------------
-echo "--- Test 2: uv lock (PEP 691 + exclude-newer) ---"
+echo "--- Test 2: uv lock (PEP 691 basic resolution) ---"
 if ! command -v uv &> /dev/null; then
     echo "SKIP: uv not installed (curl -LsSf https://astral.sh/uv/install.sh | sh)"
     exit 0
@@ -87,16 +87,13 @@ echo "  OK: uv lock succeeded"
 echo ""
 
 # ------------------------------------------------------------------
-# Test 2b: exclude-newer against PROXIED package
+# Test 3: exclude-newer PINS a proxied package to an old version
 #
-# This is the real PEP 700 test. We create a throwaway project that
-# depends on requests>=2.28.0 with exclude-newer = 2022-07-01.
-# requests 2.28.0 was published 2022-06-29, 2.28.1 on 2022-08-29.
-# uv must resolve exactly 2.28.0 — if the proxy doesn't forward
-# upload-time from upstream, uv ignores the constraint and resolves
-# the latest version.
+# requests 2.28.0 published 2022-06-29, 2.28.1 published 2022-08-29.
+# With cutoff 2022-07-01, uv must resolve exactly 2.28.0. If the
+# proxy doesn't forward upload-time, uv resolves latest instead.
 # ------------------------------------------------------------------
-echo "--- Test 2b: exclude-newer against proxied package ---"
+echo "--- Test 3: exclude-newer pins proxied package version ---"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 cat > "$TMPDIR/pyproject.toml" <<PYPROJECT
@@ -116,13 +113,12 @@ exclude-newer = "2022-07-01T00:00:00Z"
 PYPROJECT
 
 if uv lock --directory "$TMPDIR" 2>&1 | tail -3; then
-    # Check that requests resolved to 2.28.0
     RESOLVED=$(grep -A1 'name = "requests"' "$TMPDIR/uv.lock" | grep 'version' | head -1 | sed 's/.*"\(.*\)"/\1/')
     if [[ "$RESOLVED" == "2.28.0" ]]; then
-        echo "  OK: proxied exclude-newer works — requests pinned to $RESOLVED"
+        echo "  OK: proxy forwards upload-time — requests pinned to $RESOLVED"
     else
         echo "  FAIL: expected requests==2.28.0, got $RESOLVED"
-        echo "  This means the proxy is not forwarding PEP 700 upload-time."
+        echo "  The proxy is not forwarding PEP 700 upload-time."
         exit 1
     fi
 else
@@ -131,18 +127,55 @@ else
 fi
 echo ""
 
+# ------------------------------------------------------------------
+# Test 4: exclude-newer REJECTS a hosted package uploaded recently
+#
+# hello was uploaded today. Set cutoff 30 days ago — uv must refuse
+# to resolve it. A successful exclusion = PEP 700 works for hosted.
+# ------------------------------------------------------------------
+echo "--- Test 4: exclude-newer rejects recent hosted package ---"
+CUTOFF=$(python3 -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=30)).strftime('%Y-%m-%dT00:00:00Z'))")
+TMPDIR2=$(mktemp -d)
+cat > "$TMPDIR2/pyproject.toml" <<PYPROJECT
+[project]
+name = "exclude-newer-hosted-test"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["hello>=0.2.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+index-url = "${PANTERA_URL}"
+exclude-newer = "${CUTOFF}"
+PYPROJECT
+
+if uv lock --directory "$TMPDIR2" 2>&1 | tail -3; then
+    echo "  FAIL: uv lock should have rejected hello (uploaded after $CUTOFF)"
+    echo "  upload-time is missing from the hosted JSON."
+    rm -rf "$TMPDIR2"
+    exit 1
+else
+    echo "  OK: hello correctly excluded (uploaded after cutoff $CUTOFF)"
+    echo "  PEP 700 upload-time works for hosted packages."
+fi
+rm -rf "$TMPDIR2"
+echo ""
+
 if [[ "${1:-}" == "--lock-only" ]]; then
-    echo "=== Lock test passed ==="
+    echo "=== All lock tests passed ==="
     exit 0
 fi
 
 # ------------------------------------------------------------------
-# Test 3: uv sync + pytest
+# Test 5: uv sync + pytest (full install + programmatic tests)
 # ------------------------------------------------------------------
-echo "--- Test 3: uv sync + pytest ---"
+echo "--- Test 5: uv sync + pytest ---"
 uv sync 2>&1 | tail -3
-uv add --dev pytest 2>&1 | tail -1
+uv add --dev pytest requests 2>&1 | tail -1
 uv run python -m pytest tests/ -v
 
 echo ""
-echo "=== All PEP 691 tests passed ==="
+echo "=== All PEP 691 / PEP 700 tests passed ==="
