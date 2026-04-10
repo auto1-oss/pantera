@@ -21,3 +21,9 @@ index-url = "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simpl
 # tests against proxy and hosted packages run in pytest as isolated
 # throwaway projects with their own cutoff dates.
 exclude-newer = "2026-04-11T00:00:00Z"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "requests>=2.33.1",
+]
