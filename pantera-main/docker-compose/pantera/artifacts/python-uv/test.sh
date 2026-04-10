@@ -86,6 +86,51 @@ uv lock --verbose 2>&1 | tail -5
 echo "  OK: uv lock succeeded"
 echo ""
 
+# ------------------------------------------------------------------
+# Test 2b: exclude-newer against PROXIED package
+#
+# This is the real PEP 700 test. We create a throwaway project that
+# depends on requests>=2.28.0 with exclude-newer = 2022-07-01.
+# requests 2.28.0 was published 2022-06-29, 2.28.1 on 2022-08-29.
+# uv must resolve exactly 2.28.0 — if the proxy doesn't forward
+# upload-time from upstream, uv ignores the constraint and resolves
+# the latest version.
+# ------------------------------------------------------------------
+echo "--- Test 2b: exclude-newer against proxied package ---"
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+cat > "$TMPDIR/pyproject.toml" <<PYPROJECT
+[project]
+name = "exclude-newer-proxy-test"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.28.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+index-url = "${PANTERA_URL}"
+exclude-newer = "2022-07-01T00:00:00Z"
+PYPROJECT
+
+if uv lock --directory "$TMPDIR" 2>&1 | tail -3; then
+    # Check that requests resolved to 2.28.0
+    RESOLVED=$(grep -A1 'name = "requests"' "$TMPDIR/uv.lock" | grep 'version' | head -1 | sed 's/.*"\(.*\)"/\1/')
+    if [[ "$RESOLVED" == "2.28.0" ]]; then
+        echo "  OK: proxied exclude-newer works — requests pinned to $RESOLVED"
+    else
+        echo "  FAIL: expected requests==2.28.0, got $RESOLVED"
+        echo "  This means the proxy is not forwarding PEP 700 upload-time."
+        exit 1
+    fi
+else
+    echo "  FAIL: uv lock with exclude-newer failed"
+    exit 1
+fi
+echo ""
+
 if [[ "${1:-}" == "--lock-only" ]]; then
     echo "=== Lock test passed ==="
     exit 0

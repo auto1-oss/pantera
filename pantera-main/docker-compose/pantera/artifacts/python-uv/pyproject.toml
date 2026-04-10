@@ -4,14 +4,13 @@ version = "0.1.0"
 description = "Tests Pantera's PEP 691 JSON Simple API via uv resolver"
 requires-python = ">=3.10"
 dependencies = [
-    # Packages resolved through the Pantera proxy (pypi_group).
-    # Each exercises a different resolution path:
-    #   - requests: popular, many transitive deps
-    #   - hello: hosted on the local Pantera instance (not proxied)
-    #   - pydantic: deep dep tree, version constraints
+    # Proxied packages — resolved through the Pantera proxy, which must
+    # forward the upstream PEP 691 JSON response (including upload-time
+    # per PEP 700) to the client for exclude-newer to work.
     "requests>=2.28",
-    "hello>=0.2.0",
     "pydantic>=2.0",
+    # Hosted package — uploaded to the local Pantera PyPI repo.
+    "hello>=0.2.0",
 ]
 
 [build-system]
@@ -20,15 +19,26 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 # Point uv at the Pantera PyPI group (proxy + hosted combined).
-# Replace with your actual Pantera URL and credentials.
 index-url = "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/"
 
-# --exclude-newer locks resolution to packages published before this
-# timestamp. This is the key PEP 691 test: uv needs the JSON Simple
-# API with upload-time metadata (PEP 700) to evaluate the cutoff.
-# If the JSON response is malformed, missing, or has wrong URLs, uv
-# will fail with a resolver error.
+# exclude-newer locks resolution to packages published before this
+# timestamp. This is the key PEP 691 + PEP 700 test.
 #
-# Set to ~30 days ago from your test date. uv requires an RFC 3339
-# timestamp, not a relative duration. Example for April 2026:
+# The cutoff is set so that:
+#   - requests and pydantic (published years ago on upstream PyPI)
+#     are INCLUDED — proves the proxy preserves upstream upload-time
+#     through the PEP 691 JSON response
+#   - a hypothetical future package published AFTER this date would
+#     be EXCLUDED — proves uv actually parses and enforces the field
+#
+# If the proxy strips upload-time or serves HTML instead of JSON,
+# uv cannot evaluate the cutoff and either ignores it silently or
+# fails to resolve. Both outcomes fail the test.
 exclude-newer = "2026-04-11T00:00:00Z"
+
+# Pin a proxied package to an OLDER version to prove exclude-newer
+# is actually filtering. requests 2.28.0 was published 2022-06-29.
+# With exclude-newer = 2022-07-01, uv must resolve exactly 2.28.0
+# and refuse 2.28.1+ (published later). We test this in the
+# exclude-newer-specific test below, not here — this file uses a
+# wide cutoff so all deps resolve for the install tests.
