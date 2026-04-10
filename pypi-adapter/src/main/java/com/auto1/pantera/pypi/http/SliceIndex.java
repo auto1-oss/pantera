@@ -139,9 +139,90 @@ final class SliceIndex implements Slice {
                             .build()
                     );
                 }
-                return this.generateDynamicIndex(listKey, prefix, packageName, format);
+                // Self-healing cache: dynamically generate the index
+                // for this request AND save the result to storage so
+                // the next request takes the fast path above. This
+                // covers packages uploaded before the dual-format
+                // IndexGenerator was deployed — no separate backfill
+                // tool is needed.
+                return this.generateAndCacheIndex(
+                    listKey, prefix, packageName, format, indexKey
+                );
             }
         ).toCompletableFuture();
+    }
+
+    /**
+     * Generate a dynamic index AND persist it to storage so the next
+     * request hits the fast path. The response is served from the
+     * dynamic generator immediately. If it's a successful response
+     * (i.e., the package exists and has files), the body bytes are
+     * saved to the cache key in the background (fire-and-forget).
+     * 404 responses (empty/missing packages) are returned as-is
+     * without caching.
+     */
+    private CompletableFuture<Response> generateAndCacheIndex(
+        final Key list,
+        final String prefix,
+        final String packageName,
+        final SimpleApiFormat format,
+        final Key cacheKey
+    ) {
+        return this.generateDynamicIndex(list, prefix, packageName, format)
+            .thenApply(response -> {
+                // Only cache successful responses. 404 (empty package)
+                // must propagate untouched — caching it would make an
+                // empty response sticky even after a future upload.
+                if (!response.status().success()) {
+                    return response;
+                }
+                // Drain the body into a byte array so we can both
+                // serve it and persist it. For package indexes the
+                // body size is small (a few KB of HTML/JSON links),
+                // so the in-memory copy is fine.
+                final java.util.concurrent.CompletableFuture<byte[]> future =
+                    new java.util.concurrent.CompletableFuture<>();
+                response.body().subscribe(
+                    new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
+                        private final java.io.ByteArrayOutputStream out =
+                            new java.io.ByteArrayOutputStream();
+                        @Override
+                        public void onSubscribe(
+                            final org.reactivestreams.Subscription s
+                        ) {
+                            s.request(Long.MAX_VALUE);
+                        }
+                        @Override
+                        public void onNext(final java.nio.ByteBuffer buf) {
+                            final byte[] arr = new byte[buf.remaining()];
+                            buf.get(arr);
+                            this.out.write(arr, 0, arr.length);
+                        }
+                        @Override
+                        public void onError(final Throwable t) {
+                            future.completeExceptionally(t);
+                        }
+                        @Override
+                        public void onComplete() {
+                            future.complete(this.out.toByteArray());
+                        }
+                    }
+                );
+                final byte[] body = future.join();
+                // Fire-and-forget: save to storage so the next request
+                // uses the persisted cache. Errors are swallowed — the
+                // response is already prepared.
+                if (body.length > 0) {
+                    this.storage.save(
+                        cacheKey,
+                        new Content.From(body)
+                    ).exceptionally(err -> null);
+                }
+                return ResponseBuilder.ok()
+                    .header("Content-Type", format.contentType() + "; charset=utf-8")
+                    .body(new Content.From(body))
+                    .build();
+            });
     }
 
     /**
