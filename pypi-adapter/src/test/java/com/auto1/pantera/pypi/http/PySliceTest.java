@@ -77,7 +77,7 @@ class PySliceTest {
         ).join();
         ResponseAssert.check(resp, RsStatus.OK,
             new Header("Content-type", "text/html; charset=utf-8"),
-            new Header("Content-Length", "217")
+            new Header("Content-Length", "216")
         );
         MatcherAssert.assertThat(
             resp.body().asString(),
@@ -97,7 +97,7 @@ class PySliceTest {
         ).join();
         ResponseAssert.check(resp, RsStatus.OK,
             new Header("Content-type", "text/html; charset=utf-8"),
-            new Header("Content-Length", "193")
+            new Header("Content-Length", "192")
         );
         MatcherAssert.assertThat(
             resp.body().asString(),

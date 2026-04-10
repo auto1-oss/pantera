@@ -169,60 +169,72 @@ final class SliceIndex implements Slice {
         final Key cacheKey
     ) {
         return this.generateDynamicIndex(list, prefix, packageName, format)
-            .thenApply(response -> {
+            .thenCompose(response -> {
                 // Only cache successful responses. 404 (empty package)
                 // must propagate untouched — caching it would make an
                 // empty response sticky even after a future upload.
                 if (!response.status().success()) {
-                    return response;
+                    return CompletableFuture.completedFuture(response);
                 }
                 // Drain the body into a byte array so we can both
-                // serve it and persist it. For package indexes the
-                // body size is small (a few KB of HTML/JSON links),
-                // so the in-memory copy is fine.
-                final java.util.concurrent.CompletableFuture<byte[]> future =
-                    new java.util.concurrent.CompletableFuture<>();
-                response.body().subscribe(
-                    new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
-                        private final java.io.ByteArrayOutputStream out =
-                            new java.io.ByteArrayOutputStream();
-                        @Override
-                        public void onSubscribe(
-                            final org.reactivestreams.Subscription s
-                        ) {
-                            s.request(Long.MAX_VALUE);
-                        }
-                        @Override
-                        public void onNext(final java.nio.ByteBuffer buf) {
-                            final byte[] arr = new byte[buf.remaining()];
-                            buf.get(arr);
-                            this.out.write(arr, 0, arr.length);
-                        }
-                        @Override
-                        public void onError(final Throwable t) {
-                            future.completeExceptionally(t);
-                        }
-                        @Override
-                        public void onComplete() {
-                            future.complete(this.out.toByteArray());
-                        }
+                // serve it and persist it. The drain is fully async
+                // (no .join()) so we never block the Vert.x event
+                // loop even when the storage layer pushes chunks
+                // asynchronously. Index bodies are small (a few KB
+                // of HTML/JSON links) so the in-memory copy is fine.
+                return drainBody(response.body()).thenApply(body -> {
+                    // Fire-and-forget: save to storage so the next
+                    // request uses the persisted cache.
+                    if (body.length > 0) {
+                        this.storage.save(
+                            cacheKey,
+                            new Content.From(body)
+                        ).exceptionally(err -> null);
                     }
-                );
-                final byte[] body = future.join();
-                // Fire-and-forget: save to storage so the next request
-                // uses the persisted cache. Errors are swallowed — the
-                // response is already prepared.
-                if (body.length > 0) {
-                    this.storage.save(
-                        cacheKey,
-                        new Content.From(body)
-                    ).exceptionally(err -> null);
-                }
-                return ResponseBuilder.ok()
-                    .header("Content-Type", format.contentType() + "; charset=utf-8")
-                    .body(new Content.From(body))
-                    .build();
+                    return ResponseBuilder.ok()
+                        .header("Content-Type", format.contentType() + "; charset=utf-8")
+                        .body(new Content.From(body))
+                        .build();
+                });
             });
+    }
+
+    /**
+     * Drain a reactive Content body into a byte array. Fully async —
+     * never blocks the calling thread (safe for Vert.x event loop).
+     *
+     * @param content Content to drain
+     * @return Future yielding the complete body bytes
+     */
+    private static CompletableFuture<byte[]> drainBody(final Content content) {
+        final CompletableFuture<byte[]> future = new CompletableFuture<>();
+        content.subscribe(
+            new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
+                private final java.io.ByteArrayOutputStream out =
+                    new java.io.ByteArrayOutputStream();
+                @Override
+                public void onSubscribe(
+                    final org.reactivestreams.Subscription sub
+                ) {
+                    sub.request(Long.MAX_VALUE);
+                }
+                @Override
+                public void onNext(final java.nio.ByteBuffer buf) {
+                    final byte[] arr = new byte[buf.remaining()];
+                    buf.get(arr);
+                    this.out.write(arr, 0, arr.length);
+                }
+                @Override
+                public void onError(final Throwable err) {
+                    future.completeExceptionally(err);
+                }
+                @Override
+                public void onComplete() {
+                    future.complete(this.out.toByteArray());
+                }
+            }
+        );
+        return future;
     }
 
     /**
@@ -382,7 +394,7 @@ final class SliceIndex implements Slice {
                             resp -> ResponseBuilder.ok()
                                 .htmlBody(
                                     String.format(
-                                        "<!DOCTYPE html>\n<html>\n  </body>\n%s\n</body>\n</html>",
+                                        "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
                                         resp.toString()
                                     ), StandardCharsets.UTF_8)
                                 .build()

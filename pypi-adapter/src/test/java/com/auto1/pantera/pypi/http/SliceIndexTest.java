@@ -212,7 +212,7 @@ class SliceIndexTest {
         Response r = new SliceIndex(this.storage).response(
             new RequestLine("GET", "/"), Headers.EMPTY, Content.EMPTY
         ).join();
-        ResponseAssert.check(r, RsStatus.OK, ContentType.html(), new ContentLength(179));
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html(), new ContentLength(178));
     }
 
     @Test
@@ -515,6 +515,17 @@ class SliceIndexTest {
         org.junit.jupiter.api.Assertions.assertEquals(
             1, parsed.getJsonArray("files").size()
         );
+        // S3 from code review: verify the self-healing cache actually
+        // persisted the JSON to storage so the next request takes the
+        // fast path. The fire-and-forget save runs on the current
+        // thread in the InMemoryStorage test fixture, so it completes
+        // before we assert here.
+        org.junit.jupiter.api.Assertions.assertTrue(
+            this.storage.exists(
+                new Key.From(".pypi", packageName, packageName + ".json")
+            ).join(),
+            "self-healing cache must persist the generated JSON to storage"
+        );
     }
 
     private static String readBody(final Response resp) {
@@ -571,7 +582,7 @@ class SliceIndexTest {
     private static byte[] html(final Map.Entry<String, byte[]>... items) {
         return
             String.format(
-                "<!DOCTYPE html>\n<html>\n  </body>\n%s\n</body>\n</html>",
+                "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
                 Stream.of(items).map(
                     item -> String.format(
                         "<a href=\"/%s#sha256=%s\">%s</a><br/>", item.getKey(),

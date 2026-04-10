@@ -115,13 +115,18 @@ class SimpleJsonRendererTest {
             .readObject()
             .getJsonArray("files")
             .getJsonObject(0);
+        // PEP 691: yanked is a string (reason) when true, boolean
+        // false when not yanked. Previously this was a boolean true +
+        // a separate "yanked-reason" key, which was non-compliant.
         MatcherAssert.assertThat(
-            file.getBoolean("yanked"),
-            new IsEqual<>(true)
+            file.getString("yanked"),
+            new IsEqual<>("Security vulnerability")
         );
         MatcherAssert.assertThat(
-            file.getString("yanked-reason"),
-            new IsEqual<>("Security vulnerability")
+            "yanked-reason key must not exist — PEP 691 encodes the "
+                + "reason in the yanked field itself",
+            file.containsKey("yanked-reason"),
+            new IsEqual<>(false)
         );
     }
 }

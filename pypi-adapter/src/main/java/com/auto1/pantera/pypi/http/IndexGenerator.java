@@ -291,6 +291,7 @@ public final class IndexGenerator {
                     })
                     .filter(packageName -> packageName != null
                         && !packageName.equals(INDEX_HTML)
+                        && !packageName.startsWith(".")
                         && packageName.matches("[A-Za-z0-9._-]+"))
                     .distinct()
                     .sorted()

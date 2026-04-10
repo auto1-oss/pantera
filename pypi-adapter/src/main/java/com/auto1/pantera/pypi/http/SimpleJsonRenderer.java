@@ -45,9 +45,13 @@ public final class SimpleJsonRenderer {
             if (file.uploadTime() != null) {
                 entry.add("upload-time", file.uploadTime().toString());
             }
-            entry.add("yanked", file.yanked());
-            if (file.yanked() && file.yankedReason().isPresent()) {
-                entry.add("yanked-reason", file.yankedReason().get());
+            // PEP 691: yanked is either boolean false (not yanked) or
+            // a string (yanked reason, may be empty). A boolean true
+            // is non-compliant — pip expects a string when yanked.
+            if (file.yanked()) {
+                entry.add("yanked", file.yankedReason().orElse(""));
+            } else {
+                entry.add("yanked", false);
             }
             if (file.distInfoMetadata().isPresent()) {
                 entry.add("data-dist-info-metadata",
