@@ -359,32 +359,13 @@ function formatSize(bytes?: number): string {
               <i :class="entry.type === 'directory' ? 'pi pi-folder text-yellow-500' : 'pi pi-file text-gray-400'" />
               <span class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200">{{ entry.name }}</span>
               <span v-if="entry.size" class="text-xs text-gray-400">{{ formatSize(entry.size) }}</span>
-              <!-- PyPI yank controls (files only, depth >= 2: /<pkg>/<version>/...) -->
-              <template v-if="isPypi && entry.type === 'file' && parsePypiCoords(entry.path)">
-                <Tag
-                  v-if="(entry as Record<string, unknown>).yanked"
-                  value="Yanked"
-                  severity="danger"
-                  class="text-xs"
-                />
-                <Button
-                  v-if="(entry as Record<string, unknown>).yanked"
-                  icon="pi pi-undo"
-                  v-tooltip.top="'Unyank'"
-                  text
-                  size="small"
-                  @click="handleUnyank(entry, $event)"
-                />
-                <Button
-                  v-else
-                  icon="pi pi-ban"
-                  severity="danger"
-                  v-tooltip.top="'Yank'"
-                  text
-                  size="small"
-                  @click="openYankDialog(entry, $event)"
-                />
-              </template>
+              <!-- PyPI yanked status badge (action buttons are in the artifact detail dialog) -->
+              <Tag
+                v-if="isPypi && entry.type === 'file' && (entry as Record<string, unknown>).yanked"
+                value="Yanked"
+                severity="danger"
+                class="text-xs"
+              />
               <i class="pi pi-chevron-right text-gray-300" />
             </div>
           </div>
