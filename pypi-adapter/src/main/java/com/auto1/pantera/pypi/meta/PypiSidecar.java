@@ -93,7 +93,14 @@ public final class PypiSidecar {
         final Key sidecar = sidecarKey(artifactKey);
         return storage.exists(sidecar).thenCompose(exists -> {
             if (!exists) {
-                return CompletableFuture.completedFuture(Optional.empty());
+                // Self-healing: if no sidecar exists (artifact uploaded
+                // before PEP 691/700 support, or sidecar write failed),
+                // generate one from the storage backend's file metadata.
+                // Uses OP_CREATED_AT as the upload-time — this is the
+                // actual filesystem mtime or S3 LastModified, which is
+                // the real upload timestamp. The sidecar is persisted
+                // so this only computes once per artifact.
+                return generateFromStorageMetadata(storage, artifactKey);
             }
             return storage.value(sidecar)
                 .thenCompose(Content::asBytesFuture)
@@ -115,6 +122,66 @@ public final class PypiSidecar {
                         );
                     }
                 });
+        });
+    }
+
+    /**
+     * Self-healing: generate a minimal sidecar from the storage
+     * backend's file metadata when no sidecar file exists.
+     *
+     * <p>This covers artifacts uploaded before PEP 691/700 support
+     * was added, without requiring re-upload or a separate backfill
+     * CLI. The generated sidecar uses:</p>
+     * <ul>
+     *   <li>{@code upload-time}: from {@link com.auto1.pantera.asto.Meta#OP_CREATED_AT}
+     *       — the filesystem mtime or S3 LastModified, which IS the
+     *       real upload timestamp. Falls back to "now" if metadata
+     *       is unavailable.</li>
+     *   <li>{@code requires-python}: null (extracting from the wheel
+     *       would require unzipping — too expensive for a read path).</li>
+     *   <li>{@code yanked}: false.</li>
+     * </ul>
+     *
+     * <p>The generated sidecar is persisted (fire-and-forget) so
+     * subsequent reads are a single storage fetch. At scale with
+     * 5M artifacts, this runs lazily (only for packages actually
+     * requested) and amortizes to O(1) per artifact after the first
+     * hit.</p>
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static CompletableFuture<Optional<Meta>> generateFromStorageMetadata(
+        final Storage storage,
+        final Key artifactKey
+    ) {
+        return storage.exists(artifactKey).thenCompose(artifactExists -> {
+            if (!artifactExists) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+            return storage.metadata(artifactKey).thenCompose(fileMeta -> {
+                final Instant uploadTime = fileMeta
+                    .read(com.auto1.pantera.asto.Meta.OP_CREATED_AT)
+                    .map(Instant.class::cast)
+                    .orElse(Instant.now());
+                // Persist the sidecar (fire-and-forget) so subsequent
+                // reads hit the fast path. Errors are swallowed — the
+                // in-memory Meta is returned regardless.
+                write(storage, artifactKey, null, uploadTime)
+                    .exceptionally(err -> null);
+                return CompletableFuture.completedFuture(
+                    Optional.of(new Meta(
+                        null, uploadTime, false,
+                        Optional.empty(), Optional.empty()
+                    ))
+                );
+            }).exceptionally(err -> {
+                // Storage metadata not available (e.g., in-memory storage
+                // in tests). Fall back to "now" but don't persist — the
+                // next read will try again.
+                return Optional.of(new Meta(
+                    null, Instant.now(), false,
+                    Optional.empty(), Optional.empty()
+                ));
+            });
         });
     }
 
