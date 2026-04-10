@@ -401,6 +401,12 @@ function formatSize(bytes?: number): string {
           <div><strong>Path:</strong> <span class="font-mono text-sm">{{ selectedArtifact.path }}</span></div>
           <div><strong>Size:</strong> {{ selectedArtifact.size > 0 ? formatSize(selectedArtifact.size) : '—' }}</div>
           <div v-if="selectedArtifact.modified"><strong>Modified:</strong> {{ selectedArtifact.modified }}</div>
+          <Tag
+            v-if="isPypi && (selectedArtifact as Record<string, unknown>).yanked"
+            value="Yanked"
+            severity="danger"
+            class="text-xs"
+          />
           <div class="flex gap-2 pt-2">
             <Button
               icon="pi pi-download"
@@ -408,6 +414,23 @@ function formatSize(bytes?: number): string {
               :loading="downloading"
               @click="downloadArtifact(selectedArtifact!.path)"
             />
+            <template v-if="isPypi && parsePypiCoords(selectedArtifact.path)">
+              <Button
+                v-if="(selectedArtifact as Record<string, unknown>).yanked"
+                icon="pi pi-undo"
+                label="Unyank"
+                severity="warn"
+                @click="handleUnyank(selectedArtifact!, $event); detailVisible = false"
+              />
+              <Button
+                v-else
+                icon="pi pi-ban"
+                label="Yank"
+                severity="warn"
+                outlined
+                @click="detailVisible = false; openYankDialog(selectedArtifact!, $event)"
+              />
+            </template>
             <Button
               v-if="canDelete"
               icon="pi pi-trash"
