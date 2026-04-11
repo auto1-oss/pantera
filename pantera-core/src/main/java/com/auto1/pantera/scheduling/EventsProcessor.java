@@ -11,9 +11,12 @@
 package com.auto1.pantera.scheduling;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.trace.SpanContext;
 import java.util.Queue;
 import java.util.function.Consumer;
 import org.quartz.JobExecutionContext;
+import org.slf4j.MDC;
 
 /**
  * Job to process events from queue.
@@ -58,50 +61,57 @@ public final class EventsProcessor<T> extends QuartzJob {
     @Override
     @SuppressWarnings("PMD.CognitiveComplexity")
     public void execute(final JobExecutionContext context) {
-        this.resolveFromRegistry(context);
-        if (this.action == null || this.elements == null) {
-            super.stopJob(context);
-        } else {
-            int cnt = 0;
-            while (!this.elements.isEmpty()) {
-                final T item = this.elements.poll();
-                if (item != null) {
-                    boolean processed = false;
-                    for (int attempt = 0; attempt < EventsProcessor.MAX_RETRY; attempt++) {
-                        try {
-                            this.action.accept(item);
-                            cnt = cnt + 1;
-                            processed = true;
-                            break;
-                        } catch (final EventProcessingError ex) {
+        MDC.put(EcsMdc.TRACE_ID, SpanContext.generateHex16());
+        MDC.put(EcsMdc.SPAN_ID, SpanContext.generateHex16());
+        try {
+            this.resolveFromRegistry(context);
+            if (this.action == null || this.elements == null) {
+                super.stopJob(context);
+            } else {
+                int cnt = 0;
+                while (!this.elements.isEmpty()) {
+                    final T item = this.elements.poll();
+                    if (item != null) {
+                        boolean processed = false;
+                        for (int attempt = 0; attempt < EventsProcessor.MAX_RETRY; attempt++) {
+                            try {
+                                this.action.accept(item);
+                                cnt = cnt + 1;
+                                processed = true;
+                                break;
+                            } catch (final EventProcessingError ex) {
+                                EcsLogger.error("com.auto1.pantera.scheduling")
+                                    .message("Event processing failed (attempt "
+                                        + (attempt + 1) + "/" + MAX_RETRY + ")")
+                                    .eventCategory("scheduling")
+                                    .eventAction("event_process")
+                                    .eventOutcome("failure")
+                                    .error(ex)
+                                    .log();
+                            }
+                        }
+                        if (!processed) {
                             EcsLogger.error("com.auto1.pantera.scheduling")
-                                .message("Event processing failed (attempt "
-                                    + (attempt + 1) + "/" + MAX_RETRY + ")")
+                                .message("Dropping event after " + MAX_RETRY
+                                    + " failed attempts")
                                 .eventCategory("scheduling")
-                                .eventAction("event_process")
+                                .eventAction("event_drop")
                                 .eventOutcome("failure")
-                                .error(ex)
                                 .log();
                         }
                     }
-                    if (!processed) {
-                        EcsLogger.error("com.auto1.pantera.scheduling")
-                            .message("Dropping event after " + MAX_RETRY
-                                + " failed attempts")
-                            .eventCategory("scheduling")
-                            .eventAction("event_drop")
-                            .eventOutcome("failure")
-                            .log();
-                    }
                 }
+                EcsLogger.debug("com.auto1.pantera.scheduling")
+                    .message("Processed " + cnt + " elements from queue")
+                    .eventCategory("scheduling")
+                    .eventAction("event_process")
+                    .eventOutcome("success")
+                    .field("process.thread.name", Thread.currentThread().getName())
+                    .log();
             }
-            EcsLogger.debug("com.auto1.pantera.scheduling")
-                .message("Processed " + cnt + " elements from queue")
-                .eventCategory("scheduling")
-                .eventAction("event_process")
-                .eventOutcome("success")
-                .field("process.thread.name", Thread.currentThread().getName())
-                .log();
+        } finally {
+            MDC.remove(EcsMdc.TRACE_ID);
+            MDC.remove(EcsMdc.SPAN_ID);
         }
     }
 

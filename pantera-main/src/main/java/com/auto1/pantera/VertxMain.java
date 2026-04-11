@@ -139,6 +139,14 @@ public final class VertxMain {
      * @throws IOException In case of error reading settings.
      */
     public int start(final int apiPort) throws IOException {
+        org.slf4j.MDC.put(
+            com.auto1.pantera.http.log.EcsMdc.TRACE_ID,
+            com.auto1.pantera.http.trace.SpanContext.generateHex16()
+        );
+        org.slf4j.MDC.put(
+            com.auto1.pantera.http.log.EcsMdc.SPAN_ID,
+            com.auto1.pantera.http.trace.SpanContext.generateHex16()
+        );
         // Pre-parse YAML to detect DB configuration for Quartz JDBC clustering
         final com.amihaiemil.eoyaml.YamlMapping yamlContent =
             com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
