@@ -39,6 +39,22 @@ public final class EcsMdc {
     public static final String TRACE_ID = "trace.id";
 
     /**
+     * ECS {@code span.id} — 16-character hex span identifier for this request.
+     * Always generated fresh per request by {@link com.auto1.pantera.http.log.SpanContext}.
+     *
+     * @since 2.1.0
+     */
+    public static final String SPAN_ID = "span.id";
+
+    /**
+     * ECS {@code span.parent.id} — 16-character hex span identifier of the caller.
+     * Extracted from incoming B3/W3C span-id header; absent if no upstream span.
+     *
+     * @since 2.1.0
+     */
+    public static final String PARENT_SPAN_ID = "span.parent.id";
+
+    /**
      * ECS {@code client.ip} — originating client IP address.
      * Extracted from X-Forwarded-For → X-Real-IP → TCP remote address, in that order.
      */
