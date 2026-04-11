@@ -433,6 +433,16 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public boolean proxyProtocol() {
+        final YamlMapping server = this.meta != null
+            ? this.meta.yamlMapping("http_server") : null;
+        if (server == null) {
+            return false;
+        }
+        return "true".equalsIgnoreCase(server.string("proxy_protocol"));
+    }
+
+    @Override
     public void close() {
         if (this.closed) {
             return;

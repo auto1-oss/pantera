@@ -378,7 +378,8 @@ public final class VertxMain {
             this.port,
             this.vertx,
             settings.metrics(),
-            settings.httpServerRequestTimeout()
+            settings.httpServerRequestTimeout(),
+            settings.proxyProtocol()
         );
         EcsLogger.info("com.auto1.pantera")
             .message("Pantera was started on port")
@@ -852,6 +853,7 @@ public final class VertxMain {
      * @param serverPort Slice server port.
      * @param vertx Vertx instance
      * @param mctx Metrics context
+     * @param requestTimeout Maximum time to process a single request
      * @return Port server started to listen on.
      */
     private int listenOn(
@@ -861,10 +863,57 @@ public final class VertxMain {
         final MetricsContext mctx,
         final Duration requestTimeout
     ) {
+        return this.listenOn(slice, serverPort, vertx, mctx, requestTimeout, false);
+    }
+
+    /**
+     * Starts HTTP server listening on specified port.
+     *
+     * @param slice Slice.
+     * @param serverPort Slice server port.
+     * @param vertx Vertx instance
+     * @param mctx Metrics context
+     * @param requestTimeout Maximum time to process a single request
+     * @param useProxyProtocol Whether to enable Proxy Protocol v2 (for AWS NLB)
+     * @return Port server started to listen on.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private int listenOn(
+        final Slice slice,
+        final int serverPort,
+        final Vertx vertx,
+        final MetricsContext mctx,
+        final Duration requestTimeout,
+        final boolean useProxyProtocol
+    ) {
+        final HttpServerOptions opts = new HttpServerOptions()
+            .setPort(serverPort)
+            .setIdleTimeout(60)
+            .setTcpKeepAlive(true)
+            .setTcpNoDelay(true)
+            .setUseAlpn(true)
+            .setHttp2ClearTextEnabled(true)
+            .setInitialSettings(
+                new io.vertx.core.http.Http2Settings()
+                    .setInitialWindowSize(16 * 1024 * 1024)
+            )
+            .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
+            .setCompressionSupported(true)
+            .setCompressionLevel(6);
+        if (useProxyProtocol) {
+            opts.setUseProxyProtocol(true);
+            EcsLogger.info("com.auto1.pantera")
+                .message("Proxy Protocol v2 enabled on port " + serverPort)
+                .eventCategory("configuration")
+                .eventAction("proxy_protocol_enable")
+                .eventOutcome("success")
+                .field("destination.port", serverPort)
+                .log();
+        }
         final VertxSliceServer server = new VertxSliceServer(
             vertx,
             new BaseSlice(mctx, slice),
-            serverPort,
+            opts,
             requestTimeout
         );
         this.servers.add(server);
