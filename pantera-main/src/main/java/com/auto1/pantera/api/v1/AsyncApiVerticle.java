@@ -227,7 +227,20 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 )
                 .putHeader(
                     "Access-Control-Allow-Headers",
-                    "Authorization,Content-Type,Accept"
+                    // traceparent / b3 / X-B3-* are trace propagation
+                    // headers sent by the UI axios interceptor. Without
+                    // listing them here the browser CORS preflight
+                    // rejects EVERY UI→backend request.
+                    "Authorization,Content-Type,Accept,"
+                        + "traceparent,tracestate,b3,"
+                        + "X-B3-TraceId,X-B3-SpanId,X-B3-ParentSpanId,X-B3-Sampled"
+                )
+                .putHeader(
+                    "Access-Control-Expose-Headers",
+                    // Let the browser read the traceparent response
+                    // header so APM and debugging tools can see the
+                    // server-generated span id.
+                    "traceparent"
                 )
                 .putHeader("Access-Control-Max-Age", "3600");
             if ("OPTIONS".equals(ctx.request().method().name())) {
