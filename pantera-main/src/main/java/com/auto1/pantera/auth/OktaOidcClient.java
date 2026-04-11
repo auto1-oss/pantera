@@ -135,13 +135,17 @@ public final class OktaOidcClient {
                     .error(ex)
                     .log();
             }
-            EcsLogger.error("com.auto1.pantera.auth")
+            final int authnStatus = response.statusCode();
+            final boolean authnCredFailure = authnStatus == 401 || authnStatus == 403;
+            (authnCredFailure
+                ? EcsLogger.warn("com.auto1.pantera.auth")
+                : EcsLogger.error("com.auto1.pantera.auth"))
                 .message(String.format("Okta /authn failed: url=%s, errorCode=%s, errorSummary=%s", this.authnUrl, errorCode, errorSummary))
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.response.status_code", response.statusCode())
+                .field("http.response.status_code", authnStatus)
                 .log();
             return null;
         }
@@ -310,7 +314,7 @@ public final class OktaOidcClient {
                 status = body.getString("status", "");
             }
         }
-        EcsLogger.error("com.auto1.pantera.auth")
+        EcsLogger.warn("com.auto1.pantera.auth")
             .message("Okta MFA verification failed")
             .eventCategory("authentication")
             .eventAction("login")
@@ -467,13 +471,17 @@ public final class OktaOidcClient {
             request, HttpResponse.BodyHandlers.ofString()
         );
         if (resp.statusCode() / 100 != 2) {
-            EcsLogger.error("com.auto1.pantera.auth")
+            final int tokenStatus = resp.statusCode();
+            final boolean tokenCredFailure = tokenStatus == 401 || tokenStatus == 403;
+            (tokenCredFailure
+                ? EcsLogger.warn("com.auto1.pantera.auth")
+                : EcsLogger.error("com.auto1.pantera.auth"))
                 .message("Okta token endpoint failed")
                 .eventCategory("authentication")
                 .eventAction("login")
                 .eventOutcome("failure")
                 .field("user.name", username)
-                .field("http.response.status_code", resp.statusCode())
+                .field("http.response.status_code", tokenStatus)
                 .log();
             return null;
         }
