@@ -728,13 +728,14 @@ final class ProxySlice implements Slice {
     private CompletableFuture<Response> fetchFromUpstreamWithHeaders(
         final RequestLine line, final RequestLine upstream, final Headers extra
     ) {
+        final Headers traced = com.auto1.pantera.http.trace.TraceHeaders.inject(extra);
         final URI mirror = this.mirrors.getIfPresent(line.uri().getPath());
         if (mirror != null) {
             final Slice slice = this.sliceForUri(mirror);
             final String path = Optional.ofNullable(mirror.getRawPath()).orElse("/");
             return slice.response(
                 new RequestLine(line.method().value(), path, line.version()),
-                extra, Content.EMPTY
+                traced, Content.EMPTY
             );
         }
         if (this.isPackageFilePath(line)) {
@@ -745,10 +746,10 @@ final class ProxySlice implements Slice {
             final String path = Optional.ofNullable(filesUri.getRawPath()).orElse("/");
             return slice.response(
                 new RequestLine(line.method().value(), path, line.version()),
-                extra, Content.EMPTY
+                traced, Content.EMPTY
             );
         }
-        return this.origin.response(upstream, extra, Content.EMPTY);
+        return this.origin.response(upstream, traced, Content.EMPTY);
     }
 
     private CompletableFuture<Response> serveArtifact(

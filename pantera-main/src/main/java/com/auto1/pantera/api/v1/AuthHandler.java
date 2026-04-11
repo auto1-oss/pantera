@@ -361,12 +361,17 @@ public final class AuthHandler {
                     (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8)
                 );
                 final HttpClient http = HttpClient.newHttpClient();
-                final HttpRequest request = HttpRequest.newBuilder()
+                HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(tokenUrl))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("Authorization", "Basic " + basic)
-                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody));
+                final String[] traceHdrs =
+                    com.auto1.pantera.http.trace.TraceHeaders.httpClientHeaders();
+                for (int i = 0; i < traceHdrs.length; i += 2) {
+                    reqBuilder = reqBuilder.header(traceHdrs[i], traceHdrs[i + 1]);
+                }
+                final HttpRequest request = reqBuilder.build();
                 final HttpResponse<String> resp;
                 try {
                     resp = http.send(request, HttpResponse.BodyHandlers.ofString());

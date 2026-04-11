@@ -247,7 +247,7 @@ public final class SpanContext {
     /**
      * Generate a random 16-character lowercase hex string.
      */
-    static String generateHex16() {
+    public static String generateHex16() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     }
 
