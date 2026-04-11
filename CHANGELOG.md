@@ -1,3 +1,114 @@
+# Release 2.1.0
+
+## Authentication & Authorization
+ - feat: RS256 asymmetric JWT signing replaces the previous shared-secret scheme
+ - feat: access + refresh + API token architecture with configurable lifetimes
+ - feat: multi-node token revocation via blocklist with cluster-wide propagation
+ - feat: JTI ownership validation and token-type scope enforcement
+ - feat: admin UI for auth settings and per-user token revocation
+ - feat: schema-driven provider configuration UI for Okta and Keycloak
+ - feat: provider lifecycle (create, enable, disable, delete) takes effect at runtime without restart
+ - feat: mandatory `local` and `jwt-password` providers, protected from deletion
+ - feat: priority-driven provider ordering with deterministic chain evaluation
+ - feat: group-to-role mapping for SSO providers, independent from access-control gate
+ - feat: default admin account bootstrapped on fresh installs with mandatory password change
+ - feat: unified password complexity policy (server-side + client-side), minimum 12 characters
+ - feat: self-service password change from user profile for local accounts
+ - feat: admin password reset without requiring the target user's current password
+ - feat: per-request user-enabled check in JWT filter — disabled users lose all access immediately
+ - feat: token revocation on user disable (access tokens via blocklist, refresh/API tokens via DB)
+ - feat: Group → Role mapping dropdown populated from the Pantera role catalog
+ - fix: credential cache invalidation is now cluster-wide (L1 + L2) on every password change
+ - fix: authentication chain respects provider authority for local users
+ - fix: SSO-provisioned accounts remain eligible for SSO sign-in
+ - fix: persistent inline error messaging on sign-in and SSO callback views
+ - fix: generic, non-disclosing error messages across all sign-in failure paths
+ - fix: SSO callback view no longer auto-redirects on failure
+ - fix: axios interceptor no longer forces page reload on failed auth-boundary requests
+ - fix: wrong current password on change-password no longer hangs the UI indefinitely
+
+## Search
+ - feat: structured search query syntax — `name:`, `version:`, `repo:`, `type:`, AND/OR, parentheses
+ - feat: server-side search, sort, and pagination for users and roles
+ - fix: typed SortField enum prevents injection on sort parameter
+ - fix: facet aggregations computed only on the first page
+ - fix: fallback total count on deep empty pages
+ - fix: hard cap on effective offset (MAX_OFFSET=10,000)
+ - fix: permission-aware SQL filter replaces overfetch pattern
+ - fix: scoped statement_timeout on FTS aggregation path
+ - fix: type aggregation pushed into SQL with suffix merging in application code
+
+## PyPI PEP 503 / 691 Compliance
+ - feat: PEP 691 JSON Simple API with PEP 700 upload-time metadata
+ - feat: PEP 503 full data attributes on hosted-repo HTML indexes
+ - feat: dual-format index persistence — HTML and JSON written side-by-side on upload
+ - feat: self-healing JSON cache for legacy packages without JSON index
+ - feat: self-healing sidecar metadata from storage file timestamps for pre-upgrade artifacts
+ - feat: yank/unyank API endpoints (PEP 592) and UI controls in artifact detail dialog
+ - feat: sidecar metadata files for requires-python, upload-time, yanked status
+ - feat: one-time metadata backfill CLI for existing packages
+ - feat: uv-based E2E test project verifying PEP 691/700 with exclude-newer
+ - fix: proxy cache serves JSON with correct Content-Type on cache hits
+ - fix: relative URLs in JSON index prevent hostname-resolution errors
+ - fix: PEP 691 yanked field encoding corrected to string|false per spec
+ - fix: .pypi metadata directory excluded from repo-level package index
+ - fix: non-blocking async in self-healing cache path (no .join on event loop)
+ - fix: HTML body tag typo in dynamic index generation
+
+## File Version Detection
+ - feat: version inference from dotted artifact names for file/file-proxy repos
+ - feat: version repair CLI (`--mode version-repair`) for bulk-fixing UNKNOWN versions
+
+## Natural Version Sort
+ - feat: stored `version_sort bigint[]` generated column for natural ordering
+ - feat: covers dates, v-prefixed versions, integers, and git hashes
+
+## GroupSlice Performance
+ - perf: index-miss fanout restricted to proxy-type members only
+ - fix: 404 log noise reduced — per-member 404s at DEBUG, aggregate miss at WARN
+
+## Observability
+ - feat: distributed tracing with B3 (openzipkin) and W3C Trace Context support
+ - feat: trace.id, span.id, span.parent.id in all log entries per SRE convention
+ - feat: SRE2042 validation — malformed trace/span IDs are regenerated and logged
+ - feat: traceparent response header on all HTTP responses
+ - feat: B3 + W3C header injection into all upstream calls (proxy, SSO, Okta)
+ - feat: UI propagates traceparent from Elastic APM RUM or generated fallback
+ - feat: startup and background job trace context (before HTTP processing)
+ - feat: artifact audit logging at INFO level — upload, download, delete, resolution events
+ - feat: dedicated `artifact.audit` logger with ECS-structured fields
+ - feat: Proxy Protocol v2 support for AWS NLB (config-gated via `meta.http_server.proxy_protocol`)
+ - fix: auth failure log levels reclassified — wrong password is WARN, system errors stay ERROR
+ - fix: ECS-compliant HTTP access logging with structured fields
+ - fix: package.release_date no longer logged as non-date literal
+ - fix: malformed Authorization header returns 401 instead of 500
+ - fix: url.original includes full path + query string, sanitized
+
+## Cooldown
+ - fix: expired cooldown blocks now invalidate the metadata cache (L1 + L2)
+ - fix: previously, expired versions remained missing from metadata until container restart
+
+## Dependency Security
+ - security: UI dependencies pinned to exact versions (supply-chain hardening)
+ - security: .npmrc enforces save-exact, package-lock, engine-strict
+ - security: vite upgraded to patched release, clearing dev-server advisories
+ - security: eslint, vue-tsc, happy-dom upgraded to clear transitive advisories
+ - security: npm audit reports zero vulnerabilities
+ - security: Java dependencies refreshed to current stable within major lines
+ - security: passwords hashed with bcrypt
+
+## Database Migrations
+ - feat: Flyway V100–V116 — all auth, provider, user-lifecycle, and cooldown schema
+ - feat: pg_cron job definitions for materialized view refresh
+
+## Breaking Changes
+ - All previously issued tokens are invalidated (signing scheme changed)
+ - `meta.jwt.secret` replaced by `meta.jwt.private-key-path` + `meta.jwt.public-key-path`
+ - Login and callback endpoints return `{ token, refresh_token, expires_in }`
+ - Fresh installs bootstrap a default admin account requiring password change on first sign-in
+ - `local` and `jwt-password` auth providers are mandatory and cannot be removed
+ - UI dependencies pinned to exact versions — developers must use `npm ci`
+
 # Release 0.23
  - 7f9f53b - ci: remove codecov action
    by Kirill <g4s8.public@gmail.com>
