@@ -12,6 +12,7 @@ package com.auto1.pantera.http.slice;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -66,7 +67,12 @@ public final class SliceDelete implements Slice {
                     final CompletableFuture<Response> rsp;
                     if (exists) {
                         rsp = this.storage.delete(key).thenAccept(
-                            nothing -> this.events.ifPresent(item -> item.addDeleteEventByKey(key))
+                            nothing -> {
+                                this.events.ifPresent(item -> item.addDeleteEventByKey(key));
+                                final java.util.List<String> parts = key.parts();
+                                final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
+                                AuditLogger.delete("", "", "", "", filename);
+                            }
                         ).thenApply(none -> ResponseBuilder.noContent().build());
                     } else {
                         // Consume request body to prevent Vert.x request leak
