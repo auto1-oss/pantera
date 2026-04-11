@@ -267,6 +267,44 @@ public final class EcsSchemaValidationTest {
         }
     }
 
+    @Test
+    void urlOriginalIncludesPathAndQuery() {
+        // Use 404 status so the event is emitted at WARN level (always captured)
+        new EcsLogEvent()
+            .httpMethod("GET")
+            .httpStatus(com.auto1.pantera.http.RsStatus.NOT_FOUND)
+            .urlPath("/api/packages/foo")
+            .urlOriginal("/api/packages/foo?version=1.0.0&format=json")
+            .log();
+        assertFalse(capture.events.isEmpty(), "Expected a WARN-level log event for 404");
+        final LogEvent evt = capture.lastEvent();
+        final String urlOriginal = evt.getContextData().getValue("url.original");
+        assertNotNull(urlOriginal, "url.original must be present in MDC");
+        assertTrue(urlOriginal.contains("/api/packages/foo"),
+            "url.original must contain the path: " + urlOriginal);
+        assertTrue(urlOriginal.contains("version=1.0.0"),
+            "url.original must contain the query string: " + urlOriginal);
+        assertTrue(urlOriginal.contains("format=json"),
+            "url.original must contain all query parameters: " + urlOriginal);
+    }
+
+    @Test
+    void urlOriginalIsAbsentWhenNotSet() {
+        // Verify url.original is not emitted when urlOriginal() is never called
+        new EcsLogEvent()
+            .httpMethod("DELETE")
+            .httpStatus(com.auto1.pantera.http.RsStatus.NOT_FOUND)
+            .urlPath("/api/packages/missing")
+            .log();
+        assertFalse(capture.events.isEmpty(), "Expected a log event for 404");
+        final LogEvent evt = capture.lastEvent();
+        // url.path must be present; url.original must NOT be present if never set
+        assertNotNull(evt.getContextData().getValue("url.path"),
+            "url.path must be present");
+        assertNull(evt.getContextData().getValue("url.original"),
+            "url.original must be absent when urlOriginal() was never called");
+    }
+
     /**
      * Simple appender that collects log events in a list for inspection.
      */
