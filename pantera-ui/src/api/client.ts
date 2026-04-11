@@ -47,6 +47,26 @@ export function initApiClient(baseUrl: string): AxiosInstance {
     timeout: 10_000,
     headers: { 'Content-Type': 'application/json' },
   })
+  // Trace propagation: link UI actions to backend spans.
+  // If Elastic APM RUM is active, use its traceparent. Otherwise generate one.
+  apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+    const apm = (window as unknown as Record<string, unknown>).__ELASTIC_APM as
+        { getCurrentTransaction?: () => { traceparent?: string } | null } | undefined
+    if (apm?.getCurrentTransaction) {
+      const tx = apm.getCurrentTransaction()
+      if (tx?.traceparent) {
+        config.headers.traceparent = tx.traceparent
+        return config
+      }
+    }
+    // Fallback: generate a traceparent so backend logs correlate with UI actions
+    // even when APM is disabled. Format: 00-{traceId32}-{spanId16}-01
+    const hex = (n: number) =>
+      Array.from(crypto.getRandomValues(new Uint8Array(n)))
+        .map(b => b.toString(16).padStart(2, '0')).join('')
+    config.headers.traceparent = `00-${hex(16)}-${hex(8)}-01`
+    return config
+  })
   apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     const token = localStorage.getItem('access_token')
     if (token) {
