@@ -294,7 +294,7 @@ final class ProxySlice implements Slice {
             .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     // Cache HIT - serve immediately without any network calls
-                    EcsLogger.info("com.auto1.pantera.pypi")
+                    EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Cache hit, serving cached artifact (offline-safe)")
                         .eventCategory("repository")
                         .eventAction("proxy_request")

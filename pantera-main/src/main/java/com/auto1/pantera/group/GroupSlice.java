@@ -807,7 +807,7 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
-                ctx.addTo(EcsLogger.info("com.auto1.pantera.group")
+                ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member '" + member.name() + "' returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("repository")
                     .eventAction("group_query")

@@ -192,7 +192,7 @@ public final class MemberSlice {
             original.version()
         );
 
-        EcsLogger.info("com.auto1.pantera.group")
+        EcsLogger.debug("com.auto1.pantera.group")
             .message(String.format("MemberSlice '%s' rewritePath: %s to %s", this.name, raw, result.uri().getPath()))
             .eventCategory("repository")
             .eventAction("path_rewrite")
