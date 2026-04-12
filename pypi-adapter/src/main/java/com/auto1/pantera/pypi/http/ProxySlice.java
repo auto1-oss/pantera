@@ -1034,6 +1034,14 @@ final class ProxySlice implements Slice {
     }
 
     private boolean packageIndexWithoutLinks(final RequestLine line, final String body) {
+        // JSON path: PEP 691 responses with "files":[] have no downloadable
+        // artifacts. Caching them would let a group member "claim" a package
+        // name that exists upstream but has zero published releases, blocking
+        // the hosted member from serving the locally-uploaded version.
+        if (this.looksLikeJson(body)) {
+            return body.contains("\"files\":[]")
+                || body.contains("\"files\": []");
+        }
         if (!this.looksLikeHtml(body)) {
             return false;
         }
