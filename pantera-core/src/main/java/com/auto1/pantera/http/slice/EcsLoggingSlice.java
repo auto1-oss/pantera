@@ -54,11 +54,21 @@ public final class EcsLoggingSlice implements Slice {
     private final String remoteAddress;
 
     /**
+     * Repository name (nullable, for MDC propagation to audit logger).
+     */
+    private final String repoName;
+
+    /**
+     * Repository type (nullable, for MDC propagation to audit logger).
+     */
+    private final String repoType;
+
+    /**
      * Ctor.
      * @param origin Origin slice
      */
     public EcsLoggingSlice(final Slice origin) {
-        this(origin, null);
+        this(origin, null, null, null);
     }
 
     /**
@@ -67,8 +77,22 @@ public final class EcsLoggingSlice implements Slice {
      * @param remoteAddress Remote client address
      */
     public EcsLoggingSlice(final Slice origin, final String remoteAddress) {
+        this(origin, remoteAddress, null, null);
+    }
+
+    /**
+     * Ctor with full context for audit logging.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param repoName Repository name (nullable)
+     * @param repoType Repository type (nullable)
+     */
+    public EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final String repoName, final String repoType) {
         this.origin = origin;
         this.remoteAddress = remoteAddress;
+        this.repoName = repoName;
+        this.repoType = repoType;
     }
 
     @Override
@@ -99,6 +123,12 @@ public final class EcsLoggingSlice implements Slice {
         }
         if (userName != null) {
             MDC.put(EcsMdc.USER_NAME, userName);
+        }
+        if (this.repoName != null) {
+            MDC.put(EcsMdc.REPO_NAME, this.repoName);
+        }
+        if (this.repoType != null) {
+            MDC.put(EcsMdc.REPO_TYPE, this.repoType);
         }
 
         return this.origin.response(line, headers, body)
@@ -158,6 +188,8 @@ public final class EcsLoggingSlice implements Slice {
                 MDC.remove(EcsMdc.PARENT_SPAN_ID);
                 MDC.remove(EcsMdc.CLIENT_IP);
                 MDC.remove(EcsMdc.USER_NAME);
+                MDC.remove(EcsMdc.REPO_NAME);
+                MDC.remove(EcsMdc.REPO_TYPE);
             });
     }
 }

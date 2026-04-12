@@ -67,6 +67,31 @@ public final class EcsMdc {
      */
     public static final String USER_NAME = "user.name";
 
+    /**
+     * Repository type (e.g. "maven", "npm", "pypi-proxy").
+     * Set by EcsLoggingSlice when the request targets a named repository.
+     */
+    public static final String REPO_TYPE = "repository.type";
+
+    /**
+     * Repository name.
+     * Set by EcsLoggingSlice when the request targets a named repository.
+     */
+    public static final String REPO_NAME = "repository.name";
+
+    /**
+     * Package / artifact name.
+     * Set by adapter-specific slices when a package name can be derived
+     * from the request path.
+     */
+    public static final String PACKAGE_NAME = "package.name";
+
+    /**
+     * Package / artifact version.
+     * Set by adapter-specific slices when a version can be derived.
+     */
+    public static final String PACKAGE_VERSION = "package.version";
+
     private EcsMdc() {
         // constants only
     }

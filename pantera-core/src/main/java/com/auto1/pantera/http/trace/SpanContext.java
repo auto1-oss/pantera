@@ -15,7 +15,7 @@ import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsLogger;
 
 import java.util.List;
-import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Pattern;
 
 /**
@@ -55,6 +55,19 @@ public final class SpanContext {
      * 32 lowercase hex characters (W3C trace-id).
      */
     private static final Pattern HEX32 = Pattern.compile("[\\da-f]{32}");
+
+    /**
+     * String of all-zero hex characters of any length — invalid trace/span id
+     * per W3C Trace Context §3.2.2.2 and B3 specification.
+     */
+    private static final Pattern ALL_ZEROS = Pattern.compile("0+");
+
+    /**
+     * The only W3C Trace Context version we accept. Higher versions are
+     * reserved and per spec MAY be rejected by implementations that do not
+     * understand them.
+     */
+    private static final String W3C_VERSION = "00";
 
     private final String traceId;
     private final String spanId;
@@ -132,7 +145,11 @@ public final class SpanContext {
         }
         final String[] parts = value.split("-");
         if (parts.length < 2) {
-            return null;
+            // Structurally malformed (e.g. "b3: abc" with no separator).
+            // Per spec we still want trace context, so log SRE2042 and
+            // generate fresh ids rather than silently falling through.
+            logMalformed("b3.header", value, userAgent);
+            return new SpanContext(generateHex16(), generateHex16(), null);
         }
         final String rawTraceId = parts[0];
         final String rawSpanId = parts[1];
@@ -166,7 +183,17 @@ public final class SpanContext {
         }
         final String[] parts = value.split("-");
         if (parts.length < 4) {
-            return null;
+            // Structurally malformed traceparent (must be 4 dash-separated
+            // fields per W3C §3.2.2). Log and regenerate.
+            logMalformed("traceparent", value, userAgent);
+            return new SpanContext(generateHex16(), generateHex16(), null);
+        }
+        // Per W3C §3.2.2.1, version "ff" is reserved/invalid. We accept only
+        // version 00 explicitly; future versions are forward-incompatible
+        // until we know the layout.
+        if (!W3C_VERSION.equals(parts[0])) {
+            logMalformed("traceparent.version", parts[0], userAgent);
+            return new SpanContext(generateHex16(), generateHex16(), null);
         }
         final String rawTraceId = parts[1];  // 32-hex
         final String rawSpanId = parts[2];   // 16-hex
@@ -215,11 +242,28 @@ public final class SpanContext {
             return generateHex16();
         }
         final String lower = raw.toLowerCase();
+        // All-zero ids are explicitly forbidden by W3C Trace Context §3.2.2.2
+        // (trace-id) and §3.2.2.3 (parent-id), and by the B3 spec. They
+        // typically indicate a buggy or uninitialised client.
+        if (ALL_ZEROS.matcher(lower).matches()) {
+            logMalformed(fieldName, raw, userAgent);
+            return generateHex16();
+        }
         if (HEX16.matcher(lower).matches()) {
             return lower;
         }
         if (HEX32.matcher(lower).matches()) {
-            return lower.substring(16);
+            // Take the LOW 8 bytes (last 16 hex chars) — the spec is silent
+            // on which half to keep but using the low half is consistent
+            // with how X-B3-TraceId 64-bit truncation is documented.
+            final String truncated = lower.substring(16);
+            // Edge case: a 32-hex value whose low half is all zeros would
+            // collapse into an invalid 16-hex id. Reject and regenerate.
+            if (ALL_ZEROS.matcher(truncated).matches()) {
+                logMalformed(fieldName, raw, userAgent);
+                return generateHex16();
+            }
+            return truncated;
         }
         logMalformed(fieldName, raw, userAgent);
         return generateHex16();
@@ -245,10 +289,20 @@ public final class SpanContext {
     }
 
     /**
-     * Generate a random 16-character lowercase hex string.
+     * Generate a random 16-character lowercase hex string from a full
+     * 64-bit random long. We avoid UUID for two reasons: (a) the version
+     * and variant nibbles in a UUID bias the first few hex characters,
+     * (b) {@code SecureRandom} backing UUID is overkill for trace ids
+     * that are not security-sensitive. We also reject the all-zero value
+     * (1 in 2^64 odds) to keep the invariant that generated ids never
+     * collide with the all-zero "invalid" sentinel.
      */
     public static String generateHex16() {
-        return UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        long bits = ThreadLocalRandom.current().nextLong();
+        while (bits == 0L) {
+            bits = ThreadLocalRandom.current().nextLong();
+        }
+        return String.format("%016x", bits);
     }
 
     /**

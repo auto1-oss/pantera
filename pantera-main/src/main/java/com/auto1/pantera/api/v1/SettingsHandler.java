@@ -17,6 +17,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.JwtSettings;
@@ -190,7 +191,7 @@ public final class SettingsHandler {
      */
     private void getSettings(final RoutingContext ctx) {
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> this.buildFullSettings(),
+            MdcPropagation.withMdc(() -> this.buildFullSettings()),
             false
         ).onSuccess(
             result -> ctx.response()
@@ -378,14 +379,14 @@ public final class SettingsHandler {
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "system") : "system";
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 // Convert vertx JsonObject to javax.json.JsonObject
                 final javax.json.JsonObject jobj = Json.createReader(
                     new java.io.StringReader(body.encode())
                 ).readObject();
                 this.settingsDao.put(section, jobj, actor);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(HttpStatus.OK_200)
@@ -420,7 +421,7 @@ public final class SettingsHandler {
         }
         final boolean enabled = body.getBoolean("enabled");
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 // Refuse to disable protected providers (local, jwt-password).
                 // Enable is always allowed since it just restores the default.
                 if (!enabled) {
@@ -438,7 +439,7 @@ public final class SettingsHandler {
                     this.authProviderDao.disable(providerId);
                 }
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -484,13 +485,13 @@ public final class SettingsHandler {
         final int priority = body.getInteger("priority", 100);
         final JsonObject config = body.getJsonObject("config", new JsonObject());
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject jcfg = Json.createReader(
                     new java.io.StringReader(config.encode())
                 ).readObject();
                 this.authProviderDao.put(type, priority, jcfg);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -526,7 +527,7 @@ public final class SettingsHandler {
             return;
         }
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final String type = this.authProviderDao.typeOf(providerId);
                 if (type == null) {
                     throw new IllegalArgumentException("not_found");
@@ -536,7 +537,7 @@ public final class SettingsHandler {
                 }
                 this.authProviderDao.delete(providerId);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -581,13 +582,13 @@ public final class SettingsHandler {
             return;
         }
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject jobj = Json.createReader(
                     new java.io.StringReader(body.encode())
                 ).readObject();
                 this.authProviderDao.updateConfig(providerId, jobj);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

@@ -127,6 +127,76 @@ final class SpanContextTest {
         MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
     }
 
+    // ---- all-zero rejection (W3C §3.2.2.2) ----
+
+    @Test
+    void regeneratesAllZeroTraceId() {
+        final Headers hdrs = Headers.from("X-Trace-Id", "0000000000000000");
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.not(Matchers.equalTo("0000000000000000")));
+    }
+
+    @Test
+    void regeneratesAllZero32CharTraceId() {
+        final Headers hdrs = Headers.from(
+            "traceparent", "00-00000000000000000000000000000000-abcdef1234567890-01"
+        );
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.not(Matchers.equalTo("0000000000000000")));
+    }
+
+    @Test
+    void regeneratesAllZeroSpanId() {
+        final Headers hdrs = Headers.from(
+            "traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01"
+        );
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.parentSpanId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.parentSpanId(), Matchers.not(Matchers.equalTo("0000000000000000")));
+    }
+
+    // ---- W3C version byte validation ----
+
+    @Test
+    void rejectsInvalidW3cVersion() {
+        final Headers hdrs = Headers.from(
+            "traceparent", "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        );
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.parentSpanId(), Matchers.nullValue());
+    }
+
+    @Test
+    void rejectsFutureW3cVersion() {
+        final Headers hdrs = Headers.from(
+            "traceparent", "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        );
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.parentSpanId(), Matchers.nullValue());
+    }
+
+    // ---- malformed B3 single (structural) ----
+
+    @Test
+    void handlesStructurallyMalformedB3Single() {
+        final Headers hdrs = Headers.from("b3", "abc");
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.spanId(), Matchers.matchesRegex(HEX16));
+    }
+
+    @Test
+    void handlesStructurallyMalformedTraceparent() {
+        final Headers hdrs = Headers.from("traceparent", "not-enough-parts");
+        final SpanContext ctx = SpanContext.extract(hdrs);
+        MatcherAssert.assertThat(ctx.traceId(), Matchers.matchesRegex(HEX16));
+        MatcherAssert.assertThat(ctx.parentSpanId(), Matchers.nullValue());
+    }
+
     // ---- precedence ----
 
     @Test

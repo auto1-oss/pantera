@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -91,10 +92,10 @@ public final class PypiHandler {
         final String version = ctx.pathParam("version");
         final String reason = extractReason(ctx);
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.applyYank(repo, pkg, version, reason);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -135,10 +136,10 @@ public final class PypiHandler {
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.applyUnyank(repo, pkg, version);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

@@ -811,7 +811,8 @@ public final class VertxMain {
                                 prt,
                                 vertx,
                                 settings.metrics(),
-                                settings.httpServerRequestTimeout()
+                                settings.httpServerRequestTimeout(),
+                                settings.proxyProtocol()
                             );
                         }
                         EcsLogger.info("com.auto1.pantera")

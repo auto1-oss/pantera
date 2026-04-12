@@ -217,6 +217,68 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         });
         // Body handler for all API routes (1MB limit)
         router.route("/api/v1/*").handler(BodyHandler.create().setBodyLimit(1_048_576));
+        // Trace context + client.ip MDC setup for all API requests.
+        // Must run BEFORE any auth / CORS / handler logic so every log
+        // emitted from the request thread carries trace.id, span.id,
+        // span.parent.id, and client.ip. The cleanup runs via
+        // addEndHandler so we also clear MDC on error paths.
+        router.route("/api/v1/*").handler(ctx -> {
+            final io.vertx.core.http.HttpServerRequest req = ctx.request();
+            // Extract trace context from incoming headers
+            final com.auto1.pantera.http.Headers panteraHeaders =
+                com.auto1.pantera.http.Headers.from(req.headers().entries());
+            final com.auto1.pantera.http.trace.SpanContext span =
+                com.auto1.pantera.http.trace.SpanContext.extract(panteraHeaders);
+            org.slf4j.MDC.put(
+                com.auto1.pantera.http.log.EcsMdc.TRACE_ID, span.traceId()
+            );
+            org.slf4j.MDC.put(
+                com.auto1.pantera.http.log.EcsMdc.SPAN_ID, span.spanId()
+            );
+            if (span.parentSpanId() != null) {
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.PARENT_SPAN_ID,
+                    span.parentSpanId()
+                );
+            }
+            // Extract client IP. X-Forwarded-For (comma-separated, first
+            // entry is the real client), fall back to X-Real-IP, then
+            // the TCP remote address.
+            String clientIp = req.getHeader("X-Forwarded-For");
+            if (clientIp != null && clientIp.contains(",")) {
+                clientIp = clientIp.substring(0, clientIp.indexOf(',')).trim();
+            }
+            if (clientIp == null || clientIp.isBlank()) {
+                clientIp = req.getHeader("X-Real-IP");
+            }
+            if (clientIp == null || clientIp.isBlank()) {
+                final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+                if (remote != null) {
+                    clientIp = remote.host();
+                }
+            }
+            if (clientIp != null && !clientIp.isBlank()) {
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp
+                );
+            }
+            // Echo the server-generated traceparent in the response so
+            // the UI / APM agent can correlate UI transactions with the
+            // backend span.
+            ctx.response().putHeader(
+                "traceparent",
+                String.format("00-%s-%s-01", span.traceId(), span.spanId())
+            );
+            // Clean up MDC when the response completes (success or error).
+            ctx.addEndHandler(ignored -> {
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.SPAN_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.PARENT_SPAN_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.USER_NAME);
+            });
+            ctx.next();
+        });
         // CORS headers
         router.route("/api/v1/*").handler(ctx -> {
             ctx.response()
@@ -412,6 +474,7 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // Start server
         final HttpServer server;
         final String schema;
+        final boolean useProxyProtocol = this.settings.proxyProtocol();
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
             final HttpServerOptions sslOptions = this.keystore.get()
                 .secureOptions(this.vertx, this.configsStorage);
@@ -419,18 +482,19 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 .setTcpNoDelay(true)
                 .setTcpKeepAlive(true)
                 .setIdleTimeout(60)
-                .setUseAlpn(true);
+                .setUseAlpn(true)
+                .setUseProxyProtocol(useProxyProtocol);
             server = this.vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
-            server = this.vertx.createHttpServer(
-                new HttpServerOptions()
+            final HttpServerOptions opts = new HttpServerOptions()
                     .setTcpNoDelay(true)
                     .setTcpKeepAlive(true)
                     .setIdleTimeout(60)
                     .setUseAlpn(true)
                     .setHttp2ClearTextEnabled(true)
-            );
+                    .setUseProxyProtocol(useProxyProtocol);
+            server = this.vertx.createHttpServer(opts);
             schema = "http";
         }
         server.requestHandler(router)

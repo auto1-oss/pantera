@@ -17,6 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.db.dao.StorageAliasDao;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
@@ -113,12 +114,12 @@ public final class StorageAliasHandler {
      */
     private void listGlobalAliases(final RoutingContext ctx) {
         ctx.vertx().<JsonArray>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     return aliasesToArray(this.aliasDao.listGlobal());
                 }
                 return yamlAliasesToArray(new ManageStorageAliases(this.asto).list());
-            },
+            }),
             false
         ).onSuccess(
             arr -> ctx.response()
@@ -142,7 +143,7 @@ public final class StorageAliasHandler {
             return;
         }
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     this.aliasDao.put(name, null, body);
                 }
@@ -153,7 +154,7 @@ public final class StorageAliasHandler {
                 }
                 this.storagesCache.invalidateAll();
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(200).end()
@@ -170,7 +171,7 @@ public final class StorageAliasHandler {
     private void deleteGlobalAlias(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     final List<String> repos = this.aliasDao.findReposUsing(name);
                     if (repos != null && !repos.isEmpty()) {
@@ -190,7 +191,7 @@ public final class StorageAliasHandler {
                 }
                 this.storagesCache.invalidateAll();
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(200).end()
@@ -215,14 +216,14 @@ public final class StorageAliasHandler {
     private void listRepoAliases(final RoutingContext ctx) {
         final String repoName = ctx.pathParam("name");
         ctx.vertx().<JsonArray>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     return aliasesToArray(this.aliasDao.listForRepo(repoName));
                 }
                 return yamlAliasesToArray(
                     new ManageStorageAliases(new Key.From(repoName), this.asto).list()
                 );
-            },
+            }),
             false
         ).onSuccess(
             arr -> ctx.response()
@@ -247,7 +248,7 @@ public final class StorageAliasHandler {
             return;
         }
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     this.aliasDao.put(aliasName, repoName, body);
                 }
@@ -259,7 +260,7 @@ public final class StorageAliasHandler {
                 }
                 this.storagesCache.invalidateAll();
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(200).end()
@@ -276,7 +277,7 @@ public final class StorageAliasHandler {
         final String repoName = ctx.pathParam("name");
         final String aliasName = ctx.pathParam("alias");
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (this.aliasDao != null) {
                     this.aliasDao.delete(aliasName, repoName);
                 }
@@ -288,7 +289,7 @@ public final class StorageAliasHandler {
                 }
                 this.storagesCache.invalidateAll();
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(200).end()

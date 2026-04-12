@@ -26,6 +26,7 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.Tokens;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.json.JsonArray;
@@ -138,14 +139,20 @@ public final class AuthHandler {
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
         ctx.vertx().<Optional<AuthUser>>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
+                // Also set user.name in MDC so logs from inside the
+                // auth chain (AuthFromDb, Keycloak, etc.) can reference
+                // who is attempting to log in.
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.USER_NAME, name
+                );
                 OktaAuthContext.setMfaCode(mfa);
                 try {
                     return this.auth.user(name, pass);
                 } finally {
                     OktaAuthContext.clear();
                 }
-            },
+            }),
             false
         ).onComplete(ar -> {
             if (ar.succeeded()) {
@@ -224,7 +231,7 @@ public final class AuthHandler {
             return;
         }
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject provider = findProvider(name);
                 if (provider == null) {
                     return null;
@@ -264,7 +271,7 @@ public final class AuthHandler {
                     + "&redirect_uri=" + enc(callbackUrl)
                     + "&state=" + enc(state);
                 return new JsonObject().put("url", url).put("state", state);
-            },
+            }),
             false
         ).onSuccess(result -> {
             if (result == null) {
@@ -320,7 +327,7 @@ public final class AuthHandler {
             return;
         }
         ctx.vertx().<Tokens.TokenPair>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject prov = findProvider(provider);
                 if (prov == null) {
                     throw new IllegalStateException(
@@ -658,7 +665,7 @@ public final class AuthHandler {
                 // Generate Pantera JWT pair
                 final AuthUser authUser = new AuthUser(username, provider);
                 return AuthHandler.this.tokens.generatePair(authUser);
-            },
+            }),
             false
         ).onSuccess(pair -> ctx.response().setStatusCode(200)
             .putHeader("Content-Type", "application/json")
@@ -946,7 +953,7 @@ public final class AuthHandler {
         }
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
         ctx.vertx().<JsonArray>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final JsonArray arr = new JsonArray();
                 for (final UserTokenDao.TokenInfo info : this.tokenDao.listByUser(sub)) {
                     final JsonObject obj = new JsonObject()
@@ -962,7 +969,7 @@ public final class AuthHandler {
                     arr.add(obj);
                 }
                 return arr;
-            },
+            }),
             false
         ).onSuccess(
             arr -> ctx.response().setStatusCode(200)
@@ -993,7 +1000,7 @@ public final class AuthHandler {
             return;
         }
         ctx.vertx().<Boolean>executeBlocking(
-            () -> this.tokenDao.revoke(id, sub),
+            MdcPropagation.withMdc(() -> this.tokenDao.revoke(id, sub)),
             false
         ).onSuccess(revoked -> {
             if (revoked) {

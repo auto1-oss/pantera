@@ -15,6 +15,7 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Meta;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -580,7 +581,7 @@ public final class ArtifactHandler {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         ctx.vertx().<String>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (!this.crs.exists(rname)) {
                     return null;
                 }
@@ -595,7 +596,7 @@ public final class ArtifactHandler {
                     return repo.getString("type", "unknown");
                 }
                 return "unknown";
-            },
+            }),
             false
         ).onSuccess(
             repoType -> {

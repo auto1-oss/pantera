@@ -22,6 +22,7 @@ import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.cache.PanteraCaches;
@@ -195,7 +196,9 @@ public final class UserHandler {
         }
         final UserDao dao = (UserDao) this.users;
         ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
-            () -> dao.listPaged(query, sortField, ascending, size, page * size),
+            MdcPropagation.withMdc(
+                () -> dao.listPaged(query, sortField, ascending, size, page * size)
+            ),
             false
         ).onSuccess(
             result -> {
@@ -220,7 +223,7 @@ public final class UserHandler {
     private void getUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            () -> this.users.get(uname),
+            MdcPropagation.withMdc(() -> this.users.get(uname)),
             false
         ).onSuccess(
             opt -> {
@@ -282,10 +285,10 @@ public final class UserHandler {
         if (existing.isPresent() && perms.implies(UserHandler.UPDATE)
             || existing.isEmpty() && perms.implies(UserHandler.CREATE)) {
             ctx.vertx().executeBlocking(
-                () -> {
+                MdcPropagation.withMdc(() -> {
                     this.users.addOrUpdate(body, uname);
                     return null;
-                },
+                }),
                 false
             ).onSuccess(
                 ignored -> {
@@ -308,10 +311,10 @@ public final class UserHandler {
     private void deleteUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.remove(uname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -382,10 +385,10 @@ public final class UserHandler {
             }
         }
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.alterPassword(uname, body);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -431,10 +434,10 @@ public final class UserHandler {
     private void enableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.enable(uname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -463,7 +466,7 @@ public final class UserHandler {
     private void disableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.disable(uname);
                 // Immediate token revocation — without this, the
                 // user's existing access tokens, refresh tokens, and
@@ -489,7 +492,7 @@ public final class UserHandler {
                         .log();
                 }
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

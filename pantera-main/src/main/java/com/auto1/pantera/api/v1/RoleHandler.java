@@ -18,6 +18,7 @@ import com.auto1.pantera.asto.misc.Cleanable;
 import com.auto1.pantera.db.dao.PagedResult;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudRoles;
 import io.vertx.core.json.JsonArray;
@@ -140,7 +141,7 @@ public final class RoleHandler {
         }
         final RoleDao dao = (RoleDao) this.roles;
         ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
-            () -> dao.listPaged(query, sortField, ascending, size, page * size),
+            MdcPropagation.withMdc(() -> dao.listPaged(query, sortField, ascending, size, page * size)),
             false
         ).onSuccess(
             result -> {
@@ -165,7 +166,7 @@ public final class RoleHandler {
     private void getRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            () -> this.roles.get(rname),
+            MdcPropagation.withMdc(() -> this.roles.get(rname)),
             false
         ).onSuccess(
             opt -> {
@@ -214,10 +215,10 @@ public final class RoleHandler {
         if (existing.isPresent() && perms.implies(RoleHandler.UPDATE)
             || existing.isEmpty() && perms.implies(RoleHandler.CREATE)) {
             ctx.vertx().executeBlocking(
-                () -> {
+                MdcPropagation.withMdc(() -> {
                     this.roles.addOrUpdate(body, rname);
                     return null;
-                },
+                }),
                 false
             ).onSuccess(
                 ignored -> {
@@ -239,10 +240,10 @@ public final class RoleHandler {
     private void deleteRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.remove(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -270,10 +271,10 @@ public final class RoleHandler {
     private void enableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.enable(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -301,10 +302,10 @@ public final class RoleHandler {
     private void disableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.disable(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

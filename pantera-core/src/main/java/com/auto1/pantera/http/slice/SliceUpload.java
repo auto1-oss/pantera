@@ -105,7 +105,7 @@ public final class SliceUpload implements Slice {
                     final long size = meta.read(Meta.OP_SIZE).map(Long::longValue).orElse(0L);
                     final java.util.List<String> parts = key.parts();
                     final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
-                    AuditLogger.upload("", "", "", "", filename, size);
+                    AuditLogger.upload(filename, size);
                     return ResponseBuilder.created().build();
                 })
         );

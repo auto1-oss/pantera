@@ -78,7 +78,7 @@ public final class SliceDownload implements Slice {
                                     final java.util.List<String> parts = key.parts();
                                     final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
                                     final long size = content.size().orElse(0L);
-                                    AuditLogger.download("", "", "", "", filename, size);
+                                    AuditLogger.download(filename, size);
                                     return ResponseBuilder.ok()
                                         .header(new ContentFileName(line.uri()))
                                         .body(content)

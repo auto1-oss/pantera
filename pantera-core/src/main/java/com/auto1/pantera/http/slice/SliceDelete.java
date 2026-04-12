@@ -71,7 +71,7 @@ public final class SliceDelete implements Slice {
                                 this.events.ifPresent(item -> item.addDeleteEventByKey(key));
                                 final java.util.List<String> parts = key.parts();
                                 final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
-                                AuditLogger.delete("", "", "", "", filename);
+                                AuditLogger.delete(filename);
                             }
                         ).thenApply(none -> ResponseBuilder.noContent().build());
                     } else {

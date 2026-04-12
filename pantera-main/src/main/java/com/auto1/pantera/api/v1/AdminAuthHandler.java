@@ -16,6 +16,7 @@ import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -98,14 +99,14 @@ public final class AdminAuthHandler {
      */
     private void getSettings(final RoutingContext ctx) {
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final Map<String, String> all = this.settingsDao.getAll();
                 final JsonObject result = new JsonObject();
                 for (final Map.Entry<String, String> entry : all.entrySet()) {
                     result.put(entry.getKey(), entry.getValue());
                 }
                 return result;
-            },
+            }),
             false
         ).onSuccess(
             settings -> ctx.response()
@@ -146,12 +147,12 @@ public final class AdminAuthHandler {
             }
         }
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 for (final String key : body.fieldNames()) {
                     this.settingsDao.put(key, body.getValue(key).toString());
                 }
                 return null;
-            },
+            }),
             false
         ).onSuccess(ignored -> {
             EcsLogger.info("com.auto1.pantera.api.v1")
@@ -179,7 +180,7 @@ public final class AdminAuthHandler {
             return;
         }
         ctx.vertx().<Integer>executeBlocking(
-            () -> this.tokenDao.revokeAllForUser(username),
+            MdcPropagation.withMdc(() -> this.tokenDao.revokeAllForUser(username)),
             false
         ).onSuccess(count -> {
             if (this.blocklist != null) {

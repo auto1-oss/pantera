@@ -11,6 +11,7 @@
 package com.auto1.pantera.auth;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.TraceHeaders;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URI;
@@ -116,9 +117,9 @@ public final class OktaOidcClient {
             .add("username", username)
             .add("password", password)
             .build();
-        final HttpRequest request = HttpRequest.newBuilder()
+        final HttpRequest request = withTrace(HttpRequest.newBuilder()
             .uri(URI.create(this.authnUrl))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json"))
             .POST(HttpRequest.BodyPublishers.ofString(authnReq.toString()))
             .build();
         final HttpResponse<String> response = this.client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -243,9 +244,9 @@ public final class OktaOidcClient {
                     .add("stateToken", stateToken)
                     .add("passCode", mfaCode)
                     .build();
-                final HttpRequest request = HttpRequest.newBuilder()
+                final HttpRequest request = withTrace(HttpRequest.newBuilder()
                     .uri(URI.create(href))
-                    .header("Content-Type", "application/json")
+                    .header("Content-Type", "application/json"))
                     .POST(HttpRequest.BodyPublishers.ofString(req.toString()))
                     .build();
                 final HttpResponse<String> resp = this.client.send(
@@ -326,9 +327,9 @@ public final class OktaOidcClient {
 
     private JsonObject sendMfaVerify(final String href, final JsonObject req)
         throws IOException, InterruptedException {
-        final HttpRequest request = HttpRequest.newBuilder()
+        final HttpRequest request = withTrace(HttpRequest.newBuilder()
             .uri(URI.create(href))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json"))
             .POST(HttpRequest.BodyPublishers.ofString(req.toString()))
             .build();
         final HttpResponse<String> resp = this.client.send(
@@ -359,8 +360,8 @@ public final class OktaOidcClient {
             + "&state=" + enc(state)
             + "&sessionToken=" + enc(sessionToken);
         final URI uri = URI.create(this.authorizeUrl + "?" + query);
-        final HttpRequest request = HttpRequest.newBuilder()
-            .uri(uri)
+        final HttpRequest request = withTrace(HttpRequest.newBuilder()
+            .uri(uri))
             .GET()
             .build();
         final HttpResponse<Void> resp = this.client.send(
@@ -461,10 +462,10 @@ public final class OktaOidcClient {
         final String basic = Base64.getEncoder().encodeToString(
             (this.clientId + ":" + this.clientSecret).getBytes(StandardCharsets.UTF_8)
         );
-        final HttpRequest request = HttpRequest.newBuilder()
+        final HttpRequest request = withTrace(HttpRequest.newBuilder()
             .uri(URI.create(this.tokenUrl))
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Authorization", "Basic " + basic)
+            .header("Authorization", "Basic " + basic))
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
         final HttpResponse<String> resp = this.client.send(
@@ -609,16 +610,16 @@ public final class OktaOidcClient {
 
     private JsonObject fetchUserInfo(final String accessToken, final String username) {
         try {
-            final HttpRequest request = HttpRequest.newBuilder()
+            final HttpRequest request = withTrace(HttpRequest.newBuilder()
                 .uri(URI.create(this.userinfoUrl))
-                .header("Authorization", "Bearer " + accessToken)
+                .header("Authorization", "Bearer " + accessToken))
                 .GET()
                 .build();
             final HttpResponse<String> resp = this.client.send(
                 request, HttpResponse.BodyHandlers.ofString()
             );
             if (resp.statusCode() / 100 != 2) {
-                EcsLogger.warn("com.auto1.pantera.auth")
+                EcsLogger.error("com.auto1.pantera.auth")
                     .message(String.format("Okta userinfo endpoint failed: url=%s", this.userinfoUrl))
                     .eventCategory("authentication")
                     .eventAction("userinfo")
@@ -638,7 +639,7 @@ public final class OktaOidcClient {
                 .log();
             return userinfo;
         } catch (final IOException | InterruptedException err) {
-            EcsLogger.warn("com.auto1.pantera.auth")
+            EcsLogger.error("com.auto1.pantera.auth")
                 .message("Failed to fetch Okta userinfo")
                 .eventCategory("authentication")
                 .eventAction("userinfo")
@@ -651,6 +652,15 @@ public final class OktaOidcClient {
             }
             return null;
         }
+    }
+
+    private static HttpRequest.Builder withTrace(final HttpRequest.Builder builder) {
+        final String[] hdrs = TraceHeaders.httpClientHeaders();
+        HttpRequest.Builder b = builder;
+        for (int i = 0; i < hdrs.length; i += 2) {
+            b = b.header(hdrs[i], hdrs[i + 1]);
+        }
+        return b;
     }
 
     private static String enc(final String value) {
