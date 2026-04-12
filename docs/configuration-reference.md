@@ -358,11 +358,13 @@ Settings for the inbound HTTP server.
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `request_timeout` | string | No | `PT2M` | Maximum request duration. ISO-8601 duration or milliseconds. `0` disables. |
+| `proxy_protocol` | string | No | `false` | Enable Proxy Protocol v2 for AWS NLB. When `"true"`, Pantera parses the PROXY header prepended by NLB to extract real client IPs. Applied to all ports (main, API, per-repo). Only enable when Pantera is behind a load balancer that sends Proxy Protocol v2 — enabling without a PP-capable LB will break all connections. |
 
 ```yaml
 meta:
   http_server:
     request_timeout: PT2M
+    proxy_protocol: "true"   # Enable only behind AWS NLB with Proxy Protocol v2
 ```
 
 ---
