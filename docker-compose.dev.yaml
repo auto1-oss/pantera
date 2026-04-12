@@ -1,0 +1,47 @@
+# Dev override — layered on top of the production docker-compose.yaml.
+# Paths are relative to the base compose file dir (pantera-main/docker-compose/).
+#
+# What this changes:
+#   - pantera: builds from source (Dockerfile.dev) instead of pre-built image
+#   - pantera: lighter resource limits, no AWS/trivy/grype volumes
+#   - nginx: HTTPS removed (no SSL certs needed locally)
+#   - prometheus & grafana: disabled
+
+services:
+  pantera:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.dev
+    cpus: 2
+    mem_limit: 2gb
+    mem_reservation: 2gb
+    volumes:
+      - ./pantera/pantera.yml:/etc/pantera/pantera.yml
+      - ./log4j2.xml:/etc/pantera/log4j2.xml
+
+  nginx:
+    ports:
+      - "8081:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+
+  pantera-ui:
+    build:
+      context: ../../pantera-ui
+      dockerfile: Dockerfile
+
+  pantera-db:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pantera -d pantera"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  prometheus:
+    deploy:
+      replicas: 0
+
+  grafana:
+    deploy:
+      replicas: 0
