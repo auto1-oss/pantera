@@ -13,6 +13,7 @@ package com.auto1.pantera.pypi.http;
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.asto.ext.ContentDigest;
 import com.auto1.pantera.asto.ext.Digests;
 import com.auto1.pantera.asto.ext.KeyLastPart;
@@ -133,10 +134,15 @@ final class SliceIndex implements Slice {
                 // reindexed.
                 if (exists) {
                     return this.storage.value(indexKey).thenApply(
-                        content -> ResponseBuilder.ok()
-                            .header("Content-Type", format.contentType() + "; charset=utf-8")
-                            .body(content)
-                            .build()
+                        content -> {
+                            if (!packageName.isEmpty()) {
+                                AuditLogger.resolution();
+                            }
+                            return ResponseBuilder.ok()
+                                .header("Content-Type", format.contentType() + "; charset=utf-8")
+                                .body(content)
+                                .build();
+                        }
                     );
                 }
                 // Self-healing cache: dynamically generate the index
@@ -327,6 +333,7 @@ final class SliceIndex implements Slice {
                         .map(
                             entries -> {
                                 final String json = SimpleJsonRenderer.render(packageName, entries);
+                                AuditLogger.resolution();
                                 return ResponseBuilder.ok()
                                     .header("Content-Type", SimpleApiFormat.JSON.contentType())
                                     .body(
@@ -402,13 +409,16 @@ final class SliceIndex implements Slice {
                         )
                         .collect(StringBuilder::new, StringBuilder::append)
                         .map(
-                            resp -> ResponseBuilder.ok()
-                                .htmlBody(
-                                    String.format(
-                                        "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
-                                        resp.toString()
-                                    ), StandardCharsets.UTF_8)
-                                .build()
+                            resp -> {
+                                AuditLogger.resolution();
+                                return ResponseBuilder.ok()
+                                    .htmlBody(
+                                        String.format(
+                                            "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
+                                            resp.toString()
+                                        ), StandardCharsets.UTF_8)
+                                    .build();
+                            }
                         );
                 }
             }).to(SingleInterop.get()).toCompletableFuture();
