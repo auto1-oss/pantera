@@ -49,6 +49,7 @@
  - feat: one-time metadata backfill CLI for existing packages
  - feat: uv-based E2E test project verifying PEP 691/700 with exclude-newer
  - fix: proxy cache serves JSON with correct Content-Type on cache hits
+ - fix: proxy cache rejects JSON responses with empty `files` array (prevents phantom package claims in groups)
  - fix: relative URLs in JSON index prevent hostname-resolution errors
  - fix: PEP 691 yanked field encoding corrected to string|false per spec
  - fix: .pypi metadata directory excluded from repo-level package index
@@ -65,24 +66,32 @@
 
 ## GroupSlice Performance
  - perf: index-miss fanout restricted to proxy-type members only
+ - feat: hosted-first cascade — index-targeted queries try hosted members before proxies
  - fix: 404 log noise reduced — per-member 404s at DEBUG, aggregate miss at WARN
 
 ## Observability
  - feat: distributed tracing with B3 (openzipkin) and W3C Trace Context support
  - feat: trace.id, span.id, span.parent.id in all log entries per SRE convention
- - feat: SRE2042 validation — malformed trace/span IDs are regenerated and logged
- - feat: traceparent response header on all HTTP responses
- - feat: B3 + W3C header injection into all upstream calls (proxy, SSO, Okta)
+ - feat: SRE2042 validation — malformed/all-zero trace/span IDs regenerated with W3C version byte check
+ - feat: traceparent response header on all HTTP responses (both public and API ports)
+ - feat: B3 + W3C header injection into all upstream calls (all proxy adapters via JettyClientSlice, SSO, Okta)
+ - feat: Okta OIDC client injects trace headers on all 6 HTTP call sites
  - feat: UI propagates traceparent from Elastic APM RUM or generated fallback
  - feat: startup and background job trace context (before HTTP processing)
+ - feat: MDC propagation across all 46 `executeBlocking` worker-thread callsites via `MdcPropagation`
+ - feat: trace context middleware on API port (AsyncApiVerticle) — MDC for trace.id, span.id, client.ip
  - feat: artifact audit logging at INFO level — upload, download, delete, resolution events
+ - feat: audit logger reads repo/package context from MDC (no more empty fields)
+ - feat: artifact resolution audit events wired into PyPI index responses
  - feat: dedicated `artifact.audit` logger with ECS-structured fields
- - feat: Proxy Protocol v2 support for AWS NLB (config-gated via `meta.http_server.proxy_protocol`)
+ - feat: Proxy Protocol v2 support for AWS NLB on all ports (main, API, per-repo)
  - fix: auth failure log levels reclassified — wrong password is WARN, system errors stay ERROR
+ - fix: Okta userinfo endpoint failures reclassified from WARN to ERROR (upstream system error)
  - fix: ECS-compliant HTTP access logging with structured fields
  - fix: package.release_date no longer logged as non-date literal
  - fix: malformed Authorization header returns 401 instead of 500
- - fix: url.original includes full path + query string, sanitized
+ - fix: url.original includes full path + query string, sanitized (extended: password, secret, client_secret)
+ - fix: hot-path INFO logging downgraded to DEBUG (MemberSlice rewrite, cache hits, slow fetches, FORBIDDEN)
 
 ## Cooldown
  - fix: expired cooldown blocks now invalidate the metadata cache (L1 + L2)
