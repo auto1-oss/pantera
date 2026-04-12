@@ -439,7 +439,9 @@ public final class GroupSlice implements Slice {
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
                                 .log();
-                            return queryTargetedMembers(targeted, line, headers, body, ctx);
+                            return queryHostedFirstThenProxy(
+                                targeted, line, headers, body, ctx
+                            );
                         }
                     }
                     // Index miss: hosted repos are fully indexed so the artifact
@@ -635,6 +637,54 @@ public final class GroupSlice implements Slice {
 
             return result;
         });
+    }
+
+    /**
+     * When the index returns multiple members for the same artifact name,
+     * query hosted (non-proxy) members first. If any hosted member returns
+     * 200, serve that immediately without querying proxies. Only fall
+     * through to proxy members if ALL hosted members return non-200.
+     *
+     * <p>This prevents a proxy from "claiming" a package name that exists
+     * on the upstream registry (e.g. PyPI.org) but has zero published files,
+     * when a hosted member has a locally-uploaded version with real files.
+     *
+     * <p>If all targeted members are the same type (all hosted or all proxy),
+     * this degrades to the normal parallel query.
+     */
+    private CompletableFuture<Response> queryHostedFirstThenProxy(
+        final List<MemberSlice> targeted,
+        final RequestLine line,
+        final Headers headers,
+        final Content body,
+        final RequestContext ctx
+    ) {
+        final List<MemberSlice> hosted = targeted.stream()
+            .filter(m -> !m.isProxy())
+            .toList();
+        final List<MemberSlice> proxy = targeted.stream()
+            .filter(MemberSlice::isProxy)
+            .toList();
+        // No partition possible — use standard parallel query
+        if (hosted.isEmpty() || proxy.isEmpty()) {
+            return queryTargetedMembers(targeted, line, headers, body, ctx);
+        }
+        // Try hosted first; fall to proxy only if hosted yields no 200
+        return queryTargetedMembers(hosted, line, headers, body, ctx)
+            .thenCompose(resp -> {
+                if (resp.status().success()) {
+                    return CompletableFuture.completedFuture(resp);
+                }
+                // Hosted members didn't have it — try proxy members
+                EcsLogger.debug("com.auto1.pantera.group")
+                    .message("Hosted miss, cascading to "
+                        + proxy.size() + " proxy member(s)")
+                    .eventCategory("repository")
+                    .eventAction("group_cascade_to_proxy")
+                    .field("repository.name", this.group)
+                    .log();
+                return queryTargetedMembers(proxy, line, headers, body, ctx);
+            });
     }
 
     /**
