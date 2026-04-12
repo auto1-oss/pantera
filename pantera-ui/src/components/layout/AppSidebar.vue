@@ -35,6 +35,9 @@ const userItems = computed<NavItem[]>(() => {
   if (canRead('api_cooldown_permissions')) {
     items.push({ label: 'Cooldown', icon: 'pi pi-clock', to: '/cooldown' })
   }
+  if (canRead('api_repository_permissions')) {
+    items.push({ label: 'Vulnerabilities', icon: 'pi pi-shield', to: '/vulnerabilities' })
+  }
   items.push({ label: 'Quick Setup', icon: 'pi pi-bolt', to: '/setup' })
   return items
 })

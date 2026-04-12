@@ -20,6 +20,15 @@ import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
+import com.auto1.pantera.vuln.DefaultVulnerabilityScanner;
+import com.auto1.pantera.vuln.VulnerabilityScanner;
+import com.auto1.pantera.vuln.VulnerabilitySettings;
+import com.auto1.pantera.vuln.backend.ScannerBackendFactory;
+import com.auto1.pantera.vuln.preparer.ComposerPreparer;
+import com.auto1.pantera.vuln.preparer.GoModulePreparer;
+import com.auto1.pantera.vuln.preparer.MavenPomArtifactPreparer;
+import com.auto1.pantera.vuln.preparer.NpmArtifactPreparer;
+import com.auto1.pantera.vuln.preparer.PypiSdistArtifactPreparer;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.db.dao.RepositoryDao;
@@ -312,6 +321,29 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        // Vulnerability scanning handler
+        final VulnerabilitySettings vsettings = this.settings.vulnerabilitySettings();
+        final VulnerabilityScanner vulnScanner = vsettings.enabled()
+            ? new DefaultVulnerabilityScanner(
+                ScannerBackendFactory.create(vsettings),
+                java.util.List.of(
+                    new NpmArtifactPreparer(),
+                    new MavenPomArtifactPreparer(),
+                    new PypiSdistArtifactPreparer(),
+                    new GoModulePreparer(),
+                    new ComposerPreparer()
+                ),
+                vsettings
+            )
+            : VulnerabilityScanner.NOP;
+        new VulnerabilityHandler(
+            vulnScanner,
+            this.dataSource,
+            vsettings,
+            crs,
+            new RepoData(this.configsStorage, this.caches.storagesCache()),
+            this.security.policy()
+        ).register(router);
         // Start server
         final HttpServer server;
         final String schema;

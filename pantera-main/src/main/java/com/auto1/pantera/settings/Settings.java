@@ -16,6 +16,7 @@ import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.vuln.VulnerabilitySettings;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
@@ -167,5 +168,14 @@ public interface Settings extends AutoCloseable {
      */
     default Optional<ValkeyConnection> valkeyConnection() {
         return Optional.empty();
+    }
+
+    /**
+     * Vulnerability scanning configuration.
+     * Returns disabled settings by default when not configured.
+     * @return Vulnerability settings
+     */
+    default VulnerabilitySettings vulnerabilitySettings() {
+        return VulnerabilitySettings.disabled();
     }
 }

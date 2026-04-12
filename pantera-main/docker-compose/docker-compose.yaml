@@ -61,6 +61,9 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Vulnerability scanner DB directories — persisted across restarts
+      - TRIVY_CACHE_DIR=/var/pantera/trivy/db
+      - GRYPE_DB_CACHE_DIR=/var/pantera/grype/db
     volumes:
       - ./pantera/pantera.yml:/etc/pantera/pantera.yml
       - ./log4j2.xml:/etc/pantera/log4j2.xml
@@ -70,6 +73,9 @@ services:
       - ./pantera/cache:/var/pantera/cache
       - ./pantera/cache/log:/var/pantera/logs/
       - ~/.aws:/home/.aws
+      # Vulnerability scanner databases — downloaded on first scan
+      - trivy-db:/var/pantera/trivy/db
+      - grype-db:/var/pantera/grype/db
     networks:
       - pantera-net
     #  - es
@@ -237,3 +243,5 @@ volumes:
   valkey-data:
   prometheus-data:
   grafana-data:
+  trivy-db:
+  grype-db:

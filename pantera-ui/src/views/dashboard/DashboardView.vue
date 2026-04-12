@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { getDashboardStats, getUiSettings } from '@/api/settings'
+import { getVulnerabilitySummary } from '@/api/vulns'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { repoTypeColor } from '@/utils/repoTypes'
@@ -13,6 +14,7 @@ const config = useConfigStore()
 const auth = useAuthStore()
 const stats = ref<DashboardStats>({ repo_count: 0, artifact_count: 0, total_storage: 0, blocked_count: 0 })
 const loading = ref(true)
+const criticalVulnCount = ref(0)
 
 onMounted(async () => {
   try {
@@ -21,6 +23,15 @@ onMounted(async () => {
     // Stats unavailable
   } finally {
     loading.value = false
+  }
+  // Load critical vulnerability count (best-effort, don't block dashboard)
+  if (auth.hasAction('api_repository_permissions', 'read')) {
+    try {
+      const summaries = await getVulnerabilitySummary()
+      criticalVulnCount.value = summaries.reduce((sum, s) => sum + s.critical, 0)
+    } catch {
+      // Scanning may not be enabled — ignore
+    }
   }
   // UI settings are available to all authenticated users.
   try {
@@ -112,6 +123,17 @@ const statCards = computed(() => [
     accent: 'border-t-red-500',
     iconBg: 'bg-red-500/10 text-red-500',
   },
+  {
+    key: 'critical-vulns',
+    label: 'Critical CVEs',
+    value: String(criticalVulnCount.value),
+    sub: 'Critical vulnerabilities found',
+    icon: 'pi pi-shield',
+    accent: criticalVulnCount.value > 0 ? 'border-t-rose-600' : 'border-t-green-500',
+    iconBg: criticalVulnCount.value > 0
+      ? 'bg-rose-500/10 text-rose-500'
+      : 'bg-green-500/10 text-green-500',
+  },
 ])
 </script>
 
@@ -150,7 +172,7 @@ const statCards = computed(() => [
       </div>
 
       <!-- Stat cards -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div
           v-for="card in statCards"
           :key="card.key"

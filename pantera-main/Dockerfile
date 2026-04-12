@@ -1,9 +1,30 @@
 FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE
 ARG APM_VERSION=1.55.4
+ARG TRIVY_VERSION=0.69.3
+ARG GRYPE_VERSION=0.110.0
 
-# Install curl for downloading Elastic APM agent + jattach for programmatic attachment (jmap + jstack + jcmd + jinfo)
-RUN apk add --no-cache curl jattach
+# Install curl, jattach, and vulnerability scanners (Trivy + Grype).
+# Both are static Go binaries — no glibc required on Alpine.
+# Trivy asset names use a hyphen (Linux-64bit), Grype uses underscore (linux_amd64).
+RUN apk add --no-cache curl jattach && \
+    ARCH="$(uname -m)" && \
+    case "${ARCH}" in \
+      x86_64)  TRIVY_ARCH="Linux-64bit" ; GRYPE_ARCH="amd64" ;; \
+      aarch64) TRIVY_ARCH="Linux-ARM64" ; GRYPE_ARCH="arm64" ;; \
+      armv7l)  TRIVY_ARCH="Linux-ARM"   ; GRYPE_ARCH="armv6" ;; \
+      *)       echo "Unsupported arch: ${ARCH}" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${TRIVY_ARCH}.tar.gz" \
+      -o /tmp/trivy.tar.gz && \
+    tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy && \
+    rm /tmp/trivy.tar.gz && \
+    chmod 755 /usr/local/bin/trivy && \
+    curl -fsSL "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_${GRYPE_ARCH}.tar.gz" \
+      -o /tmp/grype.tar.gz && \
+    tar -xzf /tmp/grype.tar.gz -C /usr/local/bin grype && \
+    rm /tmp/grype.tar.gz && \
+    chmod 755 /usr/local/bin/grype
 
 ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=300 \
   -XX:G1HeapRegionSize=16m \
@@ -20,7 +41,8 @@ ENV JVM_ARGS="-XX:+UseG1GC -XX:MaxGCPauseMillis=300 \
 
 RUN addgroup -g 2020 -S pantera && \
     adduser -u 2021 -S -G pantera -s /sbin/nologin pantera && \
-    mkdir -p /etc/pantera /usr/lib/pantera /var/pantera/logs/dumps /var/pantera/cache/tmp /opt/apm && \
+    mkdir -p /etc/pantera /usr/lib/pantera /var/pantera/logs/dumps /var/pantera/cache/tmp /opt/apm \
+             /var/pantera/trivy/db /var/pantera/grype/db && \
     chown -R pantera:pantera /etc/pantera /usr/lib/pantera /var/pantera && \
     curl -L "https://repo1.maven.org/maven2/co/elastic/apm/elastic-apm-agent/${APM_VERSION}/elastic-apm-agent-${APM_VERSION}.jar" \
     -o /opt/apm/elastic-apm-agent.jar && \
@@ -28,6 +50,10 @@ RUN addgroup -g 2020 -S pantera && \
 
 ENV TMPDIR=/var/pantera/cache/tmp
 ENV PANTERA_VERSION=2.0.7
+# Vulnerability scanner DB directories — each scanner downloads its CVE database
+# on first scan and caches it here. Mount named volumes for persistence.
+ENV TRIVY_CACHE_DIR=/var/pantera/trivy/db
+ENV GRYPE_DB_CACHE_DIR=/var/pantera/grype/db
 
 USER 2021:2020
 
