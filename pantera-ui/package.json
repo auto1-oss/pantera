@@ -16,7 +16,7 @@
     "@elastic/apm-rum": "5.17.4",
     "@elastic/apm-rum-vue": "2.1.14",
     "@primevue/themes": "^4.3.0",
-    "axios": "^1.7.0",
+    "axios": "^1.15.0",
     "chart.js": "^4.4.0",
     "pinia": "^2.3.0",
     "primeicons": "^7.0.0",
