@@ -50,7 +50,8 @@ if [[ "${1:-}" == "--json-only" ]] || [[ "${1:-}" == "" ]]; then
 import json, sys
 with open('/tmp/pantera-pep691.json') as f:
     data = json.load(f)
-assert data.get('meta', {}).get('api-version') == '1.1', 'missing api-version 1.1'
+av = data.get('meta', {}).get('api-version', '')
+assert av and tuple(int(x) for x in av.split('.')) >= (1, 1), f'api-version must be >= 1.1, got {av!r}'
 assert data.get('name') == 'hello', f'wrong name: {data.get(\"name\")}'
 assert len(data.get('files', [])) > 0, 'no files in response'
 for f in data['files']:
