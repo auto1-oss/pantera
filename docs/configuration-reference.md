@@ -361,14 +361,20 @@ Settings for the inbound HTTP server.
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `request_timeout` | string | No | `PT2M` | Maximum request duration. ISO-8601 duration or milliseconds. `0` disables. |
-| `proxy_protocol` | string | No | `false` | Enable Proxy Protocol v2 for AWS NLB. When `"true"`, Pantera parses the PROXY header prepended by NLB to extract real client IPs. Applied to all ports (main, API, per-repo). Only enable when Pantera is behind a load balancer that sends Proxy Protocol v2 — enabling without a PP-capable LB will break all connections. |
+| `proxy_protocol` | string | No | `false` | Enable Proxy Protocol v2 on the **main + per-repo** listeners. When `"true"`, Pantera parses the PROXYv2 header prepended by an upstream load balancer (typically AWS NLB with `proxy_protocol_v2.enabled` on the target group) to extract real client IPs. Only enable when the LB actually sends PROXYv2 — enabling without a PP-capable LB breaks every connection because plain `GET /` bytes are misparsed as a malformed PROXY header. |
+| `api_proxy_protocol` | string | No | value of `proxy_protocol` | Per-listener PROXYv2 toggle for the **API port** (default `8086`). Use this when the main port is behind an NLB but the API port is behind an ALB — ALB does not emit PROXYv2 and would fail every health check if PROXYv2 were enabled on the API listener. Set to `"false"` to keep PROXYv2 on for the main port and off for the API port. Defaults to `proxy_protocol`'s value for backward compatibility. |
 
 ```yaml
 meta:
   http_server:
     request_timeout: PT2M
-    proxy_protocol: "true"   # Enable only behind AWS NLB with Proxy Protocol v2
+    # NLB → main port (real client IPs preserved via PROXYv2)
+    proxy_protocol: "true"
+    # ALB → API port (ALB doesn't emit PROXYv2; use X-Forwarded-For instead)
+    api_proxy_protocol: "false"
 ```
+
+> **Topology note (mixed NLB + ALB):** an ALB terminates the L7 HTTP connection and adds `X-Forwarded-For` rather than emitting a PROXYv2 preamble. If the API listener has PROXYv2 enabled but is fronted by an ALB, ALB health checks (and every real request) will hit Pantera's PROXY decoder instead of the HTTP parser, the decoder will throw `HAProxyProtocolException`, the connection will close, and the target group will mark Pantera unhealthy. Set `api_proxy_protocol: "false"` in this topology.
 
 ---
 

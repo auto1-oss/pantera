@@ -170,12 +170,42 @@ public interface Settings extends AutoCloseable {
     }
 
     /**
-     * Whether Proxy Protocol v2 is enabled for AWS NLB integration.
-     * When true, the HTTP server will parse the PROXY protocol header
-     * prepended by the NLB to obtain real client IPs.
-     * @return True if proxy protocol should be enabled on the HTTP server
+     * Whether Proxy Protocol v2 is enabled for the main + per-repo HTTP listeners.
+     * When true, the HTTP server will parse the PROXYv2 header prepended by an
+     * upstream load balancer (typically AWS NLB with
+     * {@code proxy_protocol_v2.enabled} on the target group) to obtain real
+     * client IPs.
+     *
+     * <p>Application Load Balancers (ALB) do <em>not</em> emit PROXYv2 — they
+     * forward an L7 HTTP request with {@code X-Forwarded-For}. Enabling this
+     * flag for an ALB-fronted listener will break every connection (including
+     * health checks) because the ALB's plain {@code GET /} bytes will be
+     * misparsed as a malformed PROXY header. See {@link #apiProxyProtocol()}
+     * for the API-port-specific override.
+     *
+     * @return True if proxy protocol should be enabled on the main and per-repo
+     *     HTTP listeners
      */
     default boolean proxyProtocol() {
         return false;
+    }
+
+    /**
+     * Whether Proxy Protocol v2 is enabled specifically for the API listener
+     * (typically port 8086). Allows operators with mixed topologies (NLB →
+     * main port + ALB → API port) to enable PROXYv2 on the NLB-fronted
+     * listeners without breaking ALB health checks on the API port.
+     *
+     * <p>Default: returns {@link #proxyProtocol()} for backward compatibility
+     * — pre-2.1.2 deployments that set a single {@code proxy_protocol: true}
+     * keep their existing behaviour. Set
+     * {@code meta.http_server.api_proxy_protocol: false} explicitly to disable
+     * PROXYv2 only for the API listener.
+     *
+     * @return True if proxy protocol should be enabled on the API listener
+     * @since 2.1.2
+     */
+    default boolean apiProxyProtocol() {
+        return this.proxyProtocol();
     }
 }

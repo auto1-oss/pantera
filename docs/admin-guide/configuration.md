@@ -191,10 +191,23 @@ Inbound HTTP server settings.
 ```yaml
 meta:
   http_server:
-    request_timeout: PT2M     # ISO-8601 duration or milliseconds
+    request_timeout: PT2M       # ISO-8601 duration or milliseconds (0 disables)
+    proxy_protocol: "true"      # Enable PROXYv2 on main + per-repo listeners (NLB-fronted)
+    api_proxy_protocol: "false" # Disable PROXYv2 on the API port (ALB-fronted)
 ```
 
-Set to `0` to disable the request timeout. The default is 2 minutes.
+Set `request_timeout` to `0` to disable the request timeout. The default is 2 minutes.
+
+### Mixed NLB + ALB topology
+
+PROXYv2 is enabled per listener as of 2.1.2:
+
+- `proxy_protocol` — applies to the **main port** and **per-repository ports**. Enable this when those ports sit behind an AWS NLB target group with `proxy_protocol_v2.enabled = true`.
+- `api_proxy_protocol` — applies to the **API port** only (typically `8086`). Defaults to whatever `proxy_protocol` is set to (backward compatible). Set to `"false"` when the API port is behind an ALB while the main port stays behind an NLB.
+
+ALBs **do not** emit PROXYv2 — they terminate the L7 HTTP connection and forward a fresh request with `X-Forwarded-For`. Enabling PROXYv2 on an ALB-fronted listener breaks every connection (including health checks) because the decoder misparses the ALB's plain `GET /` bytes as a malformed PROXY header. The symptom is that the ALB target group reports the API port unhealthy with no useful Pantera log entry. The fix is `api_proxy_protocol: "false"`.
+
+For the full key reference, see [Configuration Reference §1.8](../configuration-reference.md#18-metahttp_server).
 
 ---
 

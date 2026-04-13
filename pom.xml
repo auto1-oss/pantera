@@ -14,7 +14,7 @@ Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.auto1.pantera</groupId>
   <artifactId>pantera</artifactId>
-  <version>2.1.1</version>
+  <version>2.1.2</version>
   <packaging>pom</packaging>
   <name>pantera</name>
   <modules>
