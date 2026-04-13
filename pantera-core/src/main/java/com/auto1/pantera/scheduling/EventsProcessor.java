@@ -106,7 +106,6 @@ public final class EventsProcessor<T> extends QuartzJob {
                     .eventCategory("scheduling")
                     .eventAction("event_process")
                     .eventOutcome("success")
-                    .field("process.thread.name", Thread.currentThread().getName())
                     .log();
             }
         } finally {

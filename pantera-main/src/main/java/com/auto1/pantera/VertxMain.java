@@ -23,7 +23,6 @@ import com.auto1.pantera.http.misc.StorageExecutors;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
-import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.scheduling.ScriptScheduler;
 import com.auto1.pantera.settings.ConfigFile;
@@ -749,7 +748,6 @@ public final class VertxMain {
             .eventCategory("server")
             .eventAction("server_start")
             .eventOutcome("success")
-            .field("service.version", new PanteraProperties().version())
             .log();
         final VertxMain app = new VertxMain(config, port);
 
