@@ -806,9 +806,18 @@ public class RepositorySlices {
                 );
                 break;
             case "conan":
+                // ItemTokenizer signs its own per-item JWTs with the same RS256
+                // key pair the main auth flow uses. The Tokens interface does
+                // not expose the keys, so the cast is explicit — production
+                // always wires a JwtTokens here (see VertxMain).
+                final com.auto1.pantera.auth.JwtTokens jwtTokens =
+                    (com.auto1.pantera.auth.JwtTokens) tokens;
                 slice = new ConanSlice(
                     cfg.storage(), securityPolicy(), authentication(), tokens,
-                    new ItemTokenizer(Vertx.vertx()), cfg.name()
+                    new ItemTokenizer(
+                        Vertx.vertx(), jwtTokens.publicKey(), jwtTokens.privateKey()
+                    ),
+                    cfg.name()
                 );
                 break;
             case "hexpm":

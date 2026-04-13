@@ -109,8 +109,11 @@ docker run -d \
   -p 8080:8080 -p 8086:8086 -p 8087:8087 \
   -v /path/to/pantera.yml:/etc/pantera/pantera.yml \
   -v /path/to/data:/var/pantera \
-  -e JWT_SECRET=your-secret-key \
-  pantera:2.0.0
+  -v /path/to/jwt-private.pem:/etc/pantera/jwt-private.pem:ro \
+  -v /path/to/jwt-public.pem:/etc/pantera/jwt-public.pem:ro \
+  -e JWT_PRIVATE_KEY_PATH=/etc/pantera/jwt-private.pem \
+  -e JWT_PUBLIC_KEY_PATH=/etc/pantera/jwt-public.pem \
+  pantera:2.1.2
 ```
 
 ### JAR Upgrade

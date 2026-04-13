@@ -29,7 +29,7 @@ class CliTest {
     }
 
     @Test
-    void testMain() {
+    void testMain() throws java.security.NoSuchAlgorithmException {
         Cli.main();
     }
 }

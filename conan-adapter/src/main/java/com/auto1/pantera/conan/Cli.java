@@ -58,13 +58,23 @@ public final class Cli {
      * Entry point.
      * @param args Command line arguments.
      */
-    public static void main(final String... args) {
+    public static void main(final String... args) throws java.security.NoSuchAlgorithmException {
         final Path path = Paths.get("/home/user/.conan_server/data");
         final Storage storage = new FileStorage(path);
         final ConanRepo repo = new ConanRepo(storage);
         repo.batchUpdateIncrementally(Key.ROOT);
         final Vertx vertx = Vertx.vertx();
-        final ItemTokenizer tokenizer = new ItemTokenizer(vertx.getDelegate());
+        // Demo CLI: generate a fresh RSA key pair per run. Real deployments
+        // thread the cluster-wide key pair through RepositorySlices.
+        final java.security.KeyPairGenerator kpg =
+            java.security.KeyPairGenerator.getInstance("RSA");
+        kpg.initialize(2048);
+        final java.security.KeyPair kp = kpg.generateKeyPair();
+        final ItemTokenizer tokenizer = new ItemTokenizer(
+            vertx.getDelegate(),
+            (java.security.interfaces.RSAPublicKey) kp.getPublic(),
+            (java.security.interfaces.RSAPrivateKey) kp.getPrivate()
+        );
         try (VertxSliceServer server =
             new VertxSliceServer(
                 vertx, new LoggingSlice(

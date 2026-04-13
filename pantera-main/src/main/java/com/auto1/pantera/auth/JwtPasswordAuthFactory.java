@@ -29,23 +29,23 @@ import java.util.Optional;
 
 /**
  * Factory for JWT-as-password authentication.
- * <p>
- * This factory creates a {@link JwtPasswordAuth} instance that validates
- * JWT tokens used as passwords in Basic Authentication. The JWT secret
- * is read from the pantera.yml configuration.
- * </p>
- * <p>
- * Configuration in pantera.yml:
+ *
+ * <p>Creates a {@link JwtPasswordAuth} backed by a Vert.x {@link JWTAuth}
+ * configured for RS256 verification against the cluster's public key — the
+ * same key pair {@code JwtTokens} uses to sign API tokens. Reads
+ * {@code meta.jwt.public-key-path} from {@code pantera.yml} via
+ * {@link com.auto1.pantera.settings.JwtSettings}.
+ *
+ * <p>Configuration in {@code pantera.yml}:
  * <pre>
  * meta:
  *   jwt:
- *     secret: "${JWT_SECRET}"
+ *     private-key-path: "${JWT_PRIVATE_KEY_PATH}"
+ *     public-key-path:  "${JWT_PUBLIC_KEY_PATH}"
  *   credentials:
  *     - type: jwt-password  # This enables JWT-as-password auth
- *     - type: file
- *       path: _credentials.yaml
+ *     - type: local
  * </pre>
- * </p>
  *
  * @since 1.20.7
  */

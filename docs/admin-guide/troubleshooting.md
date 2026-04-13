@@ -160,7 +160,7 @@ curl -X POST http://localhost:8086/api/v1/auth/token \
 | Username does not match token subject | For jwt-password auth, the username must match the `sub` claim |
 | User lacks read permissions | Check user roles and permissions via API or YAML files |
 | Keycloak/Okta `user-domains` mismatch | Verify the user's email domain matches the configured domains |
-| Wrong JWT secret | All nodes in HA must use the same `meta.jwt.secret` |
+| Wrong JWT keys | All nodes in HA must use the same RS256 key pair (`meta.jwt.private-key-path`, `meta.jwt.public-key-path`). A token signed by one node must be verifiable by every other node. |
 | Auth provider disabled | Check `GET /api/v1/auth/providers` for provider status |
 
 ---

@@ -10,8 +10,9 @@
 #      metadata, search index, and node registry.
 #   3. All instances MUST connect to the same Valkey instance for cache
 #      invalidation, negative cache, and cooldown state.
-#   4. JWT secret MUST be identical across all instances so tokens issued
-#      by one instance are valid on all others.
+#   4. The RS256 JWT key pair MUST be identical across all instances so
+#      tokens issued by one instance verify on all others. Mount the same
+#      PEM files (or reference the same secret manager) on every node.
 #
 # Config propagation:
 #   When repository configs are stored in S3, all instances can read them.
@@ -33,11 +34,12 @@ meta:
       accessKeyId: ${MINIO_ROOT_USER}
       secretAccessKey: ${MINIO_ROOT_PASSWORD}
 
-  # JWT token settings - secret must be identical across all instances
+  # JWT token settings — RS256 key pair must be identical across all instances
   jwt:
-    expires: true
-    expiry-seconds: 86400
-    secret: ${JWT_SECRET}
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
 
   credentials:
     - type: env
