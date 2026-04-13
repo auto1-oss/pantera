@@ -215,6 +215,9 @@ public final class SettingsHandler {
                 if (uiSettings.containsKey("grafana_url")) {
                     ui.put("grafana_url", uiSettings.getString("grafana_url"));
                 }
+                if (uiSettings.containsKey("registry_url")) {
+                    ui.put("registry_url", uiSettings.getString("registry_url"));
+                }
             });
         }
         ctx.response()
@@ -311,6 +314,9 @@ public final class SettingsHandler {
                 final JsonObject uiJson = new JsonObject();
                 if (uiSettings.containsKey("grafana_url")) {
                     uiJson.put("grafana_url", uiSettings.getString("grafana_url"));
+                }
+                if (uiSettings.containsKey("registry_url")) {
+                    uiJson.put("registry_url", uiSettings.getString("registry_url"));
                 }
                 if (!uiJson.isEmpty()) {
                     response.put("ui", uiJson);

@@ -71,6 +71,7 @@ function searchProxyTypes(event: { query: string }) {
 
 // External links
 const grafanaUrl = ref('')
+const registryUrl = ref('')
 
 onMounted(async () => {
   try {
@@ -81,6 +82,7 @@ onMounted(async () => {
     settings.value = s
     prefixes.value = (s.prefixes ?? []).join(', ')
     grafanaUrl.value = s.ui?.grafana_url ?? config.grafanaUrl
+    registryUrl.value = s.ui?.registry_url ?? config.registryUrl
     if (s.jwt) {
       jwtExpires.value = s.jwt.expires
       jwtExpirySeconds.value = s.jwt.expiry_seconds
@@ -280,8 +282,9 @@ function addRepoType() {
 
 async function saveExternalLinks() {
   try {
-    await updateSettingsSection('ui', { grafana_url: grafanaUrl.value })
+    await updateSettingsSection('ui', { grafana_url: grafanaUrl.value, registry_url: registryUrl.value })
     config.grafanaUrl = grafanaUrl.value
+    config.registryUrl = registryUrl.value
     notify.success('External links updated')
   } catch {
     notify.error('Failed to save external links')
@@ -601,6 +604,10 @@ async function saveExternalLinks() {
             <div>
               <label class="text-sm text-gray-500 block mb-1">Grafana URL</label>
               <InputText v-model="grafanaUrl" class="w-full" placeholder="https://grafana.example.com" />
+            </div>
+            <div>
+              <label class="text-sm text-gray-500 block mb-1">Registry URL</label>
+              <InputText v-model="registryUrl" class="w-full" placeholder="https://pantera.example.com" />
             </div>
             <div>
               <span class="text-sm text-gray-500">Health Endpoint:</span>

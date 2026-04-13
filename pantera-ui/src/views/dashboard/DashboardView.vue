@@ -26,6 +26,7 @@ onMounted(async () => {
   try {
     const uiSettings = await getUiSettings()
     if (uiSettings.ui?.grafana_url) config.grafanaUrl = uiSettings.ui.grafana_url
+    if (uiSettings.ui?.registry_url) config.registryUrl = uiSettings.ui.registry_url
   } catch {
     // Grafana link unavailable — not critical
   }

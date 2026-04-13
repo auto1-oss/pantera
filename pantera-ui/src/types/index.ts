@@ -236,6 +236,7 @@ export interface Settings {
   }
   ui?: {
     grafana_url?: string
+    registry_url?: string
   }
 }
 
