@@ -11,7 +11,10 @@
 package com.auto1.pantera.scheduling;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.trace.SpanContext;
 import java.io.IOException;
+import org.slf4j.MDC;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -81,12 +84,19 @@ public final class TempFileCleanupJob implements Job {
 
     @Override
     public void execute(final JobExecutionContext context) throws JobExecutionException {
-        final JobDataMap data = context.getMergedJobDataMap();
-        final Path dir = resolveCleanupDir(data);
-        final long max = data.containsKey(MAX_AGE_MINUTES_KEY)
-            ? data.getLong(MAX_AGE_MINUTES_KEY)
-            : DEFAULT_MAX_AGE_MINUTES;
-        cleanup(dir, max);
+        MDC.put(EcsMdc.TRACE_ID, SpanContext.generateHex16());
+        MDC.put(EcsMdc.SPAN_ID, SpanContext.generateHex16());
+        try {
+            final JobDataMap data = context.getMergedJobDataMap();
+            final Path dir = resolveCleanupDir(data);
+            final long max = data.containsKey(MAX_AGE_MINUTES_KEY)
+                ? data.getLong(MAX_AGE_MINUTES_KEY)
+                : DEFAULT_MAX_AGE_MINUTES;
+            cleanup(dir, max);
+        } finally {
+            MDC.remove(EcsMdc.TRACE_ID);
+            MDC.remove(EcsMdc.SPAN_ID);
+        }
     }
 
     /**

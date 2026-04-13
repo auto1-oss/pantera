@@ -365,7 +365,7 @@ public final class MavenGroupSlice implements Slice {
 
                         // Log slow fetches (>500ms) - expected for proxy repos
                         if (fetchDuration > 500) {
-                            EcsLogger.info("com.auto1.pantera.maven")
+                            EcsLogger.debug("com.auto1.pantera.maven")
                                 .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
                                 .eventCategory("repository")
                                 .eventAction("metadata_fetch")

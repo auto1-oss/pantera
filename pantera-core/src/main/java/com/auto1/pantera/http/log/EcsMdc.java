@@ -39,6 +39,22 @@ public final class EcsMdc {
     public static final String TRACE_ID = "trace.id";
 
     /**
+     * ECS {@code span.id} — 16-character hex span identifier for this request.
+     * Always generated fresh per request by {@link com.auto1.pantera.http.log.SpanContext}.
+     *
+     * @since 2.1.0
+     */
+    public static final String SPAN_ID = "span.id";
+
+    /**
+     * ECS {@code span.parent.id} — 16-character hex span identifier of the caller.
+     * Extracted from incoming B3/W3C span-id header; absent if no upstream span.
+     *
+     * @since 2.1.0
+     */
+    public static final String PARENT_SPAN_ID = "span.parent.id";
+
+    /**
      * ECS {@code client.ip} — originating client IP address.
      * Extracted from X-Forwarded-For → X-Real-IP → TCP remote address, in that order.
      */
@@ -50,6 +66,31 @@ public final class EcsMdc {
      * by the auth middleware which updates this MDC entry.
      */
     public static final String USER_NAME = "user.name";
+
+    /**
+     * Repository type (e.g. "maven", "npm", "pypi-proxy").
+     * Set by EcsLoggingSlice when the request targets a named repository.
+     */
+    public static final String REPO_TYPE = "repository.type";
+
+    /**
+     * Repository name.
+     * Set by EcsLoggingSlice when the request targets a named repository.
+     */
+    public static final String REPO_NAME = "repository.name";
+
+    /**
+     * Package / artifact name.
+     * Set by adapter-specific slices when a package name can be derived
+     * from the request path.
+     */
+    public static final String PACKAGE_NAME = "package.name";
+
+    /**
+     * Package / artifact version.
+     * Set by adapter-specific slices when a version can be derived.
+     */
+    public static final String PACKAGE_VERSION = "package.version";
 
     private EcsMdc() {
         // constants only

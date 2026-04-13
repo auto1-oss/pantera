@@ -2,6 +2,114 @@
 
 ---
 
+## v2.1.0 (April 2026)
+
+### Performance
+
+- **GroupSlice proxy-only fanout on index miss** — when the artifact index cannot resolve a name (metadata endpoints, unknown paths), the fallback fanout is now restricted to proxy members of the group. Hosted (local) members are skipped because an absent index entry means the artifact was never uploaded there. This eliminates unnecessary connections and 404 log noise from hosted members on every group metadata request.
+
+### Added
+
+- **Structured search query syntax** — the `GET /api/v1/search` `q` parameter now accepts field-prefixed filters:
+  - `name:value` — case-insensitive substring match on artifact name
+  - `version:value` — case-insensitive substring match on version
+  - `repo:value` — exact match on repository name
+  - `type:value` — prefix match on repository type (strips `-proxy`/`-group`)
+  - Combine with `AND` / `OR` and parentheses: `name:pydantic AND (version:2.12 OR version:2.11)`
+  - Fully backward-compatible: plain text queries (no prefixes) work as before.
+  - Implemented by `SearchQueryParser` (`pantera-main/.../index/SearchQueryParser.java`).
+
+- **Server-side search, sort, and pagination for users and roles** — `GET /api/v1/users` and `GET /api/v1/roles` now accept:
+  - `q` — case-insensitive substring filter on username/email (users) or role name (roles)
+  - `sort` — sort field: `username`, `email`, `enabled`, `auth_provider` (users); `name`, `enabled` (roles)
+  - `sort_dir` — `asc` or `desc`
+  - Filtering and sorting run as SQL queries using `COUNT(*) OVER()` window functions for single-pass pagination.
+
+### Fixed
+
+- **Search backend scalability** (7 fixes in `DbArtifactIndex` / `SearchHandler`):
+  1. `SortField` enum replaces raw `String` in `buildOrderBy` — prevents SQL injection on sort parameter.
+  2. Facet aggregations only computed on page 0 (`includeFacets` flag) — avoids expensive `GROUP BY` on every page change.
+  3. Fallback `COUNT(*)` when result is empty and offset is non-zero — correctly reports total on deep pages.
+  4. `MAX_OFFSET = 10,000` — caps the effective SQL `OFFSET`; requests exceeding this return `400 Bad Request`.
+  5. Permission-aware SQL filtering — passes `repo_name = ANY(?)` to PostgreSQL instead of overfetching and filtering in Java.
+  6. `SET LOCAL statement_timeout` on the FTS aggregation path — prevents runaway facet queries.
+  7. `GROUP BY repo_type` in SQL, suffix merging in Java — reduces `GROUP BY` cardinality for facet counts.
+  - Bonus: `getStats()` reads the `mv_artifact_totals` materialized view instead of `COUNT(*)` on the full table.
+
+- **Smart 404 log levels in GroupSlice** — individual 404 responses from group members during fanout are now logged at `DEBUG` instead of `INFO`. A single member miss is not actionable and was generating high log volume at busy installations. Server errors (5xx) remain at `WARN`.
+
+- **ECS-compliant HTTP request logging** — `EcsLoggingSlice` now emits proper ECS fields (`http.request.method`, `url.original`, `http.response.status_code`) instead of a raw `"GET /path 404"` message string. This fixes Elasticsearch field-type conflicts when ingesting Pantera logs.
+
+- **`package.release_date` ECS field fix** — four package processors (Composer, Go, PyPI proxies and Go `CachedProxySlice`) emitted the string `"unknown"` as the `package.release_date` ECS field when the release date was unavailable. Elasticsearch rejected these as invalid date values. The field is now omitted entirely when no release date is known.
+
+### Security
+
+- **RS256 asymmetric JWT signing** — replaced the HS256 shared secret (which was publicly visible in the OSS repo) with RS256 asymmetric key pairs using the [Auth0 java-jwt](https://github.com/auth0/java-jwt) library. The private key signs tokens; the public key verifies them. Even if the public key is exposed, tokens cannot be forged. This is a **breaking change** — all existing tokens are invalidated on upgrade. See the [upgrade guide](admin-guide/upgrade-procedures.md) for migration steps.
+- **Unified auth handler** — `UnifiedJwtAuthHandler` replaces both `JwtTokenAuth` (port 80) and the raw Vert.x `JWTAuthHandler` (port 8086) with a single code path. The management API (token generation, user management, settings) is now protected by the same JTI + username validation as the artifact proxy. Previously, forged tokens without a JTI could access the management API.
+- **JTI + username ownership check** — the token validation query now checks `WHERE id = ? AND username = ? AND revoked = FALSE` (previously missing the `username` clause). An attacker who obtained a valid JTI from one user's token could no longer embed it in a forged token with a different `sub` claim.
+- **Token type scope enforcement** — every token carries a mandatory `type` claim (`access`, `refresh`, or `api`). Refresh tokens are only accepted on `/auth/refresh`. API tokens are only accepted on the artifact proxy (port 80), not the management API. This prevents a leaked CI/CD token from being used to generate more tokens.
+
+### Added
+
+- **Access + Refresh + API token architecture** — industry-standard OAuth 2.0 pattern:
+  - **Access tokens** (default 1 hour, configurable) — used for all requests, verified by signature + revocation blocklist only (zero DB hit).
+  - **Refresh tokens** (default 7 days, configurable) — used to silently obtain new access tokens. Stored in DB with JTI. Rotated on each refresh.
+  - **API tokens** (user-chosen TTL, max 90 days, or permanent with `expiry_days: 0`) — for CI/CD pipelines. Stored in DB with JTI.
+- **Multi-node revocation blocklist** — immediate access token revocation across all Pantera nodes. When Valkey is available, uses pub/sub for near-instant propagation (reuses existing `CacheInvalidationPubSub` infrastructure). Falls back to DB polling (5-second interval) for single-node / no-Valkey deployments. Supports both JTI-level and username-level revocation.
+- **Admin auth settings (UI + API)** — new "Authentication Policy" section in the admin settings page. Configurable values: access token TTL, refresh token TTL, API token max TTL, and whether permanent tokens are allowed. Settings stored in the `auth_settings` DB table, editable at runtime without redeployment.
+- **Admin user revocation** — `POST /api/v1/admin/revoke-user/:username` immediately invalidates all tokens for a user across all nodes (DB revocation + blocklist broadcast). Available in the admin UI as a "Revoke All Tokens" action.
+- **Backend search filtering and sorting** — search filtering (by type, repo) and sorting (by name, version, date, relevance) now run as PostgreSQL queries instead of client-side JavaScript. Sidebar facet counts are computed via DB `GROUP BY` aggregations. Replaced separate `COUNT(*)` queries with `COUNT(*) OVER()` window functions to halve GIN index scans. Version sorting handles non-numeric suffixes (`-SNAPSHOT`, `-jre`). Natural numeric sort in the repository tree browser (6.2 before 6.10). (#22)
+- **PEP 691 JSON Simple API** — Pantera now serves the PEP 691 JSON format when clients request `Accept: application/vnd.pypi.simple.v1+json`. Includes `upload-time` per PEP 700, which fixes `uv lock --exclude-newer` failing against Pantera proxy repos. For proxy repos, JSON is fetched from upstream PyPI and cached with rewritten URLs. For hosted repos, JSON is generated from sidecar metadata.
+- **PEP 503 full compliance for hosted repos** — hosted PyPI repo index pages now include `data-requires-python`, `data-yanked`, and `data-dist-info-metadata` attributes on file links. Metadata is extracted from wheel `METADATA` / sdist `PKG-INFO` at upload time and stored in sidecar JSON files (`.pypi/metadata/{package}/{filename}.json`).
+- **Yank/unyank API and UI** — `POST /api/v1/pypi/:repo/:package/:version/yank` and `/unyank` endpoints for PEP 592 compliance. Yank/unyank buttons in the artifact browser UI with confirmation dialogs and optional reason field.
+- **PyPI metadata migration CLI** — `java -jar pantera-backfill.jar --mode pypi-metadata --storage-root <path> --repos <repo1,repo2>` backfills sidecar metadata for existing packages. Extracts `Requires-Python` from archives and sets `upload-time` to file last-modified. Supports `--dry-run`.
+
+### Changed
+
+- **Login/callback response format** — `POST /api/v1/auth/token` and `POST /api/v1/auth/callback` now return `{token, refresh_token, expires_in}` instead of `{token}`. The UI handles both formats during migration.
+- **`POST /api/v1/auth/refresh`** — now requires a refresh token (not an access token) in the `Authorization` header. Returns a new token pair (access + rotated refresh).
+- **`POST /api/v1/auth/token/generate`** — validates `expiry_days` against admin-configured limits. Permanent tokens (`expiry_days: 0`) are only allowed when `api_token_allow_permanent` is `true` in auth settings.
+- **Configuration** — `meta.jwt.secret` is removed. Replaced with `meta.jwt.private-key-path` and `meta.jwt.public-key-path` (PEM files, support `${ENV_VAR}` syntax). Startup fails fast with an actionable error if the old `secret` field is present.
+
+### New Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/admin/auth-settings` | GET | Returns all auth settings |
+| `/api/v1/admin/auth-settings` | PUT | Updates auth settings |
+| `/api/v1/admin/revoke-user/:username` | POST | Revokes all tokens for a user |
+| `/api/v1/pypi/:repo/:package/:version/yank` | POST | Yank a PyPI package version (PEP 592) |
+| `/api/v1/pypi/:repo/:package/:version/unyank` | POST | Unyank a PyPI package version |
+
+### Database Migrations
+
+- `V105` — adds `token_type` column to `user_tokens` (values: `api`, `refresh`)
+- `V106` — creates `revocation_blocklist` table for DB-polling fallback mode
+- `V107` — creates `auth_settings` table with default token policy values
+
+### New Dependencies
+
+- `com.auth0:java-jwt:4.4.0` — battle-tested JWT library for RS256 signing and verification
+
+### Documentation
+
+- Updated admin guide: RS256 key management, migration from HS256, auth settings, user revocation
+- Updated user guide: session behaviour, API token management, migration notice
+- Updated developer guide: JWT architecture section, testing auth, adding protected endpoints
+- Updated REST API reference: all changed/new endpoints with request/response examples
+- Updated configuration reference: new YAML fields, environment variables, auth_settings table
+
+---
+
+## v2.0.8 (March 2026)
+
+### Added
+
+- **Quick Setup page** — guided per-technology setup instructions in the UI. Accessible at `/setup`, with a technology picker (npm, Maven, Docker, PyPI, etc.) and step-by-step, copy-friendly configuration snippets with the correct registry URL pre-filled. A `REGISTRY_URL` environment variable controls the base URL shown in instructions; defaults to the app's own origin if not set. (#20)
+
+---
+
 ## v2.0.7 (March 2026)
 
 ### Security

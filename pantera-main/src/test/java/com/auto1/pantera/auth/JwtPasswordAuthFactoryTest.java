@@ -57,8 +57,6 @@ class JwtPasswordAuthFactoryTest {
                 "meta:",
                 "  jwt:",
                 "    secret: test-secret-key",
-                "    expires: true",
-                "    expiry-seconds: 3600",
                 "  credentials:",
                 "    - type: jwt-password"
             )

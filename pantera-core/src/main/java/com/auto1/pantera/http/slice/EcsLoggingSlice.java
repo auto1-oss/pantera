@@ -14,12 +14,13 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.trace.SpanContext;
 import org.slf4j.MDC;
 
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -53,11 +54,21 @@ public final class EcsLoggingSlice implements Slice {
     private final String remoteAddress;
 
     /**
+     * Repository name (nullable, for MDC propagation to audit logger).
+     */
+    private final String repoName;
+
+    /**
+     * Repository type (nullable, for MDC propagation to audit logger).
+     */
+    private final String repoType;
+
+    /**
      * Ctor.
      * @param origin Origin slice
      */
     public EcsLoggingSlice(final Slice origin) {
-        this(origin, null);
+        this(origin, null, null, null);
     }
 
     /**
@@ -66,8 +77,22 @@ public final class EcsLoggingSlice implements Slice {
      * @param remoteAddress Remote client address
      */
     public EcsLoggingSlice(final Slice origin, final String remoteAddress) {
+        this(origin, remoteAddress, null, null);
+    }
+
+    /**
+     * Ctor with full context for audit logging.
+     * @param origin Origin slice
+     * @param remoteAddress Remote client address
+     * @param repoName Repository name (nullable)
+     * @param repoType Repository type (nullable)
+     */
+    public EcsLoggingSlice(final Slice origin, final String remoteAddress,
+        final String repoName, final String repoType) {
         this.origin = origin;
         this.remoteAddress = remoteAddress;
+        this.repoName = repoName;
+        this.repoType = repoType;
     }
 
     @Override
@@ -84,32 +109,26 @@ public final class EcsLoggingSlice implements Slice {
         final String clientIp = EcsLogEvent.extractClientIp(headers, this.remoteAddress);
         final String userName = EcsLogEvent.extractUsername(headers).orElse(null);
         
-        // Generate trace.id if not already set (e.g., from incoming X-Request-ID header)
-        String traceId = MDC.get(EcsMdc.TRACE_ID);
-        if (traceId == null || traceId.isEmpty()) {
-            // Check for incoming trace headers
-            for (var h : headers.find("x-request-id")) {
-                traceId = h.getValue();
-                break;
-            }
-            if (traceId == null || traceId.isEmpty()) {
-                for (var h : headers.find("x-trace-id")) {
-                    traceId = h.getValue();
-                    break;
-                }
-            }
-            if (traceId == null || traceId.isEmpty()) {
-                traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-            }
-        }
-        
+        // Extract or generate trace context from request headers (B3 / W3C / fallback)
+        final SpanContext span = SpanContext.extract(headers);
+
         // Set MDC context for this request thread (constants from EcsMdc — no key drift)
-        MDC.put(EcsMdc.TRACE_ID, traceId);
+        MDC.put(EcsMdc.TRACE_ID, span.traceId());
+        MDC.put(EcsMdc.SPAN_ID, span.spanId());
+        if (span.parentSpanId() != null) {
+            MDC.put(EcsMdc.PARENT_SPAN_ID, span.parentSpanId());
+        }
         if (clientIp != null && !clientIp.isEmpty() && !"unknown".equals(clientIp)) {
             MDC.put(EcsMdc.CLIENT_IP, clientIp);
         }
         if (userName != null) {
             MDC.put(EcsMdc.USER_NAME, userName);
+        }
+        if (this.repoName != null) {
+            MDC.put(EcsMdc.REPO_NAME, this.repoName);
+        }
+        if (this.repoType != null) {
+            MDC.put(EcsMdc.REPO_TYPE, this.repoType);
         }
 
         return this.origin.response(line, headers, body)
@@ -125,6 +144,7 @@ public final class EcsLoggingSlice implements Slice {
                     .httpVersion(line.version())
                     .httpStatus(response.status())
                     .urlPath(line.uri().getPath())
+                    .urlOriginal(line.uri().toString())
                     .userAgent(headers)
                     .duration(duration);
 
@@ -137,7 +157,11 @@ public final class EcsLoggingSlice implements Slice {
                 // Log the event (automatically selects log level based on status)
                 logEvent.log();
 
-                return response;
+                // Add traceparent response header for downstream correlation
+                final Headers responseHeaders = response.headers().copy()
+                    .add(new Header("traceparent",
+                        String.format("00-%s-%s-01", span.traceId(), span.spanId())));
+                return new Response(response.status(), responseHeaders, response.body());
             })
             .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
@@ -160,8 +184,12 @@ public final class EcsLoggingSlice implements Slice {
             .whenComplete((response, error) -> {
                 // Clean up MDC after request completes (use constants — no key drift)
                 MDC.remove(EcsMdc.TRACE_ID);
+                MDC.remove(EcsMdc.SPAN_ID);
+                MDC.remove(EcsMdc.PARENT_SPAN_ID);
                 MDC.remove(EcsMdc.CLIENT_IP);
                 MDC.remove(EcsMdc.USER_NAME);
+                MDC.remove(EcsMdc.REPO_NAME);
+                MDC.remove(EcsMdc.REPO_TYPE);
             });
     }
 }

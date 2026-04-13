@@ -11,9 +11,9 @@ export async function getSettings(): Promise<Settings> {
   return data
 }
 
-// UI settings — available to all authenticated users, contains only grafana_url etc.
-export async function getUiSettings(): Promise<{ ui: { grafana_url?: string } }> {
-  const { data } = await getApiClient().get<{ ui: { grafana_url?: string } }>('/settings/ui')
+// UI settings — available to all authenticated users (grafana_url, registry_url, etc.)
+export async function getUiSettings(): Promise<{ ui: { grafana_url?: string; registry_url?: string } }> {
+  const { data } = await getApiClient().get<{ ui: { grafana_url?: string; registry_url?: string } }>('/settings/ui')
   return data
 }
 
@@ -94,4 +94,16 @@ export async function toggleAuthProvider(id: number, enabled: boolean): Promise<
 
 export async function updateAuthProviderConfig(id: number, config: Record<string, unknown>): Promise<void> {
   await getApiClient().put(`/auth-providers/${id}/config`, config)
+}
+
+export async function createAuthProvider(payload: {
+  type: string
+  priority?: number
+  config?: Record<string, unknown>
+}): Promise<void> {
+  await getApiClient().post('/auth-providers', payload)
+}
+
+export async function deleteAuthProvider(id: number): Promise<void> {
+  await getApiClient().delete(`/auth-providers/${id}`)
 }

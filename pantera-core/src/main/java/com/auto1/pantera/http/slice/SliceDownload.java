@@ -14,6 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.OptimizedStorageCache;
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -73,10 +74,16 @@ public final class SliceDownload implements Slice {
                             // on FileStorage (direct NIO). Falls back to standard storage.value()
                             // for S3 and other storage types.
                             return OptimizedStorageCache.optimizedValue(this.storage, key).thenApply(
-                                content -> ResponseBuilder.ok()
-                                    .header(new ContentFileName(line.uri()))
-                                    .body(content)
-                                    .build()
+                                content -> {
+                                    final java.util.List<String> parts = key.parts();
+                                    final String filename = parts.isEmpty() ? key.string() : parts.get(parts.size() - 1);
+                                    final long size = content.size().orElse(0L);
+                                    AuditLogger.download(filename, size);
+                                    return ResponseBuilder.ok()
+                                        .header(new ContentFileName(line.uri()))
+                                        .body(content)
+                                        .build();
+                                }
                             );
                         }
                         return CompletableFuture.completedFuture(

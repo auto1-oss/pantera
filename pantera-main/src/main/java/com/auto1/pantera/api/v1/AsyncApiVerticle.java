@@ -21,6 +21,7 @@ import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.db.dao.RepositoryDao;
 import com.auto1.pantera.db.dao.StorageAliasDao;
@@ -122,19 +123,26 @@ public final class AsyncApiVerticle extends AbstractVerticle {
     private final DataSource dataSource;
 
     /**
+     * JWT tokens provider (RS256). Used for token issuance and auth handler.
+     */
+    private final JwtTokens jwtTokens;
+
+    /**
      * Primary constructor.
      * @param caches Pantera settings caches
      * @param configsStorage Pantera settings storage
      * @param port Port to run API on
      * @param security Pantera security
      * @param keystore KeyStore
-     * @param jwt JWT authentication provider
+     * @param jwt JWT authentication provider (Vert.x, for route protection)
      * @param events Artifact metadata events queue
      * @param cooldown Cooldown service
      * @param settings Pantera settings
      * @param artifactIndex Artifact index for search
      * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance
      */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
     public AsyncApiVerticle(
         final PanteraCaches caches,
         final Storage configsStorage,
@@ -146,7 +154,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         final CooldownService cooldown,
         final Settings settings,
         final ArtifactIndex artifactIndex,
-        final DataSource dataSource
+        final DataSource dataSource,
+        final JwtTokens jwtTokens
     ) {
         this.caches = caches;
         this.configsStorage = configsStorage;
@@ -160,17 +169,20 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         this.settings = settings;
         this.artifactIndex = artifactIndex;
         this.dataSource = dataSource;
+        this.jwtTokens = jwtTokens;
     }
 
     /**
-     * Convenience constructor.
+     * Convenience constructor for deployment from VertxMain.
      * @param settings Pantera settings
      * @param port Port to start verticle on
      * @param jwt JWT authentication provider
      * @param dataSource Database data source, nullable
+     * @param jwtTokens RS256 tokens provider for token issuance, nullable
      */
     public AsyncApiVerticle(final Settings settings, final int port,
-        final JWTAuth jwt, final DataSource dataSource) {
+        final JWTAuth jwt, final DataSource dataSource,
+        final JwtTokens jwtTokens) {
         this(
             settings.caches(), settings.configStorage(),
             port, settings.authz(), settings.keyStore(), jwt,
@@ -178,7 +190,8 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             CooldownSupport.create(settings),
             settings,
             settings.artifactIndex(),
-            dataSource
+            dataSource,
+            jwtTokens
         );
     }
 
@@ -204,6 +217,68 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         });
         // Body handler for all API routes (1MB limit)
         router.route("/api/v1/*").handler(BodyHandler.create().setBodyLimit(1_048_576));
+        // Trace context + client.ip MDC setup for all API requests.
+        // Must run BEFORE any auth / CORS / handler logic so every log
+        // emitted from the request thread carries trace.id, span.id,
+        // span.parent.id, and client.ip. The cleanup runs via
+        // addEndHandler so we also clear MDC on error paths.
+        router.route("/api/v1/*").handler(ctx -> {
+            final io.vertx.core.http.HttpServerRequest req = ctx.request();
+            // Extract trace context from incoming headers
+            final com.auto1.pantera.http.Headers panteraHeaders =
+                com.auto1.pantera.http.Headers.from(req.headers().entries());
+            final com.auto1.pantera.http.trace.SpanContext span =
+                com.auto1.pantera.http.trace.SpanContext.extract(panteraHeaders);
+            org.slf4j.MDC.put(
+                com.auto1.pantera.http.log.EcsMdc.TRACE_ID, span.traceId()
+            );
+            org.slf4j.MDC.put(
+                com.auto1.pantera.http.log.EcsMdc.SPAN_ID, span.spanId()
+            );
+            if (span.parentSpanId() != null) {
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.PARENT_SPAN_ID,
+                    span.parentSpanId()
+                );
+            }
+            // Extract client IP. X-Forwarded-For (comma-separated, first
+            // entry is the real client), fall back to X-Real-IP, then
+            // the TCP remote address.
+            String clientIp = req.getHeader("X-Forwarded-For");
+            if (clientIp != null && clientIp.contains(",")) {
+                clientIp = clientIp.substring(0, clientIp.indexOf(',')).trim();
+            }
+            if (clientIp == null || clientIp.isBlank()) {
+                clientIp = req.getHeader("X-Real-IP");
+            }
+            if (clientIp == null || clientIp.isBlank()) {
+                final io.vertx.core.net.SocketAddress remote = req.remoteAddress();
+                if (remote != null) {
+                    clientIp = remote.host();
+                }
+            }
+            if (clientIp != null && !clientIp.isBlank()) {
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.CLIENT_IP, clientIp
+                );
+            }
+            // Echo the server-generated traceparent in the response so
+            // the UI / APM agent can correlate UI transactions with the
+            // backend span.
+            ctx.response().putHeader(
+                "traceparent",
+                String.format("00-%s-%s-01", span.traceId(), span.spanId())
+            );
+            // Clean up MDC when the response completes (success or error).
+            ctx.addEndHandler(ignored -> {
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.TRACE_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.SPAN_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.PARENT_SPAN_ID);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.CLIENT_IP);
+                org.slf4j.MDC.remove(com.auto1.pantera.http.log.EcsMdc.USER_NAME);
+            });
+            ctx.next();
+        });
         // CORS headers
         router.route("/api/v1/*").handler(ctx -> {
             ctx.response()
@@ -214,7 +289,20 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 )
                 .putHeader(
                     "Access-Control-Allow-Headers",
-                    "Authorization,Content-Type,Accept"
+                    // traceparent / b3 / X-B3-* are trace propagation
+                    // headers sent by the UI axios interceptor. Without
+                    // listing them here the browser CORS preflight
+                    // rejects EVERY UI→backend request.
+                    "Authorization,Content-Type,Accept,"
+                        + "traceparent,tracestate,b3,"
+                        + "X-B3-TraceId,X-B3-SpanId,X-B3-ParentSpanId,X-B3-Sampled"
+                )
+                .putHeader(
+                    "Access-Control-Expose-Headers",
+                    // Let the browser read the traceparent response
+                    // header so APM and debugging tools can see the
+                    // server-generated span id.
+                    "traceparent"
                 )
                 .putHeader("Access-Control-Max-Age", "3600");
             if ("OPTIONS".equals(ctx.request().method().name())) {
@@ -257,24 +345,66 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         }
         // Auth handler routes (token generation + providers are public)
         final AuthHandler authHandler = new AuthHandler(
-            new JwtTokens(this.jwt, this.settings.jwtSettings()),
+            this.jwtTokens,
             this.security.authentication(),
             users,
             this.security.policy(),
             this.dataSource != null ? new AuthProviderDao(this.dataSource) : null,
-            this.dataSource != null ? new UserTokenDao(this.dataSource) : null
+            this.dataSource != null ? new UserTokenDao(this.dataSource) : null,
+            this.dataSource != null ? new AuthSettingsDao(this.dataSource) : null
         );
         authHandler.register(router);
-        // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth)
-        final io.vertx.ext.web.handler.AuthenticationHandler jwtHandler =
-            JWTAuthHandler.create(this.jwt);
+        // JWT auth for all /api/v1/* routes EXCEPT download-direct (uses HMAC token auth).
+        // Uses UnifiedJwtAuthHandler (RS256 via Auth0 java-jwt) instead of Vert.x JWTAuthHandler.
+        // After validation, bridges the result into ctx.setUser() so all downstream handlers
+        // that read ctx.user().principal() continue to work unchanged.
+        final com.auto1.pantera.auth.UnifiedJwtAuthHandler unifiedAuth =
+            this.jwtTokens != null
+                ? (com.auto1.pantera.auth.UnifiedJwtAuthHandler) this.jwtTokens.auth()
+                : null;
         router.route("/api/v1/*").handler(ctx -> {
-            // Skip JWT for download-direct — it authenticates via HMAC token in query param
-            if (ctx.request().path().contains("/artifact/download-direct")) {
+            final String path = ctx.request().path();
+            // Skip JWT auth for public endpoints (registered before this filter)
+            if (path.contains("/artifact/download-direct")
+                || path.endsWith("/auth/token")
+                || path.endsWith("/auth/callback")
+                || path.endsWith("/auth/providers")
+                || path.contains("/auth/providers/")
+                || path.endsWith("/health")) {
                 ctx.next();
-            } else {
-                jwtHandler.handle(ctx);
+                return;
             }
+            if (unifiedAuth == null) {
+                // No RS256 keys configured — fall back to legacy Vert.x JWTAuth
+                JWTAuthHandler.create(this.jwt).handle(ctx);
+                return;
+            }
+            final String authHeader = ctx.request().getHeader("Authorization");
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Bearer token required");
+                return;
+            }
+            final String rawToken = authHeader.substring(7);
+            unifiedAuth.user(rawToken).toCompletableFuture()
+                .thenAccept(userOpt -> {
+                    if (userOpt.isPresent()) {
+                        final com.auto1.pantera.http.auth.AuthUser authUser = userOpt.get();
+                        // Bridge into Vert.x User so ctx.user().principal() works
+                        // for all downstream handlers (me, generate, list, settings, etc.)
+                        final io.vertx.core.json.JsonObject principal = new io.vertx.core.json.JsonObject()
+                            .put(com.auto1.pantera.api.AuthTokenRest.SUB, authUser.name())
+                            .put(com.auto1.pantera.api.AuthTokenRest.CONTEXT, authUser.authContext());
+                        ctx.setUser(io.vertx.ext.auth.User.fromToken(rawToken));
+                        ctx.user().principal().mergeIn(principal);
+                        ctx.next();
+                    } else {
+                        ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid or expired token");
+                    }
+                })
+                .exceptionally(err -> {
+                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Authentication failed");
+                    return null;
+                });
         });
         // Register protected auth routes (requires JWT)
         authHandler.registerProtected(router);
@@ -287,7 +417,18 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.vertx.eventBus()
         ).register(router);
         if (users != null) {
-            new UserHandler(users, this.caches, this.security).register(router);
+            // Wire the revocation blocklist + token DAO so that
+            // disabling a user via the admin UI also immediately
+            // blocks any existing access/refresh/API tokens — not
+            // just the session cache, which only covers the current
+            // login's L1 entry.
+            final com.auto1.pantera.auth.RevocationBlocklist blocklist =
+                this.jwtTokens != null ? this.jwtTokens.blocklist() : null;
+            final com.auto1.pantera.db.dao.UserTokenDao utDao =
+                this.dataSource != null
+                    ? new com.auto1.pantera.db.dao.UserTokenDao(this.dataSource) : null;
+            new UserHandler(users, this.caches, this.security, blocklist, utDao)
+                .register(router);
         }
         if (roles != null) {
             new RoleHandler(
@@ -300,7 +441,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         ).register(router);
         new SettingsHandler(
             this.port, this.settings, manageRepo, this.dataSource,
-            this.security.policy()
+            this.security.policy(),
+            // Pass the auth chain so provider toggle/delete/edit can
+            // flush the credential cache and take effect immediately.
+            this.security.authentication()
+                instanceof com.auto1.pantera.asto.misc.Cleanable
+                ? (com.auto1.pantera.asto.misc.Cleanable<String>)
+                    this.security.authentication()
+                : null
         ).register(router);
         new DashboardHandler(crs, this.dataSource).register(router);
         new ArtifactHandler(
@@ -312,9 +460,21 @@ public final class AsyncApiVerticle extends AbstractVerticle {
             this.security.policy()
         ).register(router);
         new SearchHandler(this.artifactIndex, this.security.policy()).register(router);
+        new PypiHandler(
+            crs, new RepoData(this.configsStorage, this.caches.storagesCache())
+        ).register(router);
+        if (this.dataSource != null) {
+            new AdminAuthHandler(
+                new AuthSettingsDao(this.dataSource),
+                new UserTokenDao(this.dataSource),
+                this.jwtTokens != null ? this.jwtTokens.blocklist() : null,
+                this.security.policy()
+            ).register(router);
+        }
         // Start server
         final HttpServer server;
         final String schema;
+        final boolean useProxyProtocol = this.settings.proxyProtocol();
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
             final HttpServerOptions sslOptions = this.keystore.get()
                 .secureOptions(this.vertx, this.configsStorage);
@@ -322,18 +482,19 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 .setTcpNoDelay(true)
                 .setTcpKeepAlive(true)
                 .setIdleTimeout(60)
-                .setUseAlpn(true);
+                .setUseAlpn(true)
+                .setUseProxyProtocol(useProxyProtocol);
             server = this.vertx.createHttpServer(sslOptions);
             schema = "https";
         } else {
-            server = this.vertx.createHttpServer(
-                new HttpServerOptions()
+            final HttpServerOptions opts = new HttpServerOptions()
                     .setTcpNoDelay(true)
                     .setTcpKeepAlive(true)
                     .setIdleTimeout(60)
                     .setUseAlpn(true)
                     .setHttp2ClearTextEnabled(true)
-            );
+                    .setUseProxyProtocol(useProxyProtocol);
+            server = this.vertx.createHttpServer(opts);
             schema = "http";
         }
         server.requestHandler(router)

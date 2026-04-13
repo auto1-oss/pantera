@@ -13,16 +13,20 @@
 3. [Module Map](#3-module-map)
 4. [Core Concepts](#4-core-concepts)
 5. [Database Layer](#5-database-layer)
-6. [Cache Architecture](#6-cache-architecture)
-7. [Cluster Architecture](#7-cluster-architecture)
-8. [Thread Model](#8-thread-model)
-9. [Shutdown Sequence](#9-shutdown-sequence)
-10. [Health Check Architecture](#10-health-check-architecture)
-11. [Development Setup](#11-development-setup)
-12. [Build System](#12-build-system)
-13. [Adding Features](#13-adding-features)
-14. [Testing](#14-testing)
-15. [Debugging](#15-debugging)
+6. [JWT Security Architecture](#6-jwt-security-architecture)
+7. [Cache Architecture](#7-cache-architecture)
+8. [Cluster Architecture](#8-cluster-architecture)
+9. [Thread Model](#9-thread-model)
+10. [Shutdown Sequence](#10-shutdown-sequence)
+11. [Health Check Architecture](#11-health-check-architecture)
+12. [Development Setup](#12-development-setup)
+13. [Build System](#13-build-system)
+14. [Adding Features](#14-adding-features)
+    - [14.4 Adding a New Search Field](#144-adding-a-new-search-field)
+    - [14.5 PagedResult and Server-Side Pagination](#145-pagedresult-and-server-side-pagination)
+    - [14.6 GroupSlice: Proxy-Only Fanout on Index Miss](#146-groupslice-proxy-only-fanout-on-index-miss)
+15. [Testing](#15-testing)
+16. [Debugging](#16-debugging)
 
 ---
 
@@ -41,6 +45,7 @@ Pantera is a universal binary artifact registry supporting 15+ package formats. 
 | JSON Processing   | Jackson                 | 2.17.3    |
 | Database          | PostgreSQL + HikariCP   | 16+ / 5.x |
 | Distributed Cache | Valkey (via Lettuce)     | 8.x       |
+| JWT Library       | Auth0 java-jwt          | 4.x       |
 | Scheduling        | Quartz Scheduler        | 2.3.2     |
 | Metrics           | Micrometer              | 1.12.13   |
 | Logging           | Log4j 2                 | 2.24.3    |
@@ -369,9 +374,92 @@ Migrations are applied automatically by `DbManager.migrate(dataSource)` at start
 
 ---
 
-## 6. Cache Architecture
+## 6. JWT Security Architecture
 
-### 6.1 BaseCachedProxySlice
+### 6.1 Signing Algorithm
+
+Pantera uses RS256 (RSA + SHA-256) asymmetric signing via the Auth0 `java-jwt` library. The private key signs tokens at issuance; the public key verifies them on every request. The public key can be freely distributed (e.g., to sidecars or separate verification services) without enabling token forgery.
+
+Key loading is performed at startup by `JwtSettings.fromYaml()`. If either PEM file is missing, unreadable, or the keys do not form a valid RSA pair, startup fails with a descriptive error.
+
+**Key files:**
+- `pantera-main/src/main/java/com/auto1/pantera/settings/JwtSettings.java` -- key loading, validation, token issuance helpers
+- `pantera-main/src/main/java/com/auto1/pantera/VertxMain.java` -- `JWTAuth` setup
+
+### 6.2 Token Types
+
+Three token types share the same RSA key pair but have different lifecycles and validation paths:
+
+| Token `type` claim | Stored in DB | Validation path |
+|--------------------|-------------|-----------------|
+| `access` | No | Signature + expiry only (no DB hit) |
+| `refresh` | Yes (`user_tokens`) | Signature + DB row (not revoked) |
+| `api` | Yes (`user_tokens`) | Signature + DB row (not revoked, owns the JTI) |
+
+The `type` claim is mandatory. Tokens missing the `type` claim are rejected regardless of signature validity.
+
+### 6.3 Revocation Architecture
+
+**API and refresh tokens** are revoked by setting `revoked = TRUE` in `user_tokens`. The `jti` check additionally verifies that the `sub` claim matches the token owner, preventing JTI-theft attacks.
+
+**Access tokens** (not DB-stored) are invalidated via a blocklist:
+
+1. `POST /api/v1/admin/revoke-user/:username` writes a revocation record and publishes a `pantera:revoke:user:{username}` message on the Valkey pub/sub channel.
+2. All cluster nodes receive the message via `ClusterEventBus` and add the username to their in-memory revocation cache.
+3. On each access token validation, the cache is consulted. Tokens issued before the revocation timestamp are rejected.
+4. Without Valkey, nodes poll the `user_tokens` revocation table every 30 seconds.
+
+The in-memory revocation cache has a TTL equal to the access token lifetime (default: 1 hour). After that period no access token from a revoked user can still be valid.
+
+### 6.4 Adding a New Protected Endpoint
+
+All management API routes are registered in `AsyncApiVerticle`. To protect a new endpoint with JWT auth:
+
+```java
+// In AsyncApiVerticle.start():
+router.post("/api/v1/my-feature")
+    .handler(jwtAuthHandler)            // shared handler, validates RS256 + type + blocklist
+    .handler(requirePermission("api_role_permissions", "update"))
+    .handler(new MyFeatureHandler()::handle);
+```
+
+Use the shared `jwtAuthHandler` instance -- do not create a new `JWTAuthHandler` with a different key. The shared handler enforces:
+- RS256 signature verification
+- Token expiry
+- `type` claim presence (rejects tokens without a type)
+- Access token blocklist check (for revoked users)
+- JTI ownership check (for API/refresh tokens)
+
+### 6.5 Testing Auth
+
+**Unit tests:** Generate test tokens with the Auth0 `java-jwt` library using a test key pair generated in `@BeforeAll`:
+
+```java
+private static KeyPair keyPair;
+
+@BeforeAll
+static void generateKeys() throws Exception {
+    keyPair = KeyPairGenerator.getInstance("RSA")
+        .generateKeyPair();  // or use a fixed test PEM
+}
+
+private String makeAccessToken(String username) {
+    return JWT.create()
+        .withSubject(username)
+        .withClaim("type", "access")
+        .withJWTId(UUID.randomUUID().toString())
+        .withExpiresAt(Instant.now().plusSeconds(3600))
+        .sign(Algorithm.RSA256(null, (RSAPrivateKey) keyPair.getPrivate()));
+}
+```
+
+**Integration tests:** The `pantera-main` test suite includes `JwtAuthIT` which starts a full Pantera instance with a generated key pair and verifies all token flows end-to-end using TestContainers PostgreSQL.
+
+---
+
+## 7. Cache Architecture
+
+### 7.1 BaseCachedProxySlice
 
 Location: `pantera-core/src/main/java/com/auto1/pantera/http/cache/BaseCachedProxySlice.java`
 
@@ -389,7 +477,7 @@ Abstract base class implementing the shared proxy caching pipeline via template 
 
 Adapters override hooks: `isCacheable()`, `buildCooldownRequest()`, `digestAlgorithms()`, `buildArtifactEvent()`, `postProcess()`, `generateSidecars()`.
 
-### 6.2 RequestDeduplicator
+### 7.2 RequestDeduplicator
 
 Location: `pantera-core/src/main/java/com/auto1/pantera/http/cache/RequestDeduplicator.java`
 
@@ -401,7 +489,7 @@ Prevents thundering-herd problems when multiple clients request the same artifac
 - Supports three strategies: `SIGNAL` (default, coalesce at future level), `STORAGE` (coalesce at storage level), `NONE` (no deduplication).
 - `FetchSignal` enum: `SUCCESS`, `NOT_FOUND`, `ERROR`.
 
-### 6.3 NegativeCache
+### 7.3 NegativeCache
 
 Location: `pantera-core/src/main/java/com/auto1/pantera/http/cache/NegativeCache.java`
 
@@ -421,7 +509,7 @@ Two-tier cache for 404 (Not Found) responses:
 - On L2 hit, entry is promoted to L1.
 - Bulk invalidation via `SCAN` + `DEL` (avoids blocking `KEYS`).
 
-### 6.4 DiskCacheStorage
+### 7.4 DiskCacheStorage
 
 Location: `pantera-storage/pantera-storage-s3/src/main/java/com/auto1/pantera/asto/s3/DiskCacheStorage.java`
 
@@ -436,9 +524,9 @@ Read-through on-disk cache for S3 storage:
 
 ---
 
-## 7. Cluster Architecture
+## 8. Cluster Architecture
 
-### 7.1 DbNodeRegistry
+### 8.1 DbNodeRegistry
 
 Location: `pantera-main/src/main/java/com/auto1/pantera/cluster/DbNodeRegistry.java`
 
@@ -449,7 +537,7 @@ PostgreSQL-backed node registry for HA clustering:
 - Nodes missing heartbeats are marked as dead.
 - Schema: `pantera_nodes(node_id, hostname, port, started_at, last_heartbeat, status)`.
 
-### 7.2 ClusterEventBus
+### 8.2 ClusterEventBus
 
 Location: `pantera-core/src/main/java/com/auto1/pantera/cluster/ClusterEventBus.java`
 
@@ -461,7 +549,7 @@ Cross-instance event bus using Valkey pub/sub:
 - Uses separate Lettuce connections for subscribe and publish (required by Redis pub/sub spec).
 - Handler registration: `ConcurrentHashMap<String, CopyOnWriteArrayList<Consumer<String>>>`.
 
-### 7.3 CacheInvalidationPubSub
+### 8.3 CacheInvalidationPubSub
 
 Location: `pantera-core/src/main/java/com/auto1/pantera/cache/CacheInvalidationPubSub.java`
 
@@ -473,7 +561,7 @@ Cross-instance Caffeine cache invalidation:
 - Registered caches implement `Cleanable<String>` interface.
 - Self-published messages are filtered by instanceId comparison.
 
-### 7.4 QuartzService
+### 8.4 QuartzService
 
 Location: `pantera-main/src/main/java/com/auto1/pantera/scheduling/QuartzService.java`
 
@@ -493,7 +581,7 @@ JDBC mode:
 
 ---
 
-## 8. Thread Model
+## 9. Thread Model
 
 ### Named Thread Pools
 
@@ -521,7 +609,7 @@ Blocked thread detection: `BlockedThreadDiagnostics` is initialized at startup. 
 
 ---
 
-## 9. Shutdown Sequence
+## 10. Shutdown Sequence
 
 `VertxMain.stop()` performs an ordered shutdown to prevent resource leaks and ensure in-flight requests complete:
 
@@ -540,7 +628,7 @@ A JVM shutdown hook (`pantera-shutdown-hook` thread) triggers `stop()` on `SIGTE
 
 ---
 
-## 10. Health Check Architecture
+## 11. Health Check Architecture
 
 ### HealthSlice
 
@@ -583,7 +671,7 @@ The REST API verticle at `/api/v1/` provides deeper health checks including:
 
 ---
 
-## 11. Development Setup
+## 12. Development Setup
 
 ### Prerequisites
 
@@ -661,7 +749,7 @@ java -cp target/pantera-main-2.0.0.jar:target/dependency/* \
 
 ---
 
-## 12. Build System
+## 13. Build System
 
 ### Maven Profiles
 
@@ -723,9 +811,9 @@ This script:
 
 ---
 
-## 13. Adding Features
+## 14. Adding Features
 
-### 13.1 Adding a New Repository Adapter
+### 14.1 Adding a New Repository Adapter
 
 1. **Create the Maven module:**
 
@@ -796,7 +884,7 @@ case "myformat":
 
 4. **Add tests** following the patterns in existing adapters (unit tests with `InMemoryStorage`, integration tests with `*IT.java` suffix).
 
-### 13.2 Adding a New API Endpoint
+### 14.2 Adding a New API Endpoint
 
 1. **Create a handler class** in `pantera-main/src/main/java/com/auto1/pantera/api/v1/`:
 
@@ -824,7 +912,7 @@ router.get("/api/v1/my-feature")
     .handler(new MyFeatureHandler()::handle);
 ```
 
-### 13.3 Adding a New Storage Backend
+### 14.3 Adding a New Storage Backend
 
 1. Create a new sub-module under `pantera-storage/` (e.g., `pantera-storage-gcs`).
 2. Implement the `Storage` interface.
@@ -832,9 +920,93 @@ router.get("/api/v1/my-feature")
 4. Register the factory in the storage factory chain.
 5. Run the `StorageWhiteboxVerification` test harness against your implementation to ensure compliance with the `Storage` contract.
 
+### 14.4 Adding a New Search Field
+
+The search query parser is in `pantera-main/src/main/java/com/auto1/pantera/index/SearchQueryParser.java`. It translates a structured query string into a `SearchQuery` record containing FTS terms and typed `FieldFilter` instances.
+
+**To add a new filterable field (e.g., `owner:alice`):**
+
+1. Register the field in `SearchQueryParser.FIELD_MATCH_TYPES`:
+
+```java
+private static final Map<String, MatchType> FIELD_MATCH_TYPES = Map.of(
+    "name",    MatchType.ILIKE,
+    "version", MatchType.ILIKE,
+    "repo",    MatchType.EXACT,
+    "type",    MatchType.PREFIX,
+    "owner",   MatchType.ILIKE   // new
+);
+```
+
+2. Handle the new field in `DbArtifactIndex` when building the SQL `WHERE` clause. The `FieldFilter` record exposes `field()`, `values()`, and `matchType()`.
+
+3. Add unit tests to `SearchQueryParserTest` for the new field. Test plain FTS, single filter, OR grouping, and mixed queries.
+
+**`SearchQuery` record:**
+
+```java
+record SearchQuery(String ftsQuery, List<FieldFilter> filters) { }
+record FieldFilter(String field, List<String> values, MatchType matchType) { }
+```
+
+`ftsQuery` is passed to the existing PostgreSQL `tsvector` path. `filters` generate additional `WHERE` clauses appended with `AND`.
+
+### 14.5 PagedResult and Server-Side Pagination
+
+Endpoints that return paginated lists of users or roles use the shared `PagedResult<T>` record:
+
+```java
+// pantera-main/src/main/java/com/auto1/pantera/db/dao/PagedResult.java
+public record PagedResult<T>(List<T> items, int total) {}
+```
+
+DAO methods follow this signature pattern:
+
+```java
+public PagedResult<JsonObject> listPaged(
+    String query,       // case-insensitive substring filter (null = no filter)
+    String sortField,   // validated against an allowlist before use in SQL
+    String sortDir,     // "asc" or "desc"
+    int page,
+    int size
+) { ... }
+```
+
+The SQL uses `COUNT(*) OVER()` window functions so both the total count and the page rows are retrieved in a single query. Sort fields are validated against an explicit allowlist before being interpolated into SQL to prevent injection.
+
+**Relevant files:**
+- `pantera-main/src/main/java/com/auto1/pantera/db/dao/UserDao.java`
+- `pantera-main/src/main/java/com/auto1/pantera/db/dao/RoleDao.java`
+- `pantera-main/src/main/java/com/auto1/pantera/api/v1/UserHandler.java`
+- `pantera-main/src/main/java/com/auto1/pantera/api/v1/RoleHandler.java`
+
+### 14.6 GroupSlice: Proxy-Only Fanout on Index Miss
+
+When `GroupSlice` cannot resolve an artifact name from the URL (metadata endpoints, unknown paths), it falls back to direct fanout instead of querying the artifact index. As of v2.1.0, this fallback fans out only to **proxy members** of the group, not to hosted (local) repositories.
+
+The rationale: if the artifact index does not contain the artifact, it was never uploaded to a hosted member. Proxy members may still have it from upstream. Fanning out to hosted members wastes connections and generates 404 log noise.
+
+**Implementation:**
+
+```java
+// GroupSlice.java (~line 449)
+final List<MemberSlice> proxyOnly = this.members.stream()
+    .filter(m -> this.proxyMembers.contains(m.name()))
+    .collect(toList());
+if (proxyOnly.isEmpty()) {
+    // fall back to all members if no proxies are configured
+    return queryTargetedMembers(this.members, line, headers, body, ctx);
+}
+return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
+```
+
+`proxyMembers` is a `Set<String>` injected at construction time by `RepositorySlices`, which classifies each member by its configured type.
+
+To ensure a new adapter type is included in proxy fanout, register it as a proxy type in `RepositorySlices` when building the `GroupSlice`.
+
 ---
 
-## 14. Testing
+## 15. Testing
 
 ### Test Categories
 
@@ -906,7 +1078,7 @@ mvn install -DskipTests
 
 ---
 
-## 15. Debugging
+## 16. Debugging
 
 ### Common Issues
 

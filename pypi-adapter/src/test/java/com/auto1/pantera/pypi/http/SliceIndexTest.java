@@ -212,7 +212,7 @@ class SliceIndexTest {
         Response r = new SliceIndex(this.storage).response(
             new RequestLine("GET", "/"), Headers.EMPTY, Content.EMPTY
         ).join();
-        ResponseAssert.check(r, RsStatus.OK, ContentType.html(), new ContentLength(179));
+        ResponseAssert.check(r, RsStatus.OK, ContentType.html(), new ContentLength(178));
     }
 
     @Test
@@ -405,6 +405,159 @@ class SliceIndexTest {
         );
     }
 
+    // ----------------------------------------------------------------
+    // PEP 691 JSON Simple API — regression tests for the "pip fails
+    // with JSONDecodeError on hosted packages" bug. The old code path
+    // served the persisted .pypi/<pkg>/<pkg>.html file verbatim for
+    // any Accept header, so a JSON request received HTML bytes with
+    // a Content-Type: application/vnd.pypi.simple.v1+json header.
+    // ----------------------------------------------------------------
+
+    @Test
+    void jsonRequestRegeneratesInsteadOfServingCachedHtml() {
+        // Arrange: package has both a persisted HTML index AND files
+        // underneath it. The bug: JSON requests returned the HTML.
+        final String packageName = "hello";
+        final byte[] wheel = "content".getBytes();
+        this.storage.save(
+            new Key.From(packageName, "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From(wheel)
+        ).join();
+        this.storage.save(
+            new Key.From(".pypi", packageName, packageName + ".html"),
+            new Content.From("<html><body>CACHED HTML</body></html>".getBytes())
+        ).join();
+
+        final Response resp = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/" + packageName + "/"),
+            Headers.from("Accept", "application/vnd.pypi.simple.v1+json"),
+            Content.EMPTY
+        ).join();
+
+        final String body = readBody(resp);
+        // Must be JSON, not the cached HTML
+        org.junit.jupiter.api.Assertions.assertFalse(
+            body.contains("CACHED HTML"),
+            "JSON request must NOT return cached HTML bytes"
+        );
+        org.junit.jupiter.api.Assertions.assertFalse(
+            body.trim().startsWith("<"),
+            "JSON request must not start with '<' (this is the exact "
+                + "failure pip reports: JSONDecodeError at line 1 col 1)"
+        );
+        // Validate it actually parses as JSON and has the PEP 691 shape
+        final javax.json.JsonObject parsed = javax.json.Json.createReader(
+            new java.io.StringReader(body)
+        ).readObject();
+        org.junit.jupiter.api.Assertions.assertEquals(
+            "hello", parsed.getString("name")
+        );
+        org.junit.jupiter.api.Assertions.assertNotNull(
+            parsed.getJsonObject("meta"),
+            "PEP 691 response must carry a meta.api-version"
+        );
+        org.junit.jupiter.api.Assertions.assertFalse(
+            parsed.getJsonArray("files").isEmpty(),
+            "JSON response must include the hosted wheel file"
+        );
+    }
+
+    @Test
+    void htmlRequestStillServesCachedHtml() {
+        // Non-regression: HTML clients must keep using the fast path
+        // that reads the persisted cache verbatim.
+        final String packageName = "hello";
+        this.storage.save(
+            new Key.From(packageName, "0.2.0", "hello-0.2.0-py3-none-any.whl"),
+            new Content.From("content".getBytes())
+        ).join();
+        final String cachedHtml =
+            "<!DOCTYPE html>\n<html>\n<body>CACHED HTML BODY</body>\n</html>";
+        this.storage.save(
+            new Key.From(".pypi", packageName, packageName + ".html"),
+            new Content.From(cachedHtml.getBytes())
+        ).join();
+
+        final Response resp = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/" + packageName + "/"),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        final String body = readBody(resp);
+        org.junit.jupiter.api.Assertions.assertTrue(
+            body.contains("CACHED HTML BODY"),
+            "HTML clients must still receive the persisted cache verbatim"
+        );
+    }
+
+    @Test
+    void jsonRequestWithoutCacheGeneratesDynamically() {
+        // No persisted HTML, only raw files. The JSON generator path
+        // must still produce valid JSON for the hosted package.
+        final String packageName = "hello";
+        this.storage.save(
+            new Key.From(packageName, "0.2.0", "hello-0.2.0.tar.gz"),
+            new Content.From("sdist".getBytes())
+        ).join();
+
+        final Response resp = new SliceIndex(this.storage).response(
+            new RequestLine("GET", "/simple/" + packageName + "/"),
+            Headers.from("Accept", "application/vnd.pypi.simple.v1+json"),
+            Content.EMPTY
+        ).join();
+
+        final String body = readBody(resp);
+        final javax.json.JsonObject parsed = javax.json.Json.createReader(
+            new java.io.StringReader(body)
+        ).readObject();
+        org.junit.jupiter.api.Assertions.assertEquals("hello", parsed.getString("name"));
+        org.junit.jupiter.api.Assertions.assertEquals(
+            1, parsed.getJsonArray("files").size()
+        );
+        // S3 from code review: verify the self-healing cache actually
+        // persisted the JSON to storage so the next request takes the
+        // fast path. The fire-and-forget save runs on the current
+        // thread in the InMemoryStorage test fixture, so it completes
+        // before we assert here.
+        org.junit.jupiter.api.Assertions.assertTrue(
+            this.storage.exists(
+                new Key.From(".pypi", packageName, packageName + ".json")
+            ).join(),
+            "self-healing cache must persist the generated JSON to storage"
+        );
+    }
+
+    private static String readBody(final Response resp) {
+        final java.util.concurrent.CompletableFuture<byte[]> future =
+            new java.util.concurrent.CompletableFuture<>();
+        resp.body().subscribe(
+            new org.reactivestreams.Subscriber<java.nio.ByteBuffer>() {
+                private final java.io.ByteArrayOutputStream out =
+                    new java.io.ByteArrayOutputStream();
+                @Override
+                public void onSubscribe(final org.reactivestreams.Subscription s) {
+                    s.request(Long.MAX_VALUE);
+                }
+                @Override
+                public void onNext(final java.nio.ByteBuffer buf) {
+                    final byte[] arr = new byte[buf.remaining()];
+                    buf.get(arr);
+                    this.out.write(arr, 0, arr.length);
+                }
+                @Override
+                public void onError(final Throwable t) {
+                    future.completeExceptionally(t);
+                }
+                @Override
+                public void onComplete() {
+                    future.complete(this.out.toByteArray());
+                }
+            }
+        );
+        return new String(future.join(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     @Test
     void normalizesPackageNameWithMixedSeparators() {
         // Package stored with normalized name (all separators become single hyphen)
@@ -429,7 +582,7 @@ class SliceIndexTest {
     private static byte[] html(final Map.Entry<String, byte[]>... items) {
         return
             String.format(
-                "<!DOCTYPE html>\n<html>\n  </body>\n%s\n</body>\n</html>",
+                "<!DOCTYPE html>\n<html>\n  <body>\n%s\n</body>\n</html>",
                 Stream.of(items).map(
                     item -> String.format(
                         "<a href=\"/%s#sha256=%s\">%s</a><br/>", item.getKey(),

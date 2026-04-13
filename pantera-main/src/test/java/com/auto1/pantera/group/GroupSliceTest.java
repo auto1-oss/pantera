@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -193,6 +194,59 @@ public final class GroupSliceTest {
         assertNotNull(seen.get());
         assertEquals("/github.com/google/uuid/@v/v1.6.0.info", seen.get().uri().getPath(),
             "After TrimPathSlice simulation, path should be the Go module path without member prefix");
+    }
+
+    @Test
+    void cancelledLosingMembersDoNotTripCircuitBreaker() throws InterruptedException {
+        // Regression test for: future.cancel(true) on losing members called handleMemberFailure
+        // which called member.recordFailure(), tripping circuits on healthy proxy members.
+        //
+        // Setup: "fast" wins every round; "slow" (200ms delay) gets cancelled before it responds.
+        // After threshold (3) cancellations the old code would open slow's circuit.
+        // Phase 2 switches fast to 404 — if slow's circuit is open it gets skipped → 503.
+        // With the fix, slow must still be queried and return 200.
+        final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
+        try {
+            final AtomicBoolean fastWins = new AtomicBoolean(true);
+            final Slice fast = (line, headers, body) ->
+                fastWins.get()
+                    ? CompletableFuture.completedFuture(ResponseBuilder.ok().build())
+                    : CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+            final Slice slow = (line, headers, body) -> {
+                final CompletableFuture<Response> fut = new CompletableFuture<>();
+                scheduler.schedule(
+                    () -> fut.complete(ResponseBuilder.ok().build()),
+                    200, TimeUnit.MILLISECONDS
+                );
+                return fut;
+            };
+            final Map<String, Slice> map = new HashMap<>();
+            map.put("fast", fast);
+            map.put("slow", slow);
+            final GroupSlice slice = new GroupSlice(
+                new MapResolver(map), "group", List.of("fast", "slow"), 8080
+            );
+            // Phase 1: fast wins 5 times — slow gets cancelled each time (threshold = 3)
+            for (int i = 0; i < 5; i++) {
+                assertEquals(
+                    RsStatus.OK,
+                    slice.response(new RequestLine("GET", "/pkg.json"), Headers.EMPTY, Content.EMPTY)
+                        .join().status()
+                );
+            }
+            // Phase 2: fast returns 404; only slow has the artifact
+            fastWins.set(false);
+            final Response rsp = slice.response(
+                new RequestLine("GET", "/pkg.json"), Headers.EMPTY, Content.EMPTY
+            ).join();
+            assertEquals(
+                RsStatus.OK, rsp.status(),
+                "Slow member circuit must be ONLINE after cancellations — circuit must not trip on cancel"
+            );
+        } finally {
+            scheduler.shutdownNow();
+            scheduler.awaitTermination(1, TimeUnit.SECONDS);
+        }
     }
 
     private static final class MapResolver implements SliceResolver {

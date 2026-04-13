@@ -27,10 +27,10 @@ SOFTWARE.
   <parent>
     <groupId>com.auto1.pantera</groupId>
     <artifactId>pantera</artifactId>
-    <version>2.0.7</version>
+    <version>2.1.0</version>
   </parent>
   <artifactId>composer-adapter</artifactId>
-  <version>2.0.7</version>
+  <version>2.1.0</version>
   <packaging>jar</packaging>
   <name>composer-files</name>
   <description>Turns your files/objects into PHP Composer artifacts</description>
@@ -45,19 +45,19 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>http-client</artifactId>
-      <version>2.0.7</version>
+      <version>2.1.0</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>files-adapter</artifactId>
-      <version>2.0.7</version>
+      <version>2.1.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>pantera-storage-core</artifactId>
-      <version>2.0.7</version>
+      <version>2.1.0</version>
       <scope>compile</scope>
       <!-- Do not remove this exclusion! No tests will run if dependency is not excluded! -->
       <exclusions>
@@ -76,7 +76,7 @@ SOFTWARE.
     <dependency>
       <groupId>com.auto1.pantera</groupId>
       <artifactId>vertx-server</artifactId>
-      <version>2.0.7</version>
+      <version>2.1.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

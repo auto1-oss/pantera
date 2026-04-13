@@ -20,6 +20,7 @@ import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.RsStatus;
+import com.auto1.pantera.http.trace.TraceHeaders;
 import io.reactivex.Flowable;
 import io.reactivex.processors.UnicastProcessor;
 import org.apache.hc.core5.net.URIBuilder;
@@ -261,7 +262,12 @@ final class JettyClientSlice implements Slice {
         if (this.acquireTimeoutMillis > 0) {
             request.timeout(this.acquireTimeoutMillis, TimeUnit.MILLISECONDS);
         }
-        for (Header header : headers) {
+        // Inject B3 + W3C trace propagation headers from the current MDC,
+        // so every upstream call from any adapter (maven, npm, docker,
+        // composer, files, go, pypi, helm, debian, gem, hex, ...) carries
+        // the request's trace context. No-op when MDC has no trace.id.
+        final Headers withTrace = TraceHeaders.inject(headers);
+        for (Header header : withTrace) {
             request.headers(mutable -> mutable.add(header.getKey(), header.getValue()));
         }
         return request;

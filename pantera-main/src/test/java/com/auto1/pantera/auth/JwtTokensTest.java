@@ -11,10 +11,11 @@
 package com.auto1.pantera.auth;
 
 import com.auto1.pantera.http.auth.AuthUser;
-import io.vertx.core.Vertx;
-import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
-import io.vertx.ext.auth.jwt.JWTAuthOptions;
+import com.auto1.pantera.http.auth.TokenAuthentication;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsInstanceOf;
@@ -24,37 +25,42 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Test for {@link JwtTokens}.
- * @since 0.29
+ * @since 2.1.0
  */
 class JwtTokensTest {
 
     /**
-     * Test JWT provider.
+     * RSA private key for signing test tokens.
      */
-    private JWTAuth provider;
+    private RSAPrivateKey privateKey;
+
+    /**
+     * RSA public key for verification.
+     */
+    private RSAPublicKey publicKey;
 
     @BeforeEach
-    void init() {
-        this.provider = JWTAuth.create(
-            Vertx.vertx(),
-            new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("some secret")
-            )
-        );
+    void setUp() throws Exception {
+        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+        gen.initialize(2048);
+        final KeyPair kp = gen.generateKeyPair();
+        this.privateKey = (RSAPrivateKey) kp.getPrivate();
+        this.publicKey = (RSAPublicKey) kp.getPublic();
     }
 
     @Test
     void returnsAuth() {
         MatcherAssert.assertThat(
-            new JwtTokens(this.provider).auth(),
-            new IsInstanceOf(JwtTokenAuth.class)
+            new JwtTokens(this.privateKey, this.publicKey, null, null, null).auth(),
+            new IsInstanceOf(UnifiedJwtAuthHandler.class)
         );
     }
 
     @Test
     void generatesToken() {
         MatcherAssert.assertThat(
-            new JwtTokens(this.provider).generate(new AuthUser("Oleg", "test")),
+            new JwtTokens(this.privateKey, this.publicKey, null, null, null)
+                .generate(new AuthUser("Oleg", "test")),
             new IsNot<>(Matchers.emptyString())
         );
     }

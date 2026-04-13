@@ -6,10 +6,12 @@ import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
+import Popover from 'primevue/popover'
 import Tag from 'primevue/tag'
 import Paginator from 'primevue/paginator'
 import type { SearchResult } from '@/types'
 
+const syntaxHelp = ref()
 const query = ref('')
 const items = ref<SearchResult[]>([])
 const page = ref(0)
@@ -245,6 +247,39 @@ const SORT_OPTIONS = [
             class="flex-1 bg-transparent border-none outline-none text-sm text-gray-900 dark:text-white py-2.5 placeholder:text-gray-400"
           />
           <Button label="Search" icon="pi pi-search" size="small" class="!rounded-lg" :loading="loading" @click="doSearch" />
+          <button
+            class="ml-1 mr-1 w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-orange-500 hover:bg-orange-500/10 transition-colors"
+            title="Search syntax help"
+            @click="(e: MouseEvent) => syntaxHelp.toggle(e)"
+          >
+            <i class="pi pi-question-circle text-base" />
+          </button>
+          <Popover ref="syntaxHelp">
+            <div class="w-80 p-3 text-sm">
+              <div class="font-semibold text-gray-900 dark:text-white mb-2">Search syntax</div>
+              <table class="w-full text-xs">
+                <tbody>
+                  <tr v-for="row in [
+                    ['pydantic', 'Full-text search'],
+                    ['name:pydantic', 'Filter by package name'],
+                    ['version:2.12', 'Filter by version'],
+                    ['repo:pypi-proxy', 'Filter by repository'],
+                    ['type:maven', 'Filter by repo type'],
+                  ]" :key="row[0]" class="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                    <td class="py-1.5 pr-3 font-mono text-orange-500 whitespace-nowrap">{{ row[0] }}</td>
+                    <td class="py-1.5 text-gray-500">{{ row[1] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="mt-3 pt-2 border-t border-gray-100 dark:border-gray-800">
+                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1.5">Combine with AND / OR</div>
+                <div class="space-y-1 font-mono text-xs text-gray-400">
+                  <div>name:pydantic AND version:2.12</div>
+                  <div>name:foo AND (version:1.0 OR version:2.0)</div>
+                </div>
+              </div>
+            </div>
+          </Popover>
         </div>
         <div v-if="query && items.length > 0" class="flex items-center justify-between mt-3">
           <div class="text-sm text-gray-500">
@@ -405,7 +440,7 @@ const SORT_OPTIONS = [
       <div v-else-if="query && items.length === 0 && !loading" class="text-center py-16">
         <i class="pi pi-inbox text-4xl text-gray-700 mb-4" />
         <p class="text-gray-400">No results found for "{{ query }}"</p>
-        <p class="text-xs text-gray-600 mt-2">Try a different search term or check spelling</p>
+        <p class="text-xs text-gray-600 mt-2">Try a different search term, check spelling, or use field syntax: <span class="font-mono text-orange-500">name:</span> <span class="font-mono text-orange-500">version:</span> <span class="font-mono text-orange-500">repo:</span></p>
       </div>
     </div>
   </AppLayout>

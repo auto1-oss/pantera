@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# =================================================================
+# PEP 691 JSON Simple API test via uv
+#
+# Prerequisites:
+#   - Pantera running at localhost:8081 with pypi_group configured
+#   - hello package uploaded to the hosted pypi repo
+#   - uv installed (curl -LsSf https://astral.sh/uv/install.sh | sh)
+#
+# Usage:
+#   ./test.sh                    # full test: lock + sync + pytest
+#   ./test.sh --lock-only        # just test resolution (no install)
+#   ./test.sh --json-only        # just test the raw JSON endpoint
+# =================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+PANTERA_URL="${PANTERA_URL:-http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/}"
+
+echo "=== Pantera PEP 691 / uv test ==="
+echo "Index: $PANTERA_URL"
+echo ""
+
+# ------------------------------------------------------------------
+# Test 1: Raw JSON endpoint (no uv dependency)
+# ------------------------------------------------------------------
+if [[ "${1:-}" == "--json-only" ]] || [[ "${1:-}" == "" ]]; then
+    echo "--- Test 1: Raw PEP 691 JSON endpoint ---"
+    HTTP_CODE=$(curl -s -o /tmp/pantera-pep691.json -w '%{http_code}' \
+        -H 'Accept: application/vnd.pypi.simple.v1+json' \
+        "${PANTERA_URL}hello/")
+
+    if [[ "$HTTP_CODE" != "200" ]]; then
+        echo "FAIL: Expected HTTP 200, got $HTTP_CODE"
+        cat /tmp/pantera-pep691.json
+        exit 1
+    fi
+
+    # Must be parseable JSON (not HTML)
+    if ! python3 -m json.tool /tmp/pantera-pep691.json > /dev/null 2>&1; then
+        echo "FAIL: Response is not valid JSON"
+        head -5 /tmp/pantera-pep691.json
+        exit 1
+    fi
+
+    # Check PEP 691 structure
+    python3 -c "
+import json, sys
+with open('/tmp/pantera-pep691.json') as f:
+    data = json.load(f)
+av = data.get('meta', {}).get('api-version', '')
+assert av and tuple(int(x) for x in av.split('.')) >= (1, 1), f'api-version must be >= 1.1, got {av!r}'
+assert data.get('name') == 'hello', f'wrong name: {data.get(\"name\")}'
+assert len(data.get('files', [])) > 0, 'no files in response'
+for f in data['files']:
+    url = f.get('url', '')
+    assert not url.startswith('//'), f'protocol-relative URL: {url}'
+    assert 'sha256' in f.get('hashes', {}), f'missing sha256 for {f.get(\"filename\")}'
+    yanked = f.get('yanked')
+    assert yanked is False or isinstance(yanked, str), f'yanked must be false or string: {yanked}'
+print(f'  OK: {len(data[\"files\"])} file(s), all URLs relative, PEP 691 compliant')
+"
+    echo ""
+fi
+
+if [[ "${1:-}" == "--json-only" ]]; then
+    echo "=== JSON test passed ==="
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Test 2: uv lock (PEP 691 basic resolution)
+# ------------------------------------------------------------------
+echo "--- Test 2: uv lock (PEP 691 basic resolution) ---"
+if ! command -v uv &> /dev/null; then
+    echo "SKIP: uv not installed (curl -LsSf https://astral.sh/uv/install.sh | sh)"
+    exit 0
+fi
+
+# Clean previous state
+rm -f uv.lock
+rm -rf .venv
+
+uv lock --verbose 2>&1 | tail -5
+echo "  OK: uv lock succeeded"
+echo ""
+
+# ------------------------------------------------------------------
+# Test 3: exclude-newer PINS a proxied package to an old version
+#
+# requests 2.28.0 published 2022-06-09, 2.28.1 published 2022-06-29.
+# With cutoff 2022-06-15, uv must resolve exactly 2.28.0. If the
+# proxy doesn't forward upload-time, uv resolves latest instead.
+# ------------------------------------------------------------------
+echo "--- Test 3: exclude-newer pins proxied package version ---"
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+cat > "$TMPDIR/pyproject.toml" <<PYPROJECT
+[project]
+name = "exclude-newer-proxy-test"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.28.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+index-url = "${PANTERA_URL}"
+exclude-newer = "2022-06-15T00:00:00Z"
+PYPROJECT
+
+if uv lock --directory "$TMPDIR" 2>&1 | tail -3; then
+    RESOLVED=$(grep -A1 'name = "requests"' "$TMPDIR/uv.lock" | grep 'version' | head -1 | sed 's/.*"\(.*\)"/\1/')
+    if [[ "$RESOLVED" == "2.28.0" ]]; then
+        echo "  OK: proxy forwards upload-time — requests pinned to $RESOLVED"
+    else
+        echo "  FAIL: expected requests==2.28.0, got $RESOLVED"
+        echo "  The proxy is not forwarding PEP 700 upload-time."
+        exit 1
+    fi
+else
+    echo "  FAIL: uv lock with exclude-newer failed"
+    exit 1
+fi
+echo ""
+
+# ------------------------------------------------------------------
+# Test 4: exclude-newer REJECTS a hosted package uploaded recently
+#
+# hello was uploaded today. Set cutoff 30 days ago — uv must refuse
+# to resolve it. A successful exclusion = PEP 700 works for hosted.
+# ------------------------------------------------------------------
+echo "--- Test 4: exclude-newer rejects recent hosted package ---"
+CUTOFF=$(python3 -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=30)).strftime('%Y-%m-%dT00:00:00Z'))")
+TMPDIR2=$(mktemp -d)
+cat > "$TMPDIR2/pyproject.toml" <<PYPROJECT
+[project]
+name = "exclude-newer-hosted-test"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["hello>=0.2.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+index-url = "${PANTERA_URL}"
+exclude-newer = "${CUTOFF}"
+PYPROJECT
+
+if uv lock --directory "$TMPDIR2" 2>&1 | tail -3; then
+    echo "  FAIL: uv lock should have rejected hello (uploaded after $CUTOFF)"
+    echo "  upload-time is missing from the hosted JSON."
+    rm -rf "$TMPDIR2"
+    exit 1
+else
+    echo "  OK: hello correctly excluded (uploaded after cutoff $CUTOFF)"
+    echo "  PEP 700 upload-time works for hosted packages."
+fi
+rm -rf "$TMPDIR2"
+echo ""
+
+if [[ "${1:-}" == "--lock-only" ]]; then
+    echo "=== All lock tests passed ==="
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Test 5: uv sync + pytest (full install + programmatic tests)
+# ------------------------------------------------------------------
+echo "--- Test 5: uv sync + pytest ---"
+uv sync 2>&1 | tail -3
+uv add --dev pytest requests 2>&1 | tail -1
+uv run python -m pytest tests/ -v
+
+echo ""
+echo "=== All PEP 691 / PEP 700 tests passed ==="

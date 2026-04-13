@@ -89,3 +89,21 @@ export async function refreshToken(): Promise<TokenResponse> {
   const { data } = await getApiClient().post<TokenResponse>('/auth/refresh')
   return data
 }
+
+// --- Admin Auth Settings ---
+
+export async function getAuthSettings(): Promise<Record<string, string>> {
+  const { data } = await getApiClient().get<Record<string, string>>('/admin/auth-settings')
+  return data
+}
+
+export async function updateAuthSettings(settings: Record<string, string>): Promise<void> {
+  await getApiClient().put('/admin/auth-settings', settings)
+}
+
+export async function revokeAllUserTokens(username: string): Promise<{ revoked_count: number }> {
+  const { data } = await getApiClient().post<{ revoked_count: number }>(
+    `/admin/revoke-user/${username}`
+  )
+  return data
+}

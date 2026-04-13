@@ -433,6 +433,16 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public boolean proxyProtocol() {
+        final YamlMapping server = this.meta != null
+            ? this.meta.yamlMapping("http_server") : null;
+        if (server == null) {
+            return false;
+        }
+        return "true".equalsIgnoreCase(server.string("proxy_protocol"));
+    }
+
+    @Override
     public void close() {
         if (this.closed) {
             return;
@@ -743,6 +753,15 @@ public final class YamlSettings implements Settings {
         } else {
             res = new AuthFromEnv();
         }
+        // Shared cache of currently-enabled auth_providers.type values.
+        // Every dynamic provider (SSO, jwt-password, ...) is wrapped in
+        // DbGatedAuth with a reference to this cache so UI-driven
+        // enable/disable/delete takes effect within seconds (5s TTL)
+        // without requiring a server restart.
+        final com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache enabledCache =
+            dataSource != null
+                ? new com.auto1.pantera.auth.DbGatedAuth.EnabledTypesCache(dataSource)
+                : null;
         // Add YAML-configured providers as fallbacks (SSO, env, etc.)
         final YamlSequence creds = settings.yamlSequence(YamlSettings.NODE_CREDENTIALS);
         if (creds != null && !creds.isEmpty()) {
@@ -755,7 +774,13 @@ public final class YamlSettings implements Settings {
                 }
                 try {
                     final Authentication auth = loader.newObject(type, settings);
-                    res = new Authentication.Joined(res, auth);
+                    // Wrap in DbGatedAuth so disable/delete via the UI
+                    // actually takes effect on the running chain.
+                    final Authentication gated = enabledCache != null && type != null
+                        ? new com.auto1.pantera.auth.DbGatedAuth(
+                            auth, type, enabledCache)
+                        : auth;
+                    res = new Authentication.Joined(res, gated);
                 } catch (final Exception ex) {
                     EcsLogger.warn("com.auto1.pantera.security")
                         .message("Failed to load auth provider: " + type)
@@ -766,6 +791,17 @@ public final class YamlSettings implements Settings {
                         .log();
                 }
             }
+        }
+        // Final enabled-state gate on the whole chain. Rejects any
+        // successful authentication whose local user row is disabled.
+        // This closes the hole where a user disabled in Pantera is
+        // still authenticated via basic auth (CLI pulls) using their
+        // upstream Keycloak / Okta credentials — AuthFromDb already
+        // checks enabled for local users, but SSO providers do not.
+        // Order matters: wrap BEFORE CachedUsers so a stale cache
+        // entry cannot let a just-disabled user through.
+        if (dataSource != null) {
+            res = new com.auto1.pantera.auth.LocalEnabledFilter(res, dataSource);
         }
         // Create CachedUsers with Valkey connection and JWT settings for TTL capping
         if (valkey.isPresent()) {

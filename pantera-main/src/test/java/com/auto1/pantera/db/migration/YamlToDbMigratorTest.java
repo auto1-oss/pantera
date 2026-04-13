@@ -212,19 +212,31 @@ class YamlToDbMigratorTest {
         // Verify settings
         final SettingsDao settings = new SettingsDao(ds);
         assertTrue(settings.get("layout").isPresent());
-        // Verify auth providers
+        // Verify auth providers — YAML supplied (local, keycloak) plus the
+        // bootstrapped jwt-password row that ensureExists always creates.
+        // local is in the YAML so ensureExists is a no-op for it.
         final AuthProviderDao authDao = new AuthProviderDao(ds);
-        assertEquals(2, authDao.list().size());
+        final java.util.List<javax.json.JsonObject> providers = authDao.list();
+        assertEquals(3, providers.size());
+        final java.util.Set<String> types = providers.stream()
+            .map(p -> p.getString("type"))
+            .collect(java.util.stream.Collectors.toSet());
+        assertTrue(types.contains("local"), "local must be present");
+        assertTrue(types.contains("keycloak"), "keycloak must be present");
+        assertTrue(types.contains("jwt-password"),
+            "jwt-password must be auto-bootstrapped");
     }
 
     @Test
     void skipsIfAlreadyMigrated() throws Exception {
         final SettingsDao settings = new SettingsDao(ds);
+        // Must equal MIGRATION_VERSION in YamlToDbMigrator. Bump this when
+        // the migrator version is bumped.
         settings.put(
             "migration_completed",
             Json.createObjectBuilder()
                 .add("completed", true)
-                .add("version", 4)
+                .add("version", 6)
                 .build(),
             "system"
         );

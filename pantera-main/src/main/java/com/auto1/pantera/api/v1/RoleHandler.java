@@ -15,7 +15,10 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiRolePermission;
 import com.auto1.pantera.api.perms.ApiRolePermission.RoleAction;
 import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.db.dao.PagedResult;
+import com.auto1.pantera.db.dao.RoleDao;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudRoles;
 import io.vertx.core.json.JsonArray;
@@ -23,8 +26,8 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.security.PermissionCollection;
-import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -114,6 +117,7 @@ public final class RoleHandler {
 
     /**
      * GET /api/v1/roles — paginated list of roles.
+     * Supports query params: page, size, q (search), sort (field), sort_dir (asc|desc).
      * @param ctx Routing context
      */
     private void listRoles(final RoutingContext ctx) {
@@ -125,25 +129,30 @@ public final class RoleHandler {
                 ctx.queryParam("size").stream().findFirst().orElse(null), 20
             )
         );
-        ctx.vertx().<javax.json.JsonArray>executeBlocking(
-            this.roles::list,
+        final String query = ctx.queryParam("q").stream().findFirst().orElse(null);
+        final Set<String> roleSortFields = Set.of("name", "enabled");
+        final String rawSort = ctx.queryParam("sort").stream().findFirst().orElse("name");
+        final String sortField = roleSortFields.contains(rawSort) ? rawSort : "name";
+        final String sortDir = ctx.queryParam("sort_dir").stream().findFirst().orElse("asc");
+        final boolean ascending = !"desc".equalsIgnoreCase(sortDir);
+        if (!(this.roles instanceof RoleDao)) {
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Paged listing not supported");
+            return;
+        }
+        final RoleDao dao = (RoleDao) this.roles;
+        ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
+            MdcPropagation.withMdc(() -> dao.listPaged(query, sortField, ascending, size, page * size)),
             false
         ).onSuccess(
-            all -> {
-                final List<io.vertx.core.json.JsonObject> flat =
-                    new java.util.ArrayList<>(all.size());
-                for (int i = 0; i < all.size(); i++) {
-                    flat.add(
-                        new io.vertx.core.json.JsonObject(
-                            all.getJsonObject(i).toString()
-                        )
-                    );
+            result -> {
+                final JsonArray items = new JsonArray();
+                for (final JsonObject obj : result.items()) {
+                    items.add(new io.vertx.core.json.JsonObject(obj.toString()));
                 }
-                final JsonArray items = ApiResponse.sliceToArray(flat, page, size);
                 ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
-                    .end(ApiResponse.paginated(items, page, size, flat.size()).encode());
+                    .end(ApiResponse.paginated(items, page, size, result.total()).encode());
             }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
@@ -157,7 +166,7 @@ public final class RoleHandler {
     private void getRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            () -> this.roles.get(rname),
+            MdcPropagation.withMdc(() -> this.roles.get(rname)),
             false
         ).onSuccess(
             opt -> {
@@ -206,10 +215,10 @@ public final class RoleHandler {
         if (existing.isPresent() && perms.implies(RoleHandler.UPDATE)
             || existing.isEmpty() && perms.implies(RoleHandler.CREATE)) {
             ctx.vertx().executeBlocking(
-                () -> {
+                MdcPropagation.withMdc(() -> {
                     this.roles.addOrUpdate(body, rname);
                     return null;
-                },
+                }),
                 false
             ).onSuccess(
                 ignored -> {
@@ -231,10 +240,10 @@ public final class RoleHandler {
     private void deleteRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.remove(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -262,10 +271,10 @@ public final class RoleHandler {
     private void enableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.enable(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -293,10 +302,10 @@ public final class RoleHandler {
     private void disableRole(final RoutingContext ctx) {
         final String rname = ctx.pathParam(RoleHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.roles.disable(rname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

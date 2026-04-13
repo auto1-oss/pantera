@@ -555,7 +555,7 @@ final class CachedProxySlice implements Slice {
                 .field("package.name", key.string())
                 .field("repository.name", this.rname)
                 .field("user.name", owner)
-                .field("package.release_date", release.map(Object::toString).orElse("unknown"))
+                .field("package.release_date", release.map(Object::toString).orElse(null))
                 .log();
         });
     }

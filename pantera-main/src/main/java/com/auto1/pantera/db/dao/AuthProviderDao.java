@@ -88,6 +88,53 @@ public final class AuthProviderDao {
         }
     }
 
+    /**
+     * Insert a provider only if no row with this type already exists.
+     * Used to bootstrap the default {@code local} provider on startup
+     * without overwriting admin-edited config or enable state.
+     *
+     * @param type Provider type
+     * @param priority Priority for ordering
+     * @param config Initial config JSON
+     * @return true if a new row was inserted, false if a row already existed
+     */
+    public boolean ensureExists(final String type, final int priority, final JsonObject config) {
+        final String sql = String.join(" ",
+            "INSERT INTO auth_providers (type, priority, config) VALUES (?, ?, ?::jsonb)",
+            "ON CONFLICT (type) DO NOTHING"
+        );
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, type);
+            ps.setInt(2, priority);
+            ps.setString(3, config.toString());
+            return ps.executeUpdate() > 0;
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to ensure auth provider exists: " + type, ex);
+        }
+    }
+
+    /**
+     * Look up the {@code type} of a provider by its ID. Returns null if not found.
+     * Used to check whether a delete request targets the protected local provider.
+     *
+     * @param id Provider ID
+     * @return Provider type string, or null if no row matches
+     */
+    public String typeOf(final int id) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "SELECT type FROM auth_providers WHERE id = ?"
+             )) {
+            ps.setInt(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        } catch (final Exception ex) {
+            throw new IllegalStateException("Failed to look up auth provider type: " + id, ex);
+        }
+    }
+
     public void enable(final int id) {
         setEnabled(id, true);
     }

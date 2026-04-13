@@ -128,7 +128,8 @@ These variables are not read directly by Pantera code but are referenced in `pan
 
 | Variable | Description |
 |----------|-------------|
-| `JWT_SECRET` | HMAC key for JWT token signing |
+| `JWT_PRIVATE_KEY_PATH` | Path to RSA private key PEM file for JWT signing (replaces `JWT_SECRET`) |
+| `JWT_PUBLIC_KEY_PATH` | Path to RSA public key PEM file for JWT verification |
 | `POSTGRES_USER` | PostgreSQL username |
 | `POSTGRES_PASSWORD` | PostgreSQL password |
 | `KEYCLOAK_CLIENT_SECRET` | Keycloak OIDC client secret |
@@ -136,6 +137,8 @@ These variables are not read directly by Pantera code but are referenced in `pan
 | `OKTA_CLIENT_ID` | Okta OIDC client identifier |
 | `OKTA_CLIENT_SECRET` | Okta OIDC client secret |
 | `OKTA_REDIRECT_URI` | OAuth2 callback URL |
+
+> **v2.1.0 change:** `JWT_SECRET` is no longer used. Pantera will fail to start if `meta.jwt.secret` is still present in `pantera.yml`. See [Upgrade Procedures](upgrade-procedures.md#jwt-migration-hs256-to-rs256) for migration steps.
 
 ---
 

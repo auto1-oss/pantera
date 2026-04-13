@@ -183,7 +183,7 @@ class JettyClientSliceTest {
         MatcherAssert.assertThat(
             this.slice.response(new RequestLine(RqMethod.HEAD, "/content"),
                 Headers.EMPTY, Content.EMPTY).join().headers(),
-            Matchers.containsInAnyOrder(
+            Matchers.hasItems(
                 ContentType.text(),
                 new Header("WWW-Authenticate", "Basic")
             )

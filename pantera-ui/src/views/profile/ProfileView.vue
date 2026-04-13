@@ -3,12 +3,15 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
-import { generateTokenForSession, listTokens, revokeToken, type ApiToken } from '@/api/auth'
+import { generateTokenForSession, listTokens, revokeToken, getAuthSettings, type ApiToken } from '@/api/auth'
+import { changePassword } from '@/api/users'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Select from 'primevue/select'
+import Message from 'primevue/message'
+import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
@@ -28,18 +31,31 @@ const permissionEntries = computed(() =>
 const generatedToken = ref('')
 const tokenLoading = ref(false)
 const selectedExpiry = ref(30)
-const expiryOptions = [
+const expiryOptions = ref([
   { label: '30 days', value: 30 },
   { label: '90 days', value: 90 },
-  { label: '1 year', value: 365 },
-  { label: 'Permanent (no expiry)', value: 0 },
-]
+])
 
 // Existing tokens
 const tokens = ref<ApiToken[]>([])
 const tokensLoading = ref(false)
 
-onMounted(() => loadTokens())
+onMounted(async () => {
+  loadTokens()
+  try {
+    const settings = await getAuthSettings()
+    const maxTtlDays = Math.floor(parseInt(settings.api_token_max_ttl_seconds ?? '7776000') / 86400)
+    const allowPermanent = settings.api_token_allow_permanent === 'true'
+    const opts = []
+    if (maxTtlDays >= 30) opts.push({ label: '30 days', value: 30 })
+    if (maxTtlDays >= 90) opts.push({ label: '90 days', value: 90 })
+    if (maxTtlDays >= 365) opts.push({ label: '1 year', value: 365 })
+    if (allowPermanent) opts.push({ label: 'Permanent (no expiry)', value: 0 })
+    if (opts.length > 0) expiryOptions.value = opts
+  } catch {
+    // Keep defaults if settings unavailable
+  }
+})
 
 async function loadTokens() {
   tokensLoading.value = true
@@ -102,6 +118,34 @@ function expirySeverity(token: ApiToken): string {
   if (token.expired) return 'danger'
   return 'success'
 }
+
+/* ---------- Self-service password change (local users only) ---------- */
+
+const isLocalUser = computed(() => (auth.user?.context ?? '') === 'local')
+
+const pwOld = ref('')
+const pwNew = ref('')
+const pwValid = ref(false)
+const pwSubmitting = ref(false)
+const pwError = ref<string | null>(null)
+
+async function submitPasswordChange() {
+  if (!pwValid.value || pwSubmitting.value) return
+  pwError.value = null
+  pwSubmitting.value = true
+  try {
+    await changePassword(auth.username, pwOld.value, pwNew.value)
+    notify.success('Password changed', 'Your new password is active immediately.')
+    pwOld.value = ''
+    pwNew.value = ''
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    pwError.value = err.response?.data?.message
+      ?? (e instanceof Error ? e.message : 'Failed to change password')
+  } finally {
+    pwSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -135,6 +179,37 @@ function expirySeverity(token: ApiToken): string {
               <Tag :value="String(value)" />
             </div>
           </div>
+        </template>
+      </Card>
+
+      <Card v-if="isLocalUser" class="shadow-sm">
+        <template #title>Change Password</template>
+        <template #subtitle>
+          <p class="text-xs text-gray-500 mt-1">
+            Only available for local (username/password) accounts. SSO users
+            manage their password via the identity provider.
+          </p>
+        </template>
+        <template #content>
+          <form class="space-y-4" @submit.prevent="submitPasswordChange">
+            <PasswordComplexityForm
+              v-model:oldPassword="pwOld"
+              v-model:password="pwNew"
+              :username="auth.username"
+              :disabled="pwSubmitting"
+              @valid="(v) => pwValid = v"
+            />
+            <Message v-if="pwError" severity="error" :closable="false">
+              {{ pwError }}
+            </Message>
+            <Button
+              type="submit"
+              label="Change password"
+              icon="pi pi-check"
+              :loading="pwSubmitting"
+              :disabled="!pwValid"
+            />
+          </form>
         </template>
       </Card>
 

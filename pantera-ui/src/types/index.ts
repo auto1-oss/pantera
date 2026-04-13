@@ -34,6 +34,8 @@ export interface AuthProvidersResponse {
 
 export interface TokenResponse {
   token: string
+  refresh_token?: string
+  expires_in?: number
 }
 
 export interface UserInfo {
@@ -43,6 +45,12 @@ export interface UserInfo {
   can_delete_artifacts?: boolean
   email?: string
   groups?: string[]
+  /**
+   * When true, the user is forced to change their password before any
+   * other action succeeds. Set on the bootstrap admin user; cleared by
+   * the backend once a sufficiently complex password is submitted.
+   */
+  must_change_password?: boolean
 }
 
 export interface RepoListItem {
@@ -216,7 +224,9 @@ export interface Settings {
     type: string
     priority: number
     enabled: boolean
-    config?: Record<string, string>
+    // Nested arrays (allowed-groups) and objects (group-roles) are
+    // serialized as real JSON by the backend — not strings.
+    config?: Record<string, unknown>
   }>
   database?: {
     configured: boolean
@@ -226,6 +236,7 @@ export interface Settings {
   }
   ui?: {
     grafana_url?: string
+    registry_url?: string
   }
 }
 

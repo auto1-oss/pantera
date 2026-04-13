@@ -15,8 +15,8 @@ import com.auto1.pantera.http.log.EcsLogger;
 import java.util.Optional;
 
 /**
- * JWT token settings.
- * @since 1.20.7
+ * JWT token settings (RS256).
+ * @since 2.1.0
  */
 public final class JwtSettings {
 
@@ -36,27 +36,35 @@ public final class JwtSettings {
     private final int expirySeconds;
 
     /**
-     * JWT secret key.
+     * Path to the RS256 private key PEM file.
      */
-    private final String secret;
+    private final String privateKeyPath;
 
     /**
-     * Ctor with defaults (permanent tokens).
+     * Path to the RS256 public key PEM file.
+     */
+    private final String publicKeyPath;
+
+    /**
+     * Ctor with defaults (permanent tokens, no key paths).
      */
     public JwtSettings() {
-        this(false, DEFAULT_EXPIRY_SECONDS, "some secret");
+        this(false, DEFAULT_EXPIRY_SECONDS, null, null);
     }
 
     /**
      * Ctor.
      * @param expires Whether tokens expire
      * @param expirySeconds Expiry time in seconds
-     * @param secret JWT secret key
+     * @param privateKeyPath Path to RS256 private key PEM file
+     * @param publicKeyPath Path to RS256 public key PEM file
      */
-    public JwtSettings(final boolean expires, final int expirySeconds, final String secret) {
+    public JwtSettings(final boolean expires, final int expirySeconds,
+        final String privateKeyPath, final String publicKeyPath) {
         this.expires = expires;
         this.expirySeconds = expirySeconds;
-        this.secret = secret;
+        this.privateKeyPath = privateKeyPath;
+        this.publicKeyPath = publicKeyPath;
     }
 
     /**
@@ -76,11 +84,19 @@ public final class JwtSettings {
     }
 
     /**
-     * JWT secret key for signing.
-     * @return Secret key
+     * Path to the RS256 private key PEM file.
+     * @return Optional private key path
      */
-    public String secret() {
-        return this.secret;
+    public Optional<String> privateKeyPath() {
+        return Optional.ofNullable(this.privateKeyPath);
+    }
+
+    /**
+     * Path to the RS256 public key PEM file.
+     * @return Optional public key path
+     */
+    public Optional<String> publicKeyPath() {
+        return Optional.ofNullable(this.publicKeyPath);
     }
 
     /**
@@ -107,6 +123,13 @@ public final class JwtSettings {
         if (jwt == null) {
             return new JwtSettings();
         }
+        if (jwt.string("secret") != null) {
+            throw new IllegalStateException(
+                "HS256 secret configuration is no longer supported. Migrate to RS256."
+                + " Generate keys with: openssl genrsa -out private.pem 2048"
+                + " && openssl rsa -in private.pem -pubout -out public.pem"
+            );
+        }
         final String expiresStr = jwt.string("expires");
         final boolean expires = expiresStr != null && Boolean.parseBoolean(expiresStr);
         int expirySeconds = DEFAULT_EXPIRY_SECONDS;
@@ -124,17 +147,9 @@ public final class JwtSettings {
                     .log();
             }
         }
-        String secret = jwt.string("secret");
-        if (secret == null || secret.trim().isEmpty()) {
-            secret = resolveEnv(jwt.string("secret"));
-            if (secret == null || secret.trim().isEmpty()) {
-                secret = "some secret";
-            }
-        } else {
-            // Check for env var syntax
-            secret = resolveEnv(secret);
-        }
-        return new JwtSettings(expires, expirySeconds, secret);
+        final String privateKeyPath = resolveEnv(jwt.string("private-key-path"));
+        final String publicKeyPath = resolveEnv(jwt.string("public-key-path"));
+        return new JwtSettings(expires, expirySeconds, privateKeyPath, publicKeyPath);
     }
 
     /**

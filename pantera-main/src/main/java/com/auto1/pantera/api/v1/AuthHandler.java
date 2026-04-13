@@ -20,11 +20,13 @@ import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.auth.JwtTokens;
 import com.auto1.pantera.auth.OktaAuthContext;
 import com.auto1.pantera.db.dao.AuthProviderDao;
+import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.auth.Tokens;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.users.CrudUsers;
 import io.vertx.core.json.JsonArray;
@@ -60,28 +62,42 @@ public final class AuthHandler {
      */
     private static final int DEFAULT_EXPIRY_DAYS = 30;
 
+    /**
+     * Auth settings key for maximum API token expiry in days.
+     */
+    private static final String SETTING_MAX_TOKEN_DAYS = "max_api_token_days";
+
     private final Tokens tokens;
     private final Authentication auth;
     private final CrudUsers users;
     private final Policy<?> policy;
     private final AuthProviderDao providerDao;
     private final UserTokenDao tokenDao;
+    private final AuthSettingsDao settingsDao;
 
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
-        final AuthProviderDao providerDao, final UserTokenDao tokenDao) {
+        final AuthProviderDao providerDao, final UserTokenDao tokenDao,
+        final AuthSettingsDao settingsDao) {
         this.tokens = tokens;
         this.auth = auth;
         this.users = users;
         this.policy = policy;
         this.providerDao = providerDao;
         this.tokenDao = tokenDao;
+        this.settingsDao = settingsDao;
+    }
+
+    public AuthHandler(final Tokens tokens, final Authentication auth,
+        final CrudUsers users, final Policy<?> policy,
+        final AuthProviderDao providerDao, final UserTokenDao tokenDao) {
+        this(tokens, auth, users, policy, providerDao, tokenDao, null);
     }
 
     public AuthHandler(final Tokens tokens, final Authentication auth,
         final CrudUsers users, final Policy<?> policy,
         final AuthProviderDao providerDao) {
-        this(tokens, auth, users, policy, providerDao, null);
+        this(tokens, auth, users, policy, providerDao, null, null);
     }
 
     /**
@@ -123,29 +139,44 @@ public final class AuthHandler {
         final String pass = body.getString("pass");
         final String mfa = body.getString("mfa_code");
         ctx.vertx().<Optional<AuthUser>>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
+                // Also set user.name in MDC so logs from inside the
+                // auth chain (AuthFromDb, Keycloak, etc.) can reference
+                // who is attempting to log in.
+                org.slf4j.MDC.put(
+                    com.auto1.pantera.http.log.EcsMdc.USER_NAME, name
+                );
                 OktaAuthContext.setMfaCode(mfa);
                 try {
                     return this.auth.user(name, pass);
                 } finally {
                     OktaAuthContext.clear();
                 }
-            },
+            }),
             false
         ).onComplete(ar -> {
             if (ar.succeeded()) {
                 final Optional<AuthUser> user = ar.result();
                 if (user.isPresent()) {
-                    final String token = this.tokens.generate(user.get());
+                    final Tokens.TokenPair pair = this.tokens.generatePair(user.get());
                     ctx.response()
                         .setStatusCode(200)
                         .putHeader("Content-Type", "application/json")
-                        .end(new JsonObject().put("token", token).encode());
+                        .end(new JsonObject()
+                            .put("token", pair.accessToken())
+                            .put("refresh_token", pair.refreshToken())
+                            .put("expires_in", pair.expiresIn())
+                            .encode());
                 } else {
-                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid credentials");
+                    // Generic message — never disclose whether the user
+                    // exists, the password is wrong, or MFA failed. Detail
+                    // is in the server logs from the auth chain.
+                    ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                        "Sign-in failed. Check your credentials and try again.");
                 }
             } else {
-                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Authentication failed");
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                    "Sign-in is temporarily unavailable. Please try again.");
             }
         });
     }
@@ -200,7 +231,7 @@ public final class AuthHandler {
             return;
         }
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject provider = findProvider(name);
                 if (provider == null) {
                     return null;
@@ -240,22 +271,36 @@ public final class AuthHandler {
                     + "&redirect_uri=" + enc(callbackUrl)
                     + "&state=" + enc(state);
                 return new JsonObject().put("url", url).put("state", state);
-            },
+            }),
             false
         ).onSuccess(result -> {
             if (result == null) {
                 ApiResponse.sendError(ctx, 404, "NOT_FOUND",
-                    String.format("Provider '%s' not found", name));
+                    "Sign-in provider is not configured.");
             } else if (result.containsKey("error")) {
-                ApiResponse.sendError(ctx, 400, "BAD_REQUEST", result.getString("error"));
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("SSO redirect rejected: " + result.getString("error"))
+                    .eventCategory("authentication")
+                    .eventAction("sso_redirect")
+                    .log();
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Sign-in provider is not configured correctly.");
             } else {
                 ctx.response().setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
                     .end(result.encode());
             }
-        }).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        }).onFailure(err -> {
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("SSO redirect failed: "
+                    + (err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName()))
+                .eventCategory("authentication")
+                .eventAction("sso_redirect")
+                .error(err)
+                .log();
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR",
+                "Sign-in is temporarily unavailable. Please try again.");
+        });
     }
 
     /**
@@ -281,8 +326,8 @@ public final class AuthHandler {
                 "Field 'callback_url' is required");
             return;
         }
-        ctx.vertx().<String>executeBlocking(
-            () -> {
+        ctx.vertx().<Tokens.TokenPair>executeBlocking(
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject prov = findProvider(provider);
                 if (prov == null) {
                     throw new IllegalStateException(
@@ -323,12 +368,17 @@ public final class AuthHandler {
                     (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8)
                 );
                 final HttpClient http = HttpClient.newHttpClient();
-                final HttpRequest request = HttpRequest.newBuilder()
+                HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(tokenUrl))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("Authorization", "Basic " + basic)
-                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody));
+                final String[] traceHdrs =
+                    com.auto1.pantera.http.trace.TraceHeaders.httpClientHeaders();
+                for (int i = 0; i < traceHdrs.length; i += 2) {
+                    reqBuilder = reqBuilder.header(traceHdrs[i], traceHdrs[i + 1]);
+                }
+                final HttpRequest request = reqBuilder.build();
                 final HttpResponse<String> resp;
                 try {
                     resp = http.send(request, HttpResponse.BodyHandlers.ofString());
@@ -374,6 +424,9 @@ public final class AuthHandler {
                 if (username == null || username.isEmpty()) {
                     throw new IllegalStateException("Cannot determine username from id_token");
                 }
+                // Case-normalize so SSO logins always reference the same DB row
+                // regardless of how Okta capitalizes preferred_username.
+                username = username.toLowerCase(java.util.Locale.ROOT);
                 // Extract email from id_token
                 final String email = claims.getString("email", null);
                 // Extract groups from id_token using the configured groups-claim
@@ -406,6 +459,73 @@ public final class AuthHandler {
                     .eventAction("sso_groups")
                     .field("user.name", username)
                     .log();
+                // ACCESS GATE 1: allowed-groups check.
+                // If meta.auth.providers[*].allowed-groups is configured,
+                // the user's id_token MUST carry at least one matching group,
+                // otherwise the SSO login is rejected with no DB row created.
+                // This is the primary control point for "who can access Pantera".
+                // If allowed-groups is NOT configured, JIT provisioning is open
+                // (any IdP user can log in) — preserved for backward compat,
+                // but logged as a warning so admins notice.
+                final List<String> allowedGroups = new ArrayList<>();
+                if (config.containsKey("allowed-groups")) {
+                    final javax.json.JsonValue agVal = config.get("allowed-groups");
+                    if (agVal.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
+                        final javax.json.JsonArray agArr = config.getJsonArray("allowed-groups");
+                        for (int ai = 0; ai < agArr.size(); ai++) {
+                            allowedGroups.add(agArr.getString(ai, ""));
+                        }
+                    }
+                }
+                if (!allowedGroups.isEmpty()) {
+                    final boolean intersects = groups.stream().anyMatch(allowedGroups::contains);
+                    if (!intersects) {
+                        EcsLogger.warn("com.auto1.pantera.api.v1")
+                            .message("SSO login rejected: user not in any allowed group")
+                            .eventCategory("authentication")
+                            .eventAction("sso_callback")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .field("user.groups", String.join(",", groups))
+                            .field("allowed_groups", String.join(",", allowedGroups))
+                            .log();
+                        throw new IllegalStateException(
+                            "Access denied: user is not in any allowed group for this provider"
+                        );
+                    }
+                } else {
+                    EcsLogger.warn("com.auto1.pantera.api.v1")
+                        .message("SSO provider '" + provider + "' has no allowed-groups "
+                            + "configured — any authenticated IdP user will be provisioned. "
+                            + "This is insecure; configure meta.auth.providers["
+                            + provider + "].allowed-groups to restrict access.")
+                        .eventCategory("authentication")
+                        .eventAction("sso_callback")
+                        .field("user.name", username)
+                        .log();
+                }
+                // ACCESS GATE 2: enabled check.
+                // If the user already exists in the DB and is disabled, refuse
+                // the login regardless of what Okta says. This lets admins
+                // revoke a user's access without needing to remove them from
+                // the IdP. New users (no DB row yet) pass this check.
+                if (AuthHandler.this.users != null) {
+                    final Optional<javax.json.JsonObject> existing =
+                        AuthHandler.this.users.get(username);
+                    if (existing.isPresent()
+                        && !existing.get().getBoolean("enabled", true)) {
+                        EcsLogger.warn("com.auto1.pantera.api.v1")
+                            .message("SSO login rejected: user is disabled in Pantera")
+                            .eventCategory("authentication")
+                            .eventAction("sso_callback")
+                            .eventOutcome("failure")
+                            .field("user.name", username)
+                            .log();
+                        throw new IllegalStateException(
+                            "Access denied: user is disabled"
+                        );
+                    }
+                }
                 // Map Okta/IdP groups to Pantera roles using group-roles config.
                 // Groups with an explicit mapping use the mapped role name.
                 // Groups without a mapping use the group name as the role name
@@ -469,8 +589,12 @@ public final class AuthHandler {
                         .field("user.name", username)
                         .log();
                 }
-                // If no roles mapped, apply default role "reader" if configured
-                if (roles.isEmpty()) {
+                // If Okta sent groups but none mapped to a role AND there's
+                // a configured default-role, fall back to that. Note: if
+                // Okta sent NO groups at all, we deliberately skip default-role
+                // for existing users to preserve any manually-assigned roles.
+                final boolean idTokenHasGroups = !groups.isEmpty();
+                if (roles.isEmpty() && idTokenHasGroups) {
                     final String defaultRole = config.getString("default-role", "reader");
                     if (defaultRole != null && !defaultRole.isEmpty()) {
                         roles.add(defaultRole);
@@ -482,27 +606,45 @@ public final class AuthHandler {
                             .log();
                     }
                 }
-                // Provision user in the database/storage
+                // Provision user in the database/storage.
+                //
+                // CRITICAL: only include "roles" in the userInfo when Okta
+                // actually sent a groups claim. UserDao.addOrUpdate hard-deletes
+                // existing user_roles before reinserting, so passing an empty
+                // or stale role list would wipe any roles a Pantera admin
+                // assigned manually via the UI. By omitting the key entirely,
+                // existing role assignments are preserved.
                 if (AuthHandler.this.users != null) {
-                    final javax.json.JsonArrayBuilder rolesArr = Json.createArrayBuilder();
-                    for (final String role : roles) {
-                        rolesArr.add(role);
-                    }
                     final javax.json.JsonObjectBuilder userInfo = Json.createObjectBuilder()
-                        .add("type", type)
-                        .add("roles", rolesArr.build());
+                        .add("type", type);
+                    if (idTokenHasGroups) {
+                        final javax.json.JsonArrayBuilder rolesArr = Json.createArrayBuilder();
+                        for (final String role : roles) {
+                            rolesArr.add(role);
+                        }
+                        userInfo.add("roles", rolesArr.build());
+                    }
                     if (email != null && !email.isEmpty()) {
                         userInfo.add("email", email);
                     }
                     EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("SSO provisioning user with roles via provider=" + provider
+                        .message("SSO provisioning user via provider=" + provider
                             + " roles=[" + String.join(",", roles) + "]"
-                            + " roles_count=" + roles.size())
+                            + " roles_count=" + roles.size()
+                            + " preserve_existing_roles=" + (!idTokenHasGroups))
                         .eventCategory("authentication")
                         .eventAction("sso_provision")
                         .field("user.name", username)
                         .log();
                     AuthHandler.this.users.addOrUpdate(userInfo.build(), username);
+                    // Invalidate the cached UserPermissions so the next /me
+                    // call sees fresh role/permission data instead of waiting
+                    // 3 minutes for the cache to expire.
+                    if (AuthHandler.this.policy
+                        instanceof com.auto1.pantera.security.policy.CachedDbPolicy) {
+                        ((com.auto1.pantera.security.policy.CachedDbPolicy)
+                            AuthHandler.this.policy).invalidate(username);
+                    }
                 } else {
                     EcsLogger.warn("com.auto1.pantera.api.v1")
                         .message("SSO cannot provision user - users store is null")
@@ -520,20 +662,40 @@ public final class AuthHandler {
                     .eventOutcome("success")
                     .field("user.name", username)
                     .log();
-                // Generate Pantera JWT
+                // Generate Pantera JWT pair
                 final AuthUser authUser = new AuthUser(username, provider);
-                return AuthHandler.this.tokens.generate(authUser);
-            },
+                return AuthHandler.this.tokens.generatePair(authUser);
+            }),
             false
-        ).onSuccess(token -> ctx.response().setStatusCode(200)
+        ).onSuccess(pair -> ctx.response().setStatusCode(200)
             .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", token).encode())
+            .end(new JsonObject()
+                .put("token", pair.accessToken())
+                .put("refresh_token", pair.refreshToken())
+                .put("expires_in", pair.expiresIn())
+                .encode())
         ).onFailure(err -> {
-            final String msg = err.getMessage() != null ? err.getMessage() : "SSO callback failed";
-            if (msg.contains("not found")) {
-                ApiResponse.sendError(ctx, 404, "NOT_FOUND", msg);
+            // Detailed reason logged server-side for ops/forensics. The
+            // client always gets a single generic message: revealing
+            // "user is disabled" / "not in allowed group" / "token
+            // exchange failed" lets attackers enumerate accounts and
+            // probe IdP configuration. The only exception is a missing
+            // provider (admin misconfig, not security-sensitive).
+            final String detail = err.getMessage() != null
+                ? err.getMessage() : "SSO callback failed";
+            EcsLogger.error("com.auto1.pantera.api.v1")
+                .message("SSO callback failed: " + detail)
+                .eventCategory("authentication")
+                .eventAction("sso_callback")
+                .eventOutcome("failure")
+                .error(err)
+                .log();
+            if (detail.contains("Provider '") && detail.contains("not found")) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND",
+                    "Sign-in provider is not configured.");
             } else {
-                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", msg);
+                ApiResponse.sendError(ctx, 401, "UNAUTHORIZED",
+                    "Sign-in failed. Please try again or contact your administrator.");
             }
         });
     }
@@ -574,9 +736,24 @@ public final class AuthHandler {
         final JsonObject body = ctx.body().asJsonObject();
         final String label = body != null
             ? body.getString("label", "API Token") : "API Token";
-        final int expiryDays = body != null
+        final int requestedDays = body != null
             ? body.getInteger("expiry_days", DEFAULT_EXPIRY_DAYS)
             : DEFAULT_EXPIRY_DAYS;
+        // Enforce admin-configured maximum, if set (0 = unlimited/permanent is always allowed)
+        final int maxTokenDays = this.settingsDao != null
+            ? this.settingsDao.getInt(SETTING_MAX_TOKEN_DAYS, 0) : 0;
+        final int expiryDays;
+        if (maxTokenDays > 0 && requestedDays > 0 && requestedDays > maxTokenDays) {
+            expiryDays = maxTokenDays;
+            EcsLogger.info("com.auto1.pantera.auth")
+                .message("API token expiry capped by admin limit: requested=" + requestedDays
+                    + " max=" + maxTokenDays)
+                .eventCategory("authentication")
+                .eventAction("token_generate")
+                .log();
+        } else {
+            expiryDays = requestedDays;
+        }
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
         final String context = ctx.user().principal().getString(
             AuthTokenRest.CONTEXT, "local"
@@ -588,14 +765,14 @@ public final class AuthHandler {
         final UUID jti = UUID.randomUUID();
         final String token;
         if (this.tokens instanceof JwtTokens) {
-            token = ((JwtTokens) this.tokens).generate(authUser, expirySecs, jti);
+            token = ((JwtTokens) this.tokens).generateApiToken(authUser, expirySecs, jti, label);
         } else {
             token = expiryDays <= 0
                 ? this.tokens.generate(authUser, true)
                 : this.tokens.generate(authUser);
-        }
-        if (this.tokenDao != null) {
-            this.tokenDao.store(jti, sub, label, token, expiresAt);
+            if (this.tokenDao != null) {
+                this.tokenDao.store(jti, sub, label, token, expiresAt);
+            }
         }
         final JsonObject resp = new JsonObject()
             .put("token", token)
@@ -612,14 +789,14 @@ public final class AuthHandler {
     }
 
     /**
-     * POST /api/v1/auth/refresh — issue a fresh session JWT for the current user.
+     * POST /api/v1/auth/refresh — issue a fresh session JWT pair for the current user.
      *
-     * <p>Requires a valid (non-expired) JWT in the Authorization header. Extracts the
-     * {@code sub} (username) and {@code context} (auth provider) from the existing token
-     * and generates a new JWT with a full fresh expiry window. This prevents UI logout
-     * caused by silent JWT expiry during active sessions.
+     * <p>Requires a valid (non-expired) refresh JWT in the Authorization header. Extracts
+     * the {@code sub} (username) and {@code context} (auth provider) from the existing
+     * token and generates a new access + refresh token pair with a full fresh expiry
+     * window. This prevents UI logout caused by silent JWT expiry during active sessions.
      *
-     * <p>Response: {@code {"token": "<new_jwt>"}}
+     * <p>Response: {@code {"token": "<access>", "refresh_token": "<refresh>", "expires_in": N}}
      *
      * @param ctx Routing context (user principal populated by JWT filter)
      */
@@ -630,7 +807,7 @@ public final class AuthHandler {
             ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "No subject in token");
             return;
         }
-        final String newToken = this.tokens.generate(new AuthUser(sub, context));
+        final Tokens.TokenPair pair = this.tokens.generatePair(new AuthUser(sub, context));
         EcsLogger.debug("com.auto1.pantera.auth")
             .message("JWT refresh issued for user: " + sub)
             .eventCategory("authentication")
@@ -640,7 +817,11 @@ public final class AuthHandler {
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
-            .end(new JsonObject().put("token", newToken).encode());
+            .end(new JsonObject()
+                .put("token", pair.accessToken())
+                .put("refresh_token", pair.refreshToken())
+                .put("expires_in", pair.expiresIn())
+                .encode());
     }
 
     /**
@@ -719,6 +900,12 @@ public final class AuthHandler {
                 if (info.containsKey("email")) {
                     result.put("email", info.getString("email"));
                 }
+                // Force password change flag (set on the bootstrap admin user
+                // and cleared by alterPassword once a complex password is set).
+                if (info.containsKey("must_change_password")) {
+                    result.put("must_change_password",
+                        info.getBoolean("must_change_password", false));
+                }
                 if (info.containsKey("groups")) {
                     result.put("groups",
                         new JsonArray(
@@ -730,6 +917,21 @@ public final class AuthHandler {
                         )
                     );
                 }
+            } else {
+                // Authenticated JWT but no matching DB row — this is the
+                // root cause of "/me returns empty permissions". Most
+                // likely a username case/format mismatch between the
+                // SSO callback's preferred_username and the row created
+                // earlier (or the row was deleted out from under the JWT).
+                EcsLogger.warn("com.auto1.pantera.api.v1")
+                    .message("/me: authenticated user has no DB row — "
+                        + "permissions will be empty")
+                    .eventCategory("authentication")
+                    .eventAction("me_user_lookup")
+                    .eventOutcome("failure")
+                    .field("user.name", sub)
+                    .field("user.context", context != null ? context : "local")
+                    .log();
             }
         }
         ctx.response()
@@ -751,7 +953,7 @@ public final class AuthHandler {
         }
         final String sub = ctx.user().principal().getString(AuthTokenRest.SUB);
         ctx.vertx().<JsonArray>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final JsonArray arr = new JsonArray();
                 for (final UserTokenDao.TokenInfo info : this.tokenDao.listByUser(sub)) {
                     final JsonObject obj = new JsonObject()
@@ -767,7 +969,7 @@ public final class AuthHandler {
                     arr.add(obj);
                 }
                 return arr;
-            },
+            }),
             false
         ).onSuccess(
             arr -> ctx.response().setStatusCode(200)
@@ -798,7 +1000,7 @@ public final class AuthHandler {
             return;
         }
         ctx.vertx().<Boolean>executeBlocking(
-            () -> this.tokenDao.revoke(id, sub),
+            MdcPropagation.withMdc(() -> this.tokenDao.revoke(id, sub)),
             false
         ).onSuccess(revoked -> {
             if (revoked) {

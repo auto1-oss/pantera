@@ -118,21 +118,51 @@ class UserDaoTest {
     @Test
     void altersPassword() {
         addTestUser("frank");
+        // Must satisfy PasswordPolicy: ≥12 chars, upper, lower, digit, special,
+        // not equal to username, not in weak list.
+        final String compliant = "ValidPass!234";
         final JsonObject passInfo = Json.createObjectBuilder()
-            .add("new_pass", "updated_hash")
+            .add("new_pass", compliant)
             .add("new_type", "sha256")
             .build();
         this.dao.alterPassword("frank", passInfo);
-        // Verify internally that password was changed
+        // Verify password was bcrypt-hashed (not stored as plaintext)
         try (var conn = ds.getConnection();
              var ps = conn.prepareStatement(
-                 "SELECT password_hash FROM users WHERE username = ?")) {
+                 "SELECT password_hash, must_change_password FROM users WHERE username = ?")) {
             ps.setString(1, "frank");
             var rs = ps.executeQuery();
             assertTrue(rs.next());
-            assertEquals("updated_hash", rs.getString("password_hash"));
+            final String stored = rs.getString("password_hash");
+            assertTrue(stored.startsWith("$2a$"), "should be bcrypt hash");
+            assertTrue(
+                org.mindrot.jbcrypt.BCrypt.checkpw(compliant, stored),
+                "bcrypt hash should verify against original password"
+            );
+            assertFalse(
+                rs.getBoolean("must_change_password"),
+                "must_change_password should be cleared after a successful change"
+            );
         } catch (final Exception ex) {
             fail(ex);
+        }
+    }
+
+    @Test
+    void rejectsWeakPassword() {
+        addTestUser("grace");
+        // Too short, no upper/special — should be rejected by PasswordPolicy
+        final JsonObject passInfo = Json.createObjectBuilder()
+            .add("new_pass", "short")
+            .build();
+        try {
+            this.dao.alterPassword("grace", passInfo);
+            fail("Expected IllegalArgumentException for weak password");
+        } catch (final IllegalArgumentException ex) {
+            assertTrue(
+                ex.getMessage().contains("at least 12"),
+                "error should mention min length"
+            );
         }
     }
 
@@ -159,12 +189,75 @@ class UserDaoTest {
         assertTrue(user.getJsonArray("roles").getString(0).equals("readers"));
     }
 
+    @Test
+    void listPagedFiltersUsers() {
+        addTestUser("admin");
+        addTestUser("alice");
+        addTestUser("bob");
+        final PagedResult<JsonObject> result =
+            this.dao.listPaged("admin", "username", true, 20, 0);
+        assertEquals(1, result.total());
+        assertEquals(1, result.items().size());
+        assertEquals("admin", result.items().get(0).getString("name"));
+    }
+
+    @Test
+    void listPagedReturnsAllWhenNoQuery() {
+        addTestUser("alice");
+        addTestUser("bob");
+        final PagedResult<JsonObject> result =
+            this.dao.listPaged(null, "username", true, 20, 0);
+        assertEquals(2, result.total());
+        assertEquals(2, result.items().size());
+    }
+
+    @Test
+    void listPagedSortsByEmailDescending() {
+        addTestUserWithEmail("zara", "zara@example.com");
+        addTestUserWithEmail("anna", "anna@example.com");
+        addTestUserWithEmail("mike", "mike@example.com");
+        final PagedResult<JsonObject> result =
+            this.dao.listPaged(null, "email", false, 20, 0);
+        assertEquals(3, result.total());
+        assertEquals("zara@example.com", result.items().get(0).getString("email"));
+        assertEquals("mike@example.com", result.items().get(1).getString("email"));
+        assertEquals("anna@example.com", result.items().get(2).getString("email"));
+    }
+
+    @Test
+    void listPagedPaginatesWithCorrectTotal() {
+        addTestUser("user1");
+        addTestUser("user2");
+        addTestUser("user3");
+        addTestUser("user4");
+        addTestUser("user5");
+        final PagedResult<JsonObject> page1 =
+            this.dao.listPaged(null, "username", true, 2, 0);
+        assertEquals(5, page1.total());
+        assertEquals(2, page1.items().size());
+        final PagedResult<JsonObject> page2 =
+            this.dao.listPaged(null, "username", true, 2, 2);
+        assertEquals(5, page2.total());
+        assertEquals(2, page2.items().size());
+    }
+
     private void addTestUser(final String name) {
         this.dao.addOrUpdate(
             Json.createObjectBuilder()
                 .add("pass", "pass123")
                 .add("type", "plain")
                 .add("email", name + "@example.com")
+                .build(),
+            name
+        );
+    }
+
+    private void addTestUserWithEmail(final String name, final String email) {
+        this.dao.addOrUpdate(
+            Json.createObjectBuilder()
+                .add("pass", "pass123")
+                .add("type", "plain")
+                .add("email", email)
                 .build(),
             name
         );

@@ -245,11 +245,11 @@ public final class BlockedThreadDiagnostics {
 
                     EcsLogger.error("com.auto1.pantera.diagnostics")
                         .message(String.format(
-                            "Blocked event loop thread details: lock=%s, lock owner=%s",
-                            info.getLockName(), info.getLockOwnerName()))
+                            "Blocked event loop thread details: thread=%s lock=%s lock_owner=%s",
+                            info.getThreadName(), info.getLockName(), info.getLockOwnerName()))
                         .eventCategory("system")
                         .eventAction("blocked_thread")
-                        .field("process.thread.name", info.getThreadName())
+                        .field("pantera.blocked_thread.name", info.getThreadName())
                         .field("error.stack_trace", sb.toString())
                         .log();
                 }

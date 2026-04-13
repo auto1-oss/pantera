@@ -32,6 +32,29 @@ final class JdbcCooldownService implements CooldownService {
     private final CooldownCache cache;
     private final CooldownCircuitBreaker circuitBreaker;
 
+    /**
+     * Callback invoked when a cooldown block expires or is removed,
+     * to invalidate the filtered metadata cache. Without this, the
+     * metadata cache continues to serve a response with the version
+     * stripped out even after the block is gone.
+     *
+     * <p>Set via {@link #setOnBlockRemoved} after construction to
+     * break the circular dependency between CooldownService and
+     * CooldownMetadataService. Never null — defaults to no-op.</p>
+     */
+    private volatile OnBlockRemoved onBlockRemoved = OnBlockRemoved.NOOP;
+
+    /**
+     * Callback for metadata cache invalidation on block removal.
+     * Called from {@link #expire} and {@link #checkExistingBlockWithTimestamp}
+     * when a block is found to be expired.
+     */
+    @FunctionalInterface
+    interface OnBlockRemoved {
+        OnBlockRemoved NOOP = (repoType, repoName, artifact, version) -> { };
+        void accept(String repoType, String repoName, String artifact, String version);
+    }
+
     private static final String SYSTEM_ACTOR = "system";
 
     JdbcCooldownService(final CooldownSettings settings, final CooldownRepository repository) {
@@ -76,6 +99,22 @@ final class JdbcCooldownService implements CooldownService {
      */
     public CooldownCache cache() {
         return this.cache;
+    }
+
+    /**
+     * Set the callback invoked when a block is removed (expired or
+     * released). The callback should invalidate the metadata cache
+     * for the affected package so clients see the unblocked version
+     * immediately instead of waiting for the metadata cache TTL.
+     *
+     * <p>Called from {@link CooldownSupport#createMetadataService}
+     * after the metadata service is constructed, breaking the
+     * circular dependency.</p>
+     *
+     * @param callback Block-removed callback
+     */
+    void setOnBlockRemoved(final OnBlockRemoved callback) {
+        this.onBlockRemoved = callback != null ? callback : OnBlockRemoved.NOOP;
     }
 
     /**
@@ -668,6 +707,31 @@ final class JdbcCooldownService implements CooldownService {
         this.repository.deleteBlock(record.id());
         // Decrement active blocks metric (O(1), no DB query)
         this.decrementActiveBlocksMetric(record.repoType(), record.repoName());
+        // Invalidate the filtered metadata cache so clients see the
+        // unblocked version immediately. Without this, the metadata
+        // cache serves the old filtered response (with the version
+        // stripped out) until its TTL expires — which can be hours.
+        // The L1 Caffeine cache is especially sticky because L2
+        // purge doesn't clear it.
+        try {
+            this.onBlockRemoved.accept(
+                record.repoType(), record.repoName(),
+                record.artifact(), record.version()
+            );
+        } catch (final Exception err) {
+            EcsLogger.warn("com.auto1.pantera.cooldown")
+                .message("Failed to invalidate metadata cache on block expiry")
+                .eventCategory("cooldown")
+                .eventAction("metadata_cache_invalidate")
+                .eventOutcome("failure")
+                .field("package.name", record.artifact())
+                .error(err)
+                .log();
+        }
+        // Invalidate inspector cache (same as unblockSingle does)
+        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+            .invalidate(record.repoType(), record.repoName(),
+                record.artifact(), record.version());
     }
 
     private void unblockSingle(

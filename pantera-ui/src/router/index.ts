@@ -15,6 +15,16 @@ export const routes: RouteRecordRaw[] = [
     meta: { public: true },
   },
   {
+    // Force-change-password page shown when the user's account is flagged
+    // must_change_password=true (bootstrap admin). The route IS protected
+    // (requires authentication) but bypasses the mustChangePassword guard
+    // so the user can actually reach it.
+    path: '/auth/change-password',
+    name: 'force-change-password',
+    component: () => import('@/views/auth/ForcePasswordChangeView.vue'),
+    meta: { skipMustChangeGuard: true },
+  },
+  {
     path: '/',
     name: 'dashboard',
     component: () => import('@/views/dashboard/DashboardView.vue'),
@@ -116,6 +126,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAdmin: true },
   },
   {
+    path: '/admin/auth-providers',
+    name: 'admin-auth-providers',
+    component: () => import('@/views/admin/AuthProvidersView.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
@@ -142,6 +158,12 @@ export function createAppRouter() {
       if (!auth.isAuthenticated) {
         return { name: 'login', query: { redirect: to.fullPath } }
       }
+    }
+    // Force password change gate: if the backend flagged must_change_password,
+    // redirect everything except the change-password page itself so the user
+    // cannot use Pantera until they pick a compliant password.
+    if (auth.mustChangePassword && !to.meta.skipMustChangeGuard) {
+      return { name: 'force-change-password' }
     }
     if (to.meta.requiresAdmin && !auth.isAdmin) {
       return { name: 'dashboard' }

@@ -30,6 +30,7 @@ import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.pypi.NormalizedProjectName;
 import com.auto1.pantera.pypi.meta.Metadata;
 import com.auto1.pantera.pypi.meta.PackageInfo;
+import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.pypi.meta.ValidFilename;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.asto.rx.RxFuture;
@@ -38,6 +39,7 @@ import io.reactivex.Flowable;
 import org.reactivestreams.Publisher;
 
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
@@ -105,6 +107,15 @@ final class WheelSlice implements Slice {
                                     this.putArtifactToQueue(name, info, filename, iterable)
                             );
                         }
+                        // Create sidecar metadata for PEP 503/691 compliance
+                        move = move.thenCompose(
+                            ignored -> PypiSidecar.write(
+                                this.storage,
+                                new Key.From(packageName, info.version(), filename),
+                                info.requiresPython(),
+                                Instant.now()
+                            )
+                        );
                         // Regenerate package-level index.html after upload
                         final Key packageKey = new Key.From(
                             new KeyFromPath(line.uri().toString()),

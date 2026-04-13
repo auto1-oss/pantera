@@ -2,17 +2,21 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useNotificationStore } from '@/stores/notifications'
+import { formatAuthError } from '@/utils/authError'
 import InputText from 'primevue/inputtext'
 import Password from 'primevue/password'
 import Button from 'primevue/button'
+import Message from 'primevue/message'
 
 const router = useRouter()
 const auth = useAuthStore()
-const notify = useNotificationStore()
 
 const username = ref('')
 const password = ref('')
+// Persistent inline error. Stays visible until the user changes a field
+// or initiates another sign-in attempt — never auto-dismissed. The login
+// page lives outside AppLayout, so toast notifications would never render
+// here anyway; the inline banner is the only reliable surface.
 const errorMsg = ref('')
 const ssoLoading = ref<string | null>(null)
 
@@ -23,15 +27,19 @@ const ssoProviders = computed(() =>
 
 onMounted(() => { auth.fetchProviders() })
 
+function clearError() {
+  errorMsg.value = ''
+}
+
 async function handleLogin() {
   errorMsg.value = ''
   try {
     await auth.login(username.value, password.value)
     router.push('/')
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Login failed'
-    errorMsg.value = msg
-    notify.error('Login failed', msg)
+    // Always a single generic message — never echo backend strings or
+    // axios diagnostics. See utils/authError.ts for the rationale.
+    errorMsg.value = formatAuthError(e).message
   }
 }
 
@@ -42,9 +50,7 @@ async function handleSsoRedirect(providerType: string) {
     await auth.ssoRedirect(providerType)
   } catch (e: unknown) {
     ssoLoading.value = null
-    const msg = e instanceof Error ? e.message : 'SSO redirect failed'
-    errorMsg.value = msg
-    notify.error('SSO Error', msg)
+    errorMsg.value = formatAuthError(e).message
   }
 }
 </script>
@@ -111,13 +117,21 @@ async function handleSsoRedirect(providerType: string) {
       <form data-testid="login-form" @submit.prevent="handleLogin" class="login-form">
         <div class="form-group">
           <label for="username">Username</label>
-          <InputText id="username" data-testid="username" v-model="username" class="w-full" placeholder="Enter your username" :disabled="auth.loading" />
+          <InputText id="username" data-testid="username" v-model="username" class="w-full" placeholder="Enter your username" :disabled="auth.loading" @input="clearError" />
         </div>
         <div class="form-group">
           <label for="password">Password</label>
-          <Password inputId="password" data-testid="password" v-model="password" class="w-full" :feedback="false" toggleMask :disabled="auth.loading" :pt="{ root: { class: 'w-full' }, input: { class: 'w-full' } }" />
+          <Password inputId="password" data-testid="password" v-model="password" class="w-full" :feedback="false" toggleMask :disabled="auth.loading" :pt="{ root: { class: 'w-full' }, input: { class: 'w-full' } }" @input="clearError" />
         </div>
-        <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
+        <Message
+          v-if="errorMsg"
+          severity="error"
+          :closable="false"
+          class="login-error"
+          data-testid="login-error"
+        >
+          {{ errorMsg }}
+        </Message>
         <Button type="submit" :label="ssoProviders.length > 0 ? 'Sign in' : 'Sign in'" class="w-full signin-btn" :class="{ 'primary-action': ssoProviders.length === 0 }" :severity="ssoProviders.length > 0 ? 'secondary' : undefined" :outlined="ssoProviders.length > 0" :loading="auth.loading" :disabled="!username || !password" />
       </form>
     </div>
@@ -229,7 +243,17 @@ async function handleSsoRedirect(providerType: string) {
   background: none !important;
 }
 
-.error-msg { color: #ef4444; font-size: 13px; margin-bottom: 8px; }
+/* Persistent inline error banner for failed sign-in attempts */
+.login-error { margin-bottom: 12px; }
+:deep(.login-error.p-message) {
+  border-radius: 10px !important;
+  background: rgba(239, 68, 68, 0.10) !important;
+  border: 1px solid rgba(239, 68, 68, 0.40) !important;
+  color: #fecaca !important;
+}
+:deep(.login-error .p-message-wrapper) { padding: 12px 14px !important; }
+:deep(.login-error .p-message-text) { font-size: 13px !important; line-height: 1.4 !important; color: #fecaca !important; }
+:deep(.login-error .p-message-icon) { color: #ef4444 !important; }
 
 .signin-btn { height: 46px; }
 :deep(.signin-btn) { border-radius: 10px !important; font-weight: 600 !important; }
