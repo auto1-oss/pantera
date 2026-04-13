@@ -1,5 +1,30 @@
 # Changelog
 
+## Version 2.1.1
+
+### 🔧 Bug fixes
+
+- Startup fails with `algid parse error, not a sequence` when the JWT private key is PEM-encoded as PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`). `RsaKeyLoader` now detects the format from the PEM header and wraps PKCS#1 in a PKCS#8 envelope in-memory; PKCS#8 keys continue to load unchanged. Supports 2048- and 4096-bit RSA. The misleading `openssl genrsa` hint in the missing-key error message has been replaced with the PKCS#8-producing `openssl genpkey` form.
+  ([@aydasraf](https://github.com/aydasraf))
+- Elastic ingest pipeline rejects logs with `Duplicate field 'service.version'`. The `EcsLayout` serializer already emits `service.version`, `process.thread.name`, and the other service metadata fields; three call sites were adding them again via `.field()` and producing duplicate JSON keys. Removed the redundant emits at startup log, scheduler queue log, and blocked-thread diagnostics; the blocked-thread diagnostic now reports the target thread name in the message and under `pantera.blocked_thread.name`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### 📚 Documentation
+
+- Configuration reference now covers scheduled scripts (`meta.crontab`), experimental HTTP/3 support, and repository filter blocks — previously only documented under the admin guide.
+  ([@aydasraf](https://github.com/aydasraf))
+- Admin-guide configuration page collapsed to a slim overview that defers to the reference for full key lists, eliminating duplicated YAML samples.
+  ([@aydasraf](https://github.com/aydasraf))
+- Design/planning documents removed from `docs/plans/`.
+  ([@aydasraf](https://github.com/aydasraf))
+
+### ✅ Testing
+
+- `RsaKeyLoaderTest` rewritten with committed PKCS#1/PKCS#8 fixture pairs at 2048 and 4096 bits; asserts both formats yield identical key material and that the DER long-form length path is exercised for 4096-bit keys.
+  ([@aydasraf](https://github.com/aydasraf))
+
+---
+
 ## Version 2.1.0
 
 ### ⚠️ Breaking changes

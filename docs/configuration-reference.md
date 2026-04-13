@@ -24,12 +24,15 @@ routing patterns.
    - [meta.caches](#110-metacaches)
    - [meta.global_prefixes](#111-metaglobal_prefixes)
    - [meta.layout](#112-metalayout)
+   - [meta.crontab](#113-metacrontab)
 2. [Repository Configuration](#2-repository-configuration)
    - [Supported Repository Types](#21-supported-repository-types)
    - [Local Repository](#22-local-repository)
    - [Proxy Repository](#23-proxy-repository)
    - [Group Repository](#24-group-repository)
    - [Type-Specific Settings](#25-type-specific-settings)
+   - [HTTP/3 Protocol Support](#26-http3-protocol-support-experimental)
+   - [Repository Filters](#27-repository-filters)
 3. [Storage Configuration](#3-storage-configuration)
    - [Filesystem (fs)](#31-filesystem-fs)
    - [Amazon S3 (s3)](#32-amazon-s3-s3)
@@ -538,6 +541,41 @@ meta:
 
 ---
 
+### 1.13 meta.crontab
+
+Scheduled server-side scripts run by the JVM scripting engine (Quartz).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `path` | string | Yes | -- | Path to the script file (relative to `meta.storage.path` or absolute) |
+| `cronexp` | string | Yes | -- | [Quartz cron expression](http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html) |
+
+```yaml
+meta:
+  crontab:
+    - path: path/to/script.groovy
+      cronexp: "*/3 * * * * ?"
+```
+
+**Supported languages:** Groovy (`.groovy`), Python 2 (`.py`).
+
+**Script context variables** (injected automatically):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `_settings` | `com.auto1.pantera.settings.Settings` | Application settings |
+| `_repositories` | `com.auto1.pantera.settings.repo.Repositories` | Repository configurations |
+
+Example (Groovy):
+
+```groovy
+File file = new File('/my-repo/info/cfg.log')
+cfg = _repositories.config('my-repo').toCompletableFuture().join()
+file.write cfg.toString()
+```
+
+---
+
 ### Complete pantera.yml Example
 
 ```yaml
@@ -921,6 +959,85 @@ repo:
     type: fs
     path: /var/pantera/data
 ```
+
+---
+
+### 2.6 HTTP/3 Protocol Support (Experimental)
+
+HTTP/3 (via Jetty HTTP/3) can be enabled per repository. Experimental — protocol support and client tooling maturity vary by package ecosystem.
+
+**Server-side (per-repository):**
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `http3` | boolean | No | `false` | Enable HTTP/3 listener for this repo's port |
+| `http3_ssl.jks.path` | string | If `http3: true` | -- | Path to JKS keystore (HTTP/3 requires TLS) |
+| `http3_ssl.jks.password` | string | If `http3: true` | -- | Keystore password |
+
+```yaml
+repo:
+  type: maven
+  storage: default
+  port: 5647
+  http3: true
+  http3_ssl:
+    jks:
+      path: keystore.jks
+      password: secret
+```
+
+Multiple repositories can share the same HTTP/3 port.
+
+**Client-side (outbound proxy requests):**
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `http3.client` | `false` | Use HTTP/3 for all outbound proxy requests when upstream supports it |
+
+---
+
+### 2.7 Repository Filters
+
+Per-repository allow/deny list that matches request paths against glob or regexp patterns. Defined under the repository's `filters` block.
+
+```yaml
+repo:
+  type: maven
+  storage: default
+  filters:
+    include:
+      glob:
+        - filter: '**/org/springframework/**/*.jar'
+        - filter: '**/org/apache/logging/**/*.jar'
+          priority: 10
+      regexp:
+        - filter: '.*/com/auto1/.*\.jar'
+    exclude:
+      glob:
+        - filter: '**/org/apache/logging/log4j/log4j-core/2.17.0/*.jar'
+```
+
+**Evaluation rules:**
+
+- A resource is **allowed** if it matches at least one `include` pattern and no `exclude` pattern.
+- A resource is **blocked** if it matches an `exclude` pattern, or if both `include` and `exclude` are empty.
+- Filters are evaluated in definition order, tie-broken by `priority` (higher first, default `0`).
+
+**Glob filter** — [Java glob syntax](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/file/FileSystem.html#getPathMatcher(java.lang.String)), matched against the request path.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `filter` | string | Yes | -- | Glob expression |
+| `priority` | int | No | `0` | Evaluation priority within its include/exclude bucket |
+
+**Regexp filter** — Java regular expression.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `filter` | string | Yes | -- | Regular expression |
+| `priority` | int | No | `0` | Evaluation priority |
+| `full_uri` | boolean | No | `false` | Match full URI (scheme + host + path + query) instead of path only |
+| `case_insensitive` | boolean | No | `false` | Case-insensitive matching |
 
 ---
 

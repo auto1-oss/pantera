@@ -11,6 +11,7 @@
 package com.auto1.pantera.auth;
 
 import com.auto1.pantera.http.log.EcsLogger;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyFactory;
@@ -35,7 +36,8 @@ public final class RsaKeyLoader {
         if (!Files.isReadable(privPath)) {
             throw new IllegalStateException(
                 "JWT private key not found at " + privateKeyPath
-                + ". Generate with: openssl genrsa -out private.pem 2048"
+                + ". Generate with: openssl genpkey -algorithm RSA"
+                + " -pkeyopt rsa_keygen_bits:2048 -out private.pem"
             );
         }
         if (!Files.isReadable(pubPath)) {
@@ -70,15 +72,30 @@ public final class RsaKeyLoader {
 
     private static RSAPrivateKey loadPrivateKey(final Path path) throws Exception {
         final String pem = Files.readString(path);
-        final String base64 = pem
-            .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-            .replace("-----BEGIN PRIVATE KEY-----", "")
-            .replace("-----END RSA PRIVATE KEY-----", "")
-            .replace("-----END PRIVATE KEY-----", "")
-            .replaceAll("\\s", "");
-        final byte[] decoded = Base64.getDecoder().decode(base64);
+        final byte[] pkcs8;
+        if (pem.contains("-----BEGIN PRIVATE KEY-----")) {
+            // PKCS#8 — the modern OpenSSL default (openssl genpkey ...)
+            final String base64 = pem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+            pkcs8 = Base64.getDecoder().decode(base64);
+        } else if (pem.contains("-----BEGIN RSA PRIVATE KEY-----")) {
+            // PKCS#1 — legacy OpenSSL format (openssl genrsa ...). Wrap as PKCS#8.
+            final String base64 = pem
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+            pkcs8 = wrapPkcs1AsPkcs8(Base64.getDecoder().decode(base64));
+        } else {
+            throw new IllegalStateException(
+                "Unrecognized private key format at " + path
+                + ". Expected PEM with '-----BEGIN PRIVATE KEY-----' (PKCS#8)"
+                + " or '-----BEGIN RSA PRIVATE KEY-----' (PKCS#1)."
+            );
+        }
         final KeyFactory kf = KeyFactory.getInstance("RSA");
-        return (RSAPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(decoded));
+        return (RSAPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
     }
 
     private static RSAPublicKey loadPublicKey(final Path path) throws Exception {
@@ -90,5 +107,62 @@ public final class RsaKeyLoader {
         final byte[] decoded = Base64.getDecoder().decode(base64);
         final KeyFactory kf = KeyFactory.getInstance("RSA");
         return (RSAPublicKey) kf.generatePublic(new X509EncodedKeySpec(decoded));
+    }
+
+    /**
+     * Wrap a PKCS#1 RSA private key (RSAPrivateKey ASN.1 blob) in a PKCS#8
+     * PrivateKeyInfo envelope so Java's {@link PKCS8EncodedKeySpec} can parse it.
+     *
+     * <p>Structure produced (DER):
+     * <pre>
+     *   SEQUENCE {
+     *     INTEGER 0,                              -- version
+     *     SEQUENCE {                              -- AlgorithmIdentifier
+     *       OID 1.2.840.113549.1.1.1,             -- rsaEncryption
+     *       NULL
+     *     },
+     *     OCTET STRING &lt;pkcs1 bytes&gt;
+     *   }
+     * </pre>
+     */
+    private static byte[] wrapPkcs1AsPkcs8(final byte[] pkcs1) {
+        // INTEGER 0 (version)
+        final byte[] version = {0x02, 0x01, 0x00};
+        // SEQUENCE { OID rsaEncryption, NULL }
+        final byte[] algId = {
+            0x30, 0x0D,
+            0x06, 0x09, 0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x01, 0x01,
+            0x05, 0x00
+        };
+        final byte[] octetLen = encodeDerLength(pkcs1.length);
+        final int innerLen = version.length + algId.length + 1 + octetLen.length + pkcs1.length;
+        final byte[] seqLen = encodeDerLength(innerLen);
+
+        final ByteArrayOutputStream out = new ByteArrayOutputStream(innerLen + seqLen.length + 1);
+        out.write(0x30);                    // SEQUENCE
+        out.writeBytes(seqLen);
+        out.writeBytes(version);
+        out.writeBytes(algId);
+        out.write(0x04);                    // OCTET STRING
+        out.writeBytes(octetLen);
+        out.writeBytes(pkcs1);
+        return out.toByteArray();
+    }
+
+    /** DER length encoding: short form for &lt;128, long form for 128..65535. */
+    private static byte[] encodeDerLength(final int len) {
+        if (len < 0) {
+            throw new IllegalArgumentException("negative length: " + len);
+        }
+        if (len < 128) {
+            return new byte[]{(byte) len};
+        }
+        if (len < 256) {
+            return new byte[]{(byte) 0x81, (byte) len};
+        }
+        if (len < 65536) {
+            return new byte[]{(byte) 0x82, (byte) (len >>> 8), (byte) len};
+        }
+        throw new IllegalArgumentException("length too large for RSA key: " + len);
     }
 }
