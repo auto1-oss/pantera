@@ -22,7 +22,7 @@ The full developer guide is maintained as a single comprehensive document. Each 
 10. [Health Check Architecture](../developer-guide.md#10-health-check-architecture) -- Health endpoints, component checks, readiness vs. liveness.
 11. [Development Setup](../developer-guide.md#11-development-setup) -- Prerequisites, IDE configuration, local PostgreSQL and Valkey.
 12. [Build System](../developer-guide.md#12-build-system) -- Maven profiles, Docker image build, dependency management.
-13. [Adding Features](../developer-guide.md#13-adding-features) -- Adding repository types, new API endpoints, database migrations.
+13. [Adding Features](../developer-guide.md#13-adding-features) -- Adding repository types, new API endpoints, database migrations, search fields, pagination DAOs, GroupSlice fanout.
 14. [Testing](../developer-guide.md#14-testing) -- Unit tests, integration tests with TestContainers, performance benchmarks.
 15. [Debugging](../developer-guide.md#15-debugging) -- Logging, metrics, remote debugging, common issues.
 

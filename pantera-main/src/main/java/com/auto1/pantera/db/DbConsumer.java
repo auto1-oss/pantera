@@ -176,7 +176,13 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             ) {
                 conn.setAutoCommit(false);
                 for (final ArtifactEvent record : sortedEvents) {
+                    // Use a SAVEPOINT so a single statement failure (e.g.
+                    // PK collision from a stale sequence) does not abort
+                    // the entire transaction and poison all subsequent
+                    // events in the batch.
+                    java.sql.Savepoint sp = null;
                     try {
+                        sp = conn.setSavepoint();
                         if (record.eventType() == ArtifactEvent.Type.INSERT) {
                             // Use atomic UPSERT to prevent deadlocks
                             final long release = record.releaseDate().orElse(record.createdDate());
@@ -190,18 +196,28 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
                             upsert.setString(8, record.owner());
                             upsert.setString(9, record.pathPrefix());
                             upsert.execute();
+                            conn.releaseSavepoint(sp);
                             logArtifactPublish(record);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_VERSION) {
                             deletev.setString(1, normalizeRepoName(record.repoName()));
                             deletev.setString(2, record.artifactName());
                             deletev.setString(3, record.artifactVersion());
                             deletev.execute();
+                            conn.releaseSavepoint(sp);
                         } else if (record.eventType() == ArtifactEvent.Type.DELETE_ALL) {
                             delete.setString(1, normalizeRepoName(record.repoName()));
                             delete.setString(2, record.artifactName());
                             delete.execute();
+                            conn.releaseSavepoint(sp);
                         }
                     } catch (final SQLException ex) {
+                        if (sp != null) {
+                            try {
+                                conn.rollback(sp);
+                            } catch (final SQLException rollbackEx) {
+                                ex.addSuppressed(rollbackEx);
+                            }
+                        }
                         EcsLogger.error("com.auto1.pantera.db")
                             .message("Failed to process artifact event")
                             .eventCategory("database")

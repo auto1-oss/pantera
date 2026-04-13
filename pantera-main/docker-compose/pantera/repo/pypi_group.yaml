@@ -1,6 +1,9 @@
 repo:
   type: "pypi-group"
-  # Existing sample: py.yaml (name: py)
+  # Hosted member first: locally-uploaded packages take priority
+  # over the proxy (PyPI.org). This ensures that a package uploaded
+  # to the hosted repo is served from there, not from PyPI.org
+  # which may have a different/empty package with the same name.
   members:
-    - pypi_proxy
     - pypi
+    - pypi_proxy

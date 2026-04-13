@@ -1,0 +1,29 @@
+[project]
+name = "pantera-pypi-uv-test"
+version = "0.1.0"
+description = "Tests Pantera's PEP 691 JSON Simple API via uv resolver"
+requires-python = ">=3.10"
+dependencies = [
+    # Proxied packages with a long publish history — resolve
+    # regardless of exclude-newer cutoff.
+    "requests>=2.28",
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+index-url = "http://ayd:ayd@localhost:8081/test_prefix/api/pypi/pypi_group/simple/"
+
+# Wide cutoff — these packages resolve fine. The tight exclude-newer
+# tests against proxy and hosted packages run in pytest as isolated
+# throwaway projects with their own cutoff dates.
+exclude-newer = "2026-04-11T00:00:00Z"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "requests>=2.33.1",
+]

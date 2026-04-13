@@ -37,6 +37,16 @@ public final class AuthTokenRest extends BaseRest {
     public static final String CONTEXT = "context";
 
     /**
+     * Token type claim name.
+     */
+    public static final String TYPE = "type";
+
+    /**
+     * JWT ID claim name.
+     */
+    public static final String JTI = "jti";
+
+    /**
      * Tokens provider.
      */
     private final Tokens tokens;

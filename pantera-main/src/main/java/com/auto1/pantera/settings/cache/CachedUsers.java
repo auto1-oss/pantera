@@ -432,12 +432,95 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
 
     @Override
     public void invalidate(final String key) {
-        this.cached.invalidate(key);
+        // The Cleanable<String> interface is generic "invalidate by key", but
+        // CachedUsers stores entries under SHA-256(username:password) — callers
+        // never have that hash, they have the plain username. The previous
+        // implementation called cached.invalidate(key) which silently matched
+        // nothing, so a password change left the old admin/admin entry live
+        // for the full TTL. There is no useful way to interpret a username as
+        // a cache key, so just flush everything. The cache is small (≤10K
+        // entries), invalidate is O(1) per entry, and the call site is rare
+        // (password change, provider toggle/delete) so the warm-up cost is
+        // negligible compared to the security risk of stale credentials.
+        // Also flushes L2 (Valkey) via SCAN+DEL on auth:* keys.
+        this.invalidateByUsername(key);
     }
 
     @Override
     public void invalidateAll() {
         this.cached.invalidateAll();
+        // Also wipe L2 if enabled, mirroring invalidateByUsername.
+        if (this.twoTier && this.l2 != null) {
+            try {
+                final java.util.List<String> keys = this.l2.keys("auth:*")
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                if (keys != null && !keys.isEmpty()) {
+                    this.l2.del(keys.toArray(new String[0]))
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.settings.cache")
+                    .message("invalidateAll: failed to flush L2 auth cache")
+                    .eventCategory("cache")
+                    .eventAction("invalidate_all")
+                    .eventOutcome("failure")
+                    .error(ex)
+                    .log();
+            }
+        }
+    }
+
+    /**
+     * Nuke every cached auth entry. Called on any password change so
+     * the stale credential window is zero regardless of L1/L2 state.
+     *
+     * <p>The cache key is {@code SHA-256(username:password)} — a
+     * one-way function. We cannot reverse it to find entries for a
+     * specific user, so trying to invalidate only the affected rows is
+     * error-prone (the username-matching scan below misses failure
+     * cases and races). A full wipe is simpler and always correct.</p>
+     *
+     * <p>Cost: L1 is small (≤10K entries) and re-populates with one
+     * DB query per subsequent login. L2 is flushed via a {@code KEYS
+     * auth:*} + {@code DEL} round trip — blocking but run on the
+     * worker thread of the password-change request, not the hot path.</p>
+     *
+     * <p>The username parameter is kept only for the log line, not
+     * for filtering. Every cache entry is dropped.</p>
+     *
+     * @param username Username whose password just changed (used for logging)
+     */
+    public void invalidateByUsername(final String username) {
+        // L1: blow away everything. Cheap and bullet-proof.
+        this.cached.invalidateAll();
+        // L2: best-effort scan + delete every auth:* key.
+        if (this.twoTier && this.l2 != null) {
+            try {
+                final java.util.List<String> keys = this.l2.keys("auth:*")
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                if (keys != null && !keys.isEmpty()) {
+                    this.l2.del(keys.toArray(new String[0]))
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            } catch (final Exception ex) {
+                EcsLogger.warn("com.auto1.pantera.settings.cache")
+                    .message("Failed to flush L2 auth cache on password change "
+                        + "— stale entries will age out via TTL")
+                    .eventCategory("cache")
+                    .eventAction("invalidate_by_username")
+                    .eventOutcome("failure")
+                    .field("user.name", username)
+                    .error(ex)
+                    .log();
+            }
+        }
+        EcsLogger.info("com.auto1.pantera.settings.cache")
+            .message("Auth cache flushed after password change")
+            .eventCategory("cache")
+            .eventAction("invalidate_by_username")
+            .eventOutcome("success")
+            .field("user.name", username)
+            .log();
     }
 
     /**

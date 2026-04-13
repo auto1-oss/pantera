@@ -17,6 +17,7 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiRepositoryPermission;
 import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.http.auth.AuthUser;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
@@ -165,7 +166,7 @@ public final class RepositoryHandler {
             )
         );
         ctx.vertx().<List<JsonObject>>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final Collection<String> all = this.crs.listAll();
                 final List<JsonObject> filtered = new ArrayList<>(all.size());
                 for (final String name : all) {
@@ -199,7 +200,7 @@ public final class RepositoryHandler {
                         .put("type", repoType));
                 }
                 return filtered;
-            },
+            }),
             false
         ).onSuccess(
             filtered -> {
@@ -234,12 +235,12 @@ public final class RepositoryHandler {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         ctx.vertx().<JsonStructure>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (!this.crs.exists(rname)) {
                     return null;
                 }
                 return this.crs.value(rname);
-            },
+            }),
             false
         ).onSuccess(
             config -> {
@@ -267,7 +268,7 @@ public final class RepositoryHandler {
     private void headRepository(final RoutingContext ctx) {
         final RepositoryName rname = new RepositoryName.Simple(ctx.pathParam("name"));
         ctx.vertx().<Boolean>executeBlocking(
-            () -> this.crs.exists(rname),
+            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
             false
         ).onSuccess(
             exists -> {
@@ -335,10 +336,10 @@ public final class RepositoryHandler {
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.crs.save(rname, body, actor);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -359,7 +360,7 @@ public final class RepositoryHandler {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         ctx.vertx().<Boolean>executeBlocking(
-            () -> this.crs.exists(rname),
+            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
             false
         ).onSuccess(
             exists -> {
@@ -411,7 +412,7 @@ public final class RepositoryHandler {
             return;
         }
         ctx.vertx().<Boolean>executeBlocking(
-            () -> this.crs.exists(rname),
+            MdcPropagation.withMdc(() -> this.crs.exists(rname)),
             false
         ).onSuccess(
             exists -> {
@@ -444,7 +445,7 @@ public final class RepositoryHandler {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 if (!this.crs.exists(rname)) {
                     return null;
                 }
@@ -473,7 +474,7 @@ public final class RepositoryHandler {
                     }
                 }
                 return new JsonObject().put("members", members).put("type", repoType);
-            },
+            }),
             false
         ).onSuccess(
             result -> {

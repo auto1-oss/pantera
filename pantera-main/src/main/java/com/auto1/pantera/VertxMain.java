@@ -23,7 +23,6 @@ import com.auto1.pantera.http.misc.StorageExecutors;
 import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.jetty.http3.Http3Server;
 import com.auto1.pantera.jetty.http3.SslFactoryFromYaml;
-import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.scheduling.QuartzService;
 import com.auto1.pantera.scheduling.ScriptScheduler;
 import com.auto1.pantera.settings.ConfigFile;
@@ -50,9 +49,6 @@ import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
-import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.micrometer.MicrometerMetricsOptions;
 import io.vertx.micrometer.VertxPrometheusOptions;
 import io.vertx.micrometer.backends.BackendRegistries;
@@ -142,6 +138,14 @@ public final class VertxMain {
      * @throws IOException In case of error reading settings.
      */
     public int start(final int apiPort) throws IOException {
+        org.slf4j.MDC.put(
+            com.auto1.pantera.http.log.EcsMdc.TRACE_ID,
+            com.auto1.pantera.http.trace.SpanContext.generateHex16()
+        );
+        org.slf4j.MDC.put(
+            com.auto1.pantera.http.log.EcsMdc.SPAN_ID,
+            com.auto1.pantera.http.trace.SpanContext.generateHex16()
+        );
         // Pre-parse YAML to detect DB configuration for Quartz JDBC clustering
         final com.amihaiemil.eoyaml.YamlMapping yamlContent =
             com.amihaiemil.eoyaml.Yaml.createYamlInput(this.config.toFile()).readYamlMapping();
@@ -199,11 +203,19 @@ public final class VertxMain {
 
         this.vertx = VertxMain.vertx(settings.metrics());
         final com.auto1.pantera.settings.JwtSettings jwtSettings = settings.jwtSettings();
-        final JWTAuth jwt = JWTAuth.create(
-            this.vertx.getDelegate(), new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(jwtSettings.secret())
-            )
-        );
+        final com.auto1.pantera.auth.RsaKeyLoader rsaKeys =
+            new com.auto1.pantera.auth.RsaKeyLoader(
+                jwtSettings.privateKeyPath().orElseThrow(
+                    () -> new IllegalStateException(
+                        "JWT private key path not configured. Set meta.jwt.private-key-path."
+                    )
+                ),
+                jwtSettings.publicKeyPath().orElseThrow(
+                    () -> new IllegalStateException(
+                        "JWT public key path not configured. Set meta.jwt.public-key-path."
+                    )
+                )
+            );
         final Repositories repos;
         if (sharedDs.isPresent()) {
             repos = new DbRepositories(
@@ -217,8 +229,24 @@ public final class VertxMain {
         final com.auto1.pantera.db.dao.UserTokenDao userTokenDao = sharedDs
             .map(com.auto1.pantera.db.dao.UserTokenDao::new)
             .orElse(null);
+        // Per-request enabled-state gate for the JWT filter. When the
+        // security Policy is a CachedDbPolicy (i.e. DB-backed), delegate
+        // to its cached isEnabled() method — any user disabled via the
+        // admin UI has their sessions and API tokens rejected on the
+        // next request, even if the token itself hasn't expired. In
+        // non-DB modes we fall back to the always-enabled default.
+        final com.auto1.pantera.auth.UserEnabledCheck enabledCheck;
+        if (settings.authz().policy()
+            instanceof com.auto1.pantera.security.policy.CachedDbPolicy cachedPolicy) {
+            enabledCheck = cachedPolicy::isEnabled;
+        } else {
+            enabledCheck = com.auto1.pantera.auth.UserEnabledCheck.ALWAYS_ENABLED;
+        }
+        final com.auto1.pantera.auth.JwtTokens jwtTokens = new com.auto1.pantera.auth.JwtTokens(
+            rsaKeys.privateKey(), rsaKeys.publicKey(), userTokenDao, null, null, enabledCheck
+        );
         final RepositorySlices slices = new RepositorySlices(
-            settings, repos, new JwtTokens(jwt, jwtSettings, userTokenDao)
+            settings, repos, jwtTokens
         );
         if (settings.metrics().http()) {
             try {
@@ -357,7 +385,8 @@ public final class VertxMain {
             this.port,
             this.vertx,
             settings.metrics(),
-            settings.httpServerRequestTimeout()
+            settings.httpServerRequestTimeout(),
+            settings.proxyProtocol()
         );
         EcsLogger.info("com.auto1.pantera")
             .message("Pantera was started on port")
@@ -374,7 +403,7 @@ public final class VertxMain {
         final DeploymentOptions deployOpts = new DeploymentOptions()
             .setInstances(apiInstances);
         this.vertx.deployVerticle(
-            () -> new AsyncApiVerticle(settings, apiPort, jwt, sharedDs.orElse(null)),
+            () -> new AsyncApiVerticle(settings, apiPort, null, sharedDs.orElse(null), jwtTokens),
             deployOpts,
             result -> {
                 if (result.succeeded()) {
@@ -719,7 +748,6 @@ public final class VertxMain {
             .eventCategory("server")
             .eventAction("server_start")
             .eventOutcome("success")
-            .field("service.version", new PanteraProperties().version())
             .log();
         final VertxMain app = new VertxMain(config, port);
 
@@ -781,7 +809,8 @@ public final class VertxMain {
                                 prt,
                                 vertx,
                                 settings.metrics(),
-                                settings.httpServerRequestTimeout()
+                                settings.httpServerRequestTimeout(),
+                                settings.proxyProtocol()
                             );
                         }
                         EcsLogger.info("com.auto1.pantera")
@@ -831,6 +860,7 @@ public final class VertxMain {
      * @param serverPort Slice server port.
      * @param vertx Vertx instance
      * @param mctx Metrics context
+     * @param requestTimeout Maximum time to process a single request
      * @return Port server started to listen on.
      */
     private int listenOn(
@@ -840,10 +870,57 @@ public final class VertxMain {
         final MetricsContext mctx,
         final Duration requestTimeout
     ) {
+        return this.listenOn(slice, serverPort, vertx, mctx, requestTimeout, false);
+    }
+
+    /**
+     * Starts HTTP server listening on specified port.
+     *
+     * @param slice Slice.
+     * @param serverPort Slice server port.
+     * @param vertx Vertx instance
+     * @param mctx Metrics context
+     * @param requestTimeout Maximum time to process a single request
+     * @param useProxyProtocol Whether to enable Proxy Protocol v2 (for AWS NLB)
+     * @return Port server started to listen on.
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    private int listenOn(
+        final Slice slice,
+        final int serverPort,
+        final Vertx vertx,
+        final MetricsContext mctx,
+        final Duration requestTimeout,
+        final boolean useProxyProtocol
+    ) {
+        final HttpServerOptions opts = new HttpServerOptions()
+            .setPort(serverPort)
+            .setIdleTimeout(60)
+            .setTcpKeepAlive(true)
+            .setTcpNoDelay(true)
+            .setUseAlpn(true)
+            .setHttp2ClearTextEnabled(true)
+            .setInitialSettings(
+                new io.vertx.core.http.Http2Settings()
+                    .setInitialWindowSize(16 * 1024 * 1024)
+            )
+            .setHttp2ConnectionWindowSize(128 * 1024 * 1024)
+            .setCompressionSupported(true)
+            .setCompressionLevel(6);
+        if (useProxyProtocol) {
+            opts.setUseProxyProtocol(true);
+            EcsLogger.info("com.auto1.pantera")
+                .message("Proxy Protocol v2 enabled on port " + serverPort)
+                .eventCategory("configuration")
+                .eventAction("proxy_protocol_enable")
+                .eventOutcome("success")
+                .field("destination.port", serverPort)
+                .log();
+        }
         final VertxSliceServer server = new VertxSliceServer(
             vertx,
             new BaseSlice(mctx, slice),
-            serverPort,
+            opts,
             requestTimeout
         );
         this.servers.add(server);

@@ -124,4 +124,103 @@ class AuthProviderDaoTest {
         assertEquals("local", all.get(0).getString("type"));
         assertEquals("keycloak", all.get(1).getString("type"));
     }
+
+    // -----------------------------------------------------------
+    // ensureExists — used by YamlToDbMigrator to bootstrap local +
+    // jwt-password on fresh installs without overwriting admin edits.
+    // -----------------------------------------------------------
+
+    @Test
+    void ensureExistsInsertsWhenMissing() {
+        final boolean inserted = this.dao.ensureExists(
+            "local", 0, Json.createObjectBuilder().build()
+        );
+        assertTrue(inserted, "ensureExists should insert a fresh row");
+        assertEquals(1, this.dao.list().size());
+        assertEquals("local", this.dao.list().get(0).getString("type"));
+    }
+
+    @Test
+    void ensureExistsDoesNotOverwriteExistingRow() {
+        // Admin has customized the local provider (priority bumped + enabled=false)
+        this.dao.put("local", 42, Json.createObjectBuilder()
+            .add("customized", true).build());
+        final int id = this.dao.list().get(0).getInt("id");
+        this.dao.disable(id);
+        // Bootstrap runs again on startup
+        final boolean inserted = this.dao.ensureExists(
+            "local", 0, Json.createObjectBuilder().build()
+        );
+        assertFalse(inserted, "ensureExists must be a no-op when row exists");
+        final List<JsonObject> all = this.dao.list();
+        assertEquals(1, all.size());
+        assertEquals(42, all.get(0).getInt("priority"),
+            "admin's priority edit preserved");
+        assertFalse(all.get(0).getBoolean("enabled"),
+            "admin's disable edit preserved");
+        assertTrue(
+            all.get(0).getJsonObject("config").getBoolean("customized"),
+            "admin's config edit preserved"
+        );
+    }
+
+    @Test
+    void ensureExistsIdempotentOnRepeatedCalls() {
+        this.dao.ensureExists("local", 0, Json.createObjectBuilder().build());
+        this.dao.ensureExists("local", 0, Json.createObjectBuilder().build());
+        this.dao.ensureExists("local", 0, Json.createObjectBuilder().build());
+        assertEquals(1, this.dao.list().size(),
+            "three ensureExists calls still result in one row");
+    }
+
+    // -----------------------------------------------------------
+    // typeOf — used by delete/disable protection checks
+    // -----------------------------------------------------------
+
+    @Test
+    void typeOfReturnsCorrectTypeForExistingId() {
+        this.dao.put("keycloak", 1, Json.createObjectBuilder().build());
+        final int id = this.dao.list().get(0).getInt("id");
+        assertEquals("keycloak", this.dao.typeOf(id));
+    }
+
+    @Test
+    void typeOfReturnsNullForMissingId() {
+        assertNull(this.dao.typeOf(99999),
+            "typeOf should return null when no row matches");
+    }
+
+    // -----------------------------------------------------------
+    // listEnabled ordering — callers expect priority-ordered results
+    // -----------------------------------------------------------
+
+    @Test
+    void listEnabledRespectsPriorityOrder() {
+        this.dao.put("okta", 30, Json.createObjectBuilder().build());
+        this.dao.put("local", 0, Json.createObjectBuilder().build());
+        this.dao.put("keycloak", 10, Json.createObjectBuilder().build());
+        this.dao.put("jwt-password", 1, Json.createObjectBuilder().build());
+        final List<JsonObject> enabled = this.dao.listEnabled();
+        assertEquals(4, enabled.size());
+        assertEquals("local", enabled.get(0).getString("type"));
+        assertEquals("jwt-password", enabled.get(1).getString("type"));
+        assertEquals("keycloak", enabled.get(2).getString("type"));
+        assertEquals("okta", enabled.get(3).getString("type"));
+    }
+
+    @Test
+    void listEnabledFiltersDisabledEvenAtLowerPriority() {
+        this.dao.put("local", 0, Json.createObjectBuilder().build());
+        this.dao.put("keycloak", 10, Json.createObjectBuilder().build());
+        this.dao.put("okta", 20, Json.createObjectBuilder().build());
+        this.dao.disable(
+            this.dao.list().stream()
+                .filter(p -> "keycloak".equals(p.getString("type")))
+                .findFirst().get().getInt("id")
+        );
+        final List<JsonObject> enabled = this.dao.listEnabled();
+        assertEquals(2, enabled.size());
+        assertEquals("local", enabled.get(0).getString("type"));
+        assertEquals("okta", enabled.get(1).getString("type"));
+    }
 }

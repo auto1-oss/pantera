@@ -33,6 +33,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.scheduling.ArtifactEvent;
+import com.auto1.pantera.scheduling.RepositoryEvents;
 import io.reactivex.Flowable;
 
 import java.net.URI;
@@ -328,7 +329,11 @@ public final class FileProxySlice implements Slice {
                                                 this.events.get().add(
                                                     new ArtifactEvent(
                                                         FileProxySlice.REPO_TYPE, this.rname, user,
-                                                        aname, "UNKNOWN", size
+                                                        aname,
+                                                        RepositoryEvents.detectFileVersion(
+                                                            FileProxySlice.REPO_TYPE, aname
+                                                        ),
+                                                        size
                                                     )
                                                 );
                                             });

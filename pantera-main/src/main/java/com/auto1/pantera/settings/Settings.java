@@ -168,4 +168,14 @@ public interface Settings extends AutoCloseable {
     default Optional<ValkeyConnection> valkeyConnection() {
         return Optional.empty();
     }
+
+    /**
+     * Whether Proxy Protocol v2 is enabled for AWS NLB integration.
+     * When true, the HTTP server will parse the PROXY protocol header
+     * prepended by the NLB to obtain real client IPs.
+     * @return True if proxy protocol should be enabled on the HTTP server
+     */
+    default boolean proxyProtocol() {
+        return false;
+    }
 }

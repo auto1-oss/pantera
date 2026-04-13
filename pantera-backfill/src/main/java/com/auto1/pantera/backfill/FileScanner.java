@@ -87,13 +87,14 @@ final class FileScanner implements Scanner {
     private ArtifactRecord toRecord(final Path root, final String repoName,
         final Path path) {
         try {
-            final String relative = root.relativize(path)
-                .toString().replace('\\', '/').replace('/', '.');
+            final Path rel = root.relativize(path);
+            final String name = rel.toString().replace('\\', '/').replace('/', '.');
+            final String version = detectVersion(rel);
             return new ArtifactRecord(
                 this.repoType,
                 repoName,
-                relative,
-                "UNKNOWN",
+                name,
+                version,
                 Files.size(path),
                 Files.getLastModifiedTime(path).toMillis(),
                 null,
@@ -103,5 +104,25 @@ final class FileScanner implements Scanner {
         } catch (final IOException ex) {
             throw new UncheckedIOException(ex);
         }
+    }
+
+    /**
+     * Infer a version from the file's parent directory.
+     * If the immediate parent segment starts with a digit it is treated as a
+     * version string (e.g. {@code 1.5.0-SNAPSHOT}, {@code 3.2.1}, {@code 2024}).
+     * This mirrors the heuristic used by {@code ArtifactNameParser.parseMaven}.
+     *
+     * @param relative Path relative to the repository root
+     * @return Version string, or {@code "UNKNOWN"} if not detectable
+     */
+    private static String detectVersion(final Path relative) {
+        final int count = relative.getNameCount();
+        if (count >= 2) {
+            final String parent = relative.getName(count - 2).toString();
+            if (!parent.isEmpty() && Character.isDigit(parent.charAt(0))) {
+                return parent;
+            }
+        }
+        return "UNKNOWN";
     }
 }

@@ -54,6 +54,7 @@ const adminItems = computed<NavItem[]>(() => {
     items.push({ label: 'Storage Configuration', icon: 'pi pi-database', to: '/admin/storage' })
   }
   if (auth.isAdmin) {
+    items.push({ label: 'Auth Providers', icon: 'pi pi-key', to: '/admin/auth-providers' })
     items.push({ label: 'System Settings', icon: 'pi pi-sliders-h', to: '/admin/settings' })
   }
   return items

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { listRepos } from '@/api/repos'
+import { getUiSettings } from '@/api/settings'
 import { getTechDef, getSetupSteps } from '@/utils/techSetup'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TechIcon from '@/components/common/TechIcon.vue'
@@ -36,7 +37,13 @@ async function loadRepos() {
   }
 }
 
-onMounted(loadRepos)
+onMounted(async () => {
+  loadRepos()
+  try {
+    const uiSettings = await getUiSettings()
+    if (uiSettings.ui?.registry_url) configStore.registryUrl = uiSettings.ui.registry_url
+  } catch { /* non-critical */ }
+})
 watch(() => props.tech, loadRepos)
 
 // ─── Instructions ──────────────────────────────────────────────────────────

@@ -24,22 +24,115 @@ All log entries are emitted as single-line JSON objects. Example:
 }
 ```
 
-### Key ECS Fields
+### Core Fields (every log entry)
 
 | Field | Description |
 |-------|-------------|
 | `@timestamp` | ISO-8601 event timestamp |
 | `log.level` | Log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL |
-| `message` | Human-readable log message |
+| `message` | Human-readable log message (never raw HTTP request lines) |
 | `service.name` | Always `pantera` |
 | `service.version` | Pantera version |
-| `event.category` | Event category (api, authentication, storage, etc.) |
-| `event.action` | Specific action (server_start, artifact_upload, etc.) |
-| `event.outcome` | success, failure, or unknown |
+| `service.environment` | Deployment environment (development, staging, production) |
 | `logger_name` | Fully qualified Java class/logger name |
-| `error.type` | Exception class name (when present) |
-| `error.message` | Exception message (when present) |
-| `error.stack_trace` | Stack trace (when present) |
+| `process.thread.name` | Thread name |
+
+### Event Fields
+
+| Field | Description | Values |
+|-------|-------------|--------|
+| `event.category` | Event category | `api`, `authentication`, `storage`, `cache`, `group`, `repository`, `pypi`, `cooldown` |
+| `event.action` | Specific action | `server_start`, `artifact_upload`, `token_validate`, `group_fanout_miss`, `group_lookup_miss`, `sso_callback`, etc. |
+| `event.outcome` | Result of the action | `success`, `failure`, `unknown` (ECS-compliant values only) |
+| `event.duration` | Duration in nanoseconds | Long integer |
+| `event.reason` | Human-readable reason for the outcome | Free text |
+
+### HTTP Fields (request/response logging)
+
+| Field | Description |
+|-------|-------------|
+| `http.request.method` | HTTP method (GET, POST, PUT, DELETE) |
+| `http.request.headers` | Request headers (sanitized, auth stripped) |
+| `http.response.status_code` | Numeric HTTP status code |
+| `http.response.body.bytes` | Response body size in bytes |
+| `http.response.headers` | Response headers |
+| `http.response.mime_type` | Response content type |
+| `http.version` | HTTP version (1.1, 2) |
+
+### URL Fields
+
+| Field | Description |
+|-------|-------------|
+| `url.original` | Full original request URI (path + query) |
+| `url.path` | Request path component |
+| `url.query` | Query string (if present) |
+| `url.domain` | Target hostname |
+| `url.port` | Target port |
+| `url.full` | Complete URL including scheme |
+
+### User and Auth Fields
+
+| Field | Description |
+|-------|-------------|
+| `user.name` | Authenticated username |
+
+### Error Fields (present on exceptions)
+
+| Field | Description |
+|-------|-------------|
+| `error.type` | Exception class name |
+| `error.message` | Exception message |
+| `error.stack_trace` | Full stack trace |
+
+### Package Fields (artifact operations)
+
+| Field | Description | ECS Standard? |
+|-------|-------------|--------------|
+| `package.name` | Package/artifact name | Yes |
+| `package.version` | Package version | Yes |
+| `package.size` | Package size in bytes | Yes |
+| `package.path` | Storage path of the artifact | Custom |
+| `package.release_date` | Upstream release timestamp (ISO-8601, omitted if unavailable) | Custom |
+| `package.age` | Age of the package for cooldown evaluation | Custom |
+| `package.checksum` | SHA-256 digest of the artifact | Custom |
+| `package.group` | Package group/namespace (e.g., Maven groupId) | Custom |
+
+### Repository Fields (custom, Pantera-specific)
+
+| Field | Description |
+|-------|-------------|
+| `repository.name` | Repository name |
+| `repository.type` | Repository type (maven-proxy, npm-hosted, etc.) |
+
+### File Fields (storage operations)
+
+| Field | Description |
+|-------|-------------|
+| `file.name` | Filename |
+| `file.path` | File path in storage |
+| `file.size` | File size in bytes |
+| `file.type` | File format (ZIP, TAR.GZ, etc.) |
+| `file.directory` | Parent directory |
+| `file.target_path` | Destination path (for moves/copies) |
+
+### Container Fields (Docker adapter)
+
+| Field | Description |
+|-------|-------------|
+| `container.image.name` | Docker image name |
+| `container.image.tag` | Image tag |
+| `container.image.hash.all` | Image digest |
+
+### Destination Fields (proxy/upstream)
+
+| Field | Description |
+|-------|-------------|
+| `destination.address` | Upstream server hostname |
+| `destination.port` | Upstream server port |
+
+> **Custom fields:** Fields marked "Custom" above are Pantera-specific extensions under the `package.*` and `repository.*` namespaces. ECS is designed to be extensible — custom fields are fully supported by Elasticsearch and won't conflict with standard ECS mappings.
+
+> **Field naming convention:** All fields follow ECS dot-notation (`namespace.field`). Custom fields use `package.*` for artifact metadata and `repository.*` for repository metadata. Never use bare field names or underscores in field names.
 
 ---
 
@@ -212,7 +305,45 @@ docker logs pantera 2>&1 | jq 'select(.["error.type"] != null)'
 
 # Show only timestamp, level, and message
 docker logs pantera 2>&1 | jq '{time: .["@timestamp"], level: .["log.level"], msg: .message}'
+
+# Filter HTTP 4xx/5xx errors with structured fields
+docker logs pantera 2>&1 | jq 'select(.["http.response.status_code"] >= 400)'
+
+# Filter by specific repository
+docker logs pantera 2>&1 | jq 'select(.["repository.name"] == "pypi-proxy")'
+
+# Show request details for slow requests (>1s)
+docker logs pantera 2>&1 | jq 'select(.["event.duration"] > 1000000000) | {method: .["http.request.method"], path: .["url.original"], status: .["http.response.status_code"], duration_ms: (.["event.duration"] / 1000000)}'
+
+# Filter group lookup failures (artifact not found in any member)
+docker logs pantera 2>&1 | jq 'select(.["event.action"] == "group_lookup_miss")'
+
+# Filter authentication events
+docker logs pantera 2>&1 | jq 'select(.["event.category"] == "authentication" and .["event.outcome"] == "failure")'
 ```
+
+### Elasticsearch / Kibana Queries
+
+When using Kibana Discover or ES|QL:
+
+```
+# All HTTP errors
+http.response.status_code >= 400
+
+# Group lookup misses (real 404s, not fanout noise)
+event.action: "group_lookup_miss"
+
+# Authentication failures
+event.category: "authentication" AND event.outcome: "failure"
+
+# Slow requests (>2 seconds)
+event.duration > 2000000000
+
+# Specific package operations
+package.name: "pydantic" AND event.category: "cooldown"
+```
+
+> **Note:** Individual group member 404s during fanout are logged at `DEBUG` level with `event.action: "group_fanout_miss"`. These are expected behavior and not visible at default INFO level. Only the aggregate "not found in any member" is logged at `WARN` with `event.action: "group_lookup_miss"`.
 
 ### Log Aggregation
 

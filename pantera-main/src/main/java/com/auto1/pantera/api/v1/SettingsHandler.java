@@ -17,6 +17,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.misc.PanteraProperties;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.JwtSettings;
@@ -43,6 +44,17 @@ import org.eclipse.jetty.http.HttpStatus;
  * @checkstyle ExecutableStatementCountCheck (500 lines)
  */
 public final class SettingsHandler {
+
+    /**
+     * Auth provider types that cannot be disabled or deleted via the API.
+     * These are bootstrap providers required for fallback access:
+     *   - local: username/password against the users table
+     *   - jwt-password: API token verification
+     * Locking these prevents an admin from accidentally severing their own
+     * ability to log in (e.g. by disabling all SSO + local in one go).
+     */
+    private static final java.util.Set<String> PROTECTED_PROVIDERS =
+        java.util.Set.of("local", "jwt-password");
 
     /**
      * Pantera port.
@@ -75,7 +87,37 @@ public final class SettingsHandler {
     private final Policy<?> policy;
 
     /**
+     * Auth cache — flushed on provider toggle/delete/config change so
+     * previously-cached successful logins from a now-disabled provider
+     * cannot be replayed.
+     */
+    private final com.auto1.pantera.asto.misc.Cleanable<String> authCache;
+
+    /**
      * Ctor.
+     * @param port Pantera port
+     * @param settings Pantera settings
+     * @param manageRepo Repository settings manager
+     * @param dataSource Database data source (nullable)
+     * @param policy Security policy
+     * @param authCache Auth cache to flush on provider changes (nullable)
+     * @checkstyle ParameterNumberCheck (6 lines)
+     */
+    public SettingsHandler(final int port, final Settings settings,
+        final ManageRepoSettings manageRepo, final DataSource dataSource,
+        final Policy<?> policy,
+        final com.auto1.pantera.asto.misc.Cleanable<String> authCache) {
+        this.port = port;
+        this.settings = settings;
+        this.manageRepo = manageRepo;
+        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
+        this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
+        this.policy = policy;
+        this.authCache = authCache;
+    }
+
+    /**
+     * Backward-compat ctor without auth cache.
      * @param port Pantera port
      * @param settings Pantera settings
      * @param manageRepo Repository settings manager
@@ -86,12 +128,22 @@ public final class SettingsHandler {
     public SettingsHandler(final int port, final Settings settings,
         final ManageRepoSettings manageRepo, final DataSource dataSource,
         final Policy<?> policy) {
-        this.port = port;
-        this.settings = settings;
-        this.manageRepo = manageRepo;
-        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
-        this.authProviderDao = dataSource != null ? new AuthProviderDao(dataSource) : null;
-        this.policy = policy;
+        this(port, settings, manageRepo, dataSource, policy, null);
+    }
+
+    /**
+     * Flush the auth credential cache so a just-changed provider
+     * cannot serve a stale success result. Called after every provider
+     * mutation (create / toggle / update config / delete).
+     */
+    private void flushAuthCache() {
+        if (this.authCache
+            instanceof com.auto1.pantera.settings.cache.CachedUsers) {
+            ((com.auto1.pantera.settings.cache.CachedUsers) this.authCache)
+                .invalidateByUsername("*");
+        } else if (this.authCache != null) {
+            this.authCache.invalidateAll();
+        }
     }
 
     /**
@@ -114,12 +166,22 @@ public final class SettingsHandler {
         router.put("/api/v1/settings/:section")
             .handler(new AuthzHandler(this.policy, update))
             .handler(this::updateSection);
-        // Auth provider management
+        // Auth provider management — admin-only. Modifying SSO providers
+        // can completely change who can access Pantera, so this is gated
+        // behind ApiAdminPermission.ADMIN, not the weaker ROLE_UPDATE.
+        final com.auto1.pantera.api.perms.ApiAdminPermission admin =
+            com.auto1.pantera.api.perms.ApiAdminPermission.ADMIN;
+        router.post("/api/v1/auth-providers")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::createAuthProvider);
+        router.delete("/api/v1/auth-providers/:id")
+            .handler(new AuthzHandler(this.policy, admin))
+            .handler(this::deleteAuthProvider);
         router.put("/api/v1/auth-providers/:id/toggle")
-            .handler(new AuthzHandler(this.policy, update))
+            .handler(new AuthzHandler(this.policy, admin))
             .handler(this::toggleAuthProvider);
         router.put("/api/v1/auth-providers/:id/config")
-            .handler(new AuthzHandler(this.policy, update))
+            .handler(new AuthzHandler(this.policy, admin))
             .handler(this::updateAuthProviderConfig);
     }
 
@@ -129,7 +191,7 @@ public final class SettingsHandler {
      */
     private void getSettings(final RoutingContext ctx) {
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> this.buildFullSettings(),
+            MdcPropagation.withMdc(() -> this.buildFullSettings()),
             false
         ).onSuccess(
             result -> ctx.response()
@@ -152,6 +214,9 @@ public final class SettingsHandler {
             this.settingsDao.get("ui").ifPresent(uiSettings -> {
                 if (uiSettings.containsKey("grafana_url")) {
                     ui.put("grafana_url", uiSettings.getString("grafana_url"));
+                }
+                if (uiSettings.containsKey("registry_url")) {
+                    ui.put("registry_url", uiSettings.getString("registry_url"));
                 }
             });
         }
@@ -225,31 +290,11 @@ public final class SettingsHandler {
                     .put("type", prov.getString("type"))
                     .put("priority", prov.getInt("priority"))
                     .put("enabled", prov.getBoolean("enabled"));
-                // Include safe config (strip secrets, handle nested values)
+                // Include safe config (strip secrets, preserve structure for
+                // nested arrays/objects so the UI sees real JSON, not strings)
                 final javax.json.JsonObject cfg = prov.getJsonObject("config");
                 if (cfg != null) {
-                    final JsonObject safeConfig = new JsonObject();
-                    for (final String key : cfg.keySet()) {
-                        final javax.json.JsonValue jval = cfg.get(key);
-                        if (jval.getValueType() == javax.json.JsonValue.ValueType.STRING) {
-                            final String val = cfg.getString(key);
-                            if (isSecret(key)) {
-                                safeConfig.put(key, maskValue(val));
-                            } else {
-                                safeConfig.put(key, val);
-                            }
-                        } else if (jval.getValueType() == javax.json.JsonValue.ValueType.OBJECT
-                            || jval.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
-                            if (isSecret(key)) {
-                                safeConfig.put(key, "***");
-                            } else {
-                                safeConfig.put(key, jval.toString());
-                            }
-                        } else {
-                            safeConfig.put(key, jval.toString());
-                        }
-                    }
-                    entry.put("config", safeConfig);
+                    entry.put("config", safeConfigToVertxJson(cfg));
                 }
                 providersArr.add(entry);
             }
@@ -269,6 +314,9 @@ public final class SettingsHandler {
                 final JsonObject uiJson = new JsonObject();
                 if (uiSettings.containsKey("grafana_url")) {
                     uiJson.put("grafana_url", uiSettings.getString("grafana_url"));
+                }
+                if (uiSettings.containsKey("registry_url")) {
+                    uiJson.put("registry_url", uiSettings.getString("registry_url"));
                 }
                 if (!uiJson.isEmpty()) {
                     response.put("ui", uiJson);
@@ -337,14 +385,14 @@ public final class SettingsHandler {
         final String actor = ctx.user() != null
             ? ctx.user().principal().getString("sub", "system") : "system";
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 // Convert vertx JsonObject to javax.json.JsonObject
                 final javax.json.JsonObject jobj = Json.createReader(
                     new java.io.StringReader(body.encode())
                 ).readObject();
                 this.settingsDao.put(section, jobj, actor);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> ctx.response().setStatusCode(HttpStatus.OK_200)
@@ -379,22 +427,142 @@ public final class SettingsHandler {
         }
         final boolean enabled = body.getBoolean("enabled");
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
+                // Refuse to disable protected providers (local, jwt-password).
+                // Enable is always allowed since it just restores the default.
+                if (!enabled) {
+                    final String type = this.authProviderDao.typeOf(providerId);
+                    if (type == null) {
+                        throw new IllegalArgumentException("not_found");
+                    }
+                    if (PROTECTED_PROVIDERS.contains(type)) {
+                        throw new IllegalArgumentException("protected:" + type);
+                    }
+                }
                 if (enabled) {
                     this.authProviderDao.enable(providerId);
                 } else {
                     this.authProviderDao.disable(providerId);
                 }
                 return null;
-            },
+            }),
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
+        ).onFailure(err -> {
+            final String msg = err.getCause() != null
+                ? err.getCause().getMessage() : err.getMessage();
+            if ("not_found".equals(msg)) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+            } else if (msg != null && msg.startsWith("protected:")) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Cannot disable the '" + msg.substring("protected:".length())
+                        + "' provider — it is required for fallback access.");
+            } else {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            }
+        });
+    }
+
+    /**
+     * POST /api/v1/auth-providers — create a new auth provider.
+     * Body: {"type": "okta", "priority": 10, "config": {...}}
+     * Type is required and must be unique. Priority defaults to 100.
+     * Config defaults to {}.
+     * @param ctx Routing context
+     */
+    private void createAuthProvider(final RoutingContext ctx) {
+        if (this.authProviderDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Database not configured");
+            return;
+        }
+        final JsonObject body = ctx.body().asJsonObject();
+        if (body == null || body.getString("type") == null
+            || body.getString("type").isBlank()) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "'type' is required");
+            return;
+        }
+        final String type = body.getString("type").trim();
+        final int priority = body.getInteger("priority", 100);
+        final JsonObject config = body.getJsonObject("config", new JsonObject());
+        ctx.vertx().<Void>executeBlocking(
+            MdcPropagation.withMdc(() -> {
+                final javax.json.JsonObject jcfg = Json.createReader(
+                    new java.io.StringReader(config.encode())
+                ).readObject();
+                this.authProviderDao.put(type, priority, jcfg);
+                return null;
+            }),
+            false
+        ).onSuccess(
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(201)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("status", "created")
+                        .put("type", type)
+                        .encode());
+            }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
+    }
+
+    /**
+     * DELETE /api/v1/auth-providers/:id — delete an auth provider.
+     * Refuses to delete protected providers (local, jwt-password) so
+     * the admin always has fallback access if SSO breaks.
+     * @param ctx Routing context
+     */
+    private void deleteAuthProvider(final RoutingContext ctx) {
+        if (this.authProviderDao == null) {
+            ApiResponse.sendError(ctx, 503, "UNAVAILABLE", "Database not configured");
+            return;
+        }
+        final int providerId;
+        try {
+            providerId = Integer.parseInt(ctx.pathParam("id"));
+        } catch (final NumberFormatException ex) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid provider ID");
+            return;
+        }
+        ctx.vertx().<Void>executeBlocking(
+            MdcPropagation.withMdc(() -> {
+                final String type = this.authProviderDao.typeOf(providerId);
+                if (type == null) {
+                    throw new IllegalArgumentException("not_found");
+                }
+                if (PROTECTED_PROVIDERS.contains(type)) {
+                    throw new IllegalArgumentException("protected:" + type);
+                }
+                this.authProviderDao.delete(providerId);
+                return null;
+            }),
+            false
+        ).onSuccess(
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(204).end();
+            }
+        ).onFailure(err -> {
+            final String msg = err.getCause() != null
+                ? err.getCause().getMessage() : err.getMessage();
+            if ("not_found".equals(msg)) {
+                ApiResponse.sendError(ctx, 404, "NOT_FOUND", "Auth provider not found");
+            } else if (msg != null && msg.startsWith("protected:")) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Cannot delete the '" + msg.substring("protected:".length())
+                        + "' provider — it is required for fallback access.");
+            } else {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            }
+        });
     }
 
     /**
@@ -420,18 +588,21 @@ public final class SettingsHandler {
             return;
         }
         ctx.vertx().<Void>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final javax.json.JsonObject jobj = Json.createReader(
                     new java.io.StringReader(body.encode())
                 ).readObject();
                 this.authProviderDao.updateConfig(providerId, jobj);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject().put("status", "saved").encode())
+            ignored -> {
+                this.flushAuthCache();
+                ctx.response().setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject().put("status", "saved").encode());
+            }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
@@ -464,5 +635,53 @@ public final class SettingsHandler {
             return "***";
         }
         return value.substring(0, 2) + "***" + value.substring(value.length() - 2);
+    }
+
+    /**
+     * Convert a {@code javax.json.JsonObject} auth-provider config to a
+     * Vert.x {@link JsonObject}, preserving nested arrays and objects
+     * while masking secret keys.
+     *
+     * @param cfg Source config
+     * @return Vert.x JsonObject with secrets masked
+     */
+    private static JsonObject safeConfigToVertxJson(final javax.json.JsonObject cfg) {
+        final JsonObject out = new JsonObject();
+        for (final String key : cfg.keySet()) {
+            final javax.json.JsonValue jval = cfg.get(key);
+            final boolean secret = isSecret(key);
+            switch (jval.getValueType()) {
+                case STRING:
+                    final String val = cfg.getString(key);
+                    out.put(key, secret ? maskValue(val) : val);
+                    break;
+                case NUMBER:
+                    out.put(key, cfg.getJsonNumber(key).longValue());
+                    break;
+                case TRUE:
+                    out.put(key, true);
+                    break;
+                case FALSE:
+                    out.put(key, false);
+                    break;
+                case ARRAY:
+                    if (secret) {
+                        out.put(key, "***");
+                    } else {
+                        out.put(key, new JsonArray(cfg.getJsonArray(key).toString()));
+                    }
+                    break;
+                case OBJECT:
+                    if (secret) {
+                        out.put(key, "***");
+                    } else {
+                        out.put(key, new JsonObject(cfg.getJsonObject(key).toString()));
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return out;
     }
 }

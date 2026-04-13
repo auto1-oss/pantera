@@ -22,7 +22,7 @@ import java.util.Queue;
 public final class RepositoryEvents {
 
     /**
-     * Unknown version.
+     * Fallback version when none can be inferred.
      */
     private static final String VERSION = "UNKNOWN";
 
@@ -56,8 +56,8 @@ public final class RepositoryEvents {
     }
 
     /**
-     * Adds event to queue, artifact name is the key and version is "UNKNOWN",
-     * owner is obtained from headers.
+     * Adds event to queue. For file/file-proxy repos the version is inferred
+     * from the artifact name; for all other types it falls back to "UNKNOWN".
      * @param key Artifact key
      * @param size Artifact size
      * @param headers Request headers
@@ -65,10 +65,11 @@ public final class RepositoryEvents {
     public void addUploadEventByKey(final Key key, final long size,
         final Headers headers) {
         final String aname = formatArtifactName(key);
+        final String version = detectFileVersion(this.rtype, aname);
         this.queue.add(
             new ArtifactEvent(
                 this.rtype, this.rname, new Login(headers).getValue(),
-                aname, RepositoryEvents.VERSION, size
+                aname, version, size
             )
         );
     }
@@ -83,6 +84,24 @@ public final class RepositoryEvents {
         this.queue.add(
             new ArtifactEvent(this.rtype, this.rname, aname, RepositoryEvents.VERSION)
         );
+    }
+
+    /**
+     * Infer a version for file-type repositories from the dotted artifact name.
+     * Delegates to {@link FileVersionDetector#detect(String)}.
+     *
+     * <p>Returns {@code "UNKNOWN"} for non-file repo types or when no
+     * version-like token run is found.</p>
+     *
+     * @param rtype Repository type
+     * @param name Dotted artifact name
+     * @return Detected version or {@code "UNKNOWN"}
+     */
+    public static String detectFileVersion(final String rtype, final String name) {
+        if (!"file".equals(rtype) && !"file-proxy".equals(rtype)) {
+            return RepositoryEvents.VERSION;
+        }
+        return FileVersionDetector.detect(name);
     }
 
     /**

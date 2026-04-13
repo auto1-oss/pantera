@@ -49,6 +49,27 @@ public interface Authentication {
     }
 
     /**
+     * Whether this provider is the authoritative source for the given
+     * username. If {@code true} and authentication fails, the chain MUST
+     * return empty immediately — it is a security error to fall through
+     * to other providers for a username that is known to this provider.
+     *
+     * <p>Example: {@code AuthFromDb} returns true for any username that
+     * exists in the local {@code users} table with
+     * {@code auth_provider = 'local'}. Otherwise an attacker could bypass
+     * a strong local password by matching a weak SSO password for the
+     * same username in a downstream provider.</p>
+     *
+     * <p>Default: {@code false} — providers make no authority claims.</p>
+     *
+     * @param username Username being authenticated
+     * @return True if this provider owns the user and chain should stop on failure
+     */
+    default boolean isAuthoritative(final String username) {
+        return false;
+    }
+
+    /**
      * Abstract decorator for Authentication.
      *
      * @since 0.15
@@ -173,8 +194,41 @@ public interface Authentication {
                 // Provider can handle this user - try authentication
                 final Optional<AuthUser> result = auth.user(user, pass);
                 if (result.isPresent()) {
-                    // Success - return immediately
+                    // Success — log which provider matched so admins can
+                    // diagnose situations like "password changed but old
+                    // one still works" (they'll see exactly which provider
+                    // accepted the credentials).
+                    com.auto1.pantera.http.log.EcsLogger.info(
+                        "com.auto1.pantera.http.auth")
+                        .message("Authentication succeeded via "
+                            + auth.getClass().getSimpleName())
+                        .eventCategory("authentication")
+                        .eventAction("provider_match")
+                        .eventOutcome("success")
+                        .field("user.name", user)
+                        .field("event.provider",
+                            auth.getClass().getSimpleName())
+                        .log();
                     return result;
+                }
+                // SECURITY: authoritative providers stop the chain on failure.
+                // If AuthFromDb says "this user is mine" but the password is
+                // wrong, we MUST NOT fall through to SSO providers — otherwise
+                // an attacker could bypass a strong local password by matching
+                // a weak SSO password for the same username.
+                if (auth.isAuthoritative(user)) {
+                    com.auto1.pantera.http.log.EcsLogger.warn(
+                        "com.auto1.pantera.http.auth")
+                        .message("Authoritative provider rejected credentials; "
+                            + "chain will NOT fall through")
+                        .eventCategory("authentication")
+                        .eventAction("provider_reject_authoritative")
+                        .eventOutcome("failure")
+                        .field("user.name", user)
+                        .field("event.provider",
+                            auth.getClass().getSimpleName())
+                        .log();
+                    return Optional.empty();
                 }
                 // Provider matched domain but auth failed
                 // If provider has specific domains configured, stop here

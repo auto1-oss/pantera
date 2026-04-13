@@ -1,0 +1,49 @@
+# ===========================================================================
+# Pantera Development Dockerfile
+# Multi-stage build: Maven builds inside Docker so no local Java/Maven needed
+# ===========================================================================
+
+# --- Stage 1: Build ---
+FROM maven:3.9-eclipse-temurin-21 AS build
+
+WORKDIR /app
+
+COPY . .
+
+# Build and install the full reactor, then collect runtime deps for pantera-main.
+# 'install' puts artifacts in the local repo so the second command can find them.
+# Remove HikariCP-java7: transitive dep that conflicts with HikariCP 5.x,
+# causing AbstractMethodError in MicrometerMetricsTrackerFactory at runtime.
+RUN mvn install -DskipTests -B \
+    && mvn dependency:copy-dependencies -DincludeScope=runtime -pl pantera-main -B \
+    && rm -f /app/pantera-main/target/dependency/HikariCP-java7-*.jar
+
+# --- Stage 2: Runtime ---
+FROM eclipse-temurin:21-jre-alpine
+
+RUN addgroup -g 2020 -S pantera && \
+    adduser -u 2021 -S -G pantera -s /sbin/nologin pantera && \
+    mkdir -p /etc/pantera /usr/lib/pantera /var/pantera/logs/dumps \
+             /var/pantera/cache/tmp /var/pantera/repo /var/pantera/security \
+             /var/pantera/data && \
+    chown -R pantera:pantera /etc/pantera /usr/lib/pantera /var/pantera
+
+ENV TMPDIR=/var/pantera/cache/tmp
+
+USER 2021:2020
+
+COPY --from=build --chown=pantera:pantera /app/pantera-main/target/dependency /usr/lib/pantera/lib
+COPY --from=build --chown=pantera:pantera /app/pantera-main/target/pantera-main-2.0.7.jar /usr/lib/pantera/pantera.jar
+
+WORKDIR /var/pantera
+
+EXPOSE 8080 8086
+
+CMD ["sh", "-c", "exec java $JVM_ARGS \
+  --add-opens java.base/java.util=ALL-UNNAMED \
+  --add-opens java.base/java.security=ALL-UNNAMED \
+  -cp /usr/lib/pantera/pantera.jar:/usr/lib/pantera/lib/* \
+  com.auto1.pantera.VertxMain \
+  --config-file=/etc/pantera/pantera.yml \
+  --port=8080 \
+  --api-port=8086"]

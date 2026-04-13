@@ -115,6 +115,28 @@ class RoleDaoTest {
         assertTrue(this.dao.get("nonexistent").isEmpty());
     }
 
+    @Test
+    void listPagedFiltersRoles() {
+        addTestRole("admin");
+        addTestRole("reader");
+        addTestRole("writer");
+        final PagedResult<JsonObject> result =
+            this.dao.listPaged("admin", "name", true, 20, 0);
+        assertEquals(1, result.total());
+        assertEquals(1, result.items().size());
+        assertEquals("admin", result.items().get(0).getString("name"));
+    }
+
+    @Test
+    void listPagedReturnsAllWhenNoQuery() {
+        addTestRole("reader");
+        addTestRole("writer");
+        final PagedResult<JsonObject> result =
+            this.dao.listPaged(null, "name", true, 20, 0);
+        assertEquals(2, result.total());
+        assertEquals(2, result.items().size());
+    }
+
     private void addTestRole(final String name) {
         this.dao.addOrUpdate(
             Json.createObjectBuilder()

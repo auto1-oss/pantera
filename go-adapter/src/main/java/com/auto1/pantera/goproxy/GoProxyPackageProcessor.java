@@ -224,7 +224,7 @@ public final class GoProxyPackageProcessor extends QuartzJob {
                         .field("package.version", coords.version())
                         .field("repository.name", event.repoName())
                         .field("package.size", size.get())
-                        .field("package.release_date", release == null ? "unknown"
+                        .field("package.release_date", release == null ? null
                             : java.time.Instant.ofEpochMilli(release).toString())
                         .log();
                 });

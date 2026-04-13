@@ -40,19 +40,50 @@ Response:
 
 Results are automatically filtered by your permissions -- you only see artifacts in repositories you have access to.
 
+### Structured Search Syntax
+
+In addition to plain full-text search, you can use field prefixes to narrow results:
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `pydantic` | Full-text search (all fields) | `pydantic` |
+| `name:value` | Filter by exact artifact name (case-insensitive) | `name:pydantic` |
+| `version:value` | Filter by version (case-insensitive, supports partial match) | `version:2.12` |
+| `repo:value` | Filter by repository name (exact match) | `repo:pypi-proxy` |
+| `type:value` | Filter by repository type (prefix match, strips `-proxy`/`-group`) | `type:maven` |
+
+Combine filters with `AND` and `OR`:
+
+```
+name:pydantic AND version:2.12
+name:pydantic AND (version:2.12 OR version:2.11)
+repo:pypi-proxy AND type:pypi
+```
+
+Mixing plain text with field filters is supported:
+
+```
+pydantic AND repo:pypi-proxy
+```
+
+Queries without any prefix work exactly as before (plain full-text search).
+
 ### Search Tips
 
 - Search is case-insensitive.
 - Dots, dashes, slashes, and underscores are treated as word separators, so searching `spring-boot` also matches `spring.boot` and `spring/boot`.
 - If the full-text search returns no results, Pantera falls back to substring matching automatically.
+- The `type:` prefix matches repository type prefixes, so `type:maven` matches both `maven` and `maven-proxy` repositories.
 
 ### Pagination
 
 | Parameter | Default | Maximum |
 |-----------|---------|---------|
 | `q` | (required) | -- |
-| `page` | 0 | 500 |
+| `page` | 0 | limited by max offset (10,000 rows) |
 | `size` | 20 | 100 |
+
+Deep pagination is capped at an effective offset of 10,000 rows. Requests that would exceed this limit are rejected with `400 Bad Request`. Use narrower search filters to locate specific results beyond this limit.
 
 ---
 

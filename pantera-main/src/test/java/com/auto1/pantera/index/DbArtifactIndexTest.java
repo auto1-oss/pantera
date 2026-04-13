@@ -23,6 +23,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -38,7 +39,7 @@ import java.util.Map;
  *
  * @since 1.20.13
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods"})
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.TooManyMethods", "PMD.TooManyStaticImports"})
 @Testcontainers
 class DbArtifactIndexTest {
 
@@ -69,6 +70,10 @@ class DbArtifactIndexTest {
                     .add(ArtifactDbFactory.YAML_DATABASE, POSTGRES.getDatabaseName())
                     .add(ArtifactDbFactory.YAML_USER, POSTGRES.getUsername())
                     .add(ArtifactDbFactory.YAML_PASSWORD, POSTGRES.getPassword())
+                    // Limit pool size to 2 per test JVM to avoid exhausting PostgreSQL's
+                    // max_connections (100) when multiple forks run concurrently.
+                    .add(ArtifactDbFactory.YAML_POOL_MAX_SIZE, "2")
+                    .add(ArtifactDbFactory.YAML_POOL_MIN_IDLE, "1")
                     .build()
             ).build(),
             "artifacts"
@@ -85,6 +90,9 @@ class DbArtifactIndexTest {
     void tearDown() {
         if (this.index != null) {
             this.index.close();
+        }
+        if (this.dataSource instanceof HikariDataSource) {
+            ((HikariDataSource) this.dataSource).close();
         }
     }
 
@@ -420,6 +428,118 @@ class DbArtifactIndexTest {
     }
 
     @Test
+    void toSortFieldMapsValidValues() {
+        MatcherAssert.assertThat(
+            DbArtifactIndex.toSortField("name"),
+            new IsEqual<>(DbArtifactIndex.SortField.NAME)
+        );
+        MatcherAssert.assertThat(
+            DbArtifactIndex.toSortField("version"),
+            new IsEqual<>(DbArtifactIndex.SortField.VERSION)
+        );
+        MatcherAssert.assertThat(
+            DbArtifactIndex.toSortField("created_at"),
+            new IsEqual<>(DbArtifactIndex.SortField.DATE)
+        );
+        MatcherAssert.assertThat(
+            DbArtifactIndex.toSortField("relevance"),
+            new IsEqual<>(DbArtifactIndex.SortField.RELEVANCE)
+        );
+    }
+
+    @Test
+    void toSortFieldDefaultsForUnknown() {
+        MatcherAssert.assertThat(
+            "Unknown string maps to RELEVANCE",
+            DbArtifactIndex.toSortField("invalid"),
+            new IsEqual<>(DbArtifactIndex.SortField.RELEVANCE)
+        );
+        MatcherAssert.assertThat(
+            "Null maps to RELEVANCE",
+            DbArtifactIndex.toSortField(null),
+            new IsEqual<>(DbArtifactIndex.SortField.RELEVANCE)
+        );
+    }
+
+    @Test
+    void searchWithOffsetSkipsFacets() throws Exception {
+        for (int idx = 0; idx < 5; idx++) {
+            this.index.index(new ArtifactDocument(
+                "maven", "repo1", "facet-item-" + idx, "facet-item-" + idx,
+                "1.0." + idx, 100L, Instant.now(), "user1"
+            )).join();
+        }
+        // Page 0 should have non-empty facets
+        final SearchResult page0 = this.index.search(
+            "facet", 3, 0, null, null, "relevance", true
+        ).join();
+        MatcherAssert.assertThat(
+            "First page should have type counts",
+            page0.typeCounts().isEmpty(),
+            new IsEqual<>(false)
+        );
+        // Page 1 (offset=3) should have empty facet maps
+        final SearchResult page1 = this.index.search(
+            "facet", 3, 3, null, null, "relevance", true
+        ).join();
+        MatcherAssert.assertThat(
+            "Non-first page typeCounts must be empty",
+            page1.typeCounts().isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Non-first page repoCounts must be empty",
+            page1.repoCounts().isEmpty(),
+            new IsEqual<>(true)
+        );
+    }
+
+    @Test
+    void typeCountsMergeSuffixes() throws Exception {
+        // Insert docs with base, -proxy, and -group variants of maven
+        this.index.index(new ArtifactDocument(
+            "maven", "maven-hosted", "com.example.core", "core",
+            "1.0", 100L, Instant.now(), "admin"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven-proxy", "maven-central", "com.example.core", "core",
+            "1.0", 100L, Instant.now(), "proxy"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven-group", "maven-all", "com.example.core", "core",
+            "1.0", 100L, Instant.now(), "admin"
+        )).join();
+        final SearchResult result = this.index.search(
+            "core", 10, 0, null, null, "relevance", true
+        ).join();
+        MatcherAssert.assertThat(
+            "Should have results",
+            result.totalHits() > 0,
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Type counts should have exactly one 'maven' entry (merged suffixes)",
+            result.typeCounts().containsKey("maven"),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Merged maven count should be 3 (base + proxy + group)",
+            result.typeCounts().get("maven"),
+            new IsEqual<>(3L)
+        );
+        MatcherAssert.assertThat(
+            "Type counts map should not contain 'maven-proxy'",
+            result.typeCounts().containsKey("maven-proxy"),
+            new IsEqual<>(false)
+        );
+        MatcherAssert.assertThat(
+            "Type counts map should not contain 'maven-group'",
+            result.typeCounts().containsKey("maven-group"),
+            new IsEqual<>(false)
+        );
+    }
+
+    @Test
     void indexBatchMultipleDocs() throws Exception {
         final List<ArtifactDocument> docs = new ArrayList<>();
         for (int idx = 0; idx < 5; idx++) {
@@ -439,6 +559,80 @@ class DbArtifactIndexTest {
             "Total hits from batch should be 5",
             result.totalHits(),
             new IsEqual<>(5L)
+        );
+    }
+
+    /**
+     * Fix 3: when offset is beyond all results the page is empty, but
+     * totalHits must still reflect the real document count via fallbackCount().
+     * Without Fix 3, totalHits would be 0 on a deep page because COUNT(*) OVER()
+     * returns no rows when the result set is empty.
+     */
+    @Test
+    void searchWithDeepOffsetReturnsCorrectTotal() throws Exception {
+        for (int idx = 0; idx < 3; idx++) {
+            this.index.index(new ArtifactDocument(
+                "pypi", "pypi-repo", "deep-item-" + idx, "deep-item-" + idx,
+                "1.0." + idx, 100L, Instant.now(), "user"
+            )).join();
+        }
+        // offset=100 is well beyond all 3 results — page must be empty
+        final SearchResult result = this.index.search(
+            "deep-item", 10, 100, null, null, "relevance", true
+        ).join();
+        MatcherAssert.assertThat(
+            "Items must be empty on a deep page",
+            result.documents().isEmpty(),
+            new IsEqual<>(true)
+        );
+        MatcherAssert.assertThat(
+            "Total hits must equal 3 (not 0) via fallbackCount",
+            result.totalHits(),
+            new IsEqual<>(3L)
+        );
+    }
+
+    /**
+     * Fix 5: when allowedRepos is provided the SQL adds AND repo_name = ANY(?)
+     * so only results from permitted repos are returned.
+     */
+    @Test
+    void searchWithAllowedReposFiltersResults() throws Exception {
+        this.index.index(new ArtifactDocument(
+            "pypi", "pypi-proxy", "requests", "requests",
+            "2.31.0", 500L, Instant.now(), "user"
+        )).join();
+        this.index.index(new ArtifactDocument(
+            "maven", "maven-proxy", "requests", "requests",
+            "1.0.0", 200L, Instant.now(), "user"
+        )).join();
+        // Search without filter — should return both
+        final SearchResult all = this.index.search(
+            "requests", 10, 0, null, null, "relevance", true, null
+        ).join();
+        MatcherAssert.assertThat(
+            "Unfiltered search should find both repos",
+            all.totalHits(),
+            new IsEqual<>(2L)
+        );
+        // Search with allowedRepos restricted to pypi-proxy — should exclude maven-proxy
+        final SearchResult filtered = this.index.search(
+            "requests", 10, 0, null, null, "relevance", true, List.of("pypi-proxy")
+        ).join();
+        MatcherAssert.assertThat(
+            "allowedRepos filter must return only 1 result",
+            filtered.documents().size(),
+            new IsEqual<>(1)
+        );
+        MatcherAssert.assertThat(
+            "Allowed result must be from pypi-proxy",
+            filtered.documents().get(0).repoName(),
+            new IsEqual<>("pypi-proxy")
+        );
+        MatcherAssert.assertThat(
+            "Total hits with allowedRepos must be 1",
+            filtered.totalHits(),
+            new IsEqual<>(1L)
         );
     }
 }

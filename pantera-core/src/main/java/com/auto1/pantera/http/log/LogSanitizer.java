@@ -60,10 +60,14 @@ public final class LogSanitizer {
     );
 
     /**
-     * Pattern for API keys in URLs.
+     * Pattern for credentials embedded in URL query strings or fragments.
+     * Covers the common parameter names that show up in OAuth flows,
+     * webhook signing, and badly-designed APIs that put secrets in the URL.
      */
     private static final Pattern URL_API_KEY_PATTERN = Pattern.compile(
-        "([?&](?:api[_-]?key|token|access[_-]?token|auth[_-]?token)=)[^&\\s]+",
+        "([?&#](?:api[_-]?key|token|access[_-]?token|auth[_-]?token"
+            + "|password|passwd|pwd|secret|client[_-]?secret|private[_-]?key"
+            + "|signature|sig|sas|refresh[_-]?token|id[_-]?token)=)[^&\\s#]+",
         Pattern.CASE_INSENSITIVE
     );
 

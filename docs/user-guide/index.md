@@ -56,8 +56,11 @@ Step-by-step instructions for configuring your client and working with each pack
 
 All package manager clients authenticate using **HTTP Basic Auth** where the password is a JWT token. The workflow is:
 
-1. Obtain a JWT token via the API: `POST /api/v1/auth/token`
-2. Use your username and the JWT token as credentials in your client configuration.
+1. Obtain an access token: `POST /api/v1/auth/token` (returns `token` + `refresh_token`)
+2. For persistent client configurations (Maven, npm, pip, Docker), use a **long-lived API token**: `POST /api/v1/auth/token/generate`
+3. Use your username and the token as credentials in your client configuration.
+
+> **v2.1 change:** All tokens are now RS256-signed. Access tokens expire after 1 hour (previously 24 hours). Use API tokens for CI/CD pipelines and tool configurations.
 
 See [Getting Started](getting-started.md) for detailed instructions.
 

@@ -37,6 +37,14 @@ public interface PackageInfo {
     String summary();
 
     /**
+     * Python version requirement from Requires-Python header.
+     * @return Requires-Python value, or empty string if not specified
+     */
+    default String requiresPython() {
+        return "";
+    }
+
+    /**
      * Implementation of {@link PackageInfo} that parses python metadata PKG-INFO file to obtain
      * required information. For more details see
      * <a href="https://www.python.org/dev/peps/pep-0314/">PEP-314</a>.
@@ -70,6 +78,15 @@ public interface PackageInfo {
         @Override
         public String summary() {
             return this.read("Summary");
+        }
+
+        @Override
+        public String requiresPython() {
+            final String name = "Requires-Python:";
+            return Stream.of(this.input.split("\n"))
+                .filter(line -> line.startsWith(name)).findFirst()
+                .map(line -> line.replace(name, "").trim())
+                .orElse("");
         }
 
         /**

@@ -17,14 +17,23 @@ import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
+import com.auto1.pantera.index.DbArtifactIndex;
+import com.auto1.pantera.index.SearchQueryParser;
+import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
 import com.auto1.pantera.security.perms.AdapterBasicPermission;
+import com.auto1.pantera.security.perms.FreePermissions;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
+import java.security.Permission;
 import java.security.PermissionCollection;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import org.eclipse.jetty.http.HttpStatus;
 
 /**
@@ -43,11 +52,11 @@ import org.eclipse.jetty.http.HttpStatus;
 public final class SearchHandler {
 
     /**
-     * Maximum page number allowed for search pagination.
-     * Configurable via PANTERA_SEARCH_MAX_PAGE env var or settings API.
+     * Maximum effective offset (page * size) allowed for search pagination.
+     * Fix 4: replaces MAX_PAGE with MAX_OFFSET = 10_000.
      * Deep pagination with OFFSET is O(n) in PostgreSQL — capping prevents abuse.
      */
-    private static final int MAX_PAGE = ConfigDefaults.getInt("PANTERA_SEARCH_MAX_PAGE", 500);
+    private static final int MAX_OFFSET = 10_000;
 
     /**
      * Maximum results per page.
@@ -60,14 +69,10 @@ public final class SearchHandler {
     private static final int DEFAULT_SIZE = 20;
 
     /**
-     * Over-fetch multiplier for permission-filtered search. The DB query fetches
-     * {@code size * OVERFETCH_MULTIPLIER} rows so that after dropping rows the user
-     * has no access to, the requested page size can still be filled.
-     * Without this, a user with access to only one repo may see zero results when
-     * the top-ranked rows all belong to repos they cannot read.
+     * Allowed sort field values. Unknown values are treated as "relevance".
      */
-    private static final int OVERFETCH_MULTIPLIER =
-        ConfigDefaults.getInt("PANTERA_SEARCH_OVERFETCH", 10);
+    private static final Set<String> VALID_SORT_FIELDS =
+        Set.of("relevance", "name", "version", "created_at");
 
     /**
      * Artifact index.
@@ -114,11 +119,21 @@ public final class SearchHandler {
     }
 
     /**
-     * Paginated full-text search handler.
-     * Over-fetches from the index to compensate for post-query permission
-     * filtering. Without over-fetching, users with access to a small subset
-     * of repos may see empty results when the top-ranked rows all belong to
-     * repos they cannot read.
+     * Paginated full-text search handler with optional filtering and sorting.
+     * Fix 4: rejects with 400 when page * size exceeds MAX_OFFSET.
+     * Fix 5: resolves allowed repo names from policy and passes to index for SQL-level filter.
+     *
+     * <p>Query parameters:</p>
+     * <ul>
+     *   <li>{@code q} — search query (required)</li>
+     *   <li>{@code page} — page number, 0-indexed (default: 0)</li>
+     *   <li>{@code size} — results per page (default: 20, max: 100)</li>
+     *   <li>{@code type} — filter by repo type base, e.g. "maven" (matches maven, maven-proxy, maven-group)</li>
+     *   <li>{@code repo} — filter by exact repository name</li>
+     *   <li>{@code sort} — sort field: relevance|name|version|created_at (default: relevance)</li>
+     *   <li>{@code sort_dir} — sort direction: asc|desc (default: asc)</li>
+     * </ul>
+     *
      * @param ctx Routing context
      */
     private void search(final RoutingContext ctx) {
@@ -133,17 +148,77 @@ public final class SearchHandler {
                     .encode());
             return;
         }
-        final int page = Math.min(SearchHandler.intParam(ctx, "page", 0), MAX_PAGE);
+        final int page = Math.max(0, SearchHandler.intParam(ctx, "page", 0));
         final int size = Math.min(SearchHandler.intParam(ctx, "size", DEFAULT_SIZE), MAX_SIZE);
+        // Fix 4: reject deep pagination that would exceed MAX_OFFSET
+        final int dbOffset = page * size;
+        if (dbOffset > MAX_OFFSET) {
+            ctx.response()
+                .setStatusCode(HttpStatus.BAD_REQUEST_400)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject()
+                    .put("code", HttpStatus.BAD_REQUEST_400)
+                    .put("message",
+                        "Pagination offset exceeds maximum allowed (" + MAX_OFFSET + ")")
+                    .encode());
+            return;
+        }
+        // Parse structured query syntax: name:, version:, repo:, type:, AND/OR
+        final SearchQueryParser.SearchQuery parsed = SearchQueryParser.parse(query);
+        // Resolve effective type/repo: query field:value overrides URL params
+        final String queryRepoType = firstFilterValue(parsed, "type");
+        final String queryRepoName = firstFilterValue(parsed, "repo");
+        final String repoType = queryRepoType != null
+            ? queryRepoType : ctx.queryParams().get("type");
+        final String repoName = queryRepoName != null
+            ? queryRepoName : ctx.queryParams().get("repo");
+        // Field filters remaining after repo/type extraction (name, version)
+        final List<FieldFilter> fieldFilters = parsed.filters().stream()
+            .filter(f -> !"repo".equals(f.field()) && !"type".equals(f.field()))
+            .toList();
+        // Validate sortBy against allowlist — unknown values fall back to relevance
+        final String rawSort = ctx.queryParams().get("sort");
+        final String sortBy = rawSort != null && VALID_SORT_FIELDS.contains(rawSort.toLowerCase())
+            ? rawSort.toLowerCase() : null;
+        final boolean sortAsc = !"desc".equalsIgnoreCase(ctx.queryParams().get("sort_dir"));
         final PermissionCollection perms = this.policy.getPermissions(
             new AuthUser(
                 ctx.user().principal().getString(AuthTokenRest.SUB),
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        final int fetchSize = size * OVERFETCH_MULTIPLIER;
-        final int skip = page * size;
-        this.index.search(query, fetchSize, 0).whenComplete((result, error) -> {
+        // Fix 5: resolve allowed repos for SQL-level filtering.
+        // FreePermissions (admin/wildcard) gets null → no restriction in SQL.
+        // Otherwise enumerate AdapterBasicPermission read entries.
+        final List<String> allowedRepos = resolveAllowedRepos(perms);
+        // Fix 1: map sort string to SortField enum for index
+        final DbArtifactIndex.SortField sortField = DbArtifactIndex.toSortField(sortBy);
+        // Effective FTS query: bare terms only (field values are handled as filters).
+        // When blank (pure field-filter query like "name:pydantic"), DbArtifactIndex
+        // switches to the filter-only LIKE path automatically.
+        final String ftsQuery = parsed.ftsQuery();
+        // Fix 5: use the permission-filtered search method directly (no overfetch needed)
+        final java.util.concurrent.CompletableFuture<com.auto1.pantera.index.SearchResult> future;
+        if (this.index instanceof DbArtifactIndex) {
+            if (fieldFilters.isEmpty() && parsed.ftsQuery().equals(query)) {
+                // No structured syntax used — fast path (backward compat)
+                future = ((DbArtifactIndex) this.index).search(
+                    query, size, dbOffset, repoType, repoName,
+                    sortField.name().toLowerCase(), sortAsc, allowedRepos
+                );
+            } else {
+                future = ((DbArtifactIndex) this.index).search(
+                    ftsQuery, size, dbOffset, repoType, repoName,
+                    sortField.name().toLowerCase(), sortAsc, allowedRepos, fieldFilters
+                );
+            }
+        } else {
+            future = this.index.search(
+                query, size, dbOffset, repoType, repoName,
+                sortField.name().toLowerCase(), sortAsc
+            );
+        }
+        future.whenComplete((result, error) -> {
             if (error != null) {
                 ctx.response()
                     .setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR_500)
@@ -152,51 +227,93 @@ public final class SearchHandler {
                         .put("code", HttpStatus.INTERNAL_SERVER_ERROR_500)
                         .put("message", error.getMessage())
                         .encode());
-            } else {
-                final java.util.List<JsonObject> allowed = new java.util.ArrayList<>();
-                result.documents().forEach(doc -> {
-                    if (!perms.implies(
-                        new AdapterBasicPermission(doc.repoName(), "read"))) {
-                        return;
-                    }
-                    final JsonObject obj = new JsonObject()
-                        .put("repo_type", doc.repoType())
-                        .put("repo_name", doc.repoName())
-                        .put("artifact_path", doc.artifactPath());
-                    if (doc.artifactName() != null) {
-                        obj.put("artifact_name", doc.artifactName());
-                    }
-                    if (doc.version() != null) {
-                        obj.put("version", doc.version());
-                    }
-                    obj.put("size", doc.size());
-                    if (doc.createdAt() != null) {
-                        obj.put("created_at", doc.createdAt().toString());
-                    }
-                    if (doc.owner() != null) {
-                        obj.put("owner", doc.owner());
-                    }
-                    allowed.add(obj);
-                });
-                final int total = allowed.size();
-                final boolean hasMore = total > skip + size;
-                final JsonArray items = new JsonArray();
-                allowed.stream()
-                    .skip(skip)
-                    .limit(size)
-                    .forEach(items::add);
-                ctx.response()
-                    .setStatusCode(HttpStatus.OK_200)
-                    .putHeader("Content-Type", "application/json")
-                    .end(new JsonObject()
-                        .put("items", items)
-                        .put("page", page)
-                        .put("size", size)
-                        .put("total", total)
-                        .put("hasMore", hasMore)
-                        .encode());
+                return;
             }
+            // Fix 5: no client-side permission filtering needed — SQL already filtered.
+            // If index is not DbArtifactIndex, fall back to client-side filtering.
+            final JsonArray items = new JsonArray();
+            for (final var doc : result.documents()) {
+                if (!(this.index instanceof DbArtifactIndex)) {
+                    if (!perms.implies(new AdapterBasicPermission(doc.repoName(), "read"))) {
+                        continue;
+                    }
+                }
+                final JsonObject obj = new JsonObject()
+                    .put("repo_type", doc.repoType())
+                    .put("repo_name", doc.repoName())
+                    .put("artifact_path", doc.artifactPath());
+                if (doc.artifactName() != null) {
+                    obj.put("artifact_name", doc.artifactName());
+                }
+                if (doc.version() != null) {
+                    obj.put("version", doc.version());
+                }
+                obj.put("size", doc.size());
+                if (doc.createdAt() != null) {
+                    obj.put("created_at", doc.createdAt().toString());
+                }
+                if (doc.owner() != null) {
+                    obj.put("owner", doc.owner());
+                }
+                items.add(obj);
+            }
+            final long total = result.totalHits();
+            final boolean hasMore = dbOffset + size < total;
+            final JsonObject typeCountsJson = new JsonObject();
+            result.typeCounts().entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                .forEach(e -> typeCountsJson.put(e.getKey(), e.getValue()));
+            final JsonObject repoCountsJson = new JsonObject();
+            result.repoCounts().entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
+                .forEach(e -> repoCountsJson.put(e.getKey(), e.getValue()));
+            ctx.response()
+                .setStatusCode(HttpStatus.OK_200)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject()
+                    .put("items", items)
+                    .put("type_counts", typeCountsJson)
+                    .put("repo_counts", repoCountsJson)
+                    .put("page", page)
+                    .put("size", size)
+                    .put("total", total)
+                    .put("hasMore", hasMore)
+                    .encode());
         });
+    }
+
+    /**
+     * Resolve the list of allowed repository names for the given permission collection.
+     * Fix 5: returns null when the user has unrestricted access (FreePermissions or wildcard *),
+     * signalling the index to skip the SQL repo_name filter entirely.
+     *
+     * @param perms User's permission collection
+     * @return List of allowed repo names, or null if no restriction
+     */
+    private static List<String> resolveAllowedRepos(final PermissionCollection perms) {
+        // FreePermissions implies everything — no restriction
+        if (perms instanceof FreePermissions) {
+            return null;
+        }
+        final List<String> repos = new ArrayList<>();
+        final Enumeration<Permission> elements = perms.elements();
+        while (elements.hasMoreElements()) {
+            final Permission perm = elements.nextElement();
+            if (perm instanceof AdapterBasicPermission) {
+                final String name = perm.getName();
+                if ("*".equals(name)) {
+                    // Wildcard — unrestricted access
+                    return null;
+                }
+                // Include repos the user can read
+                if (perm.implies(new AdapterBasicPermission(name, "read"))) {
+                    repos.add(name);
+                }
+            }
+        }
+        // If no AdapterBasicPermission entries were found, fall through to unrestricted
+        // (other permission types like API permissions don't restrict repo access)
+        return repos.isEmpty() ? null : repos;
     }
 
     /**
@@ -299,6 +416,23 @@ public final class SearchHandler {
                     .end(json.encode());
             }
         });
+    }
+
+    /**
+     * Return the first value for a given field name from a parsed query, or null if absent.
+     *
+     * @param parsed Parsed search query
+     * @param field Field name to look up
+     * @return First value string, or null
+     */
+    private static String firstFilterValue(
+        final SearchQueryParser.SearchQuery parsed, final String field
+    ) {
+        return parsed.filters().stream()
+            .filter(f -> field.equals(f.field()))
+            .findFirst()
+            .map(f -> f.values().isEmpty() ? null : f.values().get(0))
+            .orElse(null);
     }
 
     /**

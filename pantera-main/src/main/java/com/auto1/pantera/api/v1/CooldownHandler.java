@@ -22,6 +22,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.DbBlockRecord;
 import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
@@ -273,7 +274,7 @@ public final class CooldownHandler {
             )
         );
         ctx.vertx().<List<JsonObject>>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final Collection<String> all = this.crs.listAll();
                 final List<JsonObject> result = new ArrayList<>(all.size());
                 for (final String name : all) {
@@ -329,7 +330,7 @@ public final class CooldownHandler {
                     }
                 }
                 return result;
-            },
+            }),
             false
         ).onSuccess(
             repos -> {
@@ -399,7 +400,7 @@ public final class CooldownHandler {
             )
         );
         ctx.vertx().<JsonObject>executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 final List<DbBlockRecord> allBlocks =
                     this.repository.findAllActivePaginated(
                         0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
@@ -442,7 +443,7 @@ public final class CooldownHandler {
                             new AdapterBasicPermission(r.repoName(), "read")))
                         .count();
                 return ApiResponse.paginated(items, page, size, filteredTotal);
-            },
+            }),
             false
         ).onSuccess(
             result -> ctx.response()

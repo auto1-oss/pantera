@@ -35,7 +35,8 @@ Any value in `pantera.yml` can reference environment variables using `${VAR}` sy
 ```yaml
 meta:
   jwt:
-    secret: ${JWT_SECRET}
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
   artifacts_database:
     postgres_password: ${POSTGRES_PASSWORD}
 ```
@@ -105,17 +106,20 @@ Role and permission files are stored inside this storage path. See [Authorizatio
 
 ## meta.jwt
 
-JWT token configuration for API authentication.
+JWT token configuration for RS256 asymmetric signing. The private key signs tokens; the public key verifies them.
+
+> **Breaking change (v2.1.0+):** `meta.jwt.secret` (HS256) has been removed. Replace it with `private-key-path` and `public-key-path`. See [Authentication](authentication.md#jwt-token-configuration) for key generation instructions.
 
 ```yaml
 meta:
   jwt:
-    expires: true              # Set to false for permanent tokens
-    expiry-seconds: 86400      # Token lifetime (default: 24 hours)
-    secret: ${JWT_SECRET}      # HMAC-SHA256 signing key
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}   # Path to RSA private key PEM file
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}      # Path to RSA public key PEM file
+    access-token-expiry-seconds: 3600            # Access token TTL (default: 1 hour)
+    refresh-token-expiry-seconds: 604800         # Refresh token TTL (default: 7 days)
 ```
 
-The secret must be the same across all nodes in an HA deployment. Tokens are signed with HMAC-SHA256.
+In HA deployments, all nodes must reference the same key pair (mount the PEM files from shared storage or a secrets manager). The public key alone is sufficient for verification -- nodes that only verify tokens (no token issuance) need only `public-key-path`.
 
 ---
 
@@ -326,9 +330,10 @@ meta:
     path: /var/pantera/repo
 
   jwt:
-    secret: ${JWT_SECRET}
-    expires: true
-    expiry-seconds: 86400
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
 
   credentials:
     - type: keycloak

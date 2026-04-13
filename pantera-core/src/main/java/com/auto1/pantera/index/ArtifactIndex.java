@@ -52,6 +52,27 @@ public interface ArtifactIndex extends Closeable {
     CompletableFuture<SearchResult> search(String query, int maxResults, int offset);
 
     /**
+     * Full-text search with optional server-side filtering and sorting.
+     * Implementations that support filtering/sorting should override this.
+     * The default falls back to the basic search.
+     *
+     * @param query Search query string
+     * @param maxResults Maximum results to return
+     * @param offset Starting offset for pagination
+     * @param repoType Optional repo type base (e.g. "maven" matches maven, maven-proxy, maven-group)
+     * @param repoName Optional exact repository name filter
+     * @param sortBy Sort field: "relevance", "name", "version", "created_at"
+     * @param sortAsc True for ascending, false for descending
+     * @return Search result with matching documents
+     */
+    default CompletableFuture<SearchResult> search(
+        String query, int maxResults, int offset,
+        String repoType, String repoName, String sortBy, boolean sortAsc
+    ) {
+        return search(query, maxResults, offset);
+    }
+
+    /**
      * Locate which repositories contain a given artifact path.
      * Uses path_prefix matching — slower, used as fallback.
      *

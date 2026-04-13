@@ -2,9 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   getSettings, updatePrefixes, updateSettingsSection,
-  getCooldownConfig, updateCooldownConfig, toggleAuthProvider,
-  updateAuthProviderConfig,
+  getCooldownConfig, updateCooldownConfig,
 } from '@/api/settings'
+import { getAuthSettings, updateAuthSettings } from '@/api/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -15,10 +15,6 @@ import InputNumber from 'primevue/inputnumber'
 import InputSwitch from 'primevue/inputswitch'
 import AutoComplete from 'primevue/autocomplete'
 import Tag from 'primevue/tag'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Dialog from 'primevue/dialog'
-import Textarea from 'primevue/textarea'
 import type { Settings, CooldownConfig } from '@/types'
 
 const config = useConfigStore()
@@ -41,6 +37,12 @@ const httpAcquireTimeout = ref(30000)
 const httpMaxConns = ref(64)
 const httpMaxQueued = ref(256)
 const httpServerTimeout = ref('PT2M')
+
+// Auth policy
+const authAccessTtl = ref(3600)
+const authRefreshTtl = ref(604800)
+const authApiMaxTtl = ref(7776000)
+const authAllowPermanent = ref(true)
 
 // Cooldown config
 const cooldownConfig = ref<CooldownConfig | null>(null)
@@ -69,6 +71,7 @@ function searchProxyTypes(event: { query: string }) {
 
 // External links
 const grafanaUrl = ref('')
+const registryUrl = ref('')
 
 onMounted(async () => {
   try {
@@ -79,6 +82,7 @@ onMounted(async () => {
     settings.value = s
     prefixes.value = (s.prefixes ?? []).join(', ')
     grafanaUrl.value = s.ui?.grafana_url ?? config.grafanaUrl
+    registryUrl.value = s.ui?.registry_url ?? config.registryUrl
     if (s.jwt) {
       jwtExpires.value = s.jwt.expires
       jwtExpirySeconds.value = s.jwt.expiry_seconds
@@ -100,6 +104,12 @@ onMounted(async () => {
       cooldownEnabled.value = cd.enabled
       cooldownAge.value = cd.minimum_allowed_age
     }
+    getAuthSettings().then(s => {
+      authAccessTtl.value = parseInt(s.access_token_ttl_seconds ?? '3600')
+      authRefreshTtl.value = parseInt(s.refresh_token_ttl_seconds ?? '604800')
+      authApiMaxTtl.value = parseInt(s.api_token_max_ttl_seconds ?? '7776000')
+      authAllowPermanent.value = s.api_token_allow_permanent === 'true'
+    }).catch(() => {})
   } catch {
     notify.error('Failed to load settings')
   } finally {
@@ -159,6 +169,23 @@ function saveJwt() {
   })
 }
 
+async function saveAuthSettings() {
+  saving.value = 'auth'
+  try {
+    await updateAuthSettings({
+      access_token_ttl_seconds: String(authAccessTtl.value),
+      refresh_token_ttl_seconds: String(authRefreshTtl.value),
+      api_token_max_ttl_seconds: String(authApiMaxTtl.value),
+      api_token_allow_permanent: String(authAllowPermanent.value),
+    })
+    notify.success('Authentication settings saved')
+  } catch {
+    notify.error('Failed to save authentication settings')
+  } finally {
+    saving.value = null
+  }
+}
+
 function saveHttpClient() {
   saveSection('http_client', {
     proxy_timeout: httpProxyTimeout.value,
@@ -175,16 +202,6 @@ function saveHttpServer() {
   saveSection('http_server', {
     request_timeout: httpServerTimeout.value,
   })
-}
-
-async function handleToggleProvider(prov: { id: number; enabled: boolean }) {
-  try {
-    await toggleAuthProvider(prov.id, !prov.enabled)
-    prov.enabled = !prov.enabled
-    notify.success(`Provider ${prov.enabled ? 'enabled' : 'disabled'}`)
-  } catch {
-    notify.error('Failed to toggle provider')
-  }
 }
 
 async function saveCooldown() {
@@ -265,82 +282,15 @@ function addRepoType() {
 
 async function saveExternalLinks() {
   try {
-    await updateSettingsSection('ui', { grafana_url: grafanaUrl.value })
+    await updateSettingsSection('ui', { grafana_url: grafanaUrl.value, registry_url: registryUrl.value })
     config.grafanaUrl = grafanaUrl.value
+    config.registryUrl = registryUrl.value
     notify.success('External links updated')
   } catch {
     notify.error('Failed to save external links')
   }
 }
 
-const SENSITIVE_KEYS = ['secret', 'password', 'token', 'key', 'credential']
-function isSensitiveKey(key: string): boolean {
-  const lower = key.toLowerCase()
-  return SENSITIVE_KEYS.some(s => lower.includes(s))
-}
-function formatConfigVal(val: unknown): string {
-  if (val === null || val === undefined) return '—'
-  if (typeof val === 'object') return JSON.stringify(val)
-  return String(val)
-}
-
-// Auth provider editing
-const editingProvider = ref<{ id: number; type: string; config: Record<string, unknown> } | null>(null)
-const editProviderVisible = ref(false)
-const editProviderFields = ref<{ key: string; value: string }[]>([])
-const editProviderAdvanced = ref(false)
-const editProviderJson = ref('')
-const savingProvider = ref(false)
-
-function openEditProvider(prov: { id: number; type: string; config?: Record<string, unknown> }) {
-  editingProvider.value = { id: prov.id, type: prov.type, config: prov.config ?? {} }
-  const cfg = prov.config ?? {}
-  editProviderFields.value = Object.entries(cfg).map(([key, value]) => ({
-    key,
-    value: typeof value === 'object' ? JSON.stringify(value) : String(value ?? ''),
-  }))
-  editProviderJson.value = JSON.stringify(cfg, null, 2)
-  editProviderAdvanced.value = false
-  editProviderVisible.value = true
-}
-
-function addProviderField() {
-  editProviderFields.value.push({ key: '', value: '' })
-}
-
-function removeProviderField(index: number) {
-  editProviderFields.value.splice(index, 1)
-}
-
-async function saveProviderConfig() {
-  if (!editingProvider.value) return
-  savingProvider.value = true
-  try {
-    let cfg: Record<string, unknown>
-    if (editProviderAdvanced.value) {
-      cfg = JSON.parse(editProviderJson.value)
-    } else {
-      cfg = {}
-      for (const f of editProviderFields.value) {
-        if (f.key) {
-          try { cfg[f.key] = JSON.parse(f.value) } catch { cfg[f.key] = f.value }
-        }
-      }
-    }
-    await updateAuthProviderConfig(editingProvider.value.id, cfg)
-    // Update local state
-    if (settings.value?.credentials) {
-      const p = (settings.value.credentials as any[]).find((c: any) => c.id === editingProvider.value!.id)
-      if (p) p.config = cfg
-    }
-    notify.success('Provider config updated')
-    editProviderVisible.value = false
-  } catch (e: unknown) {
-    notify.error('Failed to update provider config', e instanceof Error ? e.message : '')
-  } finally {
-    savingProvider.value = false
-  }
-}
 </script>
 
 <template>
@@ -419,115 +369,40 @@ async function saveProviderConfig() {
         </template>
       </Card>
 
-      <!-- Authentication Providers -->
-      <Card v-if="settings?.credentials" class="shadow-sm">
-        <template #title>Authentication Providers</template>
+      <!-- Authentication Policy -->
+      <Card class="shadow-sm">
+        <template #title>Authentication Policy</template>
         <template #content>
-          <div
-            v-if="settings.credentials.length === 0"
-            class="text-gray-400 text-sm"
-          >
-            No authentication providers configured
-          </div>
-          <DataTable v-else :value="settings.credentials" stripedRows class="text-sm">
-            <Column field="type" header="Type" style="width: 150px">
-              <template #body="{ data }">
-                <span class="font-mono text-xs font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{{ data.type }}</span>
-              </template>
-            </Column>
-            <Column field="priority" header="Priority" style="width: 70px; text-align: center" />
-            <Column field="enabled" header="Status" style="width: 80px">
-              <template #body="{ data }">
-                <InputSwitch
-                  :modelValue="data.enabled"
-                  @update:modelValue="handleToggleProvider(data)"
-                />
-              </template>
-            </Column>
-            <Column header="Configuration">
-              <template #body="{ data }">
-                <div v-if="data.config && Object.keys(data.config).length > 0" class="flex flex-wrap gap-x-6 gap-y-1">
-                  <div
-                    v-for="(val, key) in data.config"
-                    :key="key"
-                    class="flex items-center gap-1.5 text-xs"
-                  >
-                    <span class="text-gray-500 font-mono">{{ key }}:</span>
-                    <span class="text-gray-300 font-mono">{{ isSensitiveKey(String(key)) ? '••••••••' : formatConfigVal(val) }}</span>
-                  </div>
-                </div>
-                <span v-else class="text-gray-500 text-xs">—</span>
-              </template>
-            </Column>
-            <Column header="" style="width: 50px">
-              <template #body="{ data }">
-                <Button
-                  icon="pi pi-pencil"
-                  text
-                  size="small"
-                  @click="openEditProvider(data)"
-                />
-              </template>
-            </Column>
-          </DataTable>
-          <p class="text-xs text-gray-400 mt-3">
-            Toggle the switch to enable/disable providers. Click the edit button to modify config.
-            Secret values are masked in the table but editable in the dialog.
-          </p>
-
-          <!-- Edit Provider Dialog -->
-          <Dialog v-model:visible="editProviderVisible" :header="`Edit ${editingProvider?.type ?? ''} Configuration`" modal class="w-[600px]">
-            <div class="space-y-4">
-              <div class="flex items-center gap-2 mb-3">
-                <input type="checkbox" id="provAdvMode" v-model="editProviderAdvanced" class="cursor-pointer" />
-                <label for="provAdvMode" class="text-sm text-gray-500 cursor-pointer">Advanced mode (raw JSON)</label>
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Access Token TTL (seconds)</label>
+                <InputNumber v-model="authAccessTtl" :min="60" :max="86400" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 3600 (1 hour)</span>
               </div>
-
-              <!-- Advanced JSON mode -->
-              <div v-if="editProviderAdvanced">
-                <Textarea v-model="editProviderJson" rows="10" class="w-full font-mono text-sm" />
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Refresh Token TTL (seconds)</label>
+                <InputNumber v-model="authRefreshTtl" :min="3600" :max="2592000" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 604800 (7 days)</span>
               </div>
-
-              <!-- Form-based editing -->
-              <div v-else class="space-y-2">
-                <div
-                  v-for="(field, idx) in editProviderFields"
-                  :key="idx"
-                  class="flex items-center gap-2"
-                >
-                  <InputText
-                    v-model="field.key"
-                    placeholder="Key"
-                    class="w-40 text-sm font-mono"
-                  />
-                  <InputText
-                    v-model="field.value"
-                    placeholder="Value"
-                    class="flex-1 text-sm"
-                    :type="field.key.toLowerCase().includes('secret') || field.key.toLowerCase().includes('password') ? 'password' : 'text'"
-                  />
-                  <Button
-                    icon="pi pi-trash"
-                    text
-                    size="small"
-                    severity="danger"
-                    @click="removeProviderField(idx)"
-                  />
-                </div>
-                <Button
-                  label="Add Field"
-                  icon="pi pi-plus"
-                  text
-                  size="small"
-                  @click="addProviderField"
-                />
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">API Token Max TTL (seconds)</label>
+                <InputNumber v-model="authApiMaxTtl" :min="86400" :max="31536000" class="w-full" />
+                <span class="text-xs text-gray-400">Default: 7776000 (90 days)</span>
               </div>
             </div>
-            <template #footer>
-              <Button label="Cancel" severity="secondary" text @click="editProviderVisible = false" />
-              <Button label="Save" icon="pi pi-save" :loading="savingProvider" @click="saveProviderConfig" />
-            </template>
-          </Dialog>
+            <div class="flex items-center gap-3">
+              <InputSwitch v-model="authAllowPermanent" />
+              <span class="text-sm">Allow permanent API tokens (no expiry)</span>
+            </div>
+            <Button
+              label="Save Auth Settings"
+              icon="pi pi-save"
+              size="small"
+              :loading="saving === 'auth'"
+              @click="saveAuthSettings"
+            />
+          </div>
         </template>
       </Card>
 
@@ -729,6 +604,10 @@ async function saveProviderConfig() {
             <div>
               <label class="text-sm text-gray-500 block mb-1">Grafana URL</label>
               <InputText v-model="grafanaUrl" class="w-full" placeholder="https://grafana.example.com" />
+            </div>
+            <div>
+              <label class="text-sm text-gray-500 block mb-1">Registry URL</label>
+              <InputText v-model="registryUrl" class="w-full" placeholder="https://pantera.example.com" />
             </div>
             <div>
               <span class="text-sm text-gray-500">Health Endpoint:</span>

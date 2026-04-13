@@ -123,4 +123,22 @@ public final class SearchHandlerTest extends AsyncApiTestBase {
             res -> Assertions.assertEquals(200, res.statusCode())
         );
     }
+
+    @Test
+    void rejectsExcessiveOffset(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        // page=600, size=100 → offset = 60000 which exceeds MAX_OFFSET (10000)
+        this.request(
+            vertx, ctx,
+            HttpMethod.GET, "/api/v1/search?q=test&page=600&size=100",
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject body = res.bodyAsJsonObject();
+                Assertions.assertTrue(
+                    body.getString("message").contains("10000"),
+                    "Error message should mention the max offset limit"
+                );
+            }
+        );
+    }
 }

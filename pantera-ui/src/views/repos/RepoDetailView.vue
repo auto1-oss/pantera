@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getRepo, getTree, getArtifactDetail, deleteArtifacts } from '@/api/repos'
 import { getApiClient } from '@/api/client'
+import { yankVersion, unyankVersion } from '@/api/pypi'
 import { useNotificationStore } from '@/stores/notifications'
 import { useAuthStore } from '@/stores/auth'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
@@ -12,6 +13,7 @@ import Tag from 'primevue/tag'
 import Button from 'primevue/button'
 import Breadcrumb from 'primevue/breadcrumb'
 import Dialog from 'primevue/dialog'
+import Textarea from 'primevue/textarea'
 import Message from 'primevue/message'
 import type { TreeEntry, ArtifactDetail } from '@/types'
 
@@ -20,6 +22,57 @@ const route = useRoute()
 const notify = useNotificationStore()
 const auth = useAuthStore()
 const canDelete = computed(() => auth.user?.can_delete_artifacts === true || auth.hasAction('api_repository_permissions', 'delete'))
+
+// PyPI yank/unyank
+const isPypi = computed(() => repoType.value === 'pypi' || repoType.value === 'pypi-proxy' || repoType.value === 'pypi-group')
+const yankDialogVisible = ref(false)
+const yankTarget = ref<{ pkg: string; version: string } | null>(null)
+const yankReason = ref('')
+const yankLoading = ref(false)
+
+/** Parse a PyPI tree-entry path /<pkg>/<version>/<file> → { pkg, version } */
+function parsePypiCoords(entryPath: string): { pkg: string; version: string } | null {
+  const parts = entryPath.replace(/^\//, '').split('/')
+  if (parts.length < 2) return null
+  return { pkg: parts[0], version: parts[1] }
+}
+
+function openYankDialog(entry: TreeEntry, event: Event) {
+  event.stopPropagation()
+  const coords = parsePypiCoords(entry.path)
+  if (!coords) return
+  yankTarget.value = coords
+  yankReason.value = ''
+  yankDialogVisible.value = true
+}
+
+async function confirmYank() {
+  if (!yankTarget.value) return
+  yankLoading.value = true
+  try {
+    await yankVersion(props.name, yankTarget.value.pkg, yankTarget.value.version, yankReason.value)
+    notify.success('Version yanked', `${yankTarget.value.pkg} ${yankTarget.value.version}`)
+    yankDialogVisible.value = false
+    await loadTree(currentPath.value)
+  } catch {
+    notify.error('Failed to yank version')
+  } finally {
+    yankLoading.value = false
+  }
+}
+
+async function handleUnyank(entry: TreeEntry, event: Event) {
+  event.stopPropagation()
+  const coords = parsePypiCoords(entry.path)
+  if (!coords) return
+  try {
+    await unyankVersion(props.name, coords.pkg, coords.version)
+    notify.success('Version unyanked', `${coords.pkg} ${coords.version}`)
+    await loadTree(currentPath.value)
+  } catch {
+    notify.error('Failed to unyank version')
+  }
+}
 
 const repoConfig = ref<Record<string, unknown> | null>(null)
 const repoType = computed(() => {
@@ -45,7 +98,7 @@ const sortAsc = ref(true)
 const sortedItems = computed(() => {
   return [...treeItems.value].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-    const cmp = a.name.localeCompare(b.name)
+    const cmp = a.name.localeCompare(b.name, undefined, { numeric: true })
     return sortAsc.value ? cmp : -cmp
   })
 })
@@ -306,6 +359,13 @@ function formatSize(bytes?: number): string {
               <i :class="entry.type === 'directory' ? 'pi pi-folder text-yellow-500' : 'pi pi-file text-gray-400'" />
               <span class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200">{{ entry.name }}</span>
               <span v-if="entry.size" class="text-xs text-gray-400">{{ formatSize(entry.size) }}</span>
+              <!-- PyPI yanked status badge (action buttons are in the artifact detail dialog) -->
+              <Tag
+                v-if="isPypi && entry.type === 'file' && (entry as Record<string, unknown>).yanked"
+                value="Yanked"
+                severity="danger"
+                class="text-xs"
+              />
               <i class="pi pi-chevron-right text-gray-300" />
             </div>
           </div>
@@ -322,6 +382,12 @@ function formatSize(bytes?: number): string {
           <div><strong>Path:</strong> <span class="font-mono text-sm">{{ selectedArtifact.path }}</span></div>
           <div><strong>Size:</strong> {{ selectedArtifact.size > 0 ? formatSize(selectedArtifact.size) : '—' }}</div>
           <div v-if="selectedArtifact.modified"><strong>Modified:</strong> {{ selectedArtifact.modified }}</div>
+          <Tag
+            v-if="isPypi && (selectedArtifact as Record<string, unknown>).yanked"
+            value="Yanked"
+            severity="danger"
+            class="text-xs"
+          />
           <div class="flex gap-2 pt-2">
             <Button
               icon="pi pi-download"
@@ -329,6 +395,23 @@ function formatSize(bytes?: number): string {
               :loading="downloading"
               @click="downloadArtifact(selectedArtifact!.path)"
             />
+            <template v-if="isPypi && parsePypiCoords(selectedArtifact.path)">
+              <Button
+                v-if="(selectedArtifact as Record<string, unknown>).yanked"
+                icon="pi pi-undo"
+                label="Unyank"
+                severity="secondary"
+                @click="handleUnyank(selectedArtifact!, $event); detailVisible = false"
+              />
+              <Button
+                v-else
+                icon="pi pi-ban"
+                label="Yank"
+                severity="secondary"
+                outlined
+                @click="detailVisible = false; openYankDialog(selectedArtifact!, $event)"
+              />
+            </template>
             <Button
               v-if="canDelete"
               icon="pi pi-trash"
@@ -336,6 +419,49 @@ function formatSize(bytes?: number): string {
               severity="danger"
               :loading="deleting"
               @click="handleDeleteArtifact(selectedArtifact!.path)"
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      <!-- PyPI Yank Dialog -->
+      <Dialog
+        v-model:visible="yankDialogVisible"
+        header="Yank Version"
+        modal
+        class="w-full max-w-md"
+      >
+        <div v-if="yankTarget" class="space-y-4">
+          <p class="text-sm text-gray-600 dark:text-gray-400">
+            Yanking
+            <span class="font-mono font-semibold">{{ yankTarget.pkg }} {{ yankTarget.version }}</span>
+            will prevent new installs while keeping existing pinned installs working.
+          </p>
+          <div class="space-y-1">
+            <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Reason <span class="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <Textarea
+              v-model="yankReason"
+              rows="3"
+              class="w-full"
+              placeholder="e.g. Critical bug in this release"
+              auto-resize
+            />
+          </div>
+          <div class="flex justify-end gap-2 pt-2">
+            <Button
+              label="Cancel"
+              severity="secondary"
+              text
+              @click="yankDialogVisible = false"
+            />
+            <Button
+              icon="pi pi-ban"
+              label="Yank"
+              severity="danger"
+              :loading="yankLoading"
+              @click="confirmYank"
             />
           </div>
         </div>

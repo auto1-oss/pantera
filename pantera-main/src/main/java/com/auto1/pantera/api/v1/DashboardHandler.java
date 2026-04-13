@@ -11,7 +11,7 @@
 package com.auto1.pantera.api.v1;
 
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.log.MdcPropagatingCallable;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -190,7 +190,7 @@ public final class DashboardHandler {
     private void respondWithCache(final RoutingContext ctx,
         final java.util.function.Function<CachedDashboard, JsonObject> extractor) {
         ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagatingCallable.wrap(() -> {
+            MdcPropagation.withMdc(() -> {
                 final CachedDashboard current = this.cache.get();
                 final boolean expired = current == null
                     || System.currentTimeMillis() - current.timestamp > CACHE_TTL_MS;

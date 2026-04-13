@@ -30,12 +30,15 @@ import org.slf4j.LoggerFactory;
 /**
  * CLI entry point for the artifact backfill tool.
  *
- * <p>Supports two modes:</p>
+ * <p>Supports three modes:</p>
  * <ul>
  *   <li><b>Single-repo:</b> {@code --type}, {@code --path}, {@code --repo-name}
  *       (original behaviour)</li>
  *   <li><b>Bulk:</b> {@code --config-dir}, {@code --storage-root} — reads all
  *       {@code *.yaml} Pantera repo configs and scans each repo automatically</li>
+ *   <li><b>PyPI metadata:</b> {@code --mode pypi-metadata}, {@code --storage-root},
+ *       {@code --repos} — writes {@code .pypi/metadata} sidecar JSON files for
+ *       existing packages that do not yet have one</li>
  * </ul>
  *
  * @since 1.20.13
@@ -115,7 +118,7 @@ public final class BackfillCli {
      * @param args Command-line arguments
      * @return Exit code
      */
-    @SuppressWarnings("PMD.CyclomaticComplexity")
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
     static int run(final String... args) {
         final Options options = buildOptions();
         for (final String arg : args) {
@@ -131,6 +134,17 @@ public final class BackfillCli {
             LOG.error("Failed to parse arguments: {}", ex.getMessage());
             printHelp(options);
             return 1;
+        }
+        final String mode = cmd.getOptionValue("mode", "");
+        if ("pypi-metadata".equals(mode)) {
+            return runPypiMetadata(
+                cmd.getOptionValue("storage-root"),
+                cmd.getOptionValue("repos"),
+                cmd.hasOption("dry-run")
+            );
+        }
+        if ("version-repair".equals(mode)) {
+            return runVersionRepair(cmd);
         }
         final boolean hasBulkFlags =
             cmd.hasOption("config-dir") || cmd.hasOption("storage-root");
@@ -249,6 +263,109 @@ public final class BackfillCli {
         } finally {
             closeDataSource(dataSource);
         }
+    }
+
+    /**
+     * Run version-repair mode: update rows whose version is UNKNOWN by
+     * inferring the version from the artifact name column.
+     *
+     * @param cmd Parsed CLI arguments
+     * @return Exit code
+     */
+    private static int runVersionRepair(final CommandLine cmd) {
+        final String dbUrl = cmd.getOptionValue("db-url");
+        final boolean dryRun = cmd.hasOption("dry-run");
+        if (dbUrl == null || dbUrl.isEmpty()) {
+            LOG.error("--db-url is required for --mode version-repair "
+                + "(reads rows even in --dry-run mode)");
+            return 1;
+        }
+        final String table = cmd.getOptionValue("table", "artifacts");
+        final String filterRepoType = cmd.getOptionValue("filter-repo-type");
+        final String dbUser = cmd.getOptionValue("db-user", DEFAULT_DB_USER);
+        final String dbPassword =
+            cmd.getOptionValue("db-password", DEFAULT_DB_PASSWORD);
+        // Always need a DB connection — dry-run reads rows to compute versions.
+        final DataSource dataSource = buildDataSource(dbUrl, dbUser, dbPassword);
+        try {
+            return new VersionRepairRunner(
+                dataSource, table, filterRepoType, dryRun
+            ).run();
+        } finally {
+            closeDataSource(dataSource);
+        }
+    }
+
+    /**
+     * Run pypi-metadata mode: write missing sidecar JSON files for every
+     * PyPI distribution in the listed repositories.
+     *
+     * @param storageRootStr Storage root path string
+     * @param reposStr Comma-separated list of repository names
+     * @param dryRun When true, log only — do not write any files
+     * @return Exit code
+     */
+    private static int runPypiMetadata(
+        final String storageRootStr,
+        final String reposStr,
+        final boolean dryRun
+    ) {
+        if (storageRootStr == null || storageRootStr.isEmpty()) {
+            LOG.error(
+                "--storage-root is required for --mode pypi-metadata"
+            );
+            return 1;
+        }
+        if (reposStr == null || reposStr.isEmpty()) {
+            LOG.error("--repos is required for --mode pypi-metadata");
+            return 1;
+        }
+        final Path storageRoot = Paths.get(storageRootStr);
+        if (!Files.isDirectory(storageRoot)) {
+            LOG.error(
+                "--storage-root is not a directory: {}", storageRootStr
+            );
+            return 1;
+        }
+        final String[] repos = reposStr.split(",");
+        final PypiMetadataBackfill backfill =
+            new PypiMetadataBackfill(storageRoot, dryRun);
+        int totalProcessed = 0;
+        int totalCreated = 0;
+        int totalSkipped = 0;
+        for (final String repo : repos) {
+            final String repoName = repo.trim();
+            if (repoName.isEmpty()) {
+                continue;
+            }
+            LOG.info(
+                "PyPI metadata backfill starting: repo={}, dry-run={}",
+                repoName, dryRun
+            );
+            try {
+                final int[] stats = backfill.backfill(repoName);
+                totalProcessed += stats[0];
+                totalCreated += stats[1];
+                totalSkipped += stats[2];
+                LOG.info(
+                    "PyPI metadata backfill complete: repo={} "
+                        + "processed={} created={} skipped={}",
+                    repoName, stats[0], stats[1], stats[2]
+                );
+            } catch (final IOException ex) {
+                LOG.error(
+                    "PyPI metadata backfill failed for repo {}: {}",
+                    repoName, ex.getMessage(), ex
+                );
+                return 1;
+            }
+        }
+        LOG.info(
+            "PyPI metadata backfill summary: "
+                + "total-processed={} total-created={} total-skipped={}",
+            totalProcessed, totalCreated, totalSkipped
+        );
+        return 0;
     }
 
     /**
@@ -387,6 +504,36 @@ public final class BackfillCli {
     private static Options buildOptions() {
         final Options options = new Options();
         options.addOption(
+            Option.builder("m").longOpt("mode")
+                .hasArg().argName("MODE")
+                .desc("Backfill mode: pypi-metadata — write missing PyPI "
+                    + "sidecar JSON files for existing packages; "
+                    + "version-repair — infer version for UNKNOWN rows from name")
+                .build()
+        );
+        options.addOption(
+            Option.builder().longOpt("table")
+                .hasArg().argName("TABLE")
+                .desc("Table name to repair (default: artifacts) "
+                    + "— used with --mode version-repair")
+                .build()
+        );
+        options.addOption(
+            Option.builder().longOpt("filter-repo-type")
+                .hasArg().argName("TYPE")
+                .desc("Only repair rows with this repo_type "
+                    + "(default: all UNKNOWN rows) "
+                    + "— used with --mode version-repair")
+                .build()
+        );
+        options.addOption(
+            Option.builder().longOpt("repos")
+                .hasArg().argName("REPOS")
+                .desc("Comma-separated list of repository names "
+                    + "(required for --mode pypi-metadata)")
+                .build()
+        );
+        options.addOption(
             Option.builder("t").longOpt("type")
                 .hasArg().argName("TYPE")
                 .desc("Scanner type — single-repo mode (maven, docker, npm, "
@@ -415,7 +562,7 @@ public final class BackfillCli {
             Option.builder("R").longOpt("storage-root")
                 .hasArg().argName("DIR")
                 .desc("Storage root; each repo lives at <root>/<repo-name>/ "
-                    + "— bulk mode")
+                    + "— bulk mode and pypi-metadata mode")
                 .build()
         );
         options.addOption(
@@ -475,7 +622,8 @@ public final class BackfillCli {
     private static void printHelp(final Options options) {
         new HelpFormatter().printHelp(
             "backfill-cli",
-            "Backfill the PostgreSQL artifacts table from disk storage",
+            "Backfill the PostgreSQL artifacts table from disk storage, "
+                + "or generate PyPI sidecar metadata files",
             options,
             "",
             true

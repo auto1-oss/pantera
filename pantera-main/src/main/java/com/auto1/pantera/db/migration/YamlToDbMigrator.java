@@ -26,6 +26,9 @@ import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import javax.json.Json;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
@@ -58,8 +61,18 @@ public final class YamlToDbMigrator {
      * Current migration version. Bump this when new migration logic
      * is added. The migration re-runs (idempotently) when the stored
      * version is lower than this value.
+     *
+     * <p>v5: re-import auth providers so existing installs pick up the
+     * new {@code allowed-groups} field and any other fields admins
+     * added to pantera.yml since initial provisioning. The re-import
+     * is a DO NOTHING on conflict in AuthProviderDao for name fields
+     * but replaces the {@code config} JSONB entirely.
+     *
+     * <p>v6: bootstrap default {@code local} + {@code jwt-password}
+     * providers and (on empty users table) the default
+     * {@code admin/admin} user with {@code must_change_password = true}.
      */
-    private static final int MIGRATION_VERSION = 4;
+    private static final int MIGRATION_VERSION = 6;
 
     /**
      * DataSource for DB access.
@@ -114,6 +127,16 @@ public final class YamlToDbMigrator {
      * @return True if migration was executed, false if skipped
      */
     public boolean migrate() {
+        // Bootstrap default providers and the admin user EVERY startup,
+        // independent of the migration version flag. These calls are
+        // idempotent (ensureExists / "INSERT IF empty users") so they're
+        // safe to re-run, and running them unconditionally guarantees a
+        // working fallback even if:
+        //   - the migration version has already been bumped past v6 once
+        //   - pantera.yml is missing or empty
+        //   - an earlier migration step throws and leaves things half-done
+        bootstrapDefaultProviders();
+        bootstrapDefaultAdmin();
         final SettingsDao settings = new SettingsDao(this.source);
         final int storedVersion = settings.get(YamlToDbMigrator.MIGRATION_KEY)
             .map(obj -> obj.getInt("version", 0))
@@ -146,6 +169,25 @@ public final class YamlToDbMigrator {
         );
         LOG.info("YAML-to-DB migration v{} completed", YamlToDbMigrator.MIGRATION_VERSION);
         return true;
+    }
+
+    /**
+     * Bootstrap the default {@code local} and {@code jwt-password} provider
+     * rows. Idempotent — {@code ensureExists} is a no-op if a row already
+     * exists with that type, so admin edits are preserved.
+     */
+    private void bootstrapDefaultProviders() {
+        try {
+            final AuthProviderDao authDao = new AuthProviderDao(this.source);
+            if (authDao.ensureExists("local", 0, Json.createObjectBuilder().build())) {
+                LOG.info("Bootstrapped default 'local' auth provider");
+            }
+            if (authDao.ensureExists("jwt-password", 1, Json.createObjectBuilder().build())) {
+                LOG.info("Bootstrapped default 'jwt-password' auth provider");
+            }
+        } catch (final Exception ex) {
+            LOG.error("Failed to bootstrap default auth providers", ex);
+        }
     }
 
     /**
@@ -369,7 +411,9 @@ public final class YamlToDbMigrator {
                     }
                 }
             }
-            // Migrate auth providers (credentials list)
+            // Migrate auth providers from the YAML credentials list.
+            // (The default local + jwt-password rows are bootstrapped
+            // unconditionally in migrate(), so they're already present.)
             final YamlSequence creds = meta.yamlSequence("credentials");
             if (creds != null) {
                 final AuthProviderDao authDao = new AuthProviderDao(this.source);
@@ -387,6 +431,97 @@ public final class YamlToDbMigrator {
             LOG.info("Migrated pantera.yml settings (all sections)");
         } catch (final Exception ex) {
             LOG.error("Failed to migrate pantera.yml: {}", this.panteraYml, ex);
+        }
+    }
+
+    /**
+     * Bootstrap a default {@code admin/admin} user with the {@code admin}
+     * role. Runs on every startup but is idempotent: it skips entirely if
+     * a user named {@code admin} already exists OR any other user already
+     * holds the {@code admin} role. This guarantees:
+     *
+     * <ul>
+     *   <li>Fresh install (no users): admin/admin is created.</li>
+     *   <li>Existing install with {@code admin} user: untouched.</li>
+     *   <li>Existing install with another user holding the admin role
+     *       (e.g. an SSO-provisioned admin): untouched.</li>
+     *   <li>Existing install with users but NO admin-role holder
+     *       (rescue scenario): admin/admin is created so the operator
+     *       can recover access.</li>
+     * </ul>
+     *
+     * The admin user is created with {@code must_change_password = true},
+     * forcing a password change on first login (Pantera blocks all other
+     * API calls until that's done).
+     */
+    private void bootstrapDefaultAdmin() {
+        try (Connection conn = this.source.getConnection()) {
+            // 1a. Bail out if a user named 'admin' already exists.
+            try (PreparedStatement check = conn.prepareStatement(
+                "SELECT 1 FROM users WHERE username = 'admin' LIMIT 1")) {
+                try (ResultSet rs = check.executeQuery()) {
+                    if (rs.next()) {
+                        return;
+                    }
+                }
+            }
+            // 1b. Bail out if any user already holds the admin role —
+            //     don't create a duplicate fallback admin in that case.
+            try (PreparedStatement check = conn.prepareStatement(String.join(" ",
+                "SELECT 1 FROM user_roles ur",
+                "JOIN roles r ON ur.role_id = r.id",
+                "WHERE r.name = 'admin' LIMIT 1"
+            ))) {
+                try (ResultSet rs = check.executeQuery()) {
+                    if (rs.next()) {
+                        LOG.info("admin role already assigned to a user — "
+                            + "skipping default admin bootstrap");
+                        return;
+                    }
+                }
+            }
+            // 2. Ensure the admin role exists with all_permission.
+            try (PreparedStatement role = conn.prepareStatement(String.join(" ",
+                "INSERT INTO roles (name, permissions) VALUES",
+                "('admin', '{\"permissions\": {\"all_permission\": {}}}'::jsonb)",
+                "ON CONFLICT (name) DO NOTHING"
+            ))) {
+                role.executeUpdate();
+            }
+            // 3. Insert the admin user. Hash 'admin' with bcrypt and flag
+            //    must_change_password = true so first login is gated.
+            final String bcryptHash = org.mindrot.jbcrypt.BCrypt.hashpw(
+                "admin", org.mindrot.jbcrypt.BCrypt.gensalt()
+            );
+            final int userId;
+            try (PreparedStatement user = conn.prepareStatement(String.join(" ",
+                "INSERT INTO users (username, password_hash, enabled,",
+                "auth_provider, must_change_password)",
+                "VALUES (?, ?, TRUE, 'local', TRUE) RETURNING id"
+            ))) {
+                user.setString(1, "admin");
+                user.setString(2, bcryptHash);
+                try (ResultSet rs = user.executeQuery()) {
+                    if (!rs.next()) {
+                        return;
+                    }
+                    userId = rs.getInt(1);
+                }
+            }
+            // 4. Assign the admin role.
+            try (PreparedStatement assign = conn.prepareStatement(String.join(" ",
+                "INSERT INTO user_roles (user_id, role_id)",
+                "SELECT ?, id FROM roles WHERE name = 'admin'",
+                "ON CONFLICT DO NOTHING"
+            ))) {
+                assign.setInt(1, userId);
+                assign.executeUpdate();
+            }
+            LOG.warn("Bootstrapped default admin user — username='admin' "
+                + "password='admin' (must_change_password=TRUE on first login). "
+                + "CHANGE THIS IMMEDIATELY in production.");
+        } catch (final Exception ex) {
+            LOG.error("Failed to bootstrap default admin user", ex);
         }
     }
 

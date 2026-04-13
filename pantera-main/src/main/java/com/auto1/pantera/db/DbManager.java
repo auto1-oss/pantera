@@ -29,11 +29,21 @@ public final class DbManager {
 
     /**
      * Run all pending Flyway migrations.
-     * baselineVersion("99") ensures Flyway skips versions 1-99.
-     * The existing artifact tables (artifacts, artifact_cooldowns, import_sessions)
-     * are still managed by ArtifactDbFactory.createStructure() with IF NOT EXISTS.
-     * Only V100+ migrations (settings tables) are managed by Flyway.
-     * This will be consolidated in a future phase.
+     * baselineVersion("99") ensures Flyway skips versions 1-99 on existing
+     * installs (those were created imperatively by Java code before Flyway
+     * was introduced). V100+ covers the full schema:
+     * <ul>
+     *   <li>V100-V107: settings, users, roles, auth, tokens, revocation</li>
+     *   <li>V108: core artifacts / cooldowns / import_sessions tables</li>
+     *   <li>V109: FTS tsvector column + trigger + trigram indexes</li>
+     *   <li>V110: dashboard materialized views</li>
+     *   <li>V111: version_sort_key function + stored generated column</li>
+     *   <li>V112: Quartz scheduler tables</li>
+     *   <li>V113: pantera_nodes cluster registry</li>
+     * </ul>
+     * All migrations are idempotent (IF NOT EXISTS / OR REPLACE) so they are
+     * safe on both fresh and existing databases.
+     *
      * @param datasource HikariCP DataSource
      */
     public static void migrate(final DataSource datasource) {

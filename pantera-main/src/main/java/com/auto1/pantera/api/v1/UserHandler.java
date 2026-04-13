@@ -15,8 +15,14 @@ import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.perms.ApiUserPermission;
 import com.auto1.pantera.api.perms.ApiUserPermission.UserAction;
 import com.auto1.pantera.asto.misc.Cleanable;
+import com.auto1.pantera.auth.RevocationBlocklist;
+import com.auto1.pantera.db.dao.PagedResult;
+import com.auto1.pantera.db.dao.UserDao;
+import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.cache.PanteraCaches;
@@ -26,8 +32,8 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.security.PermissionCollection;
-import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -80,6 +86,20 @@ public final class UserHandler {
     private final Policy<?> policy;
 
     /**
+     * Token blocklist. Used to immediately revoke access tokens when
+     * an administrator disables a user. May be {@code null} in no-DB
+     * test deployments.
+     */
+    private final RevocationBlocklist blocklist;
+
+    /**
+     * Token DAO. Used to revoke long-lived refresh and API tokens when
+     * an administrator disables a user. May be {@code null} in no-DB
+     * test deployments.
+     */
+    private final UserTokenDao tokenDao;
+
+    /**
      * Ctor.
      * @param users Crud users object
      * @param caches Pantera caches
@@ -87,11 +107,29 @@ public final class UserHandler {
      */
     public UserHandler(final CrudUsers users, final PanteraCaches caches,
         final PanteraSecurity security) {
+        this(users, caches, security, null, null);
+    }
+
+    /**
+     * Full ctor with token revocation wiring.
+     * @param users Crud users object
+     * @param caches Pantera caches
+     * @param security Pantera security
+     * @param blocklist Revocation blocklist for access-token revocation
+     *     on user disable; may be {@code null}
+     * @param tokenDao Token DAO for refresh / API token revocation on
+     *     user disable; may be {@code null}
+     */
+    public UserHandler(final CrudUsers users, final PanteraCaches caches,
+        final PanteraSecurity security, final RevocationBlocklist blocklist,
+        final UserTokenDao tokenDao) {
         this.users = users;
         this.ucache = caches.usersCache();
         this.pcache = caches.policyCache();
         this.auth = security.authentication();
         this.policy = security.policy();
+        this.blocklist = blocklist;
+        this.tokenDao = tokenDao;
     }
 
     /**
@@ -134,6 +172,7 @@ public final class UserHandler {
 
     /**
      * GET /api/v1/users — paginated list of users.
+     * Supports query params: page, size, q (search), sort (field), sort_dir (asc|desc).
      * @param ctx Routing context
      */
     private void listUsers(final RoutingContext ctx) {
@@ -145,25 +184,32 @@ public final class UserHandler {
                 ctx.queryParam("size").stream().findFirst().orElse(null), 20
             )
         );
-        ctx.vertx().<javax.json.JsonArray>executeBlocking(
-            this.users::list,
+        final String query = ctx.queryParam("q").stream().findFirst().orElse(null);
+        final Set<String> userSortFields = Set.of("username", "email", "enabled", "auth_provider");
+        final String rawSort = ctx.queryParam("sort").stream().findFirst().orElse("username");
+        final String sortField = userSortFields.contains(rawSort) ? rawSort : "username";
+        final String sortDir = ctx.queryParam("sort_dir").stream().findFirst().orElse("asc");
+        final boolean ascending = !"desc".equalsIgnoreCase(sortDir);
+        if (!(this.users instanceof UserDao)) {
+            ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", "Paged listing not supported");
+            return;
+        }
+        final UserDao dao = (UserDao) this.users;
+        ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
+            MdcPropagation.withMdc(
+                () -> dao.listPaged(query, sortField, ascending, size, page * size)
+            ),
             false
         ).onSuccess(
-            all -> {
-                final List<io.vertx.core.json.JsonObject> flat =
-                    new java.util.ArrayList<>(all.size());
-                for (int i = 0; i < all.size(); i++) {
-                    flat.add(
-                        new io.vertx.core.json.JsonObject(
-                            all.getJsonObject(i).toString()
-                        )
-                    );
+            result -> {
+                final JsonArray items = new JsonArray();
+                for (final JsonObject obj : result.items()) {
+                    items.add(new io.vertx.core.json.JsonObject(obj.toString()));
                 }
-                final JsonArray items = ApiResponse.sliceToArray(flat, page, size);
                 ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
-                    .end(ApiResponse.paginated(items, page, size, flat.size()).encode());
+                    .end(ApiResponse.paginated(items, page, size, result.total()).encode());
             }
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
@@ -177,7 +223,7 @@ public final class UserHandler {
     private void getUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            () -> this.users.get(uname),
+            MdcPropagation.withMdc(() -> this.users.get(uname)),
             false
         ).onSuccess(
             opt -> {
@@ -239,10 +285,10 @@ public final class UserHandler {
         if (existing.isPresent() && perms.implies(UserHandler.UPDATE)
             || existing.isEmpty() && perms.implies(UserHandler.CREATE)) {
             ctx.vertx().executeBlocking(
-                () -> {
+                MdcPropagation.withMdc(() -> {
                     this.users.addOrUpdate(body, uname);
                     return null;
-                },
+                }),
                 false
             ).onSuccess(
                 ignored -> {
@@ -265,10 +311,10 @@ public final class UserHandler {
     private void deleteUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.remove(uname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -308,26 +354,68 @@ public final class UserHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Invalid JSON body");
             return;
         }
-        final String oldPass = body.getString("old_pass", "");
-        final Optional<AuthUser> verified = this.auth.user(uname, oldPass);
-        if (verified.isEmpty()) {
-            ApiResponse.sendError(ctx, 401, "UNAUTHORIZED", "Invalid old password");
-            return;
+        // Distinguish self-service vs admin-reset.
+        //   - Self-service: caller is changing THEIR OWN password. They
+        //     must prove knowledge of the current password.
+        //   - Admin-reset: caller is an administrator with the
+        //     api_user_permissions change_password permission (enforced
+        //     by the AuthzHandler on this route) changing someone ELSE'S
+        //     password. They do not — and cannot — know the target
+        //     user's current password. The permission check on the route
+        //     is authorization enough.
+        final String caller = ctx.user() != null && ctx.user().principal() != null
+            ? ctx.user().principal().getString(AuthTokenRest.SUB, "") : "";
+        final boolean selfService = uname.equals(caller);
+        if (selfService) {
+            final String oldPass = body.getString("old_pass", "");
+            final Optional<AuthUser> verified = this.auth.user(uname, oldPass);
+            if (verified.isEmpty()) {
+                // 403 instead of 401: the caller already has a valid
+                // session (the JWT filter let them in). "Invalid old
+                // password" is an application-level authorization
+                // failure for the mutation, not a session-expiry signal
+                // — the axios interceptor must not try to silently
+                // refresh the session and retry the request, which
+                // would loop forever because the old password is still
+                // wrong after any number of refreshes.
+                ApiResponse.sendError(
+                    ctx, 403, "FORBIDDEN", "Current password is incorrect."
+                );
+                return;
+            }
         }
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.alterPassword(uname, body);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
+                // ucache is a PublishingCleanable wrapping CachedUsers, so
+                // an instanceof check on CachedUsers is always false here.
+                // Cleanable.invalidate(key) delegates to CachedUsers.invalidate
+                // which now does a full L1+L2 flush — the only safe option
+                // because the cache is keyed by SHA-256(username:password)
+                // and we don't have the hash. The pub/sub layer broadcasts
+                // the flush to other Pantera instances in the cluster.
                 this.ucache.invalidate(uname);
+                // Policy cache may contain stale role/enabled state for this
+                // user; invalidate that too so subsequent requests see fresh data.
+                this.pcache.invalidate(uname);
                 ctx.response().setStatusCode(200).end();
             }
         ).onFailure(
             err -> {
-                if (err instanceof IllegalStateException) {
+                // Vert.x wraps the underlying exception in CompletionException;
+                // unwrap to get the original from UserDao.alterPassword.
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalArgumentException) {
+                    // PasswordPolicy validation failure → 400 with the message
+                    ApiResponse.sendError(
+                        ctx, 400, "WEAK_PASSWORD", cause.getMessage()
+                    );
+                } else if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("User '%s' not found", uname)
@@ -346,10 +434,10 @@ public final class UserHandler {
     private void enableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.enable(uname);
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {
@@ -378,10 +466,33 @@ public final class UserHandler {
     private void disableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
         ctx.vertx().executeBlocking(
-            () -> {
+            MdcPropagation.withMdc(() -> {
                 this.users.disable(uname);
+                // Immediate token revocation — without this, the
+                // user's existing access tokens, refresh tokens, and
+                // API tokens would keep working until expiry. The
+                // per-request isEnabled check in UnifiedJwtAuthHandler
+                // is the safety net (fires on the next request), but
+                // explicit revocation is cheaper, synchronous, and
+                // cluster-wide via the blocklist pub/sub.
+                if (this.blocklist != null) {
+                    // 7 days covers the default refresh-token TTL; any
+                    // access token older than that is already expired
+                    // by the JWT's own exp claim.
+                    this.blocklist.revokeUser(uname, 7 * 24 * 3600);
+                }
+                if (this.tokenDao != null) {
+                    final int revoked = this.tokenDao.revokeAllForUser(uname);
+                    EcsLogger.info("com.auto1.pantera.api.v1")
+                        .message("User disabled: revoked " + revoked + " tokens")
+                        .eventCategory("iam")
+                        .eventAction("user_disable")
+                        .eventOutcome("success")
+                        .field("user.name", uname)
+                        .log();
+                }
                 return null;
-            },
+            }),
             false
         ).onSuccess(
             ignored -> {

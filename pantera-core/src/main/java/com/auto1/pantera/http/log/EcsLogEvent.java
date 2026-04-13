@@ -157,6 +157,19 @@ public final class EcsLogEvent {
     }
 
     /**
+     * Set the original URL as received (path + query, sanitized).
+     * Maps to ECS {@code url.original}.
+     * @param original Full original request URI
+     * @return this
+     */
+    public EcsLogEvent urlOriginal(final String original) {
+        if (original != null && !original.isEmpty()) {
+            fields.put("url.original", LogSanitizer.sanitizeUrl(original));
+        }
+        return this;
+    }
+
+    /**
      * Set query string (sanitized).
      * @param query Query string
      * @return this
@@ -279,16 +292,36 @@ public final class EcsLogEvent {
     }
 
     /**
-     * Build default message from ECS fields.
+     * Build human-readable message from HTTP status code.
+     * HTTP method, path, and status code are in their respective ECS fields
+     * ({@code http.request.method}, {@code url.original}, {@code http.response.status_code}).
      */
-    private String buildDefaultMessage(final Integer statusCode) {
-        final String method = (String) fields.get("http.request.method");
-        final String path = (String) fields.get("url.path");
-        return String.format("%s %s %d",
-            method != null ? method : "?",
-            path != null ? path : "?",
-            statusCode != null ? statusCode : 0
-        );
+    private static String buildDefaultMessage(final Integer statusCode) {
+        if (statusCode == null) {
+            return "Request processed";
+        }
+        if (statusCode >= 200 && statusCode <= 299) {
+            return "Request completed";
+        }
+        if (statusCode == 304) {
+            return "Not modified";
+        }
+        if (statusCode == 401) {
+            return "Authentication required";
+        }
+        if (statusCode == 403) {
+            return "Access denied";
+        }
+        if (statusCode == 404) {
+            return "Not found";
+        }
+        if (statusCode >= 500) {
+            return "Internal server error";
+        }
+        if (statusCode >= 400) {
+            return "Client error";
+        }
+        return "Request processed";
     }
 
     /**

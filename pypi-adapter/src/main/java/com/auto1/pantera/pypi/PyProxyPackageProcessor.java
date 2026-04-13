@@ -183,7 +183,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                 .field("package.version", info.version())
                                 .field("repository.name", event.repoName())
                                 .field("package.size", archive.length)
-                                .field("package.name", release == null ? "unknown"
+                                .field("package.release_date", release == null ? null
                                     : Instant.ofEpochMilli(release).toString())
                                 .log();
                         } else {

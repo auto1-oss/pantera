@@ -58,6 +58,56 @@ public final class AuthFromDb implements Authentication {
         this.source = source;
     }
 
+    /**
+     * SQL query to check whether a username exists as a local-provider
+     * user with an actual password set. Used by {@link #isAuthoritative}
+     * to tell the authentication chain that SSO fallthrough is forbidden
+     * for this username.
+     *
+     * <p>Critically requires {@code password_hash IS NOT NULL AND <> ''}.
+     * Users provisioned by SSO (e.g. Okta callback) live in the
+     * {@code users} table with {@code auth_provider='local'} OR a
+     * specific provider name, but with an empty password_hash. We must
+     * NOT claim authority over those users — that would block them from
+     * authenticating via the SSO provider that owns them.</p>
+     */
+    private static final String EXISTS_SQL = String.join(" ",
+        "SELECT 1 FROM users",
+        "WHERE username = ?",
+        "  AND enabled = true",
+        "  AND auth_provider = 'local'",
+        "  AND password_hash IS NOT NULL",
+        "  AND password_hash <> ''",
+        "LIMIT 1"
+    );
+
+    @Override
+    public boolean isAuthoritative(final String name) {
+        // Claim authority ONLY over local users who have an actual password
+        // hash set. This blocks SSO fall-through for "real" local accounts
+        // (e.g. the bootstrap admin) while still letting SSO authenticate
+        // users whose local row is just a placeholder with no password.
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(AuthFromDb.EXISTS_SQL)) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("isAuthoritative lookup failed — defaulting to false")
+                .eventCategory("authentication")
+                .eventAction("db_auth_authoritative")
+                .field("user.name", name)
+                .error(ex)
+                .log();
+            return false;
+        }
+    }
+
     @Override
     public Optional<AuthUser> user(final String name, final String pass) {
         try (Connection conn = this.source.getConnection();
@@ -74,16 +124,14 @@ public final class AuthFromDb implements Authentication {
                 if (!AuthFromDb.ARTIPIE.equals(provider)) {
                     return Optional.empty();
                 }
-                // Bcrypt match (password hashed during migration)
+                // Bcrypt match
                 if (hash.startsWith("$2") && BCrypt.checkpw(pass, hash)) {
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
-                // Plain-text match (password stored as-is)
-                if (hash.equals(pass)) {
-                    return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
-                }
-                // SHA-256 match (password stored as hex digest)
+                // SHA-256 match (legacy passwords from YAML migration)
+                // Transparently upgrade to bcrypt on successful login.
                 if (hash.equals(DigestUtils.sha256Hex(pass))) {
+                    this.upgradeHashToBcrypt(name, pass);
                     return Optional.of(new AuthUser(name, AuthFromDb.ARTIPIE));
                 }
             }
@@ -98,6 +146,42 @@ public final class AuthFromDb implements Authentication {
                 .error(ex)
                 .log();
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Transparently upgrade a legacy SHA-256 hash to bcrypt.
+     * Runs asynchronously to avoid slowing down the login response.
+     *
+     * @param username User whose hash to upgrade
+     * @param plaintext Current plaintext password (already verified)
+     */
+    private void upgradeHashToBcrypt(final String username, final String plaintext) {
+        try (Connection conn = this.source.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "UPDATE users SET password_hash = ?, updated_at = NOW() "
+                     + "WHERE username = ? AND password_hash = ?"
+             )) {
+            final String bcryptHash = BCrypt.hashpw(plaintext, BCrypt.gensalt());
+            ps.setString(1, bcryptHash);
+            ps.setString(2, username);
+            ps.setString(3, DigestUtils.sha256Hex(plaintext));
+            ps.executeUpdate();
+            EcsLogger.info("com.auto1.pantera.auth")
+                .message("Upgraded password hash from SHA-256 to bcrypt")
+                .eventCategory("authentication")
+                .eventAction("hash_upgrade")
+                .field("user.name", username)
+                .log();
+        } catch (final Exception ex) {
+            EcsLogger.warn("com.auto1.pantera.auth")
+                .message("Failed to upgrade password hash to bcrypt")
+                .eventCategory("authentication")
+                .eventAction("hash_upgrade")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .error(ex)
+                .log();
         }
     }
 

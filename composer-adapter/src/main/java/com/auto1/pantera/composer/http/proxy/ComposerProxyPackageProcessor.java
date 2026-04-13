@@ -149,7 +149,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                             .field("package.version", version)
                             .field("repository.name", event.repoName())
                             .field("user.name", owner)
-                            .field("package.release_date", release == null ? "unknown" : java.time.Instant.ofEpochMilli(release).toString())
+                            .field("package.release_date", release == null ? null : java.time.Instant.ofEpochMilli(release).toString())
                             .log();
 
                         // Remove all duplicate events from queue

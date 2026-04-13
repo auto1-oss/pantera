@@ -3,14 +3,12 @@ meta:
     type: fs
     path: /var/pantera/repo
   
-  # JWT token settings
+  # JWT token settings (RS256 — RSA key pair)
   jwt:
-    # Set to true for tokens that expire, false for permanent tokens
-    expires: true
-    # Token lifetime in seconds (default: 86400 = 24 hours)
-    expiry-seconds: 86400
-    # Secret key for signing tokens (use env var in production)
-    secret: ${JWT_SECRET}
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
   
   credentials:
     # - type: env
@@ -32,6 +30,14 @@ meta:
       redirect-uri: ${OKTA_REDIRECT_URI}
       scope: "openid email profile groups"
       groups-claim: "groups"
+      # ACCESS GATE: if set, the user's id_token MUST carry at least one
+      # of these groups or SSO login is rejected (403). This is the
+      # primary "who can access Pantera" control. Without it, ANY
+      # authenticated Okta user gets auto-provisioned as a reader —
+      # insecure for production. Groups are matched case-sensitively.
+      allowed-groups:
+        - pantera_readers
+        - pantera_admins
       group-roles:
          - pantera_readers: "reader"
          - pantera_admins: "admin"
