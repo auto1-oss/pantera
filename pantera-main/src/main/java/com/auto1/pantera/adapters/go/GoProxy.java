@@ -21,7 +21,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.jetty.JettyClientSlices;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -62,7 +62,7 @@ public final class GoProxy implements Slice {
 
         // Support multiple remotes with GroupSlice (like maven-proxy)
         // Each remote gets its own GoProxySlice, evaluated in priority order
-        this.slice = new GroupSlice(
+        this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new GoProxySlice(
                     client,

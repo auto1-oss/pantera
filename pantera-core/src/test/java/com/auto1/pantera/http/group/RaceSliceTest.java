@@ -27,16 +27,16 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Test case for {@link GroupSlice}.
+ * Test case for {@link RaceSlice}.
  */
-final class GroupSliceTest {
+final class RaceSliceTest {
 
     @Test
     @Timeout(1)
     void returnsFirstSuccessResponseInParallel() {
         // Parallel race strategy: fastest success wins, not first in order
         final String expects = "ok-50";  // This is the FASTEST success (50ms)
-        Response response = new GroupSlice(
+        Response response = new RaceSlice(
             slice(RsStatus.NOT_FOUND, "not-found-250", Duration.ofMillis(250)),
             slice(RsStatus.NOT_FOUND, "not-found-50", Duration.ofMillis(50)),
             slice(RsStatus.OK, "ok-150", Duration.ofMillis(150)),  // Slower success
@@ -51,7 +51,7 @@ final class GroupSliceTest {
 
     @Test
     void returnsNotFoundIfAllFails() {
-        Response res = new GroupSlice(
+        Response res = new RaceSlice(
             slice(RsStatus.NOT_FOUND, "not-found-140", Duration.ofMillis(250)),
             slice(RsStatus.NOT_FOUND, "not-found-10", Duration.ofMillis(50)),
             slice(RsStatus.NOT_FOUND, "not-found-110", Duration.ofMillis(200))
@@ -66,7 +66,7 @@ final class GroupSliceTest {
         Slice s = (line, headers, body) -> CompletableFuture.failedFuture(new IllegalStateException());
 
         Assertions.assertEquals(RsStatus.NOT_FOUND,
-            new GroupSlice(s)
+            new RaceSlice(s)
                 .response(new RequestLine(RqMethod.GET, "/faulty/path"), Headers.EMPTY, Content.EMPTY)
                 .join().status());
     }

@@ -26,9 +26,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Standard group {@link Slice} implementation.
+ * Races multiple slices in parallel and returns the first 200 response.
+ *
+ * <p>This is a low-level utility for "first response wins" patterns —
+ * NOT a group repository resolver. For group/virtual repository resolution
+ * with index lookup, member flattening, and negative caching, see
+ * {@link com.auto1.pantera.group.GroupSlice} in pantera-main.
  */
-public final class GroupSlice implements Slice {
+public final class RaceSlice implements Slice {
 
     /**
      * Target slices.
@@ -36,18 +41,18 @@ public final class GroupSlice implements Slice {
     private final List<Slice> targets;
 
     /**
-     * New group slice.
-     * @param targets Slices to group
+     * New race slice.
+     * @param targets Slices to race
      */
-    public GroupSlice(final Slice... targets) {
+    public RaceSlice(final Slice... targets) {
         this(Arrays.asList(targets));
     }
 
     /**
-     * New group slice.
-     * @param targets Slices to group
+     * New race slice.
+     * @param targets Slices to race
      */
-    public GroupSlice(final List<Slice> targets) {
+    public RaceSlice(final List<Slice> targets) {
         this.targets = Collections.unmodifiableList(targets);
     }
 
@@ -59,7 +64,7 @@ public final class GroupSlice implements Slice {
         // try all repositories simultaneously and return the first successful
         // response (non-404). This reduces latency when the artifact is only
         // available in later repositories.
-        
+
         if (this.targets.isEmpty()) {
             // Consume request body to prevent Vert.x request leak
             return body.asBytesFuture().thenApply(ignored ->
@@ -75,16 +80,16 @@ public final class GroupSlice implements Slice {
         return body.asBytesFuture().thenCompose(requestBytes -> {
             // Create a result future
             final CompletableFuture<Response> result = new CompletableFuture<>();
-            
+
             // Track how many repos have responded with 404/error
-            final java.util.concurrent.atomic.AtomicInteger failedCount = 
+            final java.util.concurrent.atomic.AtomicInteger failedCount =
                 new java.util.concurrent.atomic.AtomicInteger(0);
-            
+
             // Start all repository requests in parallel
             for (int i = 0; i < this.targets.size(); i++) {
                 final int index = i;
                 final Slice target = this.targets.get(i);
-                
+
                 // Create a fresh Content instance for each member from buffered bytes
                 final Content memberBody = requestBytes.length == 0
                     ? Content.EMPTY
@@ -160,7 +165,7 @@ public final class GroupSlice implements Slice {
                     return null;
                 });
             }
-            
+
             return result;
         });
     }

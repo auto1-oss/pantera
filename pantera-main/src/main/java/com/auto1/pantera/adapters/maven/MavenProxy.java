@@ -20,7 +20,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
 import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.maven.http.MavenProxySlice;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
@@ -48,7 +48,7 @@ public final class MavenProxy implements Slice {
         CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
-        slice = new GroupSlice(
+        slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new MavenProxySlice(
                     client, remote.uri(),
