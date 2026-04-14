@@ -130,6 +130,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
         ConfigDefaults.getLong("PANTERA_SEARCH_LIKE_TIMEOUT_MS", 3000L);
 
     /**
+     * Statement timeout for locateByName queries (ms).
+     * Configurable via PANTERA_INDEX_LOCATE_TIMEOUT_MS env var.
+     * The query uses idx_artifacts_locate btree and should complete in &lt;1ms;
+     * 500ms ceiling only triggers on pathological conditions (DB pressure,
+     * missing index, lock contention). Timeout surfaces as SQLException which
+     * already maps to Optional.empty() → full fanout safety net.
+     */
+    private static final long LOCATE_BY_NAME_TIMEOUT_MS =
+        ConfigDefaults.getLong("PANTERA_INDEX_LOCATE_TIMEOUT_MS", 500L);
+
+    /**
      * Statement timeout for FTS aggregation queries (ms).
      * Fix 6: prevents slow facet aggregations from blocking the response.
      */
@@ -1683,13 +1694,27 @@ public final class DbArtifactIndex implements ArtifactIndex {
     public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
         return CompletableFuture.supplyAsync(() -> {
             final List<String> repos = new ArrayList<>();
-            try (Connection conn = this.source.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(LOCATE_BY_NAME_SQL)) {
-                stmt.setString(1, artifactName);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        repos.add(rs.getString("repo_name"));
+            try (Connection conn = this.source.getConnection()) {
+                // SET LOCAL requires an explicit transaction block to persist across statements
+                conn.setAutoCommit(false);
+                try {
+                    try (java.sql.Statement guard = conn.createStatement()) {
+                        guard.execute(
+                            "SET LOCAL statement_timeout = '" + LOCATE_BY_NAME_TIMEOUT_MS + "ms'"
+                        );
                     }
+                    try (PreparedStatement stmt = conn.prepareStatement(LOCATE_BY_NAME_SQL)) {
+                        stmt.setString(1, artifactName);
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            while (rs.next()) {
+                                repos.add(rs.getString("repo_name"));
+                            }
+                        }
+                    }
+                    conn.commit();
+                } catch (final SQLException inner) {
+                    conn.rollback();
+                    throw inner;
                 }
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
