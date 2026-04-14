@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import com.auto1.pantera.http.trace.MdcPropagation;
 import org.slf4j.MDC;
 
 /**
@@ -364,7 +365,9 @@ public final class GroupSlice implements Slice {
         // ---- Path 1: No index configured OR unparseable URL → full two-phase fanout ----
         if (this.artifactIndex.isEmpty()) {
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                    (resp, err) -> recordMetrics(resp, err, requestStartTime)
+                ));
         }
         final ArtifactIndex idx = this.artifactIndex.get();
         final Optional<String> parsedName =
@@ -378,12 +381,14 @@ public final class GroupSlice implements Slice {
                 .field("url.path", path)
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                    (resp, err) -> recordMetrics(resp, err, requestStartTime)
+                ));
         }
 
         // ---- Path 2: Query index ----
         return idx.locateByName(parsedName.get())
-            .thenCompose(optRepos -> {
+            .thenCompose(MdcPropagation.withMdc(optRepos -> {
                 if (optRepos.isEmpty()) {
                     // DB error → full two-phase fanout safety net
                     EcsLogger.warn("com.auto1.pantera.group")
@@ -402,8 +407,10 @@ public final class GroupSlice implements Slice {
                 }
                 // ---- Path 3: Index hit → targeted local read ----
                 return targetedLocalRead(repos, line, headers, body, ctx);
-            })
-            .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+            }))
+            .whenComplete(MdcPropagation.withMdcBiConsumer(
+                (resp, err) -> recordMetrics(resp, err, requestStartTime)
+            ));
     }
 
     private void recordMetrics(
@@ -504,7 +511,7 @@ public final class GroupSlice implements Slice {
             .field("url.path", line.uri().getPath())
             .log();
         return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
-            .thenApply(resp -> {
+            .thenApply(MdcPropagation.withMdcFunction(resp -> {
                 if (resp.status() == RsStatus.NOT_FOUND) {
                     this.negativeCache.put(cacheKey, Boolean.TRUE);
                     EcsLogger.debug("com.auto1.pantera.group")
@@ -514,7 +521,7 @@ public final class GroupSlice implements Slice {
                         .log();
                 }
                 return resp;
-            });
+            }));
     }
 
     /**
@@ -645,7 +652,7 @@ public final class GroupSlice implements Slice {
         }
         // Try hosted first; fall to proxy only if hosted yields no 200
         return queryTargetedMembers(hosted, line, headers, body, ctx, false)
-            .thenCompose(resp -> {
+            .thenCompose(MdcPropagation.withMdc(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(resp);
                 }
@@ -657,7 +664,7 @@ public final class GroupSlice implements Slice {
                     .eventAction("group_cascade_to_proxy")
                     .log();
                 return queryTargetedMembers(proxy, line, headers, body, ctx, false);
-            });
+            }));
     }
 
     /**

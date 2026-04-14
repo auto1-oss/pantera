@@ -12,6 +12,9 @@ package com.auto1.pantera.http.trace;
 
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
 import org.slf4j.MDC;
 
 /**
@@ -61,6 +64,130 @@ public final class MdcPropagation {
             }
             try {
                 return callable.call();
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a {@link Function} for use in {@code CompletableFuture.thenCompose()} so
+     * it restores the caller's MDC context on whichever thread the callback runs.
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * future.thenCompose(MdcPropagation.withMdc(value -> {
+     *     // MDC is restored here regardless of which thread executes this
+     *     return anotherFuture(value);
+     * }))
+     * }</pre>
+     *
+     * <p>The prior MDC state of the executing thread is saved and restored after
+     * the function completes, so pool threads are not polluted with request context.
+     *
+     * @param fn The original function
+     * @param <T> Input type
+     * @param <U> Output future type
+     * @return A function that installs + restores MDC around the original
+     */
+    public static <T, U> Function<T, CompletableFuture<U>> withMdc(
+        final Function<T, CompletableFuture<U>> fn
+    ) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return value -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                return fn.apply(value);
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a plain {@link Function} (for use in {@code CompletableFuture.thenApply()}) so
+     * it restores the caller's MDC context on whichever thread the callback runs.
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * future.thenApply(MdcPropagation.withMdcFunction(value -> {
+     *     // MDC is restored here
+     *     return transform(value);
+     * }))
+     * }</pre>
+     *
+     * @param fn The original function
+     * @param <T> Input type
+     * @param <R> Return type
+     * @return A function that installs + restores MDC around the original
+     */
+    public static <T, R> Function<T, R> withMdcFunction(final Function<T, R> fn) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return value -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                return fn.apply(value);
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a {@link BiConsumer} for use in {@code CompletableFuture.whenComplete()} so
+     * it restores the caller's MDC context on whichever thread the callback runs.
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * future.whenComplete(MdcPropagation.withMdc((result, err) -> {
+     *     // MDC is restored here regardless of which thread executes this
+     *     recordMetrics(result, err);
+     * }))
+     * }</pre>
+     *
+     * <p>The prior MDC state of the executing thread is saved and restored after
+     * the consumer completes, so pool threads are not polluted with request context.
+     *
+     * @param consumer The original bi-consumer
+     * @param <T> Result type
+     * @param <U> Throwable type
+     * @return A bi-consumer that installs + restores MDC around the original
+     */
+    public static <T, U extends Throwable> BiConsumer<T, U> withMdcBiConsumer(
+        final BiConsumer<T, U> consumer
+    ) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return (result, err) -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                consumer.accept(result, err);
             } finally {
                 if (prior != null) {
                     MDC.setContextMap(prior);
