@@ -108,7 +108,7 @@ public final class EcsLogEvent {
      * @return this
      */
     public EcsLogEvent duration(final long durationMs) {
-        fields.put("event.duration", durationMs * 1_000_000); // Convert to nanoseconds (ECS standard)
+        fields.put("event.duration", durationMs);
         return this;
     }
 
@@ -259,8 +259,8 @@ public final class EcsLogEvent {
      */
     public void log() {
         final Integer statusCode = (Integer) fields.get("http.response.status_code");
-        final Long durationNs = (Long) fields.get("event.duration");
-        final long durationMs = durationNs != null ? durationNs / 1_000_000 : 0;
+        final Long storedDuration = (Long) fields.get("event.duration");
+        final long durationMs = storedDuration != null ? storedDuration : 0;
 
         final String logMessage = this.message != null
             ? this.message

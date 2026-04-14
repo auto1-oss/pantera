@@ -206,7 +206,7 @@ public final class EcsLogger {
      * @return this
      */
     public EcsLogger duration(final long durationMs) {
-        this.fields.put("event.duration", durationMs * 1_000_000); // Convert to nanoseconds (ECS standard)
+        this.fields.put("event.duration", durationMs);
         return this;
     }
 

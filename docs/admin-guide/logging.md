@@ -44,7 +44,7 @@ All log entries are emitted as single-line JSON objects. Example:
 | `event.category` | Event category | `api`, `authentication`, `storage`, `cache`, `group`, `repository`, `pypi`, `cooldown` |
 | `event.action` | Specific action | `server_start`, `artifact_upload`, `token_validate`, `group_fanout_miss`, `group_lookup_miss`, `sso_callback`, etc. |
 | `event.outcome` | Result of the action | `success`, `failure`, `unknown` (ECS-compliant values only) |
-| `event.duration` | Duration in nanoseconds | Long integer |
+| `event.duration` | Duration in milliseconds (Pantera convention, deviates from ECS ns standard) | Long integer |
 | `event.reason` | Human-readable reason for the outcome | Free text |
 
 ### HTTP Fields (request/response logging)
@@ -313,7 +313,7 @@ docker logs pantera 2>&1 | jq 'select(.["http.response.status_code"] >= 400)'
 docker logs pantera 2>&1 | jq 'select(.["repository.name"] == "pypi-proxy")'
 
 # Show request details for slow requests (>1s)
-docker logs pantera 2>&1 | jq 'select(.["event.duration"] > 1000000000) | {method: .["http.request.method"], path: .["url.original"], status: .["http.response.status_code"], duration_ms: (.["event.duration"] / 1000000)}'
+docker logs pantera 2>&1 | jq 'select(.["event.duration"] > 1000) | {method: .["http.request.method"], path: .["url.original"], status: .["http.response.status_code"], duration_ms: .["event.duration"]}'
 
 # Filter group lookup failures (artifact not found in any member)
 docker logs pantera 2>&1 | jq 'select(.["event.action"] == "group_lookup_miss")'
@@ -337,7 +337,7 @@ event.action: "group_lookup_miss"
 event.category: "authentication" AND event.outcome: "failure"
 
 # Slow requests (>2 seconds)
-event.duration > 2000000000
+event.duration > 2000
 
 # Specific package operations
 package.name: "pydantic" AND event.category: "cooldown"
