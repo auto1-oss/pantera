@@ -68,12 +68,12 @@ class JwtPasswordAuthFactoryTest {
 
     @Test
     void failsFastWhenPublicKeyPathIsMissing() throws IOException {
+        // Meta mapping with no jwt: block at all
         final YamlMapping config = Yaml.createYamlInput(
             String.join(
                 "\n",
-                "meta:",
-                "  credentials:",
-                "    - type: jwt-password"
+                "credentials:",
+                "  - type: jwt-password"
             )
         ).readYamlMapping();
         final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
@@ -89,14 +89,14 @@ class JwtPasswordAuthFactoryTest {
 
     @Test
     void legacyHs256SecretConfigIsRejectedAtStartup() throws IOException {
+        // Meta mapping with the deprecated secret: key
         final YamlMapping config = Yaml.createYamlInput(
             String.join(
                 "\n",
-                "meta:",
-                "  jwt:",
-                "    secret: test-secret-key",
-                "  credentials:",
-                "    - type: jwt-password"
+                "jwt:",
+                "  secret: test-secret-key",
+                "credentials:",
+                "  - type: jwt-password"
             )
         ).readYamlMapping();
         final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
@@ -113,6 +113,7 @@ class JwtPasswordAuthFactoryTest {
 
     @Test
     void factoryIsRegisteredWithAuthLoader() throws IOException {
+        // AuthLoader.newObject passes cfg directly — same mapping the factory expects
         final AuthLoader loader = new AuthLoader();
         final Authentication auth = loader.newObject("jwt-password", configWithRsaKeys());
         MatcherAssert.assertThat(auth, new IsInstanceOf(JwtPasswordAuth.class));
@@ -123,14 +124,13 @@ class JwtPasswordAuthFactoryTest {
         final YamlMapping config = Yaml.createYamlInput(
             String.join(
                 "\n",
-                "meta:",
-                "  jwt:",
-                "    private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
-                "    public-key-path: " + resourcePath("pub-2048.pem"),
-                "  jwt-password:",
-                "    require-username-match: false",
-                "  credentials:",
-                "    - type: jwt-password"
+                "jwt:",
+                "  private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
+                "  public-key-path: " + resourcePath("pub-2048.pem"),
+                "jwt-password:",
+                "  require-username-match: false",
+                "credentials:",
+                "  - type: jwt-password"
             )
         ).readYamlMapping();
         final Authentication auth = new JwtPasswordAuthFactory().getAuthentication(config);
@@ -142,16 +142,21 @@ class JwtPasswordAuthFactoryTest {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
+    /**
+     * Build a config mapping that matches what production passes to the factory.
+     * {@code YamlSettings.initAuth()} passes {@code this.meta()} — the content
+     * UNDER the {@code meta:} key, not the top-level document. So the factory
+     * sees {@code jwt:}, {@code credentials:}, etc. as direct children.
+     */
     private static YamlMapping configWithRsaKeys() throws IOException {
         return Yaml.createYamlInput(
             String.join(
                 "\n",
-                "meta:",
-                "  jwt:",
-                "    private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
-                "    public-key-path: " + resourcePath("pub-2048.pem"),
-                "  credentials:",
-                "    - type: jwt-password"
+                "jwt:",
+                "  private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
+                "  public-key-path: " + resourcePath("pub-2048.pem"),
+                "credentials:",
+                "  - type: jwt-password"
             )
         ).readYamlMapping();
     }

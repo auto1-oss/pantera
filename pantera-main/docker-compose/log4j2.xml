@@ -19,7 +19,7 @@
         <!-- includeLocation=false: eliminates Throwable allocations per log event -->
         <!-- blocking=false: drops events rather than stalling JVM threads on queue overflow -->
         <!-- bufferSize=4096: survives GC pauses up to ~580ms at 7000 events/s -->
-        <!-- Discard policy: set -Dlog4j2.asyncQueueFullPolicy=Discard -Dlog4j2.discardThreshold=INFO -->
+        <!-- Discard policy: set -Dlog4j2.asyncQueueFullPolicy=Discard -Dlog4j2.discardThreshold=DEBUG -->
         <Async name="AsyncConsole" bufferSize="4096" blocking="false" includeLocation="false">
             <AppenderRef ref="Console"/>
         </Async>
@@ -27,31 +27,36 @@
 
     <Loggers>
         <!-- HTTP Access Logs (ECS-compliant) -->
-        <Logger name="http.access" level="info" additivity="false">
+        <Logger name="http.access" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
         <!-- Artifact Audit Logs (upload/download/delete/resolution) -->
-        <Logger name="artifact.audit" level="info" additivity="false">
+        <Logger name="artifact.audit" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
         <!-- Pantera application logs -->
-        <Logger name="com.auto1.pantera" level="info" additivity="false">
+        <Logger name="com.auto1.pantera" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
-        <!-- Repository adapters - INFO level for production -->
-        <Logger name="com.auto1.pantera.maven" level="info" additivity="false">
+        <!-- Pantera auth logs -->
+        <Logger name="com.auto1.pantera.auth" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
-        <Logger name="com.auto1.pantera.npm" level="info" additivity="false">
+
+        <!-- Repository adapters - DEBUG level for production -->
+        <Logger name="com.auto1.pantera.maven" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
-        <Logger name="com.auto1.pantera.docker" level="info" additivity="false">
+        <Logger name="com.auto1.pantera.npm" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
-        <Logger name="com.auto1.pantera.pypi" level="info" additivity="false">
+        <Logger name="com.auto1.pantera.docker" level="DEBUG" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+        <Logger name="com.auto1.pantera.pypi" level="DEBUG" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
@@ -70,7 +75,7 @@
         </Logger>
 
         <!-- Root logger -->
-        <Root level="info">
+        <Root level="DEBUG">
             <AppenderRef ref="AsyncConsole"/>
         </Root>
     </Loggers>

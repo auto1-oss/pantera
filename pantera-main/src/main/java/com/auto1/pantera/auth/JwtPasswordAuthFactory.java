@@ -65,12 +65,12 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
 
     @Override
     public Authentication getAuthentication(final YamlMapping cfg) {
-        final YamlMapping meta = cfg.yamlMapping("meta");
-        // v2.1.0 removed meta.jwt.secret in favour of RS256 public/private key pair.
-        // jwt-password must validate tokens with the SAME key pair used by JwtTokens
-        // (JwtTokens signs API tokens via Algorithm.RSA256(publicKey, privateKey)),
-        // otherwise UI-generated API tokens fail Basic-auth with a signature mismatch.
-        final JwtSettings jwtSettings = JwtSettings.fromYaml(meta);
+        // cfg is the meta: mapping itself (passed by YamlSettings.initAuth as
+        // this.meta()). Do NOT nest with cfg.yamlMapping("meta") — that would
+        // look for meta.meta.jwt which doesn't exist and causes the factory to
+        // throw "public-key-path is not configured" even though the keys ARE set.
+        // JwtSettings.fromYaml expects the meta mapping directly.
+        final JwtSettings jwtSettings = JwtSettings.fromYaml(cfg);
         final Optional<String> publicKeyPath = jwtSettings.publicKeyPath();
         if (publicKeyPath.isEmpty()) {
             throw new IllegalStateException(
@@ -90,8 +90,8 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
             )
         );
         boolean requireUsernameMatch = true;
-        if (meta != null) {
-            final YamlMapping jwtPasswordCfg = meta.yamlMapping("jwt-password");
+        if (cfg != null) {
+            final YamlMapping jwtPasswordCfg = cfg.yamlMapping("jwt-password");
             if (jwtPasswordCfg != null) {
                 final String matchStr = jwtPasswordCfg.string("require-username-match");
                 if (matchStr != null) {
