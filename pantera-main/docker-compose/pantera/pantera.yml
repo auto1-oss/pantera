@@ -118,6 +118,19 @@ meta:
         l1Ttl: 24h
         l2MaxSize: 5000000
         l2Ttl: 7d
+
+    # Negative cache for group fanout 404s (confirmed-miss after proxy-only fanout).
+    # Sharing via Valkey avoids per-node duplicate fanouts in multi-node clusters.
+    # Absence of this section preserves legacy in-memory defaults (5m TTL, 10K entries).
+    group-negative:
+      ttl: 5m
+      maxSize: 10000
+      valkey:
+        enabled: true
+        l1MaxSize: 10000
+        l1Ttl: 5m
+        l2MaxSize: 1000000
+        l2Ttl: 30m
     auth:
       ttl: 5m
       maxSize: 1000

@@ -12,11 +12,13 @@ package com.auto1.pantera.group;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
@@ -136,13 +138,14 @@ public final class GroupSlice implements Slice {
 
     /**
      * Negative cache for proxy fanout results.
-     * <p>Key: "groupName:artifactName". Value: Boolean.TRUE (present = confirmed 404 from all proxies).
+     * <p>Key: {@code Key.From("groupName:artifactName")}. Presence = confirmed 404 from all proxies.
      * Prevents thundering herd when many clients request a missing artifact concurrently.
      * TTL-based expiry — stale entries self-correct within the TTL window.
-     * <p>In-memory (Caffeine L1 only) by design: this cache is low-value to share across
-     * nodes (each node self-populates quickly) and we want fast expiry for new artifacts.
+     * <p>Backed by the shared two-tier {@link NegativeCache} (L1 Caffeine + L2 Valkey
+     * when configured under {@code meta.caches.group-negative}).  Defaults to the
+     * in-memory 5 min TTL, 10K-entry single-tier cache when YAML wiring is absent.
      */
-    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> negativeCache;
+    private final NegativeCache negativeCache;
 
     /**
      * Request context for enhanced logging (client IP, username, trace ID, package).
@@ -275,7 +278,9 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * Full constructor with proxy member awareness and repo type.
+     * Backward-compatible constructor that builds a default in-memory negative cache.
+     * See {@link #defaultNegativeCache(String)} for default parameters
+     * (5 min TTL, 10K entries, L1-only).
      *
      * @param resolver Slice resolver/cache
      * @param group Group repository name
@@ -301,15 +306,53 @@ public final class GroupSlice implements Slice {
         final Set<String> proxyMembers,
         final String repoType
     ) {
+        this(
+            resolver, group, members, port, depth, timeoutSeconds,
+            routingRules, artifactIndex, proxyMembers, repoType,
+            defaultNegativeCache(group)
+        );
+    }
+
+    /**
+     * Full constructor with proxy member awareness, repo type, and an explicit
+     * {@link NegativeCache}.  Lets callers inject a YAML-configured two-tier cache
+     * (L1 Caffeine + L2 Valkey) loaded via
+     * {@link NegativeCacheConfig#fromYaml(com.amihaiemil.eoyaml.YamlMapping, String)}.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     * @param proxyMembers Names of members that are proxy repositories
+     * @param repoType Repository type for name parsing (e.g., "maven-group")
+     * @param negativeCache Pre-constructed negative cache (e.g. YAML-driven two-tier)
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache
+    ) {
         this.group = Objects.requireNonNull(group, "group");
         this.repoType = repoType != null ? repoType : "";
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
         this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
         this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
-        this.negativeCache = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-            .maximumSize(10_000)
-            .expireAfterWrite(java.time.Duration.ofMinutes(5))
-            .build();
+        this.negativeCache = negativeCache != null
+            ? negativeCache
+            : defaultNegativeCache(this.group);
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -328,6 +371,32 @@ public final class GroupSlice implements Slice {
             .eventCategory("configuration")
             .eventAction("group_init")
             .log();
+    }
+
+    /**
+     * Build the default in-memory-only negative cache used when no YAML wiring
+     * is supplied.  Matches the pre-YAML behaviour exactly: 5 min TTL, 10K entries,
+     * no Valkey.  Kept as a static helper so tests and callers without settings
+     * access still get a working cache.
+     *
+     * @param group Group name used as the {@code repoName} for cache-key isolation
+     * @return L1-only negative cache (5 min TTL, 10K entries)
+     */
+    private static NegativeCache defaultNegativeCache(final String group) {
+        final NegativeCacheConfig config = new NegativeCacheConfig(
+            java.time.Duration.ofMinutes(5),
+            10_000,
+            false,
+            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L1_TTL,
+            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L2_TTL
+        );
+        return new NegativeCache(
+            "group-negative",
+            group != null ? group : "default",
+            config
+        );
     }
 
     @Override
@@ -477,8 +546,8 @@ public final class GroupSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body,
         final RequestContext ctx, final String artifactName
     ) {
-        final String cacheKey = this.group + ":" + artifactName;
-        if (this.negativeCache.getIfPresent(cacheKey) != null) {
+        final Key cacheKey = new Key.From(this.group + ":" + artifactName);
+        if (this.negativeCache.isNotFound(cacheKey)) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Negative cache hit — returning 404 without fanout")
                 .eventCategory("database")
@@ -513,9 +582,9 @@ public final class GroupSlice implements Slice {
         return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
             .thenApply(MdcPropagation.withMdcFunction(resp -> {
                 if (resp.status() == RsStatus.NOT_FOUND) {
-                    this.negativeCache.put(cacheKey, Boolean.TRUE);
+                    this.negativeCache.cacheNotFound(cacheKey);
                     EcsLogger.debug("com.auto1.pantera.group")
-                        .message("Cached negative result for artifact (5min TTL)")
+                        .message("Cached negative result for artifact")
                         .eventCategory("database")
                         .eventAction("group_negative_cache_populate")
                         .log();
