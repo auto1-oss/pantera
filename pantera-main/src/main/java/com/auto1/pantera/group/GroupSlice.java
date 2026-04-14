@@ -21,6 +21,8 @@ import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
 
@@ -672,6 +674,11 @@ public final class GroupSlice implements Slice {
     /**
      * Query a single member directly (no negative cache check).
      * Used for index-targeted queries where we already know the member has the artifact.
+     *
+     * <p>Adds {@value EcsLoggingSlice#INTERNAL_ROUTING_HEADER} to the member request so
+     * that the member's {@code EcsLoggingSlice} suppresses its access log entry.
+     * The header is group-internal and does NOT leak to upstream remotes because proxy
+     * slice implementations forward {@code Headers.EMPTY} to their upstream clients.
      */
     private CompletableFuture<Response> queryMemberDirect(
         final MemberSlice member,
@@ -686,10 +693,13 @@ public final class GroupSlice implements Slice {
             : Content.EMPTY;
 
         final RequestLine rewritten = member.rewritePath(line);
+        final Headers memberHeaders = dropFullPathHeader(headers)
+            .copy()
+            .add(new Header(EcsLoggingSlice.INTERNAL_ROUTING_HEADER, "true"));
 
         return member.slice().response(
             rewritten,
-            dropFullPathHeader(headers),
+            memberHeaders,
             memberBody
         );
     }

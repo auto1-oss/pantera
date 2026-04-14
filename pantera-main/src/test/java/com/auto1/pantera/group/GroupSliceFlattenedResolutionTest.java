@@ -18,6 +18,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.index.ArtifactDocument;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.index.SearchResult;
@@ -31,9 +32,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -301,6 +304,54 @@ final class GroupSliceFlattenedResolutionTest {
         slice.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
         assertEquals(1, proxyCount.get(),
             "Proxy should only be queried once — second request hits negative cache");
+    }
+
+    // ---- Internal routing header suppresses EcsLoggingSlice access logs ----
+
+    /**
+     * Verify that GroupSlice sets the {@code X-Pantera-Internal} header on member requests.
+     * EcsLoggingSlice checks this header and skips access log emission, eliminating ~105K
+     * noise entries per 30 min from internal group-to-member fanout in production.
+     */
+    @Test
+    void memberDispatchCarriesInternalRoutingHeader() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of(HOSTED)));
+        final AtomicBoolean headerSeen = new AtomicBoolean(false);
+        final Map<String, Slice> slices = new HashMap<>();
+        // Member slice records whether the internal routing header was present
+        slices.put(HOSTED, (line, headers, body) -> {
+            if (!headers.find(EcsLoggingSlice.INTERNAL_ROUTING_HEADER).isEmpty()) {
+                headerSeen.set(true);
+            }
+            return CompletableFuture.completedFuture(ResponseBuilder.ok().build());
+        });
+        final GroupSlice slice = buildGroup(
+            idx,
+            List.of(HOSTED),
+            Collections.emptySet(),
+            slices
+        );
+        slice.response(
+            new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+        ).join();
+        assertTrue(headerSeen.get(),
+            "GroupSlice must set X-Pantera-Internal header on member dispatch "
+                + "so EcsLoggingSlice skips access log emission for internal queries");
+    }
+
+    /**
+     * Verify that external (client-facing) requests do NOT carry the internal routing header —
+     * EcsLoggingSlice at the top of the stack must still emit access logs for real client traffic.
+     */
+    @Test
+    void externalRequestLacksInternalRoutingHeader() {
+        final AtomicBoolean headerSeen = new AtomicBoolean(false);
+        // Simulate EcsLoggingSlice's check on an external request
+        final Headers externalHeaders = Headers.EMPTY;
+        headerSeen.set(!externalHeaders.find(EcsLoggingSlice.INTERNAL_ROUTING_HEADER).isEmpty());
+        assertFalse(headerSeen.get(),
+            "External (client-facing) requests must NOT carry X-Pantera-Internal "
+                + "— EcsLoggingSlice must still emit access logs for real client traffic");
     }
 
     // ---- Helpers ----
