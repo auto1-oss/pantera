@@ -511,7 +511,7 @@ class ConanSliceS3ITCase {
                         ConanSliceS3ITCase.SRV_USERNAME, ConanSliceS3ITCase.SRV_PASSWORD
                     ),
                     new ConanSlice.FakeAuthTokens(ConanSliceS3ITCase.TOKEN, ConanSliceS3ITCase.SRV_USERNAME),
-                    new ItemTokenizer(Vertx.vertx()),
+                    new ItemTokenizer(Vertx.vertx(), com.auto1.pantera.conan.TestRsaKeys.publicKey(), com.auto1.pantera.conan.TestRsaKeys.privateKey()),
                     "test"
             )),
             ConanSliceS3ITCase.CONAN_PORT

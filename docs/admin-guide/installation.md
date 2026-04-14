@@ -31,10 +31,13 @@ docker run -d \
   -p 8087:8087 \
   -v /path/to/pantera.yml:/etc/pantera/pantera.yml \
   -v /path/to/data:/var/pantera \
-  -e JWT_SECRET=your-secret-key \
+  -v /path/to/jwt-private.pem:/etc/pantera/jwt-private.pem:ro \
+  -v /path/to/jwt-public.pem:/etc/pantera/jwt-public.pem:ro \
+  -e JWT_PRIVATE_KEY_PATH=/etc/pantera/jwt-private.pem \
+  -e JWT_PUBLIC_KEY_PATH=/etc/pantera/jwt-public.pem \
   -e PANTERA_USER_NAME=admin \
   -e PANTERA_USER_PASS=changeme \
-  pantera:2.0.0
+  pantera:2.1.2
 ```
 
 ### Minimal Configuration
@@ -167,10 +170,11 @@ The `.env` file configures all stack services. Key variables to set before first
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `PANTERA_VERSION` | `2.0.0` | Docker image tag |
+| `PANTERA_VERSION` | `2.1.2` | Docker image tag |
 | `PANTERA_USER_NAME` | `admin` | Bootstrap admin username |
 | `PANTERA_USER_PASS` | `changeme` | Bootstrap admin password |
-| `JWT_SECRET` | (generate a strong key) | JWT signing key |
+| `JWT_PRIVATE_KEY_PATH` | `/etc/pantera/jwt-private.pem` | Path to the RSA private key used to sign tokens (RS256). Generate with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private.pem`. |
+| `JWT_PUBLIC_KEY_PATH` | `/etc/pantera/jwt-public.pem` | Path to the matching RSA public key for verification. Generate with `openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem`. |
 | `POSTGRES_USER` | `pantera` | Database username |
 | `POSTGRES_PASSWORD` | (set a strong password) | Database password |
 | `KEYCLOAK_CLIENT_SECRET` | (from Keycloak console) | OIDC client secret |

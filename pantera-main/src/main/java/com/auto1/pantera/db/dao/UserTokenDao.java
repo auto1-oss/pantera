@@ -89,21 +89,44 @@ public final class UserTokenDao {
     }
 
     /**
-     * List active (non-revoked) tokens for a user.
+     * List active (non-revoked) user-generated API tokens for a user.
+     *
+     * <p>Filters out session-lifecycle rows that also live in {@code user_tokens}
+     * — refresh tokens (written on every login / SSO callback / refresh) carry
+     * {@code token_type = 'refresh'} and must never appear in the profile UI's
+     * "Active Tokens" list. Only rows with {@code token_type = 'api'} (the
+     * tokens users explicitly generate from their profile) are returned.
+     *
      * @param username Username
-     * @return List of token info records
+     * @return List of API-token info records
      */
     public List<TokenInfo> listByUser(final String username) {
-        final String sql = String.join(" ",
-            "SELECT id, label, expires_at, created_at",
-            "FROM user_tokens",
-            "WHERE username = ? AND revoked = FALSE",
-            "ORDER BY created_at DESC"
-        );
+        return this.listByUser(username, "api");
+    }
+
+    /**
+     * List active (non-revoked) tokens for a user filtered by type.
+     *
+     * @param username Username
+     * @param tokenType Token type to filter on (e.g. {@code "api"},
+     *     {@code "refresh"}). Use {@code null} to return every type.
+     * @return List of token info records
+     */
+    public List<TokenInfo> listByUser(final String username, final String tokenType) {
+        final StringBuilder sql = new StringBuilder(128)
+            .append("SELECT id, label, expires_at, created_at FROM user_tokens")
+            .append(" WHERE username = ? AND revoked = FALSE");
+        if (tokenType != null) {
+            sql.append(" AND token_type = ?");
+        }
+        sql.append(" ORDER BY created_at DESC");
         final List<TokenInfo> result = new ArrayList<>();
         try (Connection conn = this.source.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             ps.setString(1, username);
+            if (tokenType != null) {
+                ps.setString(2, tokenType);
+            }
             final ResultSet rs = ps.executeQuery();
             while (rs.next()) {
                 final Timestamp exp = rs.getTimestamp("expires_at");
@@ -121,14 +144,22 @@ public final class UserTokenDao {
     }
 
     /**
-     * Revoke a token by ID for a given user.
+     * Revoke a user-generated API token by ID for a given user.
+     *
+     * <p>Scoped to {@code token_type = 'api'} so that the self-service
+     * revocation endpoint (DELETE /api/v1/auth/tokens/:id) cannot be used
+     * to revoke the caller's own refresh token — refresh-token invalidation
+     * goes through logout or the admin revoke-user path instead.
+     *
      * @param id Token UUID
      * @param username Username (ownership check)
-     * @return True if token was revoked
+     * @return True if a matching API token was revoked
      */
     public boolean revoke(final UUID id, final String username) {
-        final String sql =
-            "UPDATE user_tokens SET revoked = TRUE WHERE id = ? AND username = ?";
+        final String sql = String.join(" ",
+            "UPDATE user_tokens SET revoked = TRUE",
+            "WHERE id = ? AND username = ? AND token_type = 'api'"
+        );
         try (Connection conn = this.source.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setObject(1, id);

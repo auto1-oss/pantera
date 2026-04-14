@@ -191,10 +191,23 @@ Inbound HTTP server settings.
 ```yaml
 meta:
   http_server:
-    request_timeout: PT2M     # ISO-8601 duration or milliseconds
+    request_timeout: PT2M       # ISO-8601 duration or milliseconds (0 disables)
+    proxy_protocol: "true"      # Enable PROXYv2 on main + per-repo listeners (NLB-fronted)
+    api_proxy_protocol: "false" # Disable PROXYv2 on the API port (ALB-fronted)
 ```
 
-Set to `0` to disable the request timeout. The default is 2 minutes.
+Set `request_timeout` to `0` to disable the request timeout. The default is 2 minutes.
+
+### Mixed NLB + ALB topology
+
+PROXYv2 is enabled per listener as of 2.1.2:
+
+- `proxy_protocol` — applies to the **main port** and **per-repository ports**. Enable this when those ports sit behind an AWS NLB target group with `proxy_protocol_v2.enabled = true`.
+- `api_proxy_protocol` — applies to the **API port** only (typically `8086`). Defaults to whatever `proxy_protocol` is set to (backward compatible). Set to `"false"` when the API port is behind an ALB while the main port stays behind an NLB.
+
+ALBs **do not** emit PROXYv2 — they terminate the L7 HTTP connection and forward a fresh request with `X-Forwarded-For`. Enabling PROXYv2 on an ALB-fronted listener breaks every connection (including health checks) because the decoder misparses the ALB's plain `GET /` bytes as a malformed PROXY header. The symptom is that the ALB target group reports the API port unhealthy with no useful Pantera log entry. The fix is `api_proxy_protocol: "false"`.
+
+For the full key reference, see [Configuration Reference §1.8](../configuration-reference.md#18-metahttp_server).
 
 ---
 
@@ -394,125 +407,13 @@ meta:
 
 ---
 
-## Scheduled Scripts (Crontab)
+## Advanced Features
 
-Pantera supports running custom server-side scripts on a schedule using the JVM scripting engine. Scripts are configured in pantera.yml under `meta.crontab`.
+The following features are supported but configured primarily via the repository YAML. See the [Configuration Reference](../configuration-reference.md) for the full key list.
 
-### Configuration
-
-```yaml
-meta:
-  crontab:
-    - path: path/to/script.groovy
-      cronexp: "*/3 * * * * ?"
-```
-
-The `cronexp` value uses [Quartz cron format](http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html). The example above runs every 3 minutes.
-
-### Supported Languages
-
-| Language | File Extension |
-|----------|---------------|
-| Groovy | `.groovy` |
-| Python 2 | `.py` |
-
-### Accessing Pantera Objects
-
-Scripts can access server objects via underscore-prefixed variables:
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| `_settings` | `com.auto1.pantera.settings.Settings` | Application settings |
-| `_repositories` | `com.auto1.pantera.settings.repo.Repositories` | Repository configurations |
-
-**Example (Groovy):**
-
-```groovy
-File file = new File('/my-repo/info/cfg.log')
-cfg = _repositories.config('my-repo').toCompletableFuture().join()
-file.write cfg.toString()
-```
-
----
-
-## HTTP/3 Protocol Support (Experimental)
-
-Pantera supports HTTP/3 via the Jetty HTTP/3 implementation. This feature is experimental.
-
-### Server-Side (Per-Repository)
-
-Enable HTTP/3 for a specific repository by adding `http3` settings to the repository YAML:
-
-```yaml
-repo:
-  type: maven
-  storage: default
-  port: 5647
-  http3: true
-  http3_ssl:
-    jks:
-      path: keystore.jks
-      password: secret
-```
-
-HTTP/3 requires TLS, so SSL settings are mandatory. Multiple repositories can share the same HTTP/3 port.
-
-### Client-Side (Proxy Adapters)
-
-To use HTTP/3 for all outbound proxy requests, set the environment variable:
-
-```bash
-http3.client=true
-```
-
----
-
-## Repository Filters
-
-Pantera can filter repository resources by URL pattern. Filters are defined in the repository YAML under the `filters` section.
-
-### Configuration
-
-```yaml
-repo:
-  type: maven
-  storage: default
-  filters:
-    include:
-      glob:
-        - filter: '**/org/springframework/**/*.jar'
-        - filter: '**/org/apache/logging/**/*.jar'
-          priority: 10
-      regexp:
-        - filter: '.*/com/auto1/.*\.jar'
-    exclude:
-      glob:
-        - filter: '**/org/apache/logging/log4j/log4j-core/2.17.0/*.jar'
-```
-
-### Filter Rules
-
-- A resource is **allowed** if it matches at least one `include` pattern and does not match any `exclude` pattern.
-- A resource is **blocked** if it matches an `exclude` pattern, or if both `include` and `exclude` are empty.
-- Filters are ordered by definition order and optional `priority` field (default: 0).
-
-### Filter Types
-
-**Glob filters** match against the request path using [Java glob syntax](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/file/FileSystem.html#getPathMatcher(java.lang.String)):
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `filter` | Yes | Glob expression |
-| `priority` | No | Numeric priority (default: 0) |
-
-**Regexp filters** match against the request path or full URI:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `filter` | Yes | Regular expression |
-| `priority` | No | Numeric priority (default: 0) |
-| `full_uri` | No | Match full URI instead of path only (default: false) |
-| `case_insensitive` | No | Case-insensitive matching (default: false) |
+- **Scheduled scripts (crontab).** Run Groovy or Python 2 scripts on a Quartz schedule from `meta.crontab`. See [Configuration Reference §1.13](../configuration-reference.md#113-metacrontab).
+- **HTTP/3 (experimental).** Enable per repository with `http3: true` + `http3_ssl.jks`, or enable client-side proxy upstreams with the `http3.client` environment variable. See [Configuration Reference §2.6](../configuration-reference.md#26-http3-protocol-support-experimental).
+- **Repository filters.** Include/exclude artifacts by glob or regexp patterns under the repo's `filters` block. See [Configuration Reference §2.7](../configuration-reference.md#27-repository-filters).
 
 ---
 

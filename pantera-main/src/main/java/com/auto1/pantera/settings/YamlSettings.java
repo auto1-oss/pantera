@@ -443,6 +443,21 @@ public final class YamlSettings implements Settings {
     }
 
     @Override
+    public boolean apiProxyProtocol() {
+        final YamlMapping server = this.meta != null
+            ? this.meta.yamlMapping("http_server") : null;
+        if (server == null) {
+            return false;
+        }
+        final String explicit = server.string("api_proxy_protocol");
+        if (explicit == null) {
+            // Backward-compatible default — pre-2.1.2 single-flag behaviour.
+            return this.proxyProtocol();
+        }
+        return "true".equalsIgnoreCase(explicit);
+    }
+
+    @Override
     public void close() {
         if (this.closed) {
             return;

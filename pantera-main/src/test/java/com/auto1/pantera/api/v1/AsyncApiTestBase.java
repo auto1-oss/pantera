@@ -31,9 +31,6 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
-import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
@@ -149,19 +146,16 @@ public class AsyncApiTestBase {
         final JwtTokens jwtTokens = new JwtTokens(
             privateKey, publicKey, null, null, null
         );
-        // Still need a JWTAuth for the Verticle constructor (legacy param, may be unused)
-        final JWTAuth jwt = JWTAuth.create(
-            vertx, new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("unused-in-new-auth")
-            )
-        );
+        // AsyncApiVerticle still takes a JWTAuth parameter for backward compat,
+        // but since 2.1.0 it's dead code (RS256 path via jwtTokens is mandatory).
+        // Production passes null here — mirror that to stay honest.
         final AsyncApiVerticle verticle = new AsyncApiVerticle(
             new TestPanteraCaches(),
             storage,
             0,
             security,
             Optional.empty(),
-            jwt,
+            null,
             Optional.empty(),
             NoopCooldownService.INSTANCE,
             new TestSettings(),

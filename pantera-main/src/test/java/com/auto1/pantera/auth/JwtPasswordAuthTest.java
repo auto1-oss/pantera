@@ -12,13 +12,20 @@ package com.auto1.pantera.auth;
 
 import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.http.auth.AuthUser;
-import com.auto1.pantera.settings.JwtSettings;
+
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.JWTOptions;
 import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
+
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
+
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterAll;
@@ -26,34 +33,28 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.Optional;
-
 /**
- * Tests for {@link JwtPasswordAuth}.
- * Verifies that JWT tokens can be used as passwords in Basic Authentication.
+ * Tests for {@link JwtPasswordAuth} against the production RS256 key pair.
+ *
+ * <p>Exercises the same wiring {@link JwtPasswordAuthFactory} assembles at
+ * runtime: an RSA key pair loaded from PEM fixtures, a Vert.x {@link JWTAuth}
+ * configured with {@code RS256} keys, and a {@link JwtPasswordAuth} that
+ * verifies tokens against it. Tokens are minted here via the same
+ * {@code JWTAuth} instance so a sign/verify key mismatch — the class of bug
+ * that broke UI-generated API tokens in 2.1.0/2.1.1 — cannot hide.
  *
  * @since 1.20.7
  */
 class JwtPasswordAuthTest {
 
-    /**
-     * Shared Vertx instance.
-     */
+    private static final String FIXTURES = "auth/rsa/";
+
     private static Vertx vertx;
 
-    /**
-     * JWT secret for testing.
-     */
-    private static final String SECRET = "test-secret-key-for-jwt-password-auth";
-
-    /**
-     * JWT provider for generating test tokens.
-     */
+    /** Vert.x provider configured with the RSA key pair; used to mint and verify. */
     private JWTAuth jwtProvider;
 
-    /**
-     * JwtPasswordAuth under test.
-     */
+    /** JwtPasswordAuth under test. */
     private JwtPasswordAuth auth;
 
     @BeforeAll
@@ -69,12 +70,20 @@ class JwtPasswordAuthTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         this.jwtProvider = JWTAuth.create(
             vertx,
-            new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(SECRET)
-            )
+            new JWTAuthOptions()
+                .addPubSecKey(
+                    new PubSecKeyOptions()
+                        .setAlgorithm("RS256")
+                        .setBuffer(readResource("pub-2048.pem"))
+                )
+                .addPubSecKey(
+                    new PubSecKeyOptions()
+                        .setAlgorithm("RS256")
+                        .setBuffer(readResource("priv-2048-pkcs8.pem"))
+                )
         );
         this.auth = new JwtPasswordAuth(this.jwtProvider);
     }
@@ -82,242 +91,170 @@ class JwtPasswordAuthTest {
     @Test
     void authenticatesWithValidJwtAsPassword() {
         final String username = "testuser@example.com";
-        final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, username)
-                .put(AuthTokenRest.CONTEXT, "okta")
-        );
+        final String token = mint(username, "okta");
         final Optional<AuthUser> result = this.auth.user(username, token);
-        MatcherAssert.assertThat(
-            "Should authenticate with valid JWT as password",
-            result.isPresent(),
-            Matchers.is(true)
-        );
-        MatcherAssert.assertThat(
-            "Username should match token subject",
-            result.get().name(),
-            Matchers.is(username)
-        );
-        MatcherAssert.assertThat(
-            "Auth context should be from token",
-            result.get().authContext(),
-            Matchers.is("okta")
-        );
+        MatcherAssert.assertThat(result.isPresent(), Matchers.is(true));
+        MatcherAssert.assertThat(result.get().name(), Matchers.is(username));
+        MatcherAssert.assertThat(result.get().authContext(), Matchers.is("okta"));
     }
 
     @Test
     void rejectsWhenUsernameDoesNotMatchTokenSubject() {
-        final String tokenSubject = "realuser@example.com";
-        final String providedUsername = "fakeuser@example.com";
-        final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, tokenSubject)
-                .put(AuthTokenRest.CONTEXT, "test")
-        );
-        final Optional<AuthUser> result = this.auth.user(providedUsername, token);
-        MatcherAssert.assertThat(
-            "Should reject when username doesn't match token subject",
-            result.isPresent(),
-            Matchers.is(false)
-        );
+        final String token = mint("realuser@example.com", "test");
+        final Optional<AuthUser> result = this.auth.user("fakeuser@example.com", token);
+        MatcherAssert.assertThat(result.isPresent(), Matchers.is(false));
     }
 
     @Test
     void allowsMismatchedUsernameWhenMatchingDisabled() {
         final JwtPasswordAuth noMatchAuth = new JwtPasswordAuth(this.jwtProvider, false);
         final String tokenSubject = "realuser@example.com";
-        final String providedUsername = "anyuser@example.com";
-        final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, tokenSubject)
-                .put(AuthTokenRest.CONTEXT, "test")
-        );
-        final Optional<AuthUser> result = noMatchAuth.user(providedUsername, token);
-        MatcherAssert.assertThat(
-            "Should allow when username matching is disabled",
-            result.isPresent(),
-            Matchers.is(true)
-        );
-        MatcherAssert.assertThat(
-            "Username should be from token subject, not provided username",
-            result.get().name(),
-            Matchers.is(tokenSubject)
-        );
+        final String token = mint(tokenSubject, "test");
+        final Optional<AuthUser> result = noMatchAuth.user("anyuser@example.com", token);
+        MatcherAssert.assertThat(result.isPresent(), Matchers.is(true));
+        MatcherAssert.assertThat(result.get().name(), Matchers.is(tokenSubject));
     }
 
     @Test
     void returnsEmptyForNonJwtPassword() {
-        final Optional<AuthUser> result = this.auth.user("user", "regular-password");
         MatcherAssert.assertThat(
-            "Should return empty for non-JWT password",
-            result.isPresent(),
+            this.auth.user("user", "regular-password").isPresent(),
             Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForNullPassword() {
-        final Optional<AuthUser> result = this.auth.user("user", null);
         MatcherAssert.assertThat(
-            "Should return empty for null password",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", null).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForEmptyPassword() {
-        final Optional<AuthUser> result = this.auth.user("user", "");
         MatcherAssert.assertThat(
-            "Should return empty for empty password",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", "").isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForInvalidJwt() {
-        final String invalidToken = "eyJhbGciOiJIUzI1NiJ9.invalid.signature";
-        final Optional<AuthUser> result = this.auth.user("user", invalidToken);
+        final String invalid = "eyJhbGciOiJSUzI1NiJ9.invalid.signature";
         MatcherAssert.assertThat(
-            "Should return empty for invalid JWT",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", invalid).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
-    void returnsEmptyForJwtWithWrongSecret() {
-        // Create JWT with different secret
+    void returnsEmptyForJwtSignedByDifferentKey() throws Exception {
+        // 4096-bit fixture key pair — different key material than the 2048-bit
+        // pair the auth-under-test verifies against.
         final JWTAuth otherProvider = JWTAuth.create(
             vertx,
-            new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer("different-secret")
-            )
+            new JWTAuthOptions()
+                .addPubSecKey(
+                    new PubSecKeyOptions()
+                        .setAlgorithm("RS256")
+                        .setBuffer(readResource("pub-4096.pem"))
+                )
+                .addPubSecKey(
+                    new PubSecKeyOptions()
+                        .setAlgorithm("RS256")
+                        .setBuffer(readResource("priv-4096-pkcs8.pem"))
+                )
         );
         final String token = otherProvider.generateToken(
             new JsonObject()
                 .put(AuthTokenRest.SUB, "user")
-                .put(AuthTokenRest.CONTEXT, "test")
+                .put(AuthTokenRest.CONTEXT, "test"),
+            new JWTOptions().setAlgorithm("RS256")
         );
-        final Optional<AuthUser> result = this.auth.user("user", token);
         MatcherAssert.assertThat(
-            "Should reject JWT signed with different secret",
-            result.isPresent(),
-            Matchers.is(false)
+            "A token signed by an unrelated RSA key pair must not verify",
+            this.auth.user("user", token).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForExpiredJwt() throws Exception {
-        // Generate token that expires in 1 second
         final String token = this.jwtProvider.generateToken(
             new JsonObject()
                 .put(AuthTokenRest.SUB, "user")
                 .put(AuthTokenRest.CONTEXT, "test"),
-            new JWTOptions().setExpiresInSeconds(1)
+            new JWTOptions().setAlgorithm("RS256").setExpiresInSeconds(1)
         );
-        // Wait for token to expire
-        Thread.sleep(2000);
-        final Optional<AuthUser> result = this.auth.user("user", token);
+        Thread.sleep(2_000L);
         MatcherAssert.assertThat(
-            "Should reject expired JWT",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", token).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForJwtWithoutSubClaim() {
         final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.CONTEXT, "test")
-            // Missing 'sub' claim
+            new JsonObject().put(AuthTokenRest.CONTEXT, "test"),
+            new JWTOptions().setAlgorithm("RS256")
         );
-        final Optional<AuthUser> result = this.auth.user("user", token);
         MatcherAssert.assertThat(
-            "Should reject JWT without 'sub' claim",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", token).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void returnsEmptyForPasswordThatLooksLikeJwtButIsNot() {
-        // Starts with "eyJ" but is not valid JWT
-        final String fakeJwt = "eyJhbGciOiJub25lIn0.not-base64.fake";
-        final Optional<AuthUser> result = this.auth.user("user", fakeJwt);
+        final String fake = "eyJhbGciOiJub25lIn0.not-base64.fake";
         MatcherAssert.assertThat(
-            "Should return empty for fake JWT-like password",
-            result.isPresent(),
-            Matchers.is(false)
+            this.auth.user("user", fake).isPresent(), Matchers.is(false)
         );
     }
 
     @Test
     void toStringIncludesClassName() {
         MatcherAssert.assertThat(
-            this.auth.toString(),
-            Matchers.containsString("JwtPasswordAuth")
-        );
-    }
-
-    @Test
-    void canBeCreatedFromSecret() {
-        final JwtPasswordAuth fromSecret = JwtPasswordAuth.fromSecret(vertx, SECRET);
-        final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, "testuser")
-                .put(AuthTokenRest.CONTEXT, "test")
-        );
-        final Optional<AuthUser> result = fromSecret.user("testuser", token);
-        MatcherAssert.assertThat(
-            "JwtPasswordAuth created from secret should validate tokens",
-            result.isPresent(),
-            Matchers.is(true)
+            this.auth.toString(), Matchers.containsString("JwtPasswordAuth")
         );
     }
 
     @Test
     void handlesSpecialCharactersInUsername() {
         final String username = "user+tag@example.com";
-        final String token = this.jwtProvider.generateToken(
-            new JsonObject()
-                .put(AuthTokenRest.SUB, username)
-                .put(AuthTokenRest.CONTEXT, "test")
-        );
+        final String token = mint(username, "test");
         final Optional<AuthUser> result = this.auth.user(username, token);
-        MatcherAssert.assertThat(
-            "Should handle special characters in username",
-            result.isPresent(),
-            Matchers.is(true)
-        );
-        MatcherAssert.assertThat(
-            result.get().name(),
-            Matchers.is(username)
-        );
+        MatcherAssert.assertThat(result.isPresent(), Matchers.is(true));
+        MatcherAssert.assertThat(result.get().name(), Matchers.is(username));
     }
 
     @Test
     void defaultContextWhenNotInToken() {
         final String username = "testuser";
-        // Create token without explicit context
-        final JwtPasswordAuth noContextAuth = new JwtPasswordAuth(this.jwtProvider, true);
         final String token = this.jwtProvider.generateToken(
+            new JsonObject().put(AuthTokenRest.SUB, username),
+            new JWTOptions().setAlgorithm("RS256")
+        );
+        final Optional<AuthUser> result = this.auth.user(username, token);
+        MatcherAssert.assertThat(result.isPresent(), Matchers.is(true));
+        MatcherAssert.assertThat(
+            result.get().authContext(), Matchers.is("jwt-password")
+        );
+    }
+
+    // ─── helpers ─────────────────────────────────────────────────────────────
+
+    private String mint(final String subject, final String context) {
+        return this.jwtProvider.generateToken(
             new JsonObject()
-                .put(AuthTokenRest.SUB, username)
-            // No CONTEXT field
+                .put(AuthTokenRest.SUB, subject)
+                .put(AuthTokenRest.CONTEXT, context),
+            new JWTOptions().setAlgorithm("RS256")
         );
-        final Optional<AuthUser> result = noContextAuth.user(username, token);
-        MatcherAssert.assertThat(
-            "Should authenticate even without context",
-            result.isPresent(),
-            Matchers.is(true)
-        );
-        MatcherAssert.assertThat(
-            "Should use default context when not in token",
-            result.get().authContext(),
-            Matchers.is("jwt-password")
-        );
+    }
+
+    private static String readResource(final String name) throws Exception {
+        final URL url = JwtPasswordAuthTest.class.getClassLoader()
+            .getResource(FIXTURES + name);
+        if (url == null) {
+            throw new IllegalStateException("Missing test fixture: " + FIXTURES + name);
+        }
+        return Files.readString(Path.of(URI.create(url.toString())));
     }
 }

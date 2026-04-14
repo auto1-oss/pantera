@@ -10,73 +10,140 @@
  */
 package com.auto1.pantera.auth;
 
-import java.io.IOException;
+import java.math.BigInteger;
+import java.net.URI;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.util.Base64;
+
 import org.hamcrest.MatcherAssert;
-import org.hamcrest.core.IsEqual;
-import org.hamcrest.core.IsNot;
-import org.hamcrest.core.IsNull;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.Assertions;
 
+/**
+ * Tests for {@link RsaKeyLoader}.
+ *
+ * <p>Verifies both PEM formats we advertise are accepted:
+ * <ul>
+ *   <li>PKCS#8 — {@code -----BEGIN PRIVATE KEY-----} (openssl genpkey)</li>
+ *   <li>PKCS#1 — {@code -----BEGIN RSA PRIVATE KEY-----} (openssl genrsa / -traditional)</li>
+ * </ul>
+ *
+ * <p>Fixtures in {@code src/test/resources/auth/rsa/} contain the same key
+ * material in both formats at both 2048 and 4096 bits, so the two loader
+ * paths must produce identical modulus + private exponent.
+ */
 class RsaKeyLoaderTest {
 
-    @TempDir
-    Path tempDir;
+    private static final String FIXTURES = "auth/rsa/";
 
     @Test
-    void loadsValidKeyPair() throws Exception {
-        final KeyPair kp = generateKeyPair();
-        final Path privPath = writePem(tempDir, "private.pem", "PRIVATE KEY",
-            kp.getPrivate().getEncoded());
-        final Path pubPath = writePem(tempDir, "public.pem", "PUBLIC KEY",
-            kp.getPublic().getEncoded());
-        final RsaKeyLoader loader = new RsaKeyLoader(privPath.toString(), pubPath.toString());
-        MatcherAssert.assertThat(loader.privateKey(), new IsNot<>(new IsNull<>()));
-        MatcherAssert.assertThat(loader.publicKey(), new IsNot<>(new IsNull<>()));
+    void loadsPkcs8Rsa2048() {
+        final RsaKeyLoader loader = load("priv-2048-pkcs8.pem", "pub-2048.pem");
+        MatcherAssert.assertThat(loader.privateKey().getModulus().bitLength(), Matchers.equalTo(2048));
+        MatcherAssert.assertThat(loader.publicKey().getModulus().bitLength(), Matchers.equalTo(2048));
+    }
+
+    @Test
+    void loadsPkcs1Rsa2048() {
+        final RsaKeyLoader loader = load("priv-2048-pkcs1.pem", "pub-2048.pem");
+        MatcherAssert.assertThat(loader.privateKey().getModulus().bitLength(), Matchers.equalTo(2048));
+    }
+
+    @Test
+    void loadsPkcs8Rsa4096() {
+        final RsaKeyLoader loader = load("priv-4096-pkcs8.pem", "pub-4096.pem");
+        MatcherAssert.assertThat(loader.privateKey().getModulus().bitLength(), Matchers.equalTo(4096));
+        MatcherAssert.assertThat(loader.publicKey().getModulus().bitLength(), Matchers.equalTo(4096));
+    }
+
+    @Test
+    void loadsPkcs1Rsa4096() {
+        // Exercises the long-form DER length encoding (0x82 + 2 bytes) in the
+        // PKCS#1→PKCS#8 wrapper — the body is ~2349 bytes, far past the
+        // 127-byte short-form threshold.
+        final RsaKeyLoader loader = load("priv-4096-pkcs1.pem", "pub-4096.pem");
+        MatcherAssert.assertThat(loader.privateKey().getModulus().bitLength(), Matchers.equalTo(4096));
+    }
+
+    @Test
+    void pkcs1AndPkcs8YieldIdenticalKeyMaterial() {
+        final RSAPrivateKey fromPkcs1 =
+            load("priv-2048-pkcs1.pem", "pub-2048.pem").privateKey();
+        final RSAPrivateKey fromPkcs8 =
+            load("priv-2048-pkcs8.pem", "pub-2048.pem").privateKey();
+        MatcherAssert.assertThat(fromPkcs1.getModulus(), Matchers.equalTo(fromPkcs8.getModulus()));
         MatcherAssert.assertThat(
-            loader.publicKey().getModulus(),
-            new IsEqual<>(((RSAPublicKey) kp.getPublic()).getModulus())
+            fromPkcs1.getPrivateExponent(),
+            Matchers.equalTo(fromPkcs8.getPrivateExponent())
         );
     }
 
     @Test
-    void throwsOnMissingPrivateKey() {
-        org.junit.jupiter.api.Assertions.assertThrows(
-            IllegalStateException.class,
-            () -> new RsaKeyLoader("/nonexistent/private.pem", "/nonexistent/public.pem")
-        );
+    void publicKeyMatchesPrivate() {
+        final RsaKeyLoader loader = load("priv-2048-pkcs8.pem", "pub-2048.pem");
+        final RSAPrivateKey priv = loader.privateKey();
+        final RSAPublicKey pub = loader.publicKey();
+        MatcherAssert.assertThat(priv.getModulus(), Matchers.equalTo(pub.getModulus()));
+        MatcherAssert.assertThat(pub.getPublicExponent(), Matchers.equalTo(BigInteger.valueOf(65_537)));
     }
 
     @Test
-    void throwsOnInvalidPem() throws Exception {
-        final Path bad = tempDir.resolve("bad.pem");
-        Files.writeString(bad, "not a pem file");
-        org.junit.jupiter.api.Assertions.assertThrows(
+    void rejectsMissingPrivateKey(@TempDir final Path tmp) {
+        final IllegalStateException ex = Assertions.assertThrows(
             IllegalStateException.class,
-            () -> new RsaKeyLoader(bad.toString(), bad.toString())
+            () -> new RsaKeyLoader(
+                tmp.resolve("does-not-exist.pem").toString(),
+                resourcePath("pub-2048.pem")
+            )
+        );
+        MatcherAssert.assertThat(ex.getMessage(), Matchers.containsString("JWT private key not found"));
+    }
+
+    @Test
+    void rejectsMissingPublicKey(@TempDir final Path tmp) {
+        final IllegalStateException ex = Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new RsaKeyLoader(
+                resourcePath("priv-2048-pkcs8.pem"),
+                tmp.resolve("nope.pem").toString()
+            )
+        );
+        MatcherAssert.assertThat(ex.getMessage(), Matchers.containsString("JWT public key not found"));
+    }
+
+    @Test
+    void rejectsUnrecognizedPemHeader(@TempDir final Path tmp) throws Exception {
+        final Path bogus = tmp.resolve("bogus.pem");
+        Files.writeString(bogus, "-----BEGIN DSA PRIVATE KEY-----\nAAAA\n-----END DSA PRIVATE KEY-----\n");
+        final IllegalStateException ex = Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> new RsaKeyLoader(bogus.toString(), resourcePath("pub-2048.pem"))
+        );
+        MatcherAssert.assertThat(
+            ex.getMessage(),
+            Matchers.containsString("Unrecognized private key format")
         );
     }
 
-    private static KeyPair generateKeyPair() throws Exception {
-        final KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(2048);
-        return gen.generateKeyPair();
+    // ─── helpers ─────────────────────────────────────────────────────────────
+
+    private static RsaKeyLoader load(final String priv, final String pub) {
+        final RsaKeyLoader loader = new RsaKeyLoader(resourcePath(priv), resourcePath(pub));
+        MatcherAssert.assertThat(loader.privateKey(), Matchers.notNullValue());
+        MatcherAssert.assertThat(loader.publicKey(), Matchers.notNullValue());
+        return loader;
     }
 
-    private static Path writePem(final Path dir, final String name,
-        final String type, final byte[] encoded) throws IOException {
-        final Path file = dir.resolve(name);
-        final String pem = "-----BEGIN " + type + "-----\n"
-            + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(encoded)
-            + "\n-----END " + type + "-----\n";
-        Files.writeString(file, pem);
-        return file;
+    private static String resourcePath(final String resource) {
+        final URL url = RsaKeyLoaderTest.class.getClassLoader().getResource(FIXTURES + resource);
+        if (url == null) {
+            throw new IllegalStateException("Missing test fixture: " + FIXTURES + resource);
+        }
+        return Path.of(URI.create(url.toString())).toString();
     }
 }

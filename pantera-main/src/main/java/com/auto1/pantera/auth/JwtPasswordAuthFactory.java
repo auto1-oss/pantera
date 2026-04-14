@@ -15,30 +15,37 @@ import com.auto1.pantera.http.auth.PanteraAuthFactory;
 import com.auto1.pantera.http.auth.AuthFactory;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.settings.JwtSettings;
 import io.vertx.core.Vertx;
 import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.interfaces.RSAPublicKey;
+import java.util.Base64;
+import java.util.Optional;
+
 /**
  * Factory for JWT-as-password authentication.
- * <p>
- * This factory creates a {@link JwtPasswordAuth} instance that validates
- * JWT tokens used as passwords in Basic Authentication. The JWT secret
- * is read from the pantera.yml configuration.
- * </p>
- * <p>
- * Configuration in pantera.yml:
+ *
+ * <p>Creates a {@link JwtPasswordAuth} backed by a Vert.x {@link JWTAuth}
+ * configured for RS256 verification against the cluster's public key — the
+ * same key pair {@code JwtTokens} uses to sign API tokens. Reads
+ * {@code meta.jwt.public-key-path} from {@code pantera.yml} via
+ * {@link com.auto1.pantera.settings.JwtSettings}.
+ *
+ * <p>Configuration in {@code pantera.yml}:
  * <pre>
  * meta:
  *   jwt:
- *     secret: "${JWT_SECRET}"
+ *     private-key-path: "${JWT_PRIVATE_KEY_PATH}"
+ *     public-key-path:  "${JWT_PUBLIC_KEY_PATH}"
  *   credentials:
  *     - type: jwt-password  # This enables JWT-as-password auth
- *     - type: file
- *       path: _credentials.yaml
+ *     - type: local
  * </pre>
- * </p>
  *
  * @since 1.20.7
  */
@@ -58,31 +65,33 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
 
     @Override
     public Authentication getAuthentication(final YamlMapping cfg) {
-        final YamlMapping meta = cfg.yamlMapping("meta");
-        final YamlMapping jwtYaml = meta != null ? meta.yamlMapping("jwt") : null;
-        String secret = jwtYaml != null ? jwtYaml.string("secret") : null;
-        if (secret == null || secret.isEmpty()) {
-            secret = "jwt-password-fallback-secret";
-            EcsLogger.warn("com.auto1.pantera.auth")
-                .message("JWT-as-password auth: no secret configured, using fallback. "
-                    + "This mode is deprecated — migrate to RS256 key-based auth.")
-                .eventCategory("authentication")
-                .eventAction("jwt_password_init")
-                .eventOutcome("success")
-                .log();
+        // cfg is the meta: mapping itself (passed by YamlSettings.initAuth as
+        // this.meta()). Do NOT nest with cfg.yamlMapping("meta") — that would
+        // look for meta.meta.jwt which doesn't exist and causes the factory to
+        // throw "public-key-path is not configured" even though the keys ARE set.
+        // JwtSettings.fromYaml expects the meta mapping directly.
+        final JwtSettings jwtSettings = JwtSettings.fromYaml(cfg);
+        final Optional<String> publicKeyPath = jwtSettings.publicKeyPath();
+        if (publicKeyPath.isEmpty()) {
+            throw new IllegalStateException(
+                "jwt-password auth provider is enabled but meta.jwt.public-key-path is"
+                + " not configured. Set meta.jwt.private-key-path and"
+                + " meta.jwt.public-key-path (see Admin Guide → Authentication)."
+            );
         }
-        // Get or create Vertx instance for JWT validation
+        final RSAPublicKey publicKey = loadRsaPublicKey(Path.of(publicKeyPath.get()));
         final Vertx vertx = getOrCreateVertx();
         final JWTAuth jwtAuth = JWTAuth.create(
             vertx,
             new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(secret)
+                new PubSecKeyOptions()
+                    .setAlgorithm("RS256")
+                    .setBuffer(pemEncodePublicKey(publicKey))
             )
         );
-        // Check if username matching is disabled in config
         boolean requireUsernameMatch = true;
-        if (meta != null) {
-            final YamlMapping jwtPasswordCfg = meta.yamlMapping("jwt-password");
+        if (cfg != null) {
+            final YamlMapping jwtPasswordCfg = cfg.yamlMapping("jwt-password");
             if (jwtPasswordCfg != null) {
                 final String matchStr = jwtPasswordCfg.string("require-username-match");
                 if (matchStr != null) {
@@ -91,12 +100,57 @@ public final class JwtPasswordAuthFactory implements AuthFactory {
             }
         }
         EcsLogger.info("com.auto1.pantera.auth")
-            .message(String.format("JWT-as-password authentication initialized: requireUsernameMatch=%s", requireUsernameMatch))
+            .message(String.format(
+                "JWT-as-password authentication initialized (RS256): requireUsernameMatch=%s",
+                requireUsernameMatch
+            ))
             .eventCategory("authentication")
             .eventAction("jwt_password_init")
             .eventOutcome("success")
             .log();
         return new JwtPasswordAuth(jwtAuth, requireUsernameMatch);
+    }
+
+    /**
+     * Load an RSA public key from a PEM file using {@link RsaKeyLoader}'s
+     * decoder. Uses a dummy private-key path so we can reuse the same loader
+     * instance — jwt-password only needs the public half for verification,
+     * but {@link RsaKeyLoader} validates both. If the configured private key
+     * is unreadable we fall back to parsing the public PEM directly.
+     */
+    private static RSAPublicKey loadRsaPublicKey(final Path publicKeyPath) {
+        try {
+            final String pem = Files.readString(publicKeyPath);
+            final String base64 = pem
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+            final byte[] decoded = Base64.getDecoder().decode(base64);
+            final java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
+            return (RSAPublicKey) kf.generatePublic(
+                new java.security.spec.X509EncodedKeySpec(decoded)
+            );
+        } catch (final Exception ex) {
+            throw new IllegalStateException(
+                "Failed to load RSA public key for jwt-password auth from "
+                + publicKeyPath + ": " + ex.getMessage(), ex
+            );
+        }
+    }
+
+    /**
+     * Re-encode an RSA public key as a PEM string — Vert.x's
+     * {@code PubSecKeyOptions.setBuffer} expects the PEM form, not raw
+     * {@code X509EncodedKeySpec} bytes.
+     */
+    private static String pemEncodePublicKey(final RSAPublicKey publicKey) {
+        final String base64 = Base64.getEncoder().encodeToString(publicKey.getEncoded());
+        final StringBuilder sb = new StringBuilder("-----BEGIN PUBLIC KEY-----\n");
+        for (int i = 0; i < base64.length(); i += 64) {
+            sb.append(base64, i, Math.min(i + 64, base64.length())).append('\n');
+        }
+        sb.append("-----END PUBLIC KEY-----\n");
+        return sb.toString();
     }
 
     /**

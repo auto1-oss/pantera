@@ -121,9 +121,10 @@ meta:
     postgres_user: pantera
     postgres_password: ${POSTGRES_PASSWORD}
   jwt:
-    secret: ${JWT_SECRET}
-    expires: true
-    expiry-seconds: 86400
+    private-key-path: ${JWT_PRIVATE_KEY_PATH}
+    public-key-path: ${JWT_PUBLIC_KEY_PATH}
+    access-token-expiry-seconds: 3600
+    refresh-token-expiry-seconds: 604800
 ```
 
 See the [Configuration Reference](docs/configuration-reference.md) for all options.

@@ -14,13 +14,10 @@ import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.http.log.EcsLogger;
-import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.auth.PubSecKeyOptions;
 import io.vertx.ext.auth.User;
 import io.vertx.ext.auth.authentication.TokenCredentials;
 import io.vertx.ext.auth.jwt.JWTAuth;
-import io.vertx.ext.auth.jwt.JWTAuthOptions;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -28,25 +25,23 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Authentication that treats JWT tokens as passwords.
- * <p>
- * This allows clients to use their JWT token (obtained via /api/v1/oauth/token)
- * as the password in Basic Authentication headers. The JWT is validated locally
- * using the shared secret without any external IdP calls.
- * </p>
- * <p>
- * Usage in Maven settings.xml:
+ *
+ * <p>Lets clients use an API token (obtained via {@code POST /api/v1/auth/token})
+ * as the password in a Basic Authentication header. The JWT is verified locally
+ * against the RS256 public key ({@code meta.jwt.public-key-path}) — no external
+ * IdP round trip.
+ *
+ * <p>Usage in {@code settings.xml}:
  * <pre>
  * &lt;server&gt;
  *   &lt;id&gt;pantera&lt;/id&gt;
  *   &lt;username&gt;user@example.com&lt;/username&gt;
- *   &lt;password&gt;eyJhbGciOiJIUzI1NiIs...&lt;/password&gt;
+ *   &lt;password&gt;eyJhbGciOiJSUzI1NiIs...&lt;/password&gt;
  * &lt;/server&gt;
  * </pre>
- * </p>
- * <p>
- * This approach follows the same pattern used by JFrog Artifactory (Access Tokens),
- * Sonatype Nexus (User Tokens), and GitHub/GitLab (Personal Access Tokens).
- * </p>
+ *
+ * <p>Same pattern as JFrog Artifactory Access Tokens, Sonatype Nexus User Tokens,
+ * and GitHub/GitLab Personal Access Tokens.
  *
  * @since 1.20.7
  */
@@ -82,23 +77,6 @@ public final class JwtPasswordAuth implements Authentication {
         this.requireUsernameMatch = requireUsernameMatch;
     }
 
-    /**
-     * Create JwtPasswordAuth from JWT secret.
-     *
-     * @param vertx Vertx instance
-     * @param secret JWT secret key
-     * @return JwtPasswordAuth instance
-     */
-    public static JwtPasswordAuth fromSecret(final Vertx vertx, final String secret) {
-        final JWTAuth auth = JWTAuth.create(
-            vertx,
-            new JWTAuthOptions().addPubSecKey(
-                new PubSecKeyOptions().setAlgorithm("HS256").setBuffer(secret)
-            )
-        );
-        return new JwtPasswordAuth(auth);
-    }
-
     @Override
     public Optional<AuthUser> user(final String username, final String password) {
         // Quick check: is password a JWT? (starts with "eyJ" and has 2 dots)
@@ -106,7 +84,7 @@ public final class JwtPasswordAuth implements Authentication {
             return Optional.empty();
         }
         try {
-            // Validate JWT locally using shared secret
+            // Validate JWT locally against the RS256 public key
             final CompletableFuture<User> future = this.jwtAuth
                 .authenticate(new TokenCredentials(password))
                 .toCompletionStage()
@@ -150,8 +128,21 @@ public final class JwtPasswordAuth implements Authentication {
                 .log();
             return Optional.empty();
         } catch (final Exception ex) {
-            // Invalid JWT - this is expected for non-JWT passwords
-            // Don't log - not an error, just means password isn't a JWT
+            // Password survived looksLikeJwt() — it has the shape of a JWT — so
+            // a verification error here is almost always diagnosable (wrong
+            // signature, wrong algorithm, mismatched key, expired, missing
+            // required claim). Log the cause at DEBUG so operators can
+            // investigate without spamming INFO on every non-JWT password in
+            // the provider chain.
+            EcsLogger.debug("com.auto1.pantera.auth")
+                .message("JWT-as-password verification failed")
+                .eventCategory("authentication")
+                .eventAction("jwt_password_auth")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .field("error.message",
+                    ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName())
+                .log();
             return Optional.empty();
         }
     }

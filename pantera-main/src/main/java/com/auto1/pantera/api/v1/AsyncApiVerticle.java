@@ -46,7 +46,6 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.ext.web.handler.JWTAuthHandler;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -375,9 +374,14 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 return;
             }
             if (unifiedAuth == null) {
-                // No RS256 keys configured — fall back to legacy Vert.x JWTAuth
-                JWTAuthHandler.create(this.jwt).handle(ctx);
-                return;
+                // RS256 key pair is required for the API listener since 2.1.0.
+                // Fail fast here — the pre-2.1.0 HS256 JWTAuth fallback was
+                // removed in 2.1.2 because it silently masked misconfigurations
+                // (server would come up but tokens would never verify).
+                throw new IllegalStateException(
+                    "RS256 key pair is required for the API listener."
+                    + " Set meta.jwt.private-key-path and meta.jwt.public-key-path."
+                );
             }
             final String authHeader = ctx.request().getHeader("Authorization");
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -474,7 +478,11 @@ public final class AsyncApiVerticle extends AbstractVerticle {
         // Start server
         final HttpServer server;
         final String schema;
-        final boolean useProxyProtocol = this.settings.proxyProtocol();
+        // The API listener uses its own PROXYv2 toggle so that operators can
+        // run the main port behind an NLB (PROXYv2 on) and the API port behind
+        // an ALB (PROXYv2 off, ALB does not emit it). Defaults to the global
+        // proxyProtocol() value for backward compatibility.
+        final boolean useProxyProtocol = this.settings.apiProxyProtocol();
         if (this.keystore.isPresent() && this.keystore.get().enabled()) {
             final HttpServerOptions sslOptions = this.keystore.get()
                 .secureOptions(this.vertx, this.configsStorage);

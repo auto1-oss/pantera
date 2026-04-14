@@ -40,6 +40,13 @@ public final class JwtTokens implements Tokens {
     private final RSAPublicKey publicKey;
 
     /**
+     * RSA private key — retained so adapters that sign their own in-process
+     * ephemeral JWTs (e.g. Conan item tokens) can share the cluster-wide RS256
+     * key pair instead of minting one-off HMAC secrets.
+     */
+    private final RSAPrivateKey privateKey;
+
+    /**
      * Token DAO for persisting JTIs. Null in no-DB mode.
      */
     private final UserTokenDao tokenDao;
@@ -109,6 +116,7 @@ public final class JwtTokens implements Tokens {
     ) {
         this.algorithm = Algorithm.RSA256(publicKey, privateKey);
         this.publicKey = publicKey;
+        this.privateKey = privateKey;
         this.tokenDao = tokenDao;
         this.settingsDao = settingsDao;
         this.blocklist = blocklist;
@@ -189,6 +197,17 @@ public final class JwtTokens implements Tokens {
      */
     public RSAPublicKey publicKey() {
         return this.publicKey;
+    }
+
+    /**
+     * Expose the RSA private key so adapter-specific token issuers (e.g. the
+     * Conan item tokenizer) can sign their own ephemeral JWTs against the
+     * same cluster-wide RS256 key pair the main auth flow uses.
+     *
+     * @return RSA private key
+     */
+    public RSAPrivateKey privateKey() {
+        return this.privateKey;
     }
 
     /**

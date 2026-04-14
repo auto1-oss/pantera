@@ -21,7 +21,11 @@
 #   POSTGRES_PASSWORD=<generate-strong-password>
 #   MINIO_ROOT_USER=minioadmin
 #   MINIO_ROOT_PASSWORD=<generate-strong-password>
-#   JWT_SECRET=<generate-strong-secret>
+#   JWT_PRIVATE_KEY_PATH=/etc/pantera/jwt-private.pem
+#   JWT_PUBLIC_KEY_PATH=/etc/pantera/jwt-public.pem
+#   # Generate the key pair once, then mount the same PEM files on every node:
+#   #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private.pem
+#   #   openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
 
 version: "3.8"
 
@@ -108,7 +112,8 @@ services:
       - PANTERA_CONFIG=/etc/pantera/pantera.yml
       - POSTGRES_USER=${POSTGRES_USER:-pantera}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_PRIVATE_KEY_PATH=${JWT_PRIVATE_KEY_PATH:-/etc/pantera/jwt-private.pem}
+      - JWT_PUBLIC_KEY_PATH=${JWT_PUBLIC_KEY_PATH:-/etc/pantera/jwt-public.pem}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
@@ -144,7 +149,8 @@ services:
       - PANTERA_CONFIG=/etc/pantera/pantera.yml
       - POSTGRES_USER=${POSTGRES_USER:-pantera}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_PRIVATE_KEY_PATH=${JWT_PRIVATE_KEY_PATH:-/etc/pantera/jwt-private.pem}
+      - JWT_PUBLIC_KEY_PATH=${JWT_PUBLIC_KEY_PATH:-/etc/pantera/jwt-public.pem}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
@@ -180,7 +186,8 @@ services:
       - PANTERA_CONFIG=/etc/pantera/pantera.yml
       - POSTGRES_USER=${POSTGRES_USER:-pantera}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pantera}
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_PRIVATE_KEY_PATH=${JWT_PRIVATE_KEY_PATH:-/etc/pantera/jwt-private.pem}
+      - JWT_PUBLIC_KEY_PATH=${JWT_PUBLIC_KEY_PATH:-/etc/pantera/jwt-public.pem}
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
       - JVM_ARGS=${JVM_ARGS:--Xms2g -Xmx4g -XX:+UseZGC}
