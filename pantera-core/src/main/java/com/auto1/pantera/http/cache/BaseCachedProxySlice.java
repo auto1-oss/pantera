@@ -42,6 +42,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -893,39 +894,80 @@ public abstract class BaseCachedProxySlice implements Slice {
         if (!this.config.staleWhileRevalidateEnabled() || this.storage.isEmpty()) {
             return fallback.get();
         }
+        if (this.metadataStore.isPresent()) {
+            return this.metadataStore.get().load(key).thenCompose(metaOpt -> {
+                if (metaOpt.isEmpty()) {
+                    return this.serveStaleFromStorage(key, fallback);
+                }
+                final CachedArtifactMetadataStore.Metadata meta = metaOpt.get();
+                final Duration age = Duration.between(meta.savedAt(), Instant.now());
+                if (age.compareTo(this.config.staleMaxAge()) > 0) {
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Stale artifact too old, refusing to serve")
+                        .eventCategory("network")
+                        .eventAction("stale_too_old")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("url.path", key.string())
+                        .field("stale.age.seconds", age.getSeconds())
+                        .field("stale.max.age.seconds", this.config.staleMaxAge().getSeconds())
+                        .log();
+                    return fallback.get();
+                }
+                return this.serveStaleFromStorageWithAge(key, fallback, age);
+            });
+        }
+        return this.serveStaleFromStorage(key, fallback);
+    }
+
+    private CompletableFuture<Response> serveStaleFromStorage(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback
+    ) {
         final Storage store = this.storage.get();
         return store.exists(key).thenCompose(exists -> {
             if (!exists) {
                 return fallback.get();
             }
-            return store.value(key)
-                .thenApply(content -> {
-                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                        .message("Upstream failed, serving stale cached artifact")
-                        .eventCategory("network")
-                        .eventAction("stale_serve")
-                        .eventOutcome("success")
-                        .field("repository.name", this.repoName)
-                        .field("url.path", key.string())
-                        .log();
-                    return (Response) ResponseBuilder.ok()
-                        .header("X-Pantera-Stale", "true")
-                        .body(content)
-                        .build();
-                })
-                .exceptionallyCompose(err -> {
-                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                        .message("Failed to read stale artifact from storage")
-                        .eventCategory("repository")
-                        .eventAction("stale_serve")
-                        .eventOutcome("failure")
-                        .field("repository.name", this.repoName)
-                        .field("url.path", key.string())
-                        .error(err)
-                        .log();
-                    return fallback.get();
-                });
+            return serveStaleFromStorageWithAge(key, fallback, null);
         });
+    }
+
+    private CompletableFuture<Response> serveStaleFromStorageWithAge(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback,
+        final Duration age
+    ) {
+        final Storage store = this.storage.get();
+        return store.value(key)
+            .thenApply(content -> {
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("Upstream failed, serving stale cached artifact")
+                    .eventCategory("network")
+                    .eventAction("stale_serve")
+                    .eventOutcome("success")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", key.string())
+                    .log();
+                final ResponseBuilder builder = ResponseBuilder.ok()
+                    .header("X-Pantera-Stale", "true");
+                if (age != null) {
+                    builder.header("Age", String.valueOf(age.getSeconds()));
+                }
+                return (Response) builder.body(content).build();
+            })
+            .exceptionallyCompose(err -> {
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("Failed to read stale artifact from storage")
+                    .eventCategory("repository")
+                    .eventAction("stale_serve")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", key.string())
+                    .error(err)
+                    .log();
+                return fallback.get();
+            });
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(

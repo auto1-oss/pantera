@@ -24,10 +24,12 @@ import javax.json.JsonObjectBuilder;
 import javax.json.JsonReader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -144,6 +146,7 @@ public final class CachedArtifactMetadataStore {
         digests.sha512().ifPresent(val -> checksums.add("sha512", val));
         digests.md5().ifPresent(val -> checksums.add("md5", val));
         root.add("digests", checksums.build());
+        root.add("savedAt", Instant.now().toString());
         final byte[] bytes = root.build().toString().getBytes(StandardCharsets.UTF_8);
         return this.storage.save(this.metaKey(key), new Content.From(bytes));
     }
@@ -172,9 +175,13 @@ public final class CachedArtifactMetadataStore {
             if (digests.containsKey("md5")) {
                 map.put("md5", digests.getString("md5"));
             }
+            final Instant savedAt = json.containsKey("savedAt")
+                ? Instant.parse(json.getString("savedAt"))
+                : Instant.now();
             return new Metadata(
                 new Headers(new ArrayList<>(headers)),
-                new ComputedDigests(size, map)
+                new ComputedDigests(size, map),
+                savedAt
             );
         }
     }
@@ -256,9 +263,15 @@ public final class CachedArtifactMetadataStore {
          */
         private final ComputedDigests digests;
 
-        Metadata(final Headers headers, final ComputedDigests digests) {
+        /**
+         * When this metadata was first persisted (used for staleMaxAge enforcement).
+         */
+        private final Instant savedAt;
+
+        Metadata(final Headers headers, final ComputedDigests digests, final Instant savedAt) {
             this.headers = headers;
             this.digests = digests;
+            this.savedAt = Objects.requireNonNull(savedAt, "savedAt");
         }
 
         public Headers headers() {
@@ -267,6 +280,13 @@ public final class CachedArtifactMetadataStore {
 
         public ComputedDigests digests() {
             return this.digests;
+        }
+
+        /**
+         * @return when this metadata was first persisted (used for staleMaxAge enforcement).
+         */
+        public Instant savedAt() {
+            return this.savedAt;
         }
     }
 }

@@ -28,6 +28,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -35,6 +38,7 @@ import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -258,7 +262,148 @@ final class BaseCachedProxySliceStaleTest {
         );
     }
 
+    // ===== Tests: staleMaxAge enforcement =====
+
+    @Test
+    @DisplayName("Stale beyond staleMaxAge → refuse to serve, propagate error")
+    void rejectStaleBeyondMaxAge() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        final Key key = new Key.From("com/example/foo/1.0/foo-1.0.jar");
+        storage.save(key, new Content.From(CACHED_BYTES)).join();
+        // Write metadata with savedAt 2 hours ago, staleMaxAge is 10 minutes
+        final Instant twoHoursAgo = Instant.now().minus(Duration.ofHours(2));
+        saveMetadataWithSavedAt(storage, key, twoHoursAgo);
+
+        final ProxyCacheConfig config = new ProxyCacheConfig(
+            Yaml.createYamlMappingBuilder()
+                .add("cache",
+                    Yaml.createYamlMappingBuilder()
+                        .add("stale_while_revalidate",
+                            Yaml.createYamlMappingBuilder()
+                                .add("enabled", "true")
+                                .add("max_age", "PT10M")
+                                .build())
+                        .build())
+                .build()
+        );
+
+        final StaleTestSlice slice = new StaleTestSlice(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new SocketTimeoutException("upstream timed out")
+            ),
+            storage,
+            new AlwaysMissCache(),
+            config
+        );
+
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, ARTIFACT_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertFalse(
+            RsStatus.OK.equals(response.status()),
+            "Must NOT serve stale 200 when artifact age exceeds staleMaxAge"
+        );
+        assertFalse(
+            hasHeader(response.headers(), "X-Pantera-Stale"),
+            "X-Pantera-Stale must NOT be set when staleMaxAge exceeded"
+        );
+    }
+
+    @Test
+    @DisplayName("Stale within staleMaxAge → serve stale 200 with Age header")
+    void serveStaleWithinMaxAge() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        final Key key = new Key.From("com/example/foo/1.0/foo-1.0.jar");
+        storage.save(key, new Content.From(CACHED_BYTES)).join();
+        // Write metadata with savedAt 5 minutes ago, staleMaxAge is 1 hour
+        final Instant fiveMinutesAgo = Instant.now().minus(Duration.ofMinutes(5));
+        saveMetadataWithSavedAt(storage, key, fiveMinutesAgo);
+
+        final StaleTestSlice slice = new StaleTestSlice(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new SocketTimeoutException("upstream timed out")
+            ),
+            storage,
+            new AlwaysMissCache(),
+            swrEnabled()
+        );
+
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, ARTIFACT_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, response.status(),
+            "Must serve stale 200 when artifact age is within staleMaxAge");
+        assertTrue(
+            hasHeader(response.headers(), "X-Pantera-Stale"),
+            "X-Pantera-Stale must be set on stale serve"
+        );
+        assertTrue(
+            hasHeader(response.headers(), "Age"),
+            "Age header (RFC 7234) must be set on stale serve"
+        );
+        final String ageValue = firstHeader(response.headers(), "Age");
+        assertNotNull(ageValue, "Age header value must not be null");
+        assertTrue(
+            Long.parseLong(ageValue) >= 270 && Long.parseLong(ageValue) <= 360,
+            "Age must be approximately 5 minutes (300s) ± tolerance, got: " + ageValue
+        );
+    }
+
+    @Test
+    @DisplayName("No metadata sidecar → fall back to existence check (legacy behavior)")
+    void noMetadataFallsBackToExistence() {
+        final InMemoryStorage storage = new InMemoryStorage();
+        final Key key = new Key.From("com/example/foo/1.0/foo-1.0.jar");
+        // Save artifact bytes only — no metadata sidecar
+        storage.save(key, new Content.From(CACHED_BYTES)).join();
+
+        final StaleTestSlice slice = new StaleTestSlice(
+            (line, headers, body) -> CompletableFuture.failedFuture(
+                new SocketTimeoutException("upstream timed out")
+            ),
+            storage,
+            new AlwaysMissCache(),
+            swrEnabled()
+        );
+
+        final Response response = slice.response(
+            new RequestLine(RqMethod.GET, ARTIFACT_PATH),
+            Headers.EMPTY,
+            Content.EMPTY
+        ).join();
+
+        assertEquals(RsStatus.OK, response.status(),
+            "Must serve stale 200 via existence fallback when no metadata sidecar present");
+        assertTrue(
+            hasHeader(response.headers(), "X-Pantera-Stale"),
+            "X-Pantera-Stale must be set on legacy stale serve"
+        );
+    }
+
     // ===== Helpers =====
+
+    /**
+     * Write a minimal metadata JSON sidecar with an explicit savedAt timestamp directly to
+     * storage (bypasses the normal save() which always uses Instant.now()).
+     */
+    private static void saveMetadataWithSavedAt(
+        final InMemoryStorage storage,
+        final Key artifactKey,
+        final Instant savedAt
+    ) {
+        final String json = String.format(
+            "{\"size\":21,\"headers\":[],\"digests\":{},\"savedAt\":\"%s\"}",
+            savedAt.toString()
+        );
+        final Key metaKey = new Key.From(artifactKey.string() + ".pantera-meta.json");
+        storage.save(metaKey, new Content.From(json.getBytes(StandardCharsets.UTF_8))).join();
+    }
 
     private static boolean hasHeader(final Headers headers, final String name) {
         return StreamSupport.stream(headers.spliterator(), false)
