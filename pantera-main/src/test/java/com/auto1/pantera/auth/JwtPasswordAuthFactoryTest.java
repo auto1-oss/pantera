@@ -15,25 +15,35 @@ import com.amihaiemil.eoyaml.YamlMapping;
 import com.auto1.pantera.http.auth.AuthLoader;
 import com.auto1.pantera.http.auth.Authentication;
 import io.vertx.core.Vertx;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Path;
+
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsInstanceOf;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-
-import java.io.IOException;
+import org.junit.jupiter.api.Assertions;
 
 /**
  * Tests for {@link JwtPasswordAuthFactory}.
+ *
+ * <p>Asserts the factory wires an RS256 {@link JwtPasswordAuth} from
+ * {@code meta.jwt.public-key-path} and fails fast on the legacy HS256
+ * {@code secret} shape. The fixture PEMs under {@code auth/rsa/} are
+ * the same key pair {@link RsaKeyLoaderTest} and {@link JwtPasswordAuthTest}
+ * use — so all three tests exercise a single, consistent RS256 story.
  *
  * @since 1.20.7
  */
 class JwtPasswordAuthFactoryTest {
 
-    /**
-     * Shared Vertx instance.
-     */
+    private static final String FIXTURES = "auth/rsa/";
+
     private static Vertx vertx;
 
     @BeforeAll
@@ -50,7 +60,35 @@ class JwtPasswordAuthFactoryTest {
     }
 
     @Test
-    void createsJwtPasswordAuthFromConfig() throws IOException {
+    void createsJwtPasswordAuthFromRs256Config() throws IOException {
+        final YamlMapping config = configWithRsaKeys();
+        final Authentication auth = new JwtPasswordAuthFactory().getAuthentication(config);
+        MatcherAssert.assertThat(auth, new IsInstanceOf(JwtPasswordAuth.class));
+    }
+
+    @Test
+    void failsFastWhenPublicKeyPathIsMissing() throws IOException {
+        final YamlMapping config = Yaml.createYamlInput(
+            String.join(
+                "\n",
+                "meta:",
+                "  credentials:",
+                "    - type: jwt-password"
+            )
+        ).readYamlMapping();
+        final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
+        final IllegalStateException ex = Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> factory.getAuthentication(config)
+        );
+        MatcherAssert.assertThat(
+            ex.getMessage(),
+            Matchers.containsString("public-key-path is not configured")
+        );
+    }
+
+    @Test
+    void legacyHs256SecretConfigIsRejectedAtStartup() throws IOException {
         final YamlMapping config = Yaml.createYamlInput(
             String.join(
                 "\n",
@@ -62,54 +100,22 @@ class JwtPasswordAuthFactoryTest {
             )
         ).readYamlMapping();
         final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
-        final Authentication auth = factory.getAuthentication(config);
-        MatcherAssert.assertThat(
-            "Factory should create JwtPasswordAuth instance",
-            auth,
-            new IsInstanceOf(JwtPasswordAuth.class)
+        final IllegalStateException ex = Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> factory.getAuthentication(config)
         );
-    }
-
-    @Test
-    void createsJwtPasswordAuthWithDefaultSecret() throws IOException {
-        final YamlMapping config = Yaml.createYamlInput(
-            String.join(
-                "\n",
-                "meta:",
-                "  credentials:",
-                "    - type: jwt-password"
-            )
-        ).readYamlMapping();
-        final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
-        final Authentication auth = factory.getAuthentication(config);
         MatcherAssert.assertThat(
-            "Factory should create JwtPasswordAuth even without explicit jwt config",
-            auth,
-            new IsInstanceOf(JwtPasswordAuth.class)
+            "Pre-2.1.0 HS256 config must fail loud, not silently",
+            ex.getMessage(),
+            Matchers.containsString("HS256 secret configuration is no longer supported")
         );
     }
 
     @Test
     void factoryIsRegisteredWithAuthLoader() throws IOException {
-        // Verify the factory can be loaded by AuthLoader
         final AuthLoader loader = new AuthLoader();
-        final YamlMapping config = Yaml.createYamlInput(
-            String.join(
-                "\n",
-                "meta:",
-                "  jwt:",
-                "    secret: test-secret-key",
-                "  credentials:",
-                "    - type: jwt-password"
-            )
-        ).readYamlMapping();
-        // This will throw if jwt-password is not registered
-        final Authentication auth = loader.newObject("jwt-password", config);
-        MatcherAssert.assertThat(
-            "AuthLoader should create JwtPasswordAuth from 'jwt-password' type",
-            auth,
-            new IsInstanceOf(JwtPasswordAuth.class)
-        );
+        final Authentication auth = loader.newObject("jwt-password", configWithRsaKeys());
+        MatcherAssert.assertThat(auth, new IsInstanceOf(JwtPasswordAuth.class));
     }
 
     @Test
@@ -119,19 +125,43 @@ class JwtPasswordAuthFactoryTest {
                 "\n",
                 "meta:",
                 "  jwt:",
-                "    secret: test-secret-key",
+                "    private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
+                "    public-key-path: " + resourcePath("pub-2048.pem"),
                 "  jwt-password:",
                 "    require-username-match: false",
                 "  credentials:",
                 "    - type: jwt-password"
             )
         ).readYamlMapping();
-        final JwtPasswordAuthFactory factory = new JwtPasswordAuthFactory();
-        final Authentication auth = factory.getAuthentication(config);
+        final Authentication auth = new JwtPasswordAuthFactory().getAuthentication(config);
         MatcherAssert.assertThat(
-            "Factory should create JwtPasswordAuth with username match disabled",
             auth.toString(),
             Matchers.containsString("requireUsernameMatch=false")
         );
+    }
+
+    // ─── helpers ─────────────────────────────────────────────────────────────
+
+    private static YamlMapping configWithRsaKeys() throws IOException {
+        return Yaml.createYamlInput(
+            String.join(
+                "\n",
+                "meta:",
+                "  jwt:",
+                "    private-key-path: " + resourcePath("priv-2048-pkcs8.pem"),
+                "    public-key-path: " + resourcePath("pub-2048.pem"),
+                "  credentials:",
+                "    - type: jwt-password"
+            )
+        ).readYamlMapping();
+    }
+
+    private static String resourcePath(final String resource) {
+        final URL url = JwtPasswordAuthFactoryTest.class.getClassLoader()
+            .getResource(FIXTURES + resource);
+        if (url == null) {
+            throw new IllegalStateException("Missing test fixture: " + FIXTURES + resource);
+        }
+        return Path.of(URI.create(url.toString())).toString();
     }
 }
