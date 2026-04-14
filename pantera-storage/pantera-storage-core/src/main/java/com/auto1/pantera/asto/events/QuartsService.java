@@ -51,7 +51,7 @@ public final class QuartsService {
                         } catch (final SchedulerException error) {
                             EcsLogger.error("com.auto1.pantera.asto")
                                 .message("Scheduler shutdown failed")
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("scheduler_shutdown")
                                 .eventOutcome("failure")
                                 .error(error)
@@ -93,7 +93,7 @@ public final class QuartsService {
         if (parallel > count) {
             EcsLogger.warn("com.auto1.pantera.asto")
                 .message("Parallel quartz jobs amount limited to thread pool size (requested: " + parallel + ", actual: " + count + ", pool size: " + count + ")")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_schedule")
                 .eventOutcome("success")
                 .log();

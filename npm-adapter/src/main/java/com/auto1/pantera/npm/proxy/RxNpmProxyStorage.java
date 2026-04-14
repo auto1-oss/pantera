@@ -111,7 +111,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
             // parses dates directly from abbreviated metadata.
             EcsLogger.debug("com.auto1.pantera.npm")
                 .message(String.format("Generated abbreviated metadata: abbreviated=%d bytes, full=%d bytes", result.length, fullContent.length()))
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("success")
                 .field("package.name", packageName)
@@ -120,7 +120,7 @@ public final class RxNpmProxyStorage implements NpmProxyStorage {
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera.npm")
                 .message(String.format("Failed to generate abbreviated metadata: full=%d bytes", fullContent.length()))
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("generate_abbreviated")
                 .eventOutcome("failure")
                 .field("package.name", packageName)

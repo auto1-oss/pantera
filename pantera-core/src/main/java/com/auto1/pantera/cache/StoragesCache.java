@@ -74,7 +74,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
             .build();
         EcsLogger.info("com.auto1.pantera.cache")
             .message("StoragesCache initialized with config: " + config.toString())
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("cache_init")
             .eventOutcome("success")
             .log();
@@ -180,7 +180,7 @@ public class StoragesCache implements Cleanable<YamlMapping> {
         if (storage != null && key != null) {
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Storage evicted from cache (type: " + key.string("type") + ", cause: " + cause.toString() + ")")
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("cache_evict")
                 .eventOutcome("success")
                 .log();

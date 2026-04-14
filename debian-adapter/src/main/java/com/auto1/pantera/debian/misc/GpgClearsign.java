@@ -100,7 +100,7 @@ public final class GpgClearsign {
         } catch (final PGPException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
@@ -109,7 +109,7 @@ public final class GpgClearsign {
         } catch (final IOException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
@@ -150,7 +150,7 @@ public final class GpgClearsign {
         } catch (final PGPException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("Error while generating gpg-signature")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)
@@ -159,7 +159,7 @@ public final class GpgClearsign {
         } catch (final IOException err) {
             EcsLogger.error("com.auto1.pantera.debian")
                 .message("IO error while generating gpg-signature")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("gpg_sign")
                 .eventOutcome("failure")
                 .error(err)

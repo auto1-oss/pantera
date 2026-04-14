@@ -116,7 +116,7 @@ public final class DownloadAssetSlice implements Slice {
             final Throwable cause = unwrapException(error);
             EcsLogger.error("com.auto1.pantera.npm")
                 .message("Error processing asset request")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("get_asset")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
@@ -174,7 +174,7 @@ public final class DownloadAssetSlice implements Slice {
                 // Since getAsset tries storage first, if we have it, serve immediately
                 EcsLogger.info("com.auto1.pantera.npm")
                     .message("Cache hit for asset, serving cached (offline-safe)")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("get_asset")
                     .eventOutcome("cache_hit")
                     .field("package.name", tgz)
@@ -254,7 +254,7 @@ public final class DownloadAssetSlice implements Slice {
                         .message(String.format(
                             "Asset download blocked by cooldown: reason=%s, blockedUntil=%s",
                             block.reason(), block.blockedUntil()))
-                        .eventCategory("cooldown")
+                        .eventCategory("database")
                         .eventAction("asset_blocked")
                         .field("package.name", req.artifact())
                         .field("package.version", req.version())

@@ -61,7 +61,7 @@ public class GetManifestSlice extends DockerActionSlice {
                             // Log response headers at DEBUG level for diagnostics
                             com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.docker")
                                 .message(String.format("GET manifest response: digest=%s", found.digest()))
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("manifest_get")
                                 .field("container.image.name", request.name())
                                 .field("container.image.tag", request.reference().digest())
@@ -81,7 +81,7 @@ public class GetManifestSlice extends DockerActionSlice {
                 .exceptionally(err -> {
                     com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Manifest GET failed with exception, returning 404")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("manifest_get")
                         .eventOutcome("failure")
                         .field("container.image.name", request.name())

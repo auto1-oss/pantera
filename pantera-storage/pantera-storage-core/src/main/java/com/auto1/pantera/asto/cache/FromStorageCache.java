@@ -70,7 +70,7 @@ public final class FromStorageCache implements Cache {
             .doOnError(err ->
                 EcsLogger.warn("com.auto1.pantera.asto")
                     .message("Failed to read cached item: " + key.string())
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("cache_read")
                     .eventOutcome("failure")
                     .error(err)
@@ -126,7 +126,7 @@ public final class FromStorageCache implements Cache {
                                 if (err != null) {
                                     EcsLogger.warn("com.auto1.pantera.asto.cache")
                                         .message(String.format("Stream-through: failed to save to cache for key '%s'", key.string()))
-                                        .eventCategory("cache")
+                                        .eventCategory("database")
                                         .eventAction("stream_through_save")
                                         .eventOutcome("failure")
                                         .error(err)
@@ -136,7 +136,7 @@ public final class FromStorageCache implements Cache {
                     } catch (final Exception ex) {
                         EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: exception initiating save for key '%s'", key.string()))
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("stream_through_save")
                             .eventOutcome("failure")
                             .error(ex)

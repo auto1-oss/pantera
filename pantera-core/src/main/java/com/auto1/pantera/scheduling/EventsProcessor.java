@@ -83,7 +83,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                                 EcsLogger.error("com.auto1.pantera.scheduling")
                                     .message("Event processing failed (attempt "
                                         + (attempt + 1) + "/" + MAX_RETRY + ")")
-                                    .eventCategory("scheduling")
+                                    .eventCategory("process")
                                     .eventAction("event_process")
                                     .eventOutcome("failure")
                                     .error(ex)
@@ -94,7 +94,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                             EcsLogger.error("com.auto1.pantera.scheduling")
                                 .message("Dropping event after " + MAX_RETRY
                                     + " failed attempts")
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("event_drop")
                                 .eventOutcome("failure")
                                 .log();
@@ -103,7 +103,7 @@ public final class EventsProcessor<T> extends QuartzJob {
                 }
                 EcsLogger.debug("com.auto1.pantera.scheduling")
                     .message("Processed " + cnt + " elements from queue")
-                    .eventCategory("scheduling")
+                    .eventCategory("process")
                     .eventAction("event_process")
                     .eventOutcome("success")
                     .log();

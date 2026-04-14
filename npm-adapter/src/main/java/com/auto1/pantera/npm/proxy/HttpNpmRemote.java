@@ -83,7 +83,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 if (HttpNpmRemote.isNotFoundError(throwable)) {
                     EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Package not found upstream (404)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("get_package")
                         .eventOutcome("not_found")
                         .field("package.name", name)
@@ -93,7 +93,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 // For transient errors, log and re-throw to prevent negative cache poisoning
                 EcsLogger.error("com.auto1.pantera.npm")
                     .message("Error occurred when process get package call")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("get_package")
                     .eventOutcome("failure")
                     .field("package.name", name)
@@ -123,7 +123,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 if (HttpNpmRemote.isNotFoundError(throwable)) {
                     EcsLogger.debug("com.auto1.pantera.npm")
                         .message("Asset not found upstream (404)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("get_asset")
                         .eventOutcome("not_found")
                         .field("package.path", path)
@@ -133,7 +133,7 @@ public final class HttpNpmRemote implements NpmRemote {
                 // For transient errors, log and re-throw to prevent negative cache poisoning
                 EcsLogger.error("com.auto1.pantera.npm")
                     .message("Error occurred when process get asset call")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("get_asset")
                     .eventOutcome("failure")
                     .field("package.path", path)

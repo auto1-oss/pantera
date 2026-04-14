@@ -92,7 +92,7 @@ public final class GroupSlice implements Slice {
 
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Sending request to target (index: " + index + ")")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("group_race")
                     .eventOutcome("pending")
                     .field("url.path", line.uri().getPath())
@@ -103,7 +103,7 @@ public final class GroupSlice implements Slice {
                     if (result.isDone()) {
                         EcsLogger.debug("com.auto1.pantera.http")
                             .message("Repository response arrived after race completed (index: " + index + ")")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("group_race")
                             .eventOutcome("late")
                             .log();
@@ -115,7 +115,7 @@ public final class GroupSlice implements Slice {
                     if (res.status() == RsStatus.NOT_FOUND) {
                         EcsLogger.debug("com.auto1.pantera.http")
                             .message("Repository returned 404 (index: " + index + ")")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("group_race")
                             .eventOutcome("not_found")
                             .log();
@@ -133,7 +133,7 @@ public final class GroupSlice implements Slice {
                     // Complete the result (first success wins) - don't consume body, it will be served
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("Repository found artifact (index: " + index + ")")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("group_race")
                         .eventOutcome("success")
                         .field("http.response.status_code", res.status().code())
@@ -147,7 +147,7 @@ public final class GroupSlice implements Slice {
                     }
                     EcsLogger.warn("com.auto1.pantera.http")
                         .message("Failed to get response from repository (index: " + index + ")")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("group_race")
                         .eventOutcome("failure")
                         .error(err)

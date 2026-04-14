@@ -130,7 +130,7 @@ public interface Metadata {
             } catch (final IOException ex) {
                 EcsLogger.error("com.auto1.pantera.pypi")
                     .message("Failed to read metadata from archive")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_extraction")
                     .eventOutcome("failure")
                     .error(ex)

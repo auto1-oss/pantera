@@ -108,7 +108,7 @@ public final class ScriptScheduler {
                                 } catch (final IllegalArgumentException exc) {
                                     EcsLogger.error("com.auto1.pantera.scheduling")
                                         .message("Invalid cron expression: " + cronexp)
-                                        .eventCategory("scheduling")
+                                        .eventCategory("process")
                                         .eventAction("crontab_load")
                                         .eventOutcome("failure")
                                         .error(exc)

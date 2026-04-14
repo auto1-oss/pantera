@@ -85,7 +85,7 @@ public final class ProxyManifests implements Manifests {
         final String uri = String.format("/v2/%s/manifests/%s", name, ref.digest());
         EcsLogger.info("com.auto1.pantera.docker.proxy")
             .message("ProxyManifests upstream request")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_manifest_get")
             .field("container.image.name", this.name)
             .field("container.image.tag", ref.digest())
@@ -102,7 +102,7 @@ public final class ProxyManifests implements Manifests {
                 final long duration = System.currentTimeMillis() - start;
                 EcsLogger.info("com.auto1.pantera.docker.proxy")
                     .message("ProxyManifests upstream response")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_manifest_get")
                     .eventOutcome(response.status().success() ? "success" : "failure")
                     .field("container.image.name", this.name)

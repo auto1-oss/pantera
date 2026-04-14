@@ -109,7 +109,7 @@ final class JettyClientSlice implements Slice {
                     buf -> async.write(buf, Callback.NOOP),
                     throwable -> EcsLogger.error("com.auto1.pantera.http.client")
                         .message("Failed to stream HTTP request body")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("http_request_body")
                         .eventOutcome("failure")
                         .error(throwable)
@@ -127,7 +127,7 @@ final class JettyClientSlice implements Slice {
                     final Headers sanitizedRespHeaders = LogSanitizer.sanitizeHeaders(respHeaders);
                     EcsLogger.debug("com.auto1.pantera.http.client")
                         .message("Received HTTP response headers (streaming body)")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("http_response_receive")
                         .field("http.response.status_code", response.getStatus())
                         .field("http.response.headers", sanitizedRespHeaders.toString())
@@ -146,7 +146,7 @@ final class JettyClientSlice implements Slice {
         final Headers sanitizedHeaders = LogSanitizer.sanitizeHeaders(toHeaders(request.getHeaders()));
         EcsLogger.debug("com.auto1.pantera.http.client")
             .message("Sending HTTP request")
-            .eventCategory("http")
+            .eventCategory("web")
             .eventAction("http_request_send")
             .field("http.request.method", request.getMethod())
             .field("url.domain", request.getHost())
@@ -171,7 +171,7 @@ final class JettyClientSlice implements Slice {
                         )) {
                             EcsLogger.debug("com.auto1.pantera.http.client")
                                 .message("Received HTTP response (no body)")
-                                .eventCategory("http")
+                                .eventCategory("web")
                                 .eventAction("http_response_receive")
                                 .field("http.response.status_code",
                                     result.getResponse().getStatus())
@@ -183,7 +183,7 @@ final class JettyClientSlice implements Slice {
                     } else {
                         EcsLogger.error("com.auto1.pantera.http.client")
                             .message("HTTP request failed")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("http_request_send")
                             .eventOutcome("failure")
                             .error(result.getFailure())
@@ -328,7 +328,7 @@ final class JettyClientSlice implements Slice {
                 if (System.nanoTime() - lastDataTime > idleTimeoutNanos) {
                     EcsLogger.error("com.auto1.pantera.http.client")
                         .message(String.format("Response reading idle timeout (120s without data) after %d iterations", iterations))
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("http_response_read")
                         .eventOutcome("timeout")
                         .field("url.full", this.response.getRequest().getURI().toString())
@@ -352,7 +352,7 @@ final class JettyClientSlice implements Slice {
                         this.response.abort(failure);
                         EcsLogger.error("com.auto1.pantera.http.client")
                             .message("HTTP response read failed")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("http_response_read")
                             .eventOutcome("failure")
                             .field("url.full", this.response.getRequest().getURI().toString())
@@ -374,7 +374,7 @@ final class JettyClientSlice implements Slice {
                             this.response.abort(failure);
                             EcsLogger.error("com.auto1.pantera.http.client")
                                 .message("Transient failure treated as terminal")
-                                .eventCategory("http")
+                                .eventCategory("web")
                                 .eventAction("http_response_read")
                                 .eventOutcome("failure")
                                 .field("url.full", this.response.getRequest().getURI().toString())
@@ -402,7 +402,7 @@ final class JettyClientSlice implements Slice {
             // Max iterations exceeded
             EcsLogger.error("com.auto1.pantera.http.client")
                 .message("Max iterations exceeded while reading response (max: " + maxIterations + ")")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("http_response_read")
                 .eventOutcome("failure")
                 .field("url.full", this.response.getRequest().getURI().toString())

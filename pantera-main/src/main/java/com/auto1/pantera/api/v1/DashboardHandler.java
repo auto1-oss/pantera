@@ -132,7 +132,7 @@ public final class DashboardHandler {
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.api.v1")
                     .message("Background dashboard cache refresh failed")
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("dashboard_cache_refresh")
                     .eventOutcome("failure")
                     .error(ex)

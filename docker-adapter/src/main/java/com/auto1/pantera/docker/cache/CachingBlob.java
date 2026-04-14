@@ -147,7 +147,7 @@ final class CachingBlob implements Blob {
                     } else {
                         EcsLogger.info("com.auto1.pantera.docker")
                             .message("Blob cached via streaming")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("blob_cache")
                             .eventOutcome("success")
                             .field("package.checksum", this.origin.digest().string())
@@ -214,7 +214,7 @@ final class CachingBlob implements Blob {
     private static void logWarn(final String msg, final Throwable err) {
         EcsLogger.warn("com.auto1.pantera.docker")
             .message(msg)
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("blob_cache")
             .eventOutcome("failure")
             .error(err)

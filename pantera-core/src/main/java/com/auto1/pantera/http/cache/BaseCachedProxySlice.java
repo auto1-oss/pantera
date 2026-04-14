@@ -505,7 +505,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     this.recordProxyMetric("exception", duration);
                     EcsLogger.warn("com.auto1.pantera." + this.repoType)
                         .message("Upstream request failed with exception")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_upstream")
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
@@ -595,7 +595,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         } catch (final IOException ex) {
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to create temp file for cache streaming")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName)
@@ -684,7 +684,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             deleteTempQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName)
@@ -829,7 +829,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.recordProxyMetric("exception", duration);
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Direct upstream request failed with exception")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_upstream")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
@@ -959,7 +959,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             .exceptionallyCompose(err -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Failed to read stale artifact from storage")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("stale_serve")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
@@ -1055,7 +1055,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     private void logDebug(final String message, final String path) {
         EcsLogger.debug("com.auto1.pantera." + this.repoType)
             .message(message)
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("repository.name", this.repoName)
             .field("url.path", path)

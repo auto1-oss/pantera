@@ -59,7 +59,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
     ) {
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Checking release date for package")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cooldown_release_date")
             .field("package.name", artifact)
             .field("package.version", version)
@@ -68,7 +68,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             if (metadata.isEmpty()) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No metadata found for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_release_date")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -80,7 +80,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             if (packages == null) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No 'packages' object in metadata")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_release_date")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -91,7 +91,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             if (versionData == null) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Version not found for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_release_date")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -106,7 +106,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                     final Instant instant = odt.toInstant();
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Found release date for package")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("cooldown_release_date")
                         .eventOutcome("success")
                         .field("package.name", artifact)
@@ -117,7 +117,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 } catch (final DateTimeParseException e) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to parse time field: " + timeStr)
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("cooldown_release_date")
                         .eventOutcome("failure")
                         .field("package.name", artifact)
@@ -127,7 +127,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             }
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("No 'time' field found in metadata")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_release_date")
                 .eventOutcome("failure")
                 .field("package.name", artifact)
@@ -144,7 +144,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
     ) {
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Fetching dependencies for package")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cooldown_dependencies")
             .field("package.name", artifact)
             .field("package.version", version)
@@ -153,7 +153,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             if (metadata.isEmpty()) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("No metadata found for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_dependencies")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -173,7 +173,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             if (require == null || require.isEmpty()) {
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("No dependencies found for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_dependencies")
                     .field("package.name", artifact)
                     .field("package.version", version)
@@ -190,7 +190,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
             }
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Found " + deps.size() + " dependencies for package")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_dependencies")
                 .eventOutcome("success")
                 .field("package.name", artifact)
@@ -244,7 +244,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
         final String path = String.format("/p2/%s.json", packageName);
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Fetching metadata from remote")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("metadata_fetch")
             .field("url.path", path)
             .field("package.name", packageName)
@@ -259,7 +259,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 if (!response.status().success()) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to fetch metadata from remote")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("package.name", packageName)
@@ -273,7 +273,7 @@ public final class ComposerCooldownInspector implements CooldownInspector {
                 } catch (final Exception e) {
                     EcsLogger.error("com.auto1.pantera.composer")
                         .message("Failed to parse JSON metadata")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("package.name", packageName)

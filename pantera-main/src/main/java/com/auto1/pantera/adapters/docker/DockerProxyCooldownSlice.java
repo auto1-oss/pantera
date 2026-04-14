@@ -171,7 +171,7 @@ public final class DockerProxyCooldownSlice implements Slice {
                 }).exceptionally(ex -> {
                     EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Failed to process manifest")
-                        .eventCategory("docker")
+                        .eventCategory("web")
                         .eventAction("manifest_process")
                         .eventOutcome("failure")
                         .field("package.name", artifact)
@@ -226,7 +226,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             if (error != null) {
                 EcsLogger.warn("com.auto1.pantera.docker")
                     .message("Failed to extract release date from config")
-                    .eventCategory("docker")
+                    .eventCategory("web")
                     .eventAction("release_date_extract")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -236,7 +236,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             } else if (release.isPresent()) {
                 EcsLogger.debug("com.auto1.pantera.docker")
                     .message("Extracted release date from config")
-                    .eventCategory("docker")
+                    .eventCategory("web")
                     .eventAction("release_date_extract")
                     .eventOutcome("success")
                     .field("package.name", artifact)
@@ -249,7 +249,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         }).exceptionally(ex -> {
             EcsLogger.warn("com.auto1.pantera.docker")
                 .message("Exception extracting release date")
-                .eventCategory("docker")
+                .eventCategory("web")
                 .eventAction("release_date_extract")
                 .eventOutcome("failure")
                 .field("package.name", artifact)
@@ -290,7 +290,7 @@ public final class DockerProxyCooldownSlice implements Slice {
             if (release.isPresent()) {
                 EcsLogger.debug("com.auto1.pantera.docker")
                     .message("Extracted release date from config")
-                    .eventCategory("docker")
+                    .eventCategory("web")
                     .eventAction("release_date_extract")
                     .eventOutcome("success")
                     .field("package.name", artifact)
@@ -303,7 +303,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         }).exceptionally(ex -> {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Failed to extract release date from config")
-                .eventCategory("docker")
+                .eventCategory("web")
                 .eventAction("release_date_extract")
                 .eventOutcome("failure")
                 .field("package.name", artifact)
@@ -321,7 +321,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         } catch (final IllegalArgumentException ex) {
             EcsLogger.warn("com.auto1.pantera.docker")
                 .message("Failed to build manifest from response headers")
-                .eventCategory("docker")
+                .eventCategory("web")
                 .eventAction("manifest_build")
                 .eventOutcome("failure")
                 .error(ex)
@@ -340,7 +340,7 @@ public final class DockerProxyCooldownSlice implements Slice {
         } catch (final DateTimeParseException | JsonException ex) {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Unable to parse manifest config created field")
-                .eventCategory("docker")
+                .eventCategory("web")
                 .eventAction("manifest_parse")
                 .eventOutcome("failure")
                 .error(ex)

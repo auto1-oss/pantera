@@ -39,7 +39,7 @@ public final class PanteraMetrics {
                     instance = new PanteraMetrics();
                     EcsLogger.info("com.auto1.pantera.metrics")
                         .message("PanteraMetrics compatibility wrapper initialized (delegate: OtelMetrics)")
-                        .eventCategory("metrics")
+                        .eventCategory("process")
                         .eventAction("metrics_init")
                         .eventOutcome("success")
                         .log();

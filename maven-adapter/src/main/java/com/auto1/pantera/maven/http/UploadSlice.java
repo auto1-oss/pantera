@@ -107,7 +107,7 @@ public final class UploadSlice implements Slice {
             sanitizedPath = path.substring(0, semicolonIndex);
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Stripped metadata properties from path: " + path + " -> " + sanitizedPath)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("path_sanitization")
                 .log();
         } else {
@@ -142,7 +142,7 @@ public final class UploadSlice implements Slice {
         if (keyPath.contains("maven-metadata.xml") && !keyPath.endsWith(".sha1") && !keyPath.endsWith(".md5")) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Intercepting maven-metadata.xml upload for fixing")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("metadata_upload")
                 .field("package.path", keyPath)
                 .log();
@@ -154,7 +154,7 @@ public final class UploadSlice implements Slice {
                             nothing -> {
                                 EcsLogger.debug("com.auto1.pantera.maven")
                                     .message("Saved fixed maven-metadata.xml, generating checksums")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("metadata_upload")
                                     .field("package.path", keyPath)
                                     .log();
@@ -173,7 +173,7 @@ public final class UploadSlice implements Slice {
                 throwable -> {
                     EcsLogger.error("com.auto1.pantera.maven")
                         .message("Failed to save artifact")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("artifact_upload")
                         .eventOutcome("failure")
                         .error(throwable)
@@ -188,7 +188,7 @@ public final class UploadSlice implements Slice {
         if (keyPath.contains("maven-metadata.xml") && (keyPath.endsWith(".sha1") || keyPath.endsWith(".md5") || keyPath.endsWith(".sha256") || keyPath.endsWith(".sha512"))) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping Maven-uploaded checksum for metadata (using generated checksums)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("checksum_upload")
                 .field("package.path", keyPath)
                 .log();
@@ -201,7 +201,7 @@ public final class UploadSlice implements Slice {
             nothing -> {
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Saved artifact file")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("artifact_upload")
                     .field("package.path", keyPath)
                     .field("package.size", size)
@@ -223,7 +223,7 @@ public final class UploadSlice implements Slice {
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to save artifact")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("artifact_upload")
                     .eventOutcome("failure")
                     .error(throwable)
@@ -310,7 +310,7 @@ public final class UploadSlice implements Slice {
 
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Normalised maven-metadata.xml")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("success")
                     .field("package.version", newLatest)
@@ -319,7 +319,7 @@ public final class UploadSlice implements Slice {
             } catch (IllegalArgumentException ex) {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to parse metadata XML, using original")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("failure")
                     .field("error.message", ex.getMessage())
@@ -382,7 +382,7 @@ public final class UploadSlice implements Slice {
         if (this.isMetadataOrChecksum(path)) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping metadata/checksum file for event")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("event_creation")
                 .field("package.path", path)
                 .log();
@@ -444,7 +444,7 @@ public final class UploadSlice implements Slice {
         );
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("event_creation")
             .eventOutcome("success")
             .field("package.name", artifactName)

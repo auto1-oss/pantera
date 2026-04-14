@@ -99,7 +99,7 @@ public final class BlockedThreadDiagnostics {
         if ("true".equalsIgnoreCase(disabled)) {
             EcsLogger.info("com.auto1.pantera.diagnostics")
                 .message("Blocked thread diagnostics disabled via environment variable")
-                .eventCategory("system")
+                .eventCategory("host")
                 .eventAction("diagnostics_disabled")
                 .log();
             return null;
@@ -112,7 +112,7 @@ public final class BlockedThreadDiagnostics {
                 .message(String.format(
                     "Blocked thread diagnostics initialized: GC check interval 1s, thread check interval 5s, GC pause threshold %dms",
                     GC_PAUSE_THRESHOLD_MS))
-                .eventCategory("system")
+                .eventCategory("host")
                 .eventAction("diagnostics_init")
                 .log();
         }
@@ -166,7 +166,7 @@ public final class BlockedThreadDiagnostics {
                     .message(String.format(
                         "Long GC pause detected - may cause blocked thread warnings: time delta %dms, %d collections, avg pause %dms, total GC time %dms",
                         gcTimeDelta, gcCountDelta, avgPauseMs, totalGcTime))
-                    .eventCategory("system")
+                    .eventCategory("host")
                     .eventAction("gc_pause")
                     .log();
 
@@ -213,7 +213,7 @@ public final class BlockedThreadDiagnostics {
                     .message(String.format(
                         "Event loop threads in BLOCKED state: %d blocked, %d waiting, %d runnable",
                         blockedCount, waitingCount, runnableCount))
-                    .eventCategory("system")
+                    .eventCategory("host")
                     .eventAction("thread_state")
                     .log();
                 this.logAllBlockedThreads();
@@ -247,7 +247,7 @@ public final class BlockedThreadDiagnostics {
                         .message(String.format(
                             "Blocked event loop thread details: thread=%s lock=%s lock_owner=%s",
                             info.getThreadName(), info.getLockName(), info.getLockOwnerName()))
-                        .eventCategory("system")
+                        .eventCategory("host")
                         .eventAction("blocked_thread")
                         .field("pantera.blocked_thread.name", info.getThreadName())
                         .field("error.stack_trace", sb.toString())

@@ -201,7 +201,7 @@ public final class ComposerGroupSlice implements Slice {
 
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Fetching packages.json from member: " + member)
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("packages_fetch")
                         .log();
 
@@ -229,7 +229,7 @@ public final class ComposerGroupSlice implements Slice {
 
                                         EcsLogger.debug("com.auto1.pantera.composer")
                                             .message("Member '" + member + "' returned packages.json (" + packageCount + " packages)")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("packages_fetch")
                                             .eventOutcome("success")
                                             .log();
@@ -237,7 +237,7 @@ public final class ComposerGroupSlice implements Slice {
                                     } catch (Exception e) {
                                         EcsLogger.warn("com.auto1.pantera.composer")
                                             .message("Failed to parse packages.json from member: " + member)
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("packages_parse")
                                             .eventOutcome("failure")
                                             .field("error.message", e.getMessage())
@@ -248,7 +248,7 @@ public final class ComposerGroupSlice implements Slice {
                         } else {
                             EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Member '" + member + "' returned non-OK status for packages.json")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("packages_fetch")
                                 .eventOutcome("failure")
                                 .field("http.response.status_code", resp.status().code())
@@ -262,7 +262,7 @@ public final class ComposerGroupSlice implements Slice {
                     .exceptionally(ex -> {
                         EcsLogger.warn("com.auto1.pantera.composer")
                             .message("Error fetching packages.json from member: " + member)
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("packages_fetch")
                             .eventOutcome("failure")
                             .field("error.message", ex.getMessage())
@@ -295,7 +295,7 @@ public final class ComposerGroupSlice implements Slice {
                         });
                         EcsLogger.debug("com.auto1.pantera.composer")
                             .message("Member returned Satis format (" + providers.size() + " providers)")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("packages_merge")
                             .log();
                     }
@@ -345,7 +345,7 @@ public final class ComposerGroupSlice implements Slice {
                     merged.add("providers", providersBuilder.build());
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Using Satis format for group (" + providersBuilder.build().size() + " providers)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("packages_merge")
                         .eventOutcome("success")
                         .field("repository.name", this.group)
@@ -357,7 +357,7 @@ public final class ComposerGroupSlice implements Slice {
                     merged.add("packages", packagesBuilder.build());
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Using traditional format for group (" + packagesBuilder.build().size() + " packages)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("packages_merge")
                         .eventOutcome("success")
                         .field("repository.name", this.group)

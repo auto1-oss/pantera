@@ -126,7 +126,7 @@ final class JdbcCooldownService implements CooldownService {
         if (!CooldownMetrics.isAvailable()) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("CooldownMetrics not available - metrics will not be initialized")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metrics_init")
                 .log();
             return;
@@ -136,7 +136,7 @@ final class JdbcCooldownService implements CooldownService {
         if (metrics == null) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("CooldownMetrics instance is null - metrics will not be initialized")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metrics_init")
                 .log();
             return;
@@ -161,13 +161,13 @@ final class JdbcCooldownService implements CooldownService {
                     .message(String.format(
                         "Initialized cooldown metrics from database: %d repositories, %d total blocks, %d all-blocked packages",
                         counts.size(), total, allBlocked))
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metrics_init")
                     .log();
             } catch (Exception e) {
                 EcsLogger.error("com.auto1.pantera.cooldown")
                     .message("Failed to initialize cooldown metrics")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metrics_init")
                     .error(e)
                     .log();
@@ -220,7 +220,7 @@ final class JdbcCooldownService implements CooldownService {
         if (!this.effectiveEnabled(request)) {
             EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("Cooldown disabled for repo type - allowing")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("evaluate")
                 .eventOutcome("allowed")
                 .field("repository.type", request.repoType())
@@ -234,7 +234,7 @@ final class JdbcCooldownService implements CooldownService {
         if (!this.circuitBreaker.shouldEvaluate()) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Circuit breaker OPEN - auto-allowing artifact")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("evaluate")
                 .eventOutcome("allowed")
                 .field("package.name", request.artifact())
@@ -245,7 +245,7 @@ final class JdbcCooldownService implements CooldownService {
         
         EcsLogger.debug("com.auto1.pantera.cooldown")
             .message("Evaluating cooldown for artifact")
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("evaluate")
             .field("repository.type", request.repoType())
             .field("repository.name", request.repoName())
@@ -263,7 +263,7 @@ final class JdbcCooldownService implements CooldownService {
             if (blocked) {
                 EcsLogger.info("com.auto1.pantera.cooldown")
                     .message("Artifact BLOCKED by cooldown (cache/db)")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("evaluate")
                     .eventOutcome("blocked")
                     .field("package.name", request.artifact())
@@ -276,7 +276,7 @@ final class JdbcCooldownService implements CooldownService {
             } else {
                 EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Artifact ALLOWED by cooldown")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("evaluate")
                     .eventOutcome("allowed")
                     .field("package.name", request.artifact())
@@ -291,7 +291,7 @@ final class JdbcCooldownService implements CooldownService {
                 this.circuitBreaker.recordFailure();
                 EcsLogger.error("com.auto1.pantera.cooldown")
                     .message("Cooldown evaluation failed")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("evaluate")
                     .eventOutcome("failure")
                     .field("package.name", request.artifact())
@@ -383,7 +383,7 @@ final class JdbcCooldownService implements CooldownService {
                 final BlockCacheEntry entry = result.get();
                 EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message((entry.blocked ? "Database block found" : "Database no block") + " (blocked: " + entry.blocked + ")")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("db_check")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
@@ -421,7 +421,7 @@ final class JdbcCooldownService implements CooldownService {
                     .message(String.format(
                         "Block record found in database: status=%s, reason=%s, blockedAt=%s, blockedUntil=%s",
                         rec.status().name(), rec.reason().name(), rec.blockedAt(), rec.blockedUntil()))
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
@@ -435,7 +435,7 @@ final class JdbcCooldownService implements CooldownService {
                             .message(String.format(
                                 "Block has EXPIRED - allowing artifact (blockedUntil=%s)",
                                 rec.blockedUntil()))
-                            .eventCategory("cooldown")
+                            .eventCategory("database")
                             .eventAction("block_expired")
                             .field("package.name", request.artifact())
                             .field("package.version", request.version())
@@ -451,7 +451,7 @@ final class JdbcCooldownService implements CooldownService {
             } else {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Cache said blocked but no DB record found - allowing")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("block_lookup")
                     .field("package.name", request.artifact())
                     .field("package.version", request.version())
@@ -521,7 +521,7 @@ final class JdbcCooldownService implements CooldownService {
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to fetch release date (allowing)")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("release_date_fetch")
                     .eventOutcome("failure")
                     .field("package.name", request.artifact())
@@ -553,7 +553,7 @@ final class JdbcCooldownService implements CooldownService {
         if (release.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.cooldown")
                 .message("No release date found - allowing")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("evaluate")
                 .eventOutcome("allowed")
                 .field("repository.type", request.repoType())
@@ -574,7 +574,7 @@ final class JdbcCooldownService implements CooldownService {
             .message(String.format(
                 "Evaluating freshness: cooldown=%s, release+cooldown=%s, requestTime=%s, isFresh=%s",
                 fresh, date.plus(fresh), now, date.plus(fresh).isAfter(now)))
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("freshness_check")
             .field("package.name", request.artifact())
             .field("package.version", request.version())
@@ -586,7 +586,7 @@ final class JdbcCooldownService implements CooldownService {
             final Instant until = date.plus(fresh);
             EcsLogger.info("com.auto1.pantera.cooldown")
                 .message("BLOCKING artifact - too fresh (released: " + date.toString() + ", blocked until: " + until.toString() + ")")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("evaluate")
                 .eventOutcome("blocked")
                 .field("package.name", request.artifact())
@@ -604,7 +604,7 @@ final class JdbcCooldownService implements CooldownService {
                 .exceptionally(error -> {
                     EcsLogger.error("com.auto1.pantera.cooldown")
                         .message("Failed to create block (blocking anyway)")
-                        .eventCategory("cooldown")
+                        .eventCategory("database")
                         .eventAction("block_create")
                         .eventOutcome("failure")
                         .field("package.name", request.artifact())
@@ -620,7 +620,7 @@ final class JdbcCooldownService implements CooldownService {
 
         EcsLogger.debug("com.auto1.pantera.cooldown")
             .message("ALLOWING artifact - old enough")
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("evaluate")
             .eventOutcome("allowed")
             .field("package.name", request.artifact())
@@ -697,7 +697,7 @@ final class JdbcCooldownService implements CooldownService {
                 + " blocked_until=" + record.blockedUntil()
                 + " blocked_by=" + record.blockedBy()
                 + " expired_at=" + when)
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("block_expired_delete")
             .field("package.name", record.artifact())
             .field("package.version", record.version())
@@ -721,7 +721,7 @@ final class JdbcCooldownService implements CooldownService {
         } catch (final Exception err) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to invalidate metadata cache on block expiry")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metadata_cache_invalidate")
                 .eventOutcome("failure")
                 .field("package.name", record.artifact())
@@ -765,7 +765,7 @@ final class JdbcCooldownService implements CooldownService {
                     + " blocked_by=" + record.blockedBy()
                     + " unblocked_by=" + actor
                     + " unblocked_at=" + now)
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("block_unblocked_delete")
                 .field("package.name", record.artifact())
                 .field("package.version", record.version())
@@ -789,7 +789,7 @@ final class JdbcCooldownService implements CooldownService {
                 + " blocked_by=" + record.blockedBy()
                 + " unblocked_by=" + actor
                 + " unblocked_at=" + when)
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("block_unblocked_delete")
             .field("package.name", record.artifact())
             .field("package.version", record.version())
@@ -821,7 +821,7 @@ final class JdbcCooldownService implements CooldownService {
                     CooldownMetrics.getInstance().incrementAllBlocked();
                     EcsLogger.debug("com.auto1.pantera.cooldown")
                         .message("Marked package as all-blocked")
-                        .eventCategory("cooldown")
+                        .eventCategory("database")
                         .eventAction("all_blocked_mark")
                         .field("repository.type", repoType)
                         .field("repository.name", repoName)
@@ -831,7 +831,7 @@ final class JdbcCooldownService implements CooldownService {
             } catch (Exception e) {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("Failed to mark package as all-blocked")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("all_blocked_mark")
                     .field("repository.type", repoType)
                     .field("package.name", artifact)
@@ -851,7 +851,7 @@ final class JdbcCooldownService implements CooldownService {
                 CooldownMetrics.getInstance().decrementAllBlocked();
                 EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message("Unmarked package as all-blocked")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("all_blocked_unmark")
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
@@ -861,7 +861,7 @@ final class JdbcCooldownService implements CooldownService {
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to unmark package as all-blocked")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("all_blocked_unmark")
                 .field("repository.type", repoType)
                 .field("package.name", artifact)
@@ -883,7 +883,7 @@ final class JdbcCooldownService implements CooldownService {
                 EcsLogger.debug("com.auto1.pantera.cooldown")
                     .message(String.format(
                         "Unmarked all-blocked packages for repo: %d packages unmarked", count))
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("all_blocked_unmark_all")
                     .field("repository.type", repoType)
                     .field("repository.name", repoName)
@@ -892,7 +892,7 @@ final class JdbcCooldownService implements CooldownService {
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.cooldown")
                 .message("Failed to unmark all-blocked packages for repo")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("all_blocked_unmark_all")
                 .field("repository.type", repoType)
                 .field("repository.name", repoName)

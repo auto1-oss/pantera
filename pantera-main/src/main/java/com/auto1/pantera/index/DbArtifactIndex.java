@@ -266,7 +266,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to index artifact")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_index")
                     .eventOutcome("failure")
                     .field("package.name", doc.artifactPath())
@@ -288,7 +288,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to remove artifact")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_remove")
                     .eventOutcome("failure")
                     .field("repository.name", repoName)
@@ -362,7 +362,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -437,7 +437,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -1127,7 +1127,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
                             .message("FTS aggregation timed out, returning empty facets")
-                            .eventCategory("search")
+                            .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
                             .log();
@@ -1245,7 +1245,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
                             .message("FTS aggregation timed out, returning empty facets")
-                            .eventCategory("search")
+                            .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
                             .log();
@@ -1371,7 +1371,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         } catch (final SQLException ex) {
             EcsLogger.error("com.auto1.pantera.index")
                 .message("Filtered LIKE search failed for pattern: " + pattern)
-                .eventCategory("search")
+                .eventCategory("database")
                 .eventAction("db_search_filtered_like")
                 .eventOutcome("failure")
                 .error(ex)
@@ -1481,7 +1481,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: "
                         + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -1637,7 +1637,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         } catch (final SQLException ex) {
             EcsLogger.error("com.auto1.pantera.index")
                 .message("LIKE search failed for pattern: " + pattern)
-                .eventCategory("search")
+                .eventCategory("database")
                 .eventAction("db_search_like")
                 .eventOutcome("failure")
                 .error(ex)
@@ -1668,7 +1668,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Locate failed for path: " + artifactPath)
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_locate")
                     .eventOutcome("failure")
                     .error(ex)
@@ -1782,7 +1782,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     // View may not exist — fall through to COUNT(*)
                     EcsLogger.warn("com.auto1.pantera.index")
                         .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
-                        .eventCategory("index")
+                        .eventCategory("database")
                         .eventAction("db_stats_mv_fallback")
                         .error(ex)
                         .log();
@@ -1798,7 +1798,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to get index stats")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_stats")
                     .eventOutcome("failure")
                     .error(ex)
@@ -1830,7 +1830,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to batch index " + docs.size() + " artifacts")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_index_batch")
                     .eventOutcome("failure")
                     .error(ex)

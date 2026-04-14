@@ -38,7 +38,7 @@ public abstract class QuartzJob implements Job {
         try {
             EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Job processing failed, stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
@@ -46,7 +46,7 @@ public abstract class QuartzJob implements Job {
             context.getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Job stopped")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("success")
                 .field("process.name", key.toString())
@@ -54,7 +54,7 @@ public abstract class QuartzJob implements Job {
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Error while stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())

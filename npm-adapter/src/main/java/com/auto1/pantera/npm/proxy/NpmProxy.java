@@ -240,14 +240,14 @@ public class NpmProxy {
                 .subscribe(
                     saved -> EcsLogger.debug("com.auto1.pantera.npm.proxy")
                         .message("Background refresh completed")
-                        .eventCategory("cache")
+                        .eventCategory("database")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("success")
                         .field("package.name", name)
                         .log(),
                     err -> EcsLogger.warn("com.auto1.pantera.npm.proxy")
                         .message("Background refresh failed")
-                        .eventCategory("cache")
+                        .eventCategory("database")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("failure")
                         .field("package.name", name)

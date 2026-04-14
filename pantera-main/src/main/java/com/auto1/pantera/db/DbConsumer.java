@@ -107,7 +107,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
             : "Artifact publish recorded";
         EcsLogger.info("com.auto1.pantera.audit")
             .message(msg)
-            .eventCategory("artifact")
+            .eventCategory("database")
             .eventAction("artifact_publish")
             .eventOutcome("success")
             .field("repository.type", record.repoType())

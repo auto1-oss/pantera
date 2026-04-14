@@ -136,7 +136,7 @@ public final class MetadataRegenerator {
     public CompletionStage<Void> regenerate(final Key artifactKey, final ImportRequest request) {
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Regenerating metadata for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("metadata_regenerate")
             .field("repository.name", this.repoName)
             .field("repository.type", this.repoType)
@@ -157,7 +157,7 @@ public final class MetadataRegenerator {
             default -> {
                 EcsLogger.warn("com.auto1.pantera.importer")
                     .message("Unknown repository type - skipping metadata regeneration")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_regenerate")
                     .eventOutcome("failure")
                     .field("repository.type", this.repoType)
@@ -173,7 +173,7 @@ public final class MetadataRegenerator {
                 this.failureCount.incrementAndGet();
                 EcsLogger.warn("com.auto1.pantera.importer")
                     .message("Metadata regeneration failed for " + this.repoType + " repository '" + this.repoName + "' at key: " + artifactKey.string())
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_regenerate")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
@@ -252,7 +252,7 @@ public final class MetadataRegenerator {
                 .exceptionally(ex -> {
                     EcsLogger.debug("com.auto1.pantera.importer")
                         .message("Base key '" + baseKey.string() + "' doesn't exist yet, creating metadata for first version")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("maven_metadata_regenerate")
                         .log();
                     return List.of();
@@ -313,7 +313,7 @@ public final class MetadataRegenerator {
                 // Not a valid version, skip it
                 EcsLogger.debug("com.auto1.pantera.importer")
                     .message("Skipping non-version directory")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("maven_metadata_regenerate")
                     .field("file.directory", firstSegment)
                     .error(ex)
@@ -441,7 +441,7 @@ public final class MetadataRegenerator {
         if (packageName == null || packageName.isBlank()) {
             EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Skipping Composer metadata regeneration - package name missing at key: " + storagePath)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
                 .log();
@@ -456,7 +456,7 @@ public final class MetadataRegenerator {
         if (version == null || version.isBlank()) {
             EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Skipping Composer metadata regeneration - unable to determine version at key: " + storagePath)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("composer_metadata_regenerate")
                 .eventOutcome("failure")
                 .log();
@@ -530,7 +530,7 @@ public final class MetadataRegenerator {
                     if (packageName == null || packageName.isBlank()) {
                         EcsLogger.warn("com.auto1.pantera.importer")
                             .message("Skipping NPM metadata regeneration - package name missing at key: " + path)
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("npm_metadata_regenerate")
                             .eventOutcome("failure")
                             .log();
@@ -542,7 +542,7 @@ public final class MetadataRegenerator {
                 } catch (final Exception ex) {
                     EcsLogger.error("com.auto1.pantera.importer")
                         .message("Failed to extract NPM package metadata at key: " + path)
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("npm_metadata_regenerate")
                         .eventOutcome("failure")
                         .error(ex)
@@ -721,7 +721,7 @@ public final class MetadataRegenerator {
     private CompletionStage<Void> regenerateDebian(final Key artifactKey) {
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Debian metadata regeneration not implemented for key: " + artifactKey.string())
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("debian_metadata_regenerate")
             .log();
         return CompletableFuture.completedFuture(null);
@@ -736,7 +736,7 @@ public final class MetadataRegenerator {
     private CompletionStage<Void> regenerateRpm(final Key artifactKey) {
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("RPM metadata regeneration not implemented for key: " + artifactKey.string())
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("rpm_metadata_regenerate")
             .log();
         return CompletableFuture.completedFuture(null);
@@ -751,7 +751,7 @@ public final class MetadataRegenerator {
     private CompletionStage<Void> regenerateConda(final Key artifactKey) {
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Conda metadata regeneration not implemented for key: " + artifactKey.string())
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("conda_metadata_regenerate")
             .log();
         return CompletableFuture.completedFuture(null);
@@ -846,7 +846,7 @@ public final class MetadataRegenerator {
                                     .exceptionally(ex -> {
                                         EcsLogger.warn("com.auto1.pantera.importer")
                                             .message("Failed to generate checksums")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("maven_checksum_generate")
                                             .eventOutcome("failure")
                                             .field("error.message", ex.getMessage())
@@ -942,7 +942,7 @@ public final class MetadataRegenerator {
                     final long delayMs = 10L * (1L << attempt);
                     EcsLogger.warn("com.auto1.pantera.importer")
                         .message("Retrying operation '" + description + "' (attempt " + (attempt + 1) + "/" + maxRetries + ", delay: " + delayMs + "ms)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
                         .field("error.message", error.getMessage())
                         .log();
@@ -951,7 +951,7 @@ public final class MetadataRegenerator {
                 } else {
                     EcsLogger.error("com.auto1.pantera.importer")
                         .message("Failed operation '" + description + "' after " + maxRetries + " retry attempts")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("metadata_regenerate_retry")
                         .eventOutcome("failure")
                         .error(error)

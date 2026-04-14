@@ -249,7 +249,7 @@ public class RepositorySlices {
         if (cached != null) {
             EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved from cache")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
@@ -262,7 +262,7 @@ public class RepositorySlices {
             this.slices.put(skey, resolved.get());
             EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved and cached from config")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
@@ -273,7 +273,7 @@ public class RepositorySlices {
         // Not found is NOT cached to allow dynamic repo addition without restart
         EcsLogger.warn("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("slice_resolve")
             .eventOutcome("failure")
             .field("repository.name", name.string())
@@ -1091,7 +1091,7 @@ public class RepositorySlices {
                 if (remaining == 0 && this.references.get() == 0) {
                     EcsLogger.debug("com.auto1.pantera")
                         .message(String.format("Jetty client reference count reached zero for settings key '%s'", this.key.metricId()))
-                        .eventCategory("http_client")
+                        .eventCategory("network")
                         .eventAction("client_release")
                         .log();
                 }

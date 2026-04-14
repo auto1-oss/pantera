@@ -95,7 +95,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
         EcsLogger.info("com.auto1.pantera.cache")
             .message("Cache invalidation pub/sub started (instance: "
                 + this.instanceId.substring(0, 8) + ")")
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("pubsub_start")
             .eventOutcome("success")
             .log();
@@ -142,7 +142,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
         this.pubConn.close();
         EcsLogger.info("com.auto1.pantera.cache")
             .message("Cache invalidation pub/sub closed")
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("pubsub_stop")
             .eventOutcome("success")
             .log();
@@ -181,7 +181,7 @@ public final class CacheInvalidationPubSub implements AutoCloseable {
             }
             EcsLogger.debug("com.auto1.pantera.cache")
                 .message("Remote cache invalidation: " + cacheType + ":" + key)
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("remote_invalidate")
                 .eventOutcome("success")
                 .log();

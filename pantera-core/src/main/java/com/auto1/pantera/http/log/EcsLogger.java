@@ -48,7 +48,7 @@ import java.util.Map;
  * // With event metadata
  * EcsLogger.warn("com.auto1.pantera.docker")
  *     .message("Slow cache operation")
- *     .eventCategory("storage")
+ *     .eventCategory("file")
  *     .eventAction("cache_read")
  *     .duration(durationMs)
  *     .log();

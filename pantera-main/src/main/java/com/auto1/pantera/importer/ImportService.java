@@ -171,7 +171,7 @@ public final class ImportService {
                 final String normalized = packagePrefix + "/-/" + correctedTarball;
                 EcsLogger.debug("com.auto1.pantera.importer")
                     .message("Normalized NPM path (removed duplicate)")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_normalize")
                     .field("url.original", path)
                     .field("url.path", normalized)
@@ -185,7 +185,7 @@ public final class ImportService {
             final String normalized = packagePrefix + "/-/" + correctedTarball;
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Normalized NPM path (added scope)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_normalize")
                 .field("url.original", path)
                 .field("url.path", normalized)
@@ -241,7 +241,7 @@ public final class ImportService {
             || session.status() == ImportSessionStatus.SKIPPED) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Import skipped (already completed, session: " + session.key() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_artifact")
                 .eventOutcome("skipped")
                 .log();
@@ -259,7 +259,7 @@ public final class ImportService {
         if (request.metadataOnly()) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Metadata-only import")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_artifact")
                 .field("repository.name", request.repo())
                 .field("url.path", request.path())
@@ -316,7 +316,7 @@ public final class ImportService {
         ).toCompletableFuture().exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.importer")
                 .message("Import failed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
                 .field("repository.name", request.repo())
@@ -363,7 +363,7 @@ public final class ImportService {
         if (mismatch.isPresent()) {
             EcsLogger.warn("com.auto1.pantera.importer")
                 .message("Checksum mismatch")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
                 .field("repository.name", request.repo())
@@ -418,7 +418,7 @@ public final class ImportService {
                     .exceptionally(cleanupErr -> {
                         EcsLogger.debug("com.auto1.pantera.importer")
                             .message("Post-import cleanup error (non-critical)")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("import_cleanup")
                             .eventOutcome("failure")
                             .field("error.message", cleanupErr.getMessage())
@@ -437,7 +437,7 @@ public final class ImportService {
                             if (MERGE_HINT_WARNED.compareAndSet(false, true)) {
                                 EcsLogger.warn("com.auto1.pantera.importer")
                                     .message("Import shard mode enabled: remember to trigger metadata merge via POST /.merge/{repo} after imports")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("import_artifact")
                                     .field("repository.name", request.repo())
                                     .log();
@@ -446,7 +446,7 @@ public final class ImportService {
                                 .exceptionally(err -> {
                                     EcsLogger.warn("com.auto1.pantera.importer")
                                         .message("Shard write failed for repository '" + request.repo() + "' at key: " + target.string())
-                                        .eventCategory("repository")
+                                        .eventCategory("web")
                                         .eventAction("import_shard_write")
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
@@ -476,7 +476,7 @@ public final class ImportService {
                                 .exceptionally(err -> {
                                     EcsLogger.warn("com.auto1.pantera.importer")
                                         .message("Metadata regeneration failed for repository '" + request.repo() + "' at key: " + target.string())
-                                        .eventCategory("repository")
+                                        .eventCategory("web")
                                         .eventAction("import_metadata_regenerate")
                                         .eventOutcome("failure")
                                         .field("repository.name", request.repo())
@@ -552,7 +552,7 @@ public final class ImportService {
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
             .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [pypi]")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .eventOutcome("success")
                 .field("package.name", pkg)
@@ -685,7 +685,7 @@ public final class ImportService {
                     // Ignore errors - directory might not be empty or already deleted
                     EcsLogger.debug("com.auto1.pantera.importer")
                         .message("Could not cleanup staging directory at key: " + parent.string())
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_cleanup")
                         .field("error.message", err.getMessage())
                         .log();
@@ -699,7 +699,7 @@ public final class ImportService {
                             .exceptionally(err -> {
                                 EcsLogger.debug("com.auto1.pantera.importer")
                                     .message("Could not cleanup .import/staging")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("import_cleanup")
                                     .field("error.message", err.getMessage())
                                     .log();
@@ -713,7 +713,7 @@ public final class ImportService {
                                         .exceptionally(err -> {
                                             EcsLogger.debug("com.auto1.pantera.importer")
                                                 .message("Could not cleanup .import")
-                                                .eventCategory("repository")
+                                                .eventCategory("web")
                                                 .eventAction("import_cleanup")
                                                 .field("error.message", err.getMessage())
                                                 .log();
@@ -912,7 +912,7 @@ public final class ImportService {
         if (path.contains("maven-metadata.xml")) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Skipping maven-metadata.xml file at path: " + path)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .log();
             return CompletableFuture.completedFuture(null);
@@ -921,7 +921,7 @@ public final class ImportService {
         if (coords == null) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Could not infer Maven coords from path: " + path)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .field("package.name", request.artifact().orElse(null))
                 .field("package.version", request.version().orElse(null))
@@ -930,7 +930,7 @@ public final class ImportService {
         }
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Inferred Maven coords")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_shard_write")
             .field("package.group", coords.groupId)
             .field("file.path", coords.groupPath)
@@ -953,7 +953,7 @@ public final class ImportService {
         final String filename = path.substring(path.lastIndexOf('/') + 1);
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Extracted filename '" + filename + "' from path: " + path)
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_shard_write")
             .log();
         // Build shard key parts, avoiding empty groupPath
@@ -978,14 +978,14 @@ public final class ImportService {
         // Debug logging to identify empty parts
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Creating shard key (parts: " + keyParts.toString() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_shard_write")
             .log();
         final Key shardKey = new Key.From(keyParts.toArray(new String[0]));
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
             .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [maven]")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .eventOutcome("success")
                 .field("package.group", coords.groupId)
@@ -1032,7 +1032,7 @@ public final class ImportService {
         if (versionStart <= 0) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Could not parse Helm name/version")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .field("file.name", file)
                 .log();
@@ -1059,7 +1059,7 @@ public final class ImportService {
         return storage.save(shardKey, new Content.From(shard.getBytes(StandardCharsets.UTF_8)))
             .thenRun(() -> EcsLogger.info("com.auto1.pantera.importer")
                 .message("Shard written [helm]")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_shard_write")
                 .eventOutcome("success")
                 .field("package.name", name)
@@ -1077,7 +1077,7 @@ public final class ImportService {
     ) {
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("inferMavenCoords called")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("maven_coords_infer")
             .field("url.path", path)
             .field("package.name", hdrArtifact)
@@ -1089,7 +1089,7 @@ public final class ImportService {
             normalizedPath = path.substring(1);
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Normalized path")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("maven_coords_infer")
                 .field("url.original", path)
                 .field("url.path", normalizedPath)
@@ -1098,7 +1098,7 @@ public final class ImportService {
         if (hdrArtifact != null && hdrVersion != null && !hdrVersion.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Using headers for coordinates")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("maven_coords_infer")
                 .log();
             final int idx = normalizedPath.lastIndexOf('/');
@@ -1114,21 +1114,21 @@ public final class ImportService {
         }
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Using path parsing fallback")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("maven_coords_infer")
             .log();
         // Fallback: .../{artifactId}/{version}/{file}
         final String[] segs = normalizedPath.split("/");
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Path segments")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("maven_coords_infer")
             .field("url.path", normalizedPath)
             .log();
         if (segs.length < 3) {
             EcsLogger.debug("com.auto1.pantera.importer")
                 .message("Path has less than 3 segments, returning null")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("maven_coords_infer")
                 .eventOutcome("failure")
                 .log();
@@ -1144,7 +1144,7 @@ public final class ImportService {
         final String groupPath = String.join("/", java.util.Arrays.copyOf(segs, segs.length - 3));
         EcsLogger.debug("com.auto1.pantera.importer")
             .message("Parsed from path")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("maven_coords_infer")
             .field("file.name", filename)
             .field("package.name", artifactId)

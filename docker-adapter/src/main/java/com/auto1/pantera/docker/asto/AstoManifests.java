@@ -93,7 +93,7 @@ public final class AstoManifests implements Manifests {
     public CompletableFuture<Optional<Manifest>> get(final ManifestReference ref) {
         EcsLogger.debug("com.auto1.pantera.docker")
             .message("AstoManifests.get() called")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("manifest_get")
             .field("container.image.hash.all", ref.digest())
             .log();
@@ -102,7 +102,7 @@ public final class AstoManifests implements Manifests {
                 digest -> {
                     EcsLogger.debug("com.auto1.pantera.docker")
                         .message("Found link for manifest reference")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("manifest_get")
                         .field("container.image.hash.all", ref.digest())
                         .field("package.checksum", digest.string())
@@ -116,7 +116,7 @@ public final class AstoManifests implements Manifests {
                                         .thenApply(bytes -> {
                                             EcsLogger.info("com.auto1.pantera.docker")
                                                 .message("Creating Manifest from bytes")
-                                                .eventCategory("repository")
+                                                .eventCategory("web")
                                                 .eventAction("manifest_get")
                                                 .eventOutcome("success")
                                                 .field("package.checksum", digest.string())
@@ -128,7 +128,7 @@ public final class AstoManifests implements Manifests {
                                 .orElseGet(() -> {
                                     EcsLogger.warn("com.auto1.pantera.docker")
                                         .message("Blob not found for digest")
-                                        .eventCategory("repository")
+                                        .eventCategory("web")
                                         .eventAction("manifest_get")
                                         .eventOutcome("failure")
                                         .field("package.checksum", digest.string())
@@ -140,7 +140,7 @@ public final class AstoManifests implements Manifests {
             ).orElseGet(() -> {
                 EcsLogger.warn("com.auto1.pantera.docker")
                     .message("No link found for manifest reference")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("manifest_get")
                     .eventOutcome("failure")
                     .field("container.image.hash.all", ref.digest())

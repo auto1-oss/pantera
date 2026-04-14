@@ -110,7 +110,7 @@ public final class StreamThroughCache implements Cache {
         } catch (final IOException ex) {
             EcsLogger.debug("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: temp file creation failed for key '%s', using in-memory fallback", key.string()))
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("stream_through")
                 .error(ex)
                 .log();
@@ -136,7 +136,7 @@ public final class StreamThroughCache implements Cache {
                 deleteTempFileQuietly(tempFile);
                 EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message(String.format("Stream-through: remote stream error for key '%s', not caching", key.string()))
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("stream_through")
                     .eventOutcome("failure")
                     .error(err)
@@ -171,7 +171,7 @@ public final class StreamThroughCache implements Cache {
             .doOnError(err -> {
                 EcsLogger.debug("com.auto1.pantera.asto.cache")
                     .message(String.format("Stream-through: remote stream error for key '%s', not caching (in-memory)", key.string()))
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("stream_through")
                     .eventOutcome("failure")
                     .error(err)
@@ -212,7 +212,7 @@ public final class StreamThroughCache implements Cache {
                     if (err != null) {
                         EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: failed to save to cache from temp file for key '%s'", key.string()))
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("stream_through_save")
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", size)
@@ -221,7 +221,7 @@ public final class StreamThroughCache implements Cache {
                     } else {
                         EcsLogger.debug("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: saved to cache from temp file for key '%s'", key.string()))
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("stream_through_save")
                             .eventOutcome("success")
                             .field("http.response.body.bytes", size)
@@ -232,7 +232,7 @@ public final class StreamThroughCache implements Cache {
             deleteTempFileQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: exception initiating save from temp file for key '%s'", key.string()))
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("stream_through_save")
                 .eventOutcome("failure")
                 .error(ex)
@@ -254,7 +254,7 @@ public final class StreamThroughCache implements Cache {
                     if (err != null) {
                         EcsLogger.warn("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: failed to save to cache for key '%s'", key.string()))
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("stream_through_save")
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", bytes.length)
@@ -263,7 +263,7 @@ public final class StreamThroughCache implements Cache {
                     } else {
                         EcsLogger.debug("com.auto1.pantera.asto.cache")
                             .message(String.format("Stream-through: saved to cache for key '%s'", key.string()))
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("stream_through_save")
                             .eventOutcome("success")
                             .field("http.response.body.bytes", bytes.length)
@@ -273,7 +273,7 @@ public final class StreamThroughCache implements Cache {
         } catch (final Exception ex) {
             EcsLogger.warn("com.auto1.pantera.asto.cache")
                 .message(String.format("Stream-through: exception initiating save for key '%s'", key.string()))
-                .eventCategory("cache")
+                .eventCategory("database")
                 .eventAction("stream_through_save")
                 .eventOutcome("failure")
                 .error(ex)

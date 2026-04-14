@@ -225,7 +225,7 @@ public final class MergeShardsSlice implements Slice {
 
         EcsLogger.info("com.auto1.pantera.http")
             .message("Triggering metadata merge for repository")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("metadata_merge")
             .field("repository.name", repoName)
             .log();
@@ -315,7 +315,7 @@ public final class MergeShardsSlice implements Slice {
         }).exceptionally(error -> {
             EcsLogger.error("com.auto1.pantera.http")
                 .message("Metadata merge failed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("metadata_merge")
                 .eventOutcome("failure")
                 .field("repository.name", repoName)
@@ -325,7 +325,7 @@ public final class MergeShardsSlice implements Slice {
             cleanupTempFolders(storage).exceptionally(e -> {
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to cleanup after merge failure")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())
@@ -399,7 +399,7 @@ public final class MergeShardsSlice implements Slice {
                         } catch (Exception e) {
                             EcsLogger.warn("com.auto1.pantera.http")
                                 .message("Failed to parse version from shard")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("shard_parse")
                                 .eventOutcome("failure")
                                 .field("file.path", p)
@@ -410,7 +410,7 @@ public final class MergeShardsSlice implements Slice {
                     .exceptionally(e -> {
                         EcsLogger.warn("com.auto1.pantera.http")
                             .message("Failed to read shard")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("shard_read")
                             .eventOutcome("failure")
                             .field("file.path", p)
@@ -611,7 +611,7 @@ public final class MergeShardsSlice implements Slice {
                         }).exceptionally(err -> {
                             com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.http")
                                 .message("MergeShardsSlice: async operation failed")
-                                .eventCategory("merge_shards")
+                                .eventCategory("database")
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
@@ -631,7 +631,7 @@ public final class MergeShardsSlice implements Slice {
                         }).exceptionally(err -> {
                             com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.http")
                                 .message("MergeShardsSlice: async operation failed")
-                                .eventCategory("merge_shards")
+                                .eventCategory("database")
                                 .eventAction("async_error")
                                 .eventOutcome("failure")
                                 .error(err)
@@ -686,7 +686,7 @@ public final class MergeShardsSlice implements Slice {
     private static CompletionStage<Void> cleanupTempFolders(final Storage storage) {
         EcsLogger.info("com.auto1.pantera.http")
             .message("Starting cleanup of temporary folders after merge")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cleanup")
             .log();
         final List<CompletionStage<Void>> deletions = new ArrayList<>();
@@ -694,14 +694,14 @@ public final class MergeShardsSlice implements Slice {
         // Delete .import folder completely
         EcsLogger.debug("com.auto1.pantera.http")
             .message("Deleting .import folder")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cleanup")
             .field("file.directory", ".import")
             .log();
         deletions.add(storage.delete(new Key.From(".import"))
             .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
                 .message(".import folder deleted successfully")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cleanup")
                 .eventOutcome("success")
                 .field("file.directory", ".import")
@@ -709,7 +709,7 @@ public final class MergeShardsSlice implements Slice {
             .exceptionally(e -> {
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to delete .import folder")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
                     .field("file.directory", ".import")
@@ -721,14 +721,14 @@ public final class MergeShardsSlice implements Slice {
         // Delete .meta folder completely
         EcsLogger.debug("com.auto1.pantera.http")
             .message("Deleting .meta folder")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cleanup")
             .field("file.directory", ".meta")
             .log();
         deletions.add(storage.delete(new Key.From(".meta"))
             .thenRun(() -> EcsLogger.debug("com.auto1.pantera.http")
                 .message(".meta folder deleted successfully")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cleanup")
                 .eventOutcome("success")
                 .field("file.directory", ".meta")
@@ -736,7 +736,7 @@ public final class MergeShardsSlice implements Slice {
             .exceptionally(e -> {
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to delete .meta folder")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
                     .field("file.directory", ".meta")
@@ -748,14 +748,14 @@ public final class MergeShardsSlice implements Slice {
         return CompletableFuture.allOf(deletions.toArray(new CompletableFuture[0]))
             .thenRun(() -> EcsLogger.info("com.auto1.pantera.http")
                 .message("Temporary folders cleanup completed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cleanup")
                 .eventOutcome("success")
                 .log())
             .exceptionally(e -> {
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Failed to cleanup temporary folders")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cleanup")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())

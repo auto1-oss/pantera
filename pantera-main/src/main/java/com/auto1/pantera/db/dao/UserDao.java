@@ -294,7 +294,7 @@ public final class UserDao implements CrudUsers {
             if (!rs.next()) {
                 EcsLogger.warn("com.auto1.pantera.db")
                     .message("updateUserRoles: user not found in DB after insert")
-                    .eventCategory("user")
+                    .eventCategory("iam")
                     .eventAction("role_assignment")
                     .eventOutcome("failure")
                     .field("user.name", uname)
@@ -310,7 +310,7 @@ public final class UserDao implements CrudUsers {
             final int deleted = ps.executeUpdate();
             EcsLogger.info("com.auto1.pantera.db")
                 .message("updateUserRoles: cleared existing roles, " + deleted + " records removed")
-                .eventCategory("user")
+                .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", userId)
@@ -324,7 +324,7 @@ public final class UserDao implements CrudUsers {
             }
             EcsLogger.info("com.auto1.pantera.db")
                 .message("updateUserRoles: assigning " + roleNames.size() + " roles [" + String.join(",", roleNames) + "]")
-                .eventCategory("user")
+                .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .field("user.id", userId)
@@ -354,7 +354,7 @@ public final class UserDao implements CrudUsers {
                     .message("updateUserRoles: skipping unknown roles "
                         + "(must be pre-created with permissions): ["
                         + String.join(",", unknown) + "]")
-                    .eventCategory("user")
+                    .eventCategory("iam")
                     .eventAction("role_assignment")
                     .eventOutcome("failure")
                     .field("user.name", uname)
@@ -375,7 +375,7 @@ public final class UserDao implements CrudUsers {
                 final int[] results = ps.executeBatch();
                 EcsLogger.info("com.auto1.pantera.db")
                     .message("updateUserRoles: batch role assignment complete, batch_size=" + results.length + " roles=[" + String.join(",", existingRoleNames) + "]")
-                    .eventCategory("user")
+                    .eventCategory("iam")
                     .eventAction("role_assignment")
                     .field("user.name", uname)
                     .log();
@@ -383,7 +383,7 @@ public final class UserDao implements CrudUsers {
         } else {
             EcsLogger.warn("com.auto1.pantera.db")
                 .message("updateUserRoles: no roles to assign (roles_null=" + (roles == null) + ")")
-                .eventCategory("user")
+                .eventCategory("iam")
                 .eventAction("role_assignment")
                 .field("user.name", uname)
                 .log();

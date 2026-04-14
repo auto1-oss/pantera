@@ -75,7 +75,7 @@ public final class OperationControl {
             .anyMatch(perm -> policy.getPermissions(user).implies(perm));
         EcsLogger.debug("com.auto1.pantera.security")
             .message("Authorization operation")
-            .eventCategory("security")
+            .eventCategory("authentication")
             .eventAction("authorization_check")
             .eventOutcome(res ? "success" : "failure")
             .field("user.name", user.name())

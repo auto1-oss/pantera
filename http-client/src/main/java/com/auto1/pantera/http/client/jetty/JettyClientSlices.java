@@ -108,7 +108,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             try {
                 EcsLogger.debug("com.auto1.pantera.http.client")
                     .message("Stopping Jetty HTTP client (" + this.clnt.getDestinations().size() + " destinations)")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("http_client_stop")
                     .log();
 
@@ -121,14 +121,14 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
 
                 EcsLogger.debug("com.auto1.pantera.http.client")
                     .message("Jetty HTTP client stopped and destroyed successfully")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("http_client_stop")
                     .eventOutcome("success")
                     .log();
             } catch (Exception e) {
                 EcsLogger.error("com.auto1.pantera.http.client")
                     .message("Failed to stop Jetty HTTP client cleanly")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("http_client_stop")
                     .eventOutcome("failure")
                     .error(e)
@@ -257,7 +257,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
         if (settings.http3()) {
             EcsLogger.warn("com.auto1.pantera.http.client")
                 .message("HTTP/3 transport requested but not supported in Jetty 12.1+")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("http_client_init")
                 .log();
         }
@@ -298,7 +298,7 @@ public final class JettyClientSlices implements ClientSlices, AutoCloseable {
             .message(String.format(
                 "Configured Jetty ByteBufferPool with bounded buckets: maxBucketSize=%d, maxHeapMB=%d, maxDirectMB=%d",
                 maxBucketSize, maxHeapMemory / (1024 * 1024), maxDirectMemory / (1024 * 1024)))
-            .eventCategory("http")
+            .eventCategory("web")
             .eventAction("http_client_init")
             .log();
         

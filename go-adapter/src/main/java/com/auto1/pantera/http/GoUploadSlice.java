@@ -107,7 +107,7 @@ final class GoUploadSlice implements Slice {
             sanitizedPath = path.substring(0, semicolonIndex);
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Stripped metadata properties from path")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("upload")
                 .field("url.original", path)
                 .field("url.path", sanitizedPath)

@@ -65,7 +65,7 @@ public class HeadBlobsSlice extends DockerActionSlice {
                 .exceptionally(err -> {
                     EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Blob HEAD failed with exception, returning 404")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("blob_head")
                         .eventOutcome("failure")
                         .field("package.checksum", request.digest().string())

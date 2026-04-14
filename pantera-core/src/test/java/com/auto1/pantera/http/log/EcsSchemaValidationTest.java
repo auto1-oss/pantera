@@ -127,7 +127,7 @@ public final class EcsSchemaValidationTest {
     void ecsLoggerMdcCleanedUpAfterLog() {
         EcsLogger.info("com.auto1.pantera.test")
             .message("Artifact published")
-            .eventCategory("artifact")
+            .eventCategory("database")
             .eventAction("artifact_publish")
             .eventOutcome("success")
             .field("repository.name", "my-repo")
@@ -140,7 +140,7 @@ public final class EcsSchemaValidationTest {
     void ecsLoggerMessageIsPlainString() {
         EcsLogger.warn("com.auto1.pantera.test")
             .message("Cache eviction pressure high")
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("cache_evict")
             .log();
         assertFalse(capture.events.isEmpty(), "Expected at least one log event");

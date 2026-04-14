@@ -98,7 +98,7 @@ final class MavenCooldownInspector implements CooldownInspector {
         }).exceptionally(throwable -> {
             EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to read dependencies from POM")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("dependency_resolution")
                 .eventOutcome("failure")
                 .error(throwable)
@@ -121,7 +121,7 @@ final class MavenCooldownInspector implements CooldownInspector {
                 if (!response.status().success()) {
                     EcsLogger.warn("com.auto1.pantera.maven")
                         .message("Failed to fetch POM from upstream")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("pom_fetch")
                         .eventOutcome("failure")
                         .field("url.path", path)
@@ -257,7 +257,7 @@ final class MavenCooldownInspector implements CooldownInspector {
         }).exceptionally(throwable -> {
             EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Failed to resolve parent POM chain")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("parent_resolution")
                 .eventOutcome("failure")
                 .field("package.name", current.artifact())

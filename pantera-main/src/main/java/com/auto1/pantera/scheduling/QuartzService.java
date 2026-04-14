@@ -125,7 +125,7 @@ public final class QuartzService {
             EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC clustering enabled (scheduler: "
                     + QuartzService.SCHED_NAME + ")")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("jdbc_cluster_init")
                 .eventOutcome("success")
                 .log();
@@ -279,7 +279,7 @@ public final class QuartzService {
         } catch (final SchedulerException err) {
             EcsLogger.error("com.auto1.pantera.scheduling")
                 .message("Error while deleting quartz job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_delete")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
@@ -326,7 +326,7 @@ public final class QuartzService {
                         } catch (final SchedulerException error) {
                             EcsLogger.error("com.auto1.pantera.scheduling")
                                 .message("Failed to shutdown Quartz scheduler")
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("scheduler_shutdown")
                                 .eventOutcome("failure")
                                 .error(error)
@@ -405,7 +405,7 @@ public final class QuartzService {
         if (requested > count) {
             EcsLogger.warn("com.auto1.pantera.scheduling")
                 .message("Parallel quartz jobs amount limited to thread pool size (" + count + " threads, " + requested + " jobs requested)")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_limit")
                 .log();
         }
@@ -421,7 +421,7 @@ public final class QuartzService {
     private void log(final int count, final String clazz, final int seconds) {
         EcsLogger.debug("com.auto1.pantera.scheduling")
             .message("Parallel jobs scheduled (" + count + " instances of " + clazz + ", interval: " + seconds + "s)")
-            .eventCategory("scheduling")
+            .eventCategory("process")
             .eventAction("job_schedule")
             .eventOutcome("success")
             .log();

@@ -55,7 +55,7 @@ public final class ScriptRunner implements Job {
                 } catch (final ScriptException exc) {
                     EcsLogger.error("com.auto1.pantera.scripting")
                         .message("Execution error in script: " + key.toString())
-                        .eventCategory("scripting")
+                        .eventCategory("process")
                         .eventAction("script_execute")
                         .eventOutcome("failure")
                         .error(exc)
@@ -64,7 +64,7 @@ public final class ScriptRunner implements Job {
             } else {
                 EcsLogger.warn("com.auto1.pantera.scripting")
                     .message("Cannot find script: " + key.toString())
-                    .eventCategory("scripting")
+                    .eventCategory("process")
                     .eventAction("script_execute")
                     .eventOutcome("failure")
                     .log();
@@ -84,14 +84,14 @@ public final class ScriptRunner implements Job {
         try {
             EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Force stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .field("process.name", key.toString())
                 .log();
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Job stopped")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("success")
                 .field("process.name", key.toString())
@@ -99,7 +99,7 @@ public final class ScriptRunner implements Job {
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.scripting")
                 .message("Error while stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())

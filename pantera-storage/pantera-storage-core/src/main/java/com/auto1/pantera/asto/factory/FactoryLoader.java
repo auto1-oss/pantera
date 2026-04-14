@@ -115,7 +115,7 @@ public abstract class FactoryLoader<F, A, C, O> {
                             res.put(type, (F) element.getDeclaredConstructor().newInstance());
                             EcsLogger.debug("com.auto1.pantera.asto")
                                 .message("Initiated factory (type: " + type + ", class: " + element.getSimpleName() + ")")
-                                .eventCategory("factory")
+                                .eventCategory("configuration")
                                 .eventAction("factory_init")
                                 .eventOutcome("success")
                                 .log();

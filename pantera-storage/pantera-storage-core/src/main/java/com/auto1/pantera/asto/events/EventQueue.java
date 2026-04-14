@@ -83,7 +83,7 @@ public final class EventQueue<T> {
             this.size.decrementAndGet();
             EcsLogger.warn("com.auto1.pantera.asto.events")
                 .message(String.format("Event queue full, dropping event: capacity=%d, size=%d", this.capacity, current))
-                .eventCategory("events")
+                .eventCategory("process")
                 .eventAction("queue_drop")
                 .log();
             return false;

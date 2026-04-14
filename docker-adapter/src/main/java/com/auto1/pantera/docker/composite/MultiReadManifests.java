@@ -76,7 +76,7 @@ public final class MultiReadManifests implements Manifests {
                             } else {
                                 EcsLogger.error("com.auto1.pantera.docker")
                                     .message("Failed to read manifest")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("manifest_get")
                                     .eventOutcome("failure")
                                     .field("container.image.hash.all", ref.digest())

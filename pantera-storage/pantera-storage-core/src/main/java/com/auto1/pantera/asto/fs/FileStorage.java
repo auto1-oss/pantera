@@ -134,7 +134,7 @@ public final class FileStorage implements Storage {
                         // Treat as empty directory to avoid breaking callers
                         EcsLogger.debug("com.auto1.pantera.asto")
                             .message("Directory disappeared during list operation")
-                            .eventCategory("storage")
+                            .eventCategory("file")
                             .eventAction("list_keys")
                             .eventOutcome("success")
                             .field("file.path", path.toString())
@@ -148,7 +148,7 @@ public final class FileStorage implements Storage {
                 }
                 EcsLogger.debug("com.auto1.pantera.asto")
                     .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("list_keys")
                     .eventOutcome("success")
                     .field("file.path", path.toString())
@@ -174,7 +174,7 @@ public final class FileStorage implements Storage {
                 if (!Files.exists(path)) {
                     EcsLogger.debug("com.auto1.pantera.asto")
                         .message("Path does not exist for prefix: " + prefix.string())
-                        .eventCategory("storage")
+                        .eventCategory("file")
                         .eventAction("list_hierarchical")
                         .eventOutcome("success")
                         .field("file.path", path.toString())
@@ -185,7 +185,7 @@ public final class FileStorage implements Storage {
                 if (!Files.isDirectory(path)) {
                     EcsLogger.debug("com.auto1.pantera.asto")
                         .message("Path is not a directory for prefix: " + prefix.string())
-                        .eventCategory("storage")
+                        .eventCategory("file")
                         .eventAction("list_hierarchical")
                         .eventOutcome("success")
                         .field("file.path", path.toString())
@@ -230,7 +230,7 @@ public final class FileStorage implements Storage {
 
                 EcsLogger.debug("com.auto1.pantera.asto")
                     .message("Hierarchical list completed for prefix '" + prefix.string() + "' (" + files.size() + " files, " + directories.size() + " directories)")
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("list_hierarchical")
                     .eventOutcome("success")
                     .log();

@@ -214,7 +214,7 @@ public final class Manifest {
         long size = this.source.length;
         EcsLogger.debug("com.auto1.pantera.docker")
             .message("Manifest size calculated")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("manifest_size")
             .field("package.checksum", this.manifestDigest.string())
             .field("package.size", size)

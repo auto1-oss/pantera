@@ -207,7 +207,7 @@ public final class MavenGroupSlice implements Slice {
                         } catch (java.security.NoSuchAlgorithmException e) {
                             EcsLogger.error("com.auto1.pantera.maven")
                                 .message("Failed to compute checksum")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("checksum_compute")
                                 .eventOutcome("failure")
                                 .field("url.path", path)
@@ -239,7 +239,7 @@ public final class MavenGroupSlice implements Slice {
                 // Cache HIT (L1 or L2)
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Returning cached merged metadata (cache hit)")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_merge")
                     .eventOutcome("success")
                     .field("repository.name", this.group)
@@ -289,7 +289,7 @@ public final class MavenGroupSlice implements Slice {
                 .exceptionally(err -> {
                     EcsLogger.warn("com.auto1.pantera.maven")
                         .message("Member failed to fetch metadata: " + member)
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("metadata_fetch")
                         .eventOutcome("failure")
                         .field("repository.name", this.group)
@@ -322,7 +322,7 @@ public final class MavenGroupSlice implements Slice {
                             if (stale.isPresent()) {
                                 EcsLogger.warn("com.auto1.pantera.maven")
                                     .message("Returning stale metadata (all members failed)")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("metadata_merge")
                                     .eventOutcome("stale_fallback")
                                     .field("repository.name", MavenGroupSlice.this.group)
@@ -336,7 +336,7 @@ public final class MavenGroupSlice implements Slice {
                             }
                             EcsLogger.warn("com.auto1.pantera.maven")
                                 .message("No metadata found in any member and no stale fallback")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("metadata_merge")
                                 .eventOutcome("failure")
                                 .field("repository.name", MavenGroupSlice.this.group)
@@ -367,7 +367,7 @@ public final class MavenGroupSlice implements Slice {
                         if (fetchDuration > 500) {
                             EcsLogger.debug("com.auto1.pantera.maven")
                                 .message(String.format("Slow member fetch (%d members), merge took %dms", metadataList.size(), mergeDuration))
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("metadata_fetch")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
@@ -380,7 +380,7 @@ public final class MavenGroupSlice implements Slice {
                         if (mergeDuration > 50) {
                             EcsLogger.warn("com.auto1.pantera.maven")
                                 .message(String.format("Slow metadata merge (%d members), fetch took %dms", metadataList.size(), fetchDuration))
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("metadata_merge")
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
@@ -400,7 +400,7 @@ public final class MavenGroupSlice implements Slice {
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
                 EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to merge metadata")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_merge")
                     .eventOutcome("failure")
                     .field("repository.name", this.group)
@@ -442,7 +442,7 @@ public final class MavenGroupSlice implements Slice {
         } catch (Exception e) {
             EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to merge metadata using reflection")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("metadata_merge")
                 .eventOutcome("failure")
                 .error(e)

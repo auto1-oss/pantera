@@ -88,7 +88,7 @@ public final class StreamingBrowseSlice implements Slice {
 
             EcsLogger.debug("com.auto1.pantera.http")
                 .message("Listed directory (" + result.files().size() + " files, " + result.directories().size() + " directories, " + totalEntries + " total)")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("directory_list")
                 .eventOutcome("success")
                 .field("url.path", key.string())
@@ -110,7 +110,7 @@ public final class StreamingBrowseSlice implements Slice {
         }).exceptionally(throwable -> {
             EcsLogger.error("com.auto1.pantera.http")
                 .message("Failed to list directory")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("directory_list")
                 .eventOutcome("failure")
                 .field("url.path", key.string())

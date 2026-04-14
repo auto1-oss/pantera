@@ -180,7 +180,7 @@ final class WheelSlice implements Slice {
         ).doOnNext(
             part -> EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("WS: multipart request body parsed, part found: " + part.toString())
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("upload")
                 .log()
         ).flatMapSingle(
@@ -189,7 +189,7 @@ final class WheelSlice implements Slice {
                 this.storage.save(temp, new Content.From(part))
                     .thenRun(() -> EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("WS: content saved to temp file")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("upload")
                         .field("file.name", temp.string())
                         .log())

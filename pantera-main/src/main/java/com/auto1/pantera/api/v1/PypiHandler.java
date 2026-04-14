@@ -101,7 +101,7 @@ public final class PypiHandler {
             ignored -> {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("PyPI yank applied")
-                    .eventCategory("pypi")
+                    .eventCategory("web")
                     .eventAction("yank")
                     .eventOutcome("success")
                     .field("repository.name", repo)
@@ -114,7 +114,7 @@ public final class PypiHandler {
             err -> {
                 EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("PyPI yank failed")
-                    .eventCategory("pypi")
+                    .eventCategory("web")
                     .eventAction("yank")
                     .eventOutcome("failure")
                     .field("repository.name", repo)
@@ -145,7 +145,7 @@ public final class PypiHandler {
             ignored -> {
                 EcsLogger.info("com.auto1.pantera.api.v1")
                     .message("PyPI unyank applied")
-                    .eventCategory("pypi")
+                    .eventCategory("web")
                     .eventAction("unyank")
                     .eventOutcome("success")
                     .field("repository.name", repo)
@@ -158,7 +158,7 @@ public final class PypiHandler {
             err -> {
                 EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("PyPI unyank failed")
-                    .eventCategory("pypi")
+                    .eventCategory("web")
                     .eventAction("unyank")
                     .eventOutcome("failure")
                     .field("repository.name", repo)

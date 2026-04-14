@@ -128,7 +128,7 @@ final class ChecksumProxySlice implements Slice {
                         // available even if caching fails or is bypassed.
                         EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Computing " + algorithm + " checksum from artifact (streaming mode): " + artifactPath)
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("checksum_computation")
                             .log();
                         return computeChecksumStreaming(artifactResp.body(), algorithm, artifactPath);
@@ -170,7 +170,7 @@ final class ChecksumProxySlice implements Slice {
                 final String hash = Hex.encodeHexString(digest.digest());
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Checksum computed successfully (" + algorithm + "): " + hash.substring(0, Math.min(16, hash.length())) + "...")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("success")
                     .field("file.path", artifactPath)
@@ -180,7 +180,7 @@ final class ChecksumProxySlice implements Slice {
             .doOnError(err -> {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to compute " + algorithm + " checksum during streaming for: " + artifactPath)
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
                     .field("error.message", err.getMessage())
@@ -201,7 +201,7 @@ final class ChecksumProxySlice implements Slice {
                 // Graceful fallback on streaming failure
                 EcsLogger.error("com.auto1.pantera.maven")
                     .message("Checksum computation failed")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("checksum_computation")
                     .eventOutcome("failure")
                     .error(err instanceof Throwable ? (Throwable) err : new RuntimeException(err))

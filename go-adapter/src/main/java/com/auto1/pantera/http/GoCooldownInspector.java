@@ -103,7 +103,7 @@ final class GoCooldownInspector implements CooldownInspector {
         }).exceptionally(throwable -> {
             EcsLogger.error("com.auto1.pantera.go")
                 .message("Failed to read dependencies")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_inspector")
                 .eventOutcome("failure")
                 .field("package.name", artifact)
@@ -124,7 +124,7 @@ final class GoCooldownInspector implements CooldownInspector {
             if (!response.status().success()) {
                 EcsLogger.warn("com.auto1.pantera.go")
                     .message("Failed to fetch go.mod")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_inspector")
                     .eventOutcome("failure")
                     .field("url.path", path)
@@ -161,7 +161,7 @@ final class GoCooldownInspector implements CooldownInspector {
             } catch (final DateTimeParseException ex2) {
                 EcsLogger.warn("com.auto1.pantera.go")
                     .message(String.format("Invalid Last-Modified header: %s", raw))
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_inspector")
                     .eventOutcome("failure")
                     .log();

@@ -184,7 +184,7 @@ public final class MetadataEventQueues {
                             );
                             EcsLogger.info("com.auto1.pantera.scheduling")
                                 .message("Initialized proxy metadata job and queue")
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("metadata_job_init")
                                 .eventOutcome("success")
                                 .field("repository.name", config.name())
@@ -206,7 +206,7 @@ public final class MetadataEventQueues {
             } catch (final Exception err) {
                 EcsLogger.error("com.auto1.pantera.scheduling")
                     .message("Failed to initialize events queue processing")
-                    .eventCategory("scheduling")
+                    .eventCategory("process")
                     .eventAction("events_queue_init")
                     .eventOutcome("failure")
                     .field("repository.name", config.name())

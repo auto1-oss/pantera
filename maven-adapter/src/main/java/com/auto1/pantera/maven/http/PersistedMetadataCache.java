@@ -156,7 +156,7 @@ public final class PersistedMetadataCache extends MetadataCache {
                 final long elapsed = System.currentTimeMillis() - start;
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Restored " + restored + " cache entries from snapshot")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cache_restore")
                     .eventOutcome("success")
                     .duration(elapsed)
@@ -165,7 +165,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         } catch (IOException | ClassNotFoundException e) {
             EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Failed to restore cache from snapshot, starting with empty cache")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cache_restore")
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
@@ -184,7 +184,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         } catch (IOException e) {
             EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Cache snapshot failed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cache_snapshot")
                 .eventOutcome("failure")
                 .field("error.message", e.getMessage())
@@ -230,7 +230,7 @@ public final class PersistedMetadataCache extends MetadataCache {
         final long elapsed = System.currentTimeMillis() - start;
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Cache snapshot saved (" + data.entries.size() + " entries)")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cache_snapshot")
             .eventOutcome("success")
             .duration(elapsed)
@@ -258,7 +258,7 @@ public final class PersistedMetadataCache extends MetadataCache {
             } catch (IOException e) {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to save final cache snapshot on shutdown")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cache_snapshot")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())

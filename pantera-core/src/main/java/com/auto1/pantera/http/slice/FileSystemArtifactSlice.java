@@ -144,7 +144,7 @@ public final class FileSystemArtifactSlice implements Slice {
                 final long elapsed = System.currentTimeMillis() - startTime;
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("FileSystem artifact served: " + key.string())
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("artifact_serve")
                     .eventOutcome("success")
                     .duration(elapsed)
@@ -160,7 +160,7 @@ public final class FileSystemArtifactSlice implements Slice {
             } catch (IOException e) {
                 EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to serve artifact: " + key.string())
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(e)
@@ -457,7 +457,7 @@ public final class FileSystemArtifactSlice implements Slice {
                     // Last resort: let GC handle it eventually (may cause OOM under load)
                     EcsLogger.warn("com.auto1.pantera.http")
                         .message("Failed to explicitly clean direct buffer, relying on GC")
-                        .eventCategory("memory")
+                        .eventCategory("host")
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)

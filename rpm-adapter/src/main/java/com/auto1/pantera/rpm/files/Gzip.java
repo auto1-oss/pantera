@@ -67,7 +67,7 @@ public final class Gzip {
         }
         EcsLogger.debug("com.auto1.pantera.rpm")
             .message("Unpacked tar.gz")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())
@@ -87,7 +87,7 @@ public final class Gzip {
         }
         EcsLogger.debug("com.auto1.pantera.rpm")
             .message("Unpacked gz")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("archive_extraction")
             .field("file.path", this.file.toString())
             .field("destination.address", dest.toString())

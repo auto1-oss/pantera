@@ -101,7 +101,7 @@ public final class GroupAuditSlice implements Slice {
 
         EcsLogger.info("com.auto1.pantera.npm")
             .message(String.format("NPM Group Audit - START - querying %d members: [%s]", this.members.size(), memberList))
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_audit_start")
             .field("url.path", line.uri().getPath())
             .log();
@@ -148,7 +148,7 @@ public final class GroupAuditSlice implements Slice {
                     if (merged.isEmpty()) {
                         EcsLogger.info("com.auto1.pantera.npm")
                             .message(String.format("NPM Group Audit - no vulnerabilities found: %d empty, %d non-empty members", emptyCount, nonEmptyCount))
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("group_audit")
                             .eventOutcome("success")
                             .duration(duration)
@@ -160,7 +160,7 @@ public final class GroupAuditSlice implements Slice {
 
                     EcsLogger.info("com.auto1.pantera.npm")
                         .message(String.format("NPM Group Audit - found %d vulnerabilities: %d empty, %d non-empty members", merged.size(), emptyCount, nonEmptyCount))
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("group_audit")
                         .eventOutcome("success")
                         .duration(duration)
@@ -178,7 +178,7 @@ public final class GroupAuditSlice implements Slice {
                     final long duration = System.currentTimeMillis() - startTime;
                     EcsLogger.error("com.auto1.pantera.npm")
                         .message("NPM Group Audit failed")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("group_audit")
                         .eventOutcome("failure")
                         .duration(duration)
@@ -208,7 +208,7 @@ public final class GroupAuditSlice implements Slice {
     ) {
         EcsLogger.debug("com.auto1.pantera.npm")
             .message("Querying member for audit: " + member.name)
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_audit")
             .field("url.path", line.uri().getPath())
             .log();
@@ -222,7 +222,7 @@ public final class GroupAuditSlice implements Slice {
             if (!response.status().success()) {
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Member audit returned non-success status: " + member.name)
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("group_audit")
                     .field("http.response.status_code", response.status().code())
                     .log();
@@ -237,7 +237,7 @@ public final class GroupAuditSlice implements Slice {
                         if (json.isBlank() || json.equals("{}")) {
                             EcsLogger.debug("com.auto1.pantera.npm")
                                 .message("Member returned empty audit response: " + member.name)
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("group_audit")
                                 .log();
                             return Json.createObjectBuilder().build();
@@ -246,7 +246,7 @@ public final class GroupAuditSlice implements Slice {
                             final JsonObject result = reader.readObject();
                             EcsLogger.debug("com.auto1.pantera.npm")
                                 .message(String.format("Member '%s' returned audit data with %d entries", member.name, result.size()))
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("group_audit")
                                 .log();
                             return result;
@@ -254,7 +254,7 @@ public final class GroupAuditSlice implements Slice {
                     } catch (Exception e) {
                         EcsLogger.warn("com.auto1.pantera.npm")
                             .message("Failed to parse audit response from member: " + member.name)
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("group_audit")
                             .error(e)
                             .log();
@@ -264,7 +264,7 @@ public final class GroupAuditSlice implements Slice {
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.npm")
                 .message("Member audit query failed: " + member.name)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("group_audit")
                 .error(err)
                 .log();

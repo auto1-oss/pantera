@@ -178,7 +178,7 @@ public final class VertxMain {
             quartz = new QuartzService(ds);
             EcsLogger.info("com.auto1.pantera")
                 .message("Quartz JDBC clustering enabled with shared DataSource")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("quartz_jdbc_init")
                 .eventOutcome("success")
                 .log();
@@ -283,7 +283,7 @@ public final class VertxMain {
                                     if (err != null) {
                                         EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after UPSERT event")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
@@ -333,7 +333,7 @@ public final class VertxMain {
                                     if (err != null) {
                                         EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after REMOVE event")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
@@ -352,7 +352,7 @@ public final class VertxMain {
                                     if (err != null) {
                                         EcsLogger.error("com.auto1.pantera")
                                             .message("Failed to refresh repositories after MOVE event")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("event_process")
                                             .eventOutcome("failure")
                                             .error(err)
@@ -372,7 +372,7 @@ public final class VertxMain {
                 } catch (final Throwable err) {
                     EcsLogger.error("com.auto1.pantera")
                         .message("Failed to process repository event")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("event_process")
                         .eventOutcome("failure")
                         .error(err)
@@ -390,7 +390,7 @@ public final class VertxMain {
         );
         EcsLogger.info("com.auto1.pantera")
             .message("Pantera was started on port")
-            .eventCategory("server")
+            .eventCategory("web")
             .eventAction("server_start")
             .eventOutcome("success")
             .field("url.port", main)
@@ -454,7 +454,7 @@ public final class VertxMain {
                 }
                 EcsLogger.info("com.auto1.pantera")
                     .message("JIT warmup complete for group repositories")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("jit_warmup")
                     .eventOutcome("success")
                     .log();
@@ -500,7 +500,7 @@ public final class VertxMain {
                         if (metricsResult.succeeded()) {
                             EcsLogger.info("com.auto1.pantera.metrics")
                                 .message(String.format("AsyncMetricsVerticle deployed as worker verticle with cache TTL %dms", metricsCacheTtlMs))
-                                .eventCategory("metrics")
+                                .eventCategory("process")
                                 .eventAction("metrics_verticle_deploy")
                                 .eventOutcome("success")
                                 .field("destination.port", metricsPort)
@@ -509,7 +509,7 @@ public final class VertxMain {
                         } else {
                             EcsLogger.error("com.auto1.pantera.metrics")
                                 .message("Failed to deploy AsyncMetricsVerticle")
-                                .eventCategory("metrics")
+                                .eventCategory("process")
                                 .eventAction("metrics_verticle_deploy")
                                 .eventOutcome("failure")
                                 .error(metricsResult.cause())
@@ -548,7 +548,7 @@ public final class VertxMain {
     public void stop() {
         EcsLogger.info("com.auto1.pantera")
             .message("Stopping Pantera and cleaning up resources")
-            .eventCategory("server")
+            .eventCategory("web")
             .eventAction("server_stop")
             .eventOutcome("success")
             .log();
@@ -558,7 +558,7 @@ public final class VertxMain {
                 server.stop();
                 EcsLogger.info("com.auto1.pantera")
                     .message("HTTP/3 server on port stopped")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("http3_stop")
                     .eventOutcome("success")
                     .field("destination.port", port)
@@ -566,7 +566,7 @@ public final class VertxMain {
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop HTTP/3 server")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("http3_stop")
                     .eventOutcome("failure")
                     .field("destination.port", port)
@@ -580,7 +580,7 @@ public final class VertxMain {
                 s.stop();
                 EcsLogger.info("com.auto1.pantera")
                     .message("Pantera's server on port was stopped")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("server_stop")
                     .eventOutcome("success")
                     .field("destination.port", s.port())
@@ -588,7 +588,7 @@ public final class VertxMain {
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop server")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("server_stop")
                     .eventOutcome("failure")
                     .error(e)
@@ -602,7 +602,7 @@ public final class VertxMain {
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to stop QuartzService")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("quartz_stop")
                     .eventOutcome("failure")
                     .error(e)
@@ -616,7 +616,7 @@ public final class VertxMain {
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close ConfigWatchService")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("config_watch_stop")
                     .eventOutcome("failure")
                     .error(e)
@@ -628,14 +628,14 @@ public final class VertxMain {
             BlockedThreadDiagnostics.shutdownInstance();
             EcsLogger.info("com.auto1.pantera")
                 .message("BlockedThreadDiagnostics shut down")
-                .eventCategory("server")
+                .eventCategory("web")
                 .eventAction("diagnostics_shutdown")
                 .eventOutcome("success")
                 .log();
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera")
                 .message("Failed to shutdown BlockedThreadDiagnostics")
-                .eventCategory("server")
+                .eventCategory("web")
                 .eventAction("diagnostics_shutdown")
                 .eventOutcome("failure")
                 .error(e)
@@ -647,14 +647,14 @@ public final class VertxMain {
                 this.settings.close();
                 EcsLogger.info("com.auto1.pantera")
                     .message("Settings and storage resources closed successfully")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("resource_cleanup")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close settings")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("resource_cleanup")
                     .eventOutcome("failure")
                     .error(e)
@@ -666,14 +666,14 @@ public final class VertxMain {
             com.auto1.pantera.http.misc.StorageExecutors.shutdown();
             EcsLogger.info("com.auto1.pantera")
                 .message("Storage executor pools shut down")
-                .eventCategory("server")
+                .eventCategory("web")
                 .eventAction("executor_shutdown")
                 .eventOutcome("success")
                 .log();
         } catch (final Exception e) {
             EcsLogger.error("com.auto1.pantera")
                 .message("Failed to shutdown storage executor pools")
-                .eventCategory("server")
+                .eventCategory("web")
                 .eventAction("executor_shutdown")
                 .eventOutcome("failure")
                 .error(e)
@@ -685,14 +685,14 @@ public final class VertxMain {
                 this.vertx.close();
                 EcsLogger.info("com.auto1.pantera")
                     .message("Vert.x instance closed")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("vertx_close")
                     .eventOutcome("success")
                     .log();
             } catch (final Exception e) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to close Vert.x instance")
-                    .eventCategory("server")
+                    .eventCategory("web")
                     .eventAction("vertx_close")
                     .eventOutcome("failure")
                     .error(e)
@@ -701,7 +701,7 @@ public final class VertxMain {
         }
         EcsLogger.info("com.auto1.pantera")
             .message("Pantera shutdown complete")
-            .eventCategory("server")
+            .eventCategory("web")
             .eventAction("server_shutdown")
             .eventOutcome("success")
             .log();
@@ -745,7 +745,7 @@ public final class VertxMain {
         }
         EcsLogger.info("com.auto1.pantera")
             .message("Used version of Pantera")
-            .eventCategory("server")
+            .eventCategory("web")
             .eventAction("server_start")
             .eventOutcome("success")
             .log();
@@ -755,7 +755,7 @@ public final class VertxMain {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             EcsLogger.info("com.auto1.pantera")
                 .message("Shutdown hook triggered - cleaning up resources")
-                .eventCategory("server")
+                .eventCategory("web")
                 .eventAction("shutdown_hook")
                 .eventOutcome("success")
                 .log();
@@ -765,7 +765,7 @@ public final class VertxMain {
         app.start(Integer.parseInt(cmd.getOptionValue(apiport, VertxMain.DEF_API_PORT)));
         EcsLogger.info("com.auto1.pantera")
             .message("Pantera started successfully. Press Ctrl+C to shutdown.")
-            .eventCategory("server")
+            .eventCategory("web")
             .eventAction("server_start")
             .eventOutcome("success")
             .log();
@@ -815,7 +815,7 @@ public final class VertxMain {
                         }
                         EcsLogger.info("com.auto1.pantera")
                             .message("Pantera repo was started on port")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("repo_start")
                             .eventOutcome("success")
                             .field("repository.name", name)
@@ -824,7 +824,7 @@ public final class VertxMain {
                     },
                     () -> EcsLogger.info("com.auto1.pantera")
                         .message("Pantera repo was started on port")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("repo_start")
                         .eventOutcome("success")
                         .field("repository.name", repo.name())
@@ -834,7 +834,7 @@ public final class VertxMain {
             } catch (final IllegalStateException err) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Invalid repo config file")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("repo_start")
                     .eventOutcome("failure")
                     .field("repository.name", repo.name())
@@ -843,7 +843,7 @@ public final class VertxMain {
             } catch (final PanteraException err) {
                 EcsLogger.error("com.auto1.pantera")
                     .message("Failed to start repo")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("repo_start")
                     .eventOutcome("failure")
                     .field("repository.name", repo.name())

@@ -366,7 +366,7 @@ public final class VertxSliceServer implements Closeable {
             this.shuttingDown.set(true);
             EcsLogger.info("com.auto1.pantera.vertx")
                 .message(String.format("Initiating graceful shutdown, draining %d in-flight requests", this.inFlightRequests.get()))
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("server_drain")
                 .log();
             // Phase 2: Wait for in-flight requests to drain
@@ -383,14 +383,14 @@ public final class VertxSliceServer implements Closeable {
             if (remaining > 0) {
                 EcsLogger.warn("com.auto1.pantera.vertx")
                     .message(String.format("Drain timeout expired with %d in-flight requests, forcing shutdown", remaining))
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("server_drain")
                     .eventOutcome("timeout")
                     .log();
             } else {
                 EcsLogger.info("com.auto1.pantera.vertx")
                     .message("All in-flight requests drained successfully")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("server_drain")
                     .eventOutcome("success")
                     .log();
@@ -400,7 +400,7 @@ public final class VertxSliceServer implements Closeable {
         } else {
             EcsLogger.warn("com.auto1.pantera.vertx")
                 .message("stop() called but server was not started")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("server_stop")
                 .eventOutcome("skipped")
                 .log();
@@ -502,7 +502,7 @@ public final class VertxSliceServer implements Closeable {
                         req.bodyHandler(body -> {
                             EcsLogger.debug("com.auto1.pantera.vertx")
                                 .message("Small request body buffered")
-                                .eventCategory("http")
+                                .eventCategory("web")
                                 .eventAction("request_buffer")
                                 .field("http.request.body.bytes", body.length())
                                 .log();
@@ -511,7 +511,7 @@ public final class VertxSliceServer implements Closeable {
                                     if (throwable != null) {
                                         EcsLogger.error("com.auto1.pantera.vertx")
                                             .message("Request serving failed")
-                                            .eventCategory("http")
+                                            .eventCategory("web")
                                             .eventAction("request_serve")
                                             .eventOutcome("failure")
                                             .error(throwable)
@@ -536,7 +536,7 @@ public final class VertxSliceServer implements Closeable {
                         // Large body or chunked transfer - stream directly to slice
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Streaming large request body")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_stream")
                             .field("http.request.body.bytes", contentLength)
                             .log();
@@ -545,7 +545,7 @@ public final class VertxSliceServer implements Closeable {
                                 if (throwable != null) {
                                     EcsLogger.error("com.auto1.pantera.vertx")
                                         .message("Request serving failed (streaming)")
-                                        .eventCategory("http")
+                                        .eventCategory("web")
                                         .eventAction("request_serve")
                                         .eventOutcome("failure")
                                         .error(throwable)
@@ -573,7 +573,7 @@ public final class VertxSliceServer implements Closeable {
                             if (throwable != null) {
                                 EcsLogger.error("com.auto1.pantera.vertx")
                                     .message("Request serving failed")
-                                    .eventCategory("http")
+                                    .eventCategory("web")
                                     .eventAction("request_serve")
                                     .eventOutcome("failure")
                                     .error(throwable)
@@ -597,7 +597,7 @@ public final class VertxSliceServer implements Closeable {
             } catch (final Exception ex) {
                 EcsLogger.error("com.auto1.pantera.vertx")
                     .message("Exception in proxy handler")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("request_handle")
                     .eventOutcome("failure")
                     .error(ex)
@@ -670,7 +670,7 @@ public final class VertxSliceServer implements Closeable {
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request with streaming body")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("request_serve_stream")
                 .field("http.request.method", req.method().name())
                 .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
@@ -715,7 +715,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response (streaming)")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
@@ -737,7 +737,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed (streaming)")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
@@ -749,7 +749,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully (streaming)")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
@@ -785,7 +785,7 @@ public final class VertxSliceServer implements Closeable {
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request with body")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("request_serve")
                 .field("http.request.method", req.method().name())
                 .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
@@ -820,7 +820,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
@@ -844,7 +844,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
@@ -856,7 +856,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
@@ -893,7 +893,7 @@ public final class VertxSliceServer implements Closeable {
         addRequestContext(
             EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Serving request without body")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("request_serve")
                 .field("http.request.method", req.method().name())
                 .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
@@ -922,7 +922,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Accepting response")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_accept")
                             .field("http.request.method", req.method().name())
                             .field("url.path", LogSanitizer.sanitizeUrl(req.uri()))
@@ -946,7 +946,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Request failed")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("failure")
                             .field("http.request.method", req.method().name())
@@ -958,7 +958,7 @@ public final class VertxSliceServer implements Closeable {
                     addRequestContext(
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("Request completed successfully")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("request_serve")
                             .eventOutcome("success")
                             .field("http.request.method", req.method().name())
@@ -1007,7 +1007,7 @@ public final class VertxSliceServer implements Closeable {
                 addRequestContext(
                     EcsLogger.warn("com.auto1.pantera.vertx")
                         .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("request_timeout")
                         .eventOutcome("timeout")
                         .field("http.request.method", req.method().name())
@@ -1042,7 +1042,7 @@ public final class VertxSliceServer implements Closeable {
         if (guardedResponse.isTerminated()) {
             EcsLogger.debug("com.auto1.pantera.vertx")
                 .message("Response already terminated, skipping accept")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("response_accept")
                 .field("http.response.status_code", status.code())
                 .log();
@@ -1096,7 +1096,7 @@ public final class VertxSliceServer implements Closeable {
                     error -> {
                         EcsLogger.error("com.auto1.pantera.vertx")
                             .message("Error in HEAD response body")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_write")
                             .eventOutcome("failure")
                             .error(error)
@@ -1106,7 +1106,7 @@ public final class VertxSliceServer implements Closeable {
                     () -> {
                         EcsLogger.debug("com.auto1.pantera.vertx")
                             .message("HEAD response body fully written")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_write")
                             .eventOutcome("success")
                             .field("http.response.body.bytes", true)
@@ -1136,7 +1136,7 @@ public final class VertxSliceServer implements Closeable {
                     if (expectedBytes > 0 && bytes != expectedBytes) {
                         EcsLogger.error("com.auto1.pantera.vertx")
                             .message(String.format("Incomplete transfer detected: expected %d bytes, wrote %d bytes", expectedBytes, bytes))
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_write")
                             .eventOutcome("failure")
                             .field("http.response.body.bytes", bytes)
@@ -1154,7 +1154,7 @@ public final class VertxSliceServer implements Closeable {
                    .doOnError(error -> {
                        EcsLogger.error("com.auto1.pantera.vertx")
                            .message("Error streaming response body")
-                           .eventCategory("http")
+                           .eventCategory("web")
                            .eventAction("response_write")
                            .eventOutcome("failure")
                            .field("http.response.body.bytes", bytesWritten.get())
@@ -1172,7 +1172,7 @@ public final class VertxSliceServer implements Closeable {
                 response.endHandler(ignored -> {
                     EcsLogger.debug("com.auto1.pantera.vertx")
                         .message("Completing chunked response")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("response_write")
                         .eventOutcome("success")
                         .log();
@@ -1183,7 +1183,7 @@ public final class VertxSliceServer implements Closeable {
                 vpb.doOnSubscribe(subscription ->
                     EcsLogger.debug("com.auto1.pantera.vertx")
                         .message("Subscribed to chunked response body")
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("response_subscribe")
                         .log()
                 )
@@ -1389,7 +1389,7 @@ public final class VertxSliceServer implements Closeable {
             } else {
                 EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Duplicate response completion suppressed (method: end)")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("response_complete")
                     .log();
             }
@@ -1403,7 +1403,7 @@ public final class VertxSliceServer implements Closeable {
             } else {
                 EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Duplicate response completion suppressed (method: handler)")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("response_complete")
                     .log();
             }
@@ -1413,7 +1413,7 @@ public final class VertxSliceServer implements Closeable {
             if (this.finished.compareAndSet(false, true)) {
                 EcsLogger.error("com.auto1.pantera.vertx")
                     .message("Error streaming response")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("response_stream")
                     .eventOutcome("failure")
                     .error(error)
@@ -1441,7 +1441,7 @@ public final class VertxSliceServer implements Closeable {
                     } catch (Exception e) {
                         EcsLogger.warn("com.auto1.pantera.vertx")
                             .message("Failed to end error response")
-                            .eventCategory("http")
+                            .eventCategory("web")
                             .eventAction("response_end")
                             .eventOutcome("failure")
                             .error(e)
@@ -1452,7 +1452,7 @@ public final class VertxSliceServer implements Closeable {
             } else {
                 EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Late failure after response completion")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("response_fail")
                     .error(error)
                     .log();
@@ -1500,7 +1500,7 @@ public final class VertxSliceServer implements Closeable {
             } else {
                 EcsLogger.debug("com.auto1.pantera.vertx")
                     .message("Filtering HTTP/2 forbidden header: " + header.getKey())
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("header_filter")
                     .field("http.version", "2.0")
                     .log();

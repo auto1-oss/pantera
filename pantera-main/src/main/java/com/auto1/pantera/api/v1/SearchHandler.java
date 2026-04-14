@@ -369,7 +369,7 @@ public final class SearchHandler {
     private void reindex(final RoutingContext ctx) {
         EcsLogger.info("com.auto1.pantera.api.v1")
             .message("Full reindex triggered via API")
-            .eventCategory("search")
+            .eventCategory("database")
             .eventAction("reindex")
             .field("user.name",
                 ctx.user() != null

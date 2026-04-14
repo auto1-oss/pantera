@@ -244,7 +244,7 @@ public final class BrowsableSlice implements Slice {
         if (unwrapped instanceof FileStorage) {
             EcsLogger.debug("com.auto1.pantera.http")
                 .message("Using FileSystemBrowseSlice for direct NIO access (unwrapped: " + unwrapped.getClass().getSimpleName() + ", original: " + this.storage.getClass().getSimpleName() + ")")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("browse_slice_select")
                 .log();
             // Use original storage to preserve SubStorage prefix (repo scoping)
@@ -255,7 +255,7 @@ public final class BrowsableSlice implements Slice {
         // TODO: Add S3BrowseSlice with pagination for large S3 directories
         EcsLogger.debug("com.auto1.pantera.http")
             .message("Using StreamingBrowseSlice for storage type: " + unwrapped.getClass().getSimpleName())
-            .eventCategory("http")
+            .eventCategory("web")
             .eventAction("browse_slice_select")
             .log();
         return new StreamingBrowseSlice(this.storage);
@@ -286,7 +286,7 @@ public final class BrowsableSlice implements Slice {
                     final Storage next = (Storage) delegate.get(current);
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped DispatchedStorage to: " + next.getClass().getSimpleName())
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("storage_unwrap")
                         .log();
                     current = next;
@@ -301,7 +301,7 @@ public final class BrowsableSlice implements Slice {
                     final Storage next = (Storage) backend.get(current);
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped DiskCacheStorage to: " + next.getClass().getSimpleName())
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("storage_unwrap")
                         .log();
                     current = next;
@@ -316,7 +316,7 @@ public final class BrowsableSlice implements Slice {
                     final Storage next = (Storage) origin.get(current);
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("Unwrapped SubStorage to: " + next.getClass().getSimpleName())
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("storage_unwrap")
                         .log();
                     current = next;
@@ -331,7 +331,7 @@ public final class BrowsableSlice implements Slice {
             } catch (Exception e) {
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Could not unwrap storage type: " + className)
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("storage_unwrap")
                     .eventOutcome("failure")
                     .field("error.message", e.getMessage())

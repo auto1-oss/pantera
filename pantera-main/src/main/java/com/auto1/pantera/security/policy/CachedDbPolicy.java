@@ -131,7 +131,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             } catch (final Exception err) {
                 EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to get user permissions from DB")
-                    .eventCategory("security")
+                    .eventCategory("authentication")
                     .eventAction("permissions_get")
                     .eventOutcome("failure")
                     .field("user.name", user.name())
@@ -246,7 +246,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.security")
                 .message("Failed to read role permissions from DB")
-                .eventCategory("security")
+                .eventCategory("authentication")
                 .eventAction("role_permissions_read")
                 .eventOutcome("failure")
                 .field("user.roles", role)
@@ -374,7 +374,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
                 if (!rs.next()) {
                     EcsLogger.warn("com.auto1.pantera.security")
                         .message("User not found in DB for policy lookup")
-                        .eventCategory("security")
+                        .eventCategory("authentication")
                         .eventAction("user_lookup")
                         .eventOutcome("failure")
                         .field("user.name", username)
@@ -396,7 +396,7 @@ public final class CachedDbPolicy implements Policy<UserPermissions>, Cleanable<
             } catch (final Exception ex) {
                 EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to load user from DB for policy")
-                    .eventCategory("security")
+                    .eventCategory("authentication")
                     .eventAction("user_lookup")
                     .eventOutcome("failure")
                     .field("user.name", username)

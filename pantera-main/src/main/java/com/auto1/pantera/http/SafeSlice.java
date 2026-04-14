@@ -42,7 +42,7 @@ final class SafeSlice implements Slice {
         } catch (final Exception err) {
             EcsLogger.error("com.auto1.pantera.http")
                 .message("Failed to respond to request")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("request_handling")
                 .eventOutcome("failure")
                 .error(err)

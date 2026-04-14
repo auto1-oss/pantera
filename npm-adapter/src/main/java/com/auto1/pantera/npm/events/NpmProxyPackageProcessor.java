@@ -98,7 +98,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
 
         EcsLogger.debug("com.auto1.pantera.npm")
             .message("Processing NPM batch (size: " + batch.size() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("batch_processing")
             .log();
 
@@ -114,7 +114,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.info("com.auto1.pantera.npm")
                 .message("NPM batch processing complete (size: " + batch.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
@@ -123,7 +123,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.error("com.auto1.pantera.npm")
                 .message("NPM batch processing failed (size: " + batch.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("failure")
                 .duration(duration)
@@ -150,7 +150,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
         if (coords.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.npm")
                 .message("Could not parse package coords from path")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("package_validation")
                 .field("package.path", item.artifactKey().string())
                 .log();
@@ -178,7 +178,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
                 );
                 EcsLogger.debug("com.auto1.pantera.npm")
                     .message("Package event created from path")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("package_processing")
                     .field("package.name", name)
                     .field("package.version", version)
@@ -187,7 +187,7 @@ public final class NpmProxyPackageProcessor extends QuartzJob {
             .exceptionally(err -> {
                 EcsLogger.error("com.auto1.pantera.npm")
                     .message("Failed to process NPM package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("package_processing")
                     .eventOutcome("failure")
                     .field("package.path", item.artifactKey().string())
