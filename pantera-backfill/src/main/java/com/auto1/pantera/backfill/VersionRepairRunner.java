@@ -234,6 +234,17 @@ public final class VersionRepairRunner {
         // Build: UPDATE t SET version = v.new_version
         //        FROM (VALUES (?,?),(?,?),...) AS v(id, new_version)
         //        WHERE t.id = v.id AND t.version = 'UNKNOWN'
+        //          AND NOT EXISTS (SELECT 1 FROM <table> x
+        //              WHERE x.repo_name = t.repo_name
+        //                AND x.name = t.name
+        //                AND x.version = v.new_version)
+        //
+        // The NOT EXISTS guard skips rows where the inferred version
+        // would collide with an existing (repo_name, name, version)
+        // tuple — e.g. a maven-metadata.xml.sha1 that already has
+        // a row for both 'UNKNOWN' and '1.0.0-SNAPSHOT'. Without it,
+        // the UPDATE violates the unique constraint and aborts the
+        // whole batch.
         final StringBuilder sql = new StringBuilder();
         sql.append(String.format("UPDATE %s t SET version = v.new_version FROM (VALUES ", this.table));
         for (int i = 0; i < toUpdate.size(); i++) {
@@ -244,6 +255,10 @@ public final class VersionRepairRunner {
         }
         sql.append(String.format(
             ") AS v(id, new_version) WHERE t.id = v.id AND t.version = 'UNKNOWN'"
+            + " AND NOT EXISTS (SELECT 1 FROM %s x"
+            + " WHERE x.repo_name = t.repo_name AND x.name = t.name"
+            + " AND x.version = v.new_version)",
+            this.table
         ));
         conn.setAutoCommit(false);
         try (PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
