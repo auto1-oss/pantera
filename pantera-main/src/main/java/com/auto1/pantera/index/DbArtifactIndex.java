@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1679,7 +1680,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     @Override
-    public CompletableFuture<List<String>> locateByName(final String artifactName) {
+    public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
         return CompletableFuture.supplyAsync(() -> {
             final List<String> repos = new ArrayList<>();
             try (Connection conn = this.source.getConnection();
@@ -1693,14 +1694,14 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("LocateByName failed for: " + artifactName)
-                    .eventCategory("search")
-                    .eventAction("db_locate_by_name")
+                    .eventCategory("database")
+                    .eventAction("locate_by_name")
                     .eventOutcome("failure")
                     .error(ex)
                     .log();
-                return List.of();
+                return Optional.empty();
             }
-            return repos;
+            return Optional.of(repos);
         }, this.executor);
     }
 

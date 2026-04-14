@@ -443,9 +443,9 @@ final class GroupSliceIndexRoutingTest {
         }
 
         @Override
-        public CompletableFuture<List<String>> locateByName(final String artifactName) {
+        public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
             this.locateByNameCalls.add(artifactName);
-            return CompletableFuture.completedFuture(this.repos);
+            return CompletableFuture.completedFuture(Optional.of(this.repos));
         }
 
         @Override

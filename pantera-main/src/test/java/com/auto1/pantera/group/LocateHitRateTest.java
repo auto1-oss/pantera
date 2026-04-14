@@ -151,7 +151,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("maven-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -213,7 +213,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("npm-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -266,7 +266,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("docker-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -319,7 +319,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("pypi-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -367,7 +367,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("helm-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -414,7 +414,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("debian-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -463,7 +463,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("hex-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -508,7 +508,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("file-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -618,7 +618,7 @@ final class LocateHitRateTest {
         for (final String[] tc : cases) {
             final Optional<String> parsed = ArtifactNameParser.parse(tc[0], tc[1]);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }

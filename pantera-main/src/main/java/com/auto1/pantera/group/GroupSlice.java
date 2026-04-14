@@ -417,7 +417,8 @@ public final class GroupSlice implements Slice {
                     });
             }
             return idx.locateByName(parsedName.get())
-                .thenCompose(repos -> {
+                .thenCompose(optRepos -> {
+                    final List<String> repos = optRepos.orElse(List.of());
                     if (!repos.isEmpty()) {
                         // Map index hits (leaf repos) to direct members of this group.
                         // For single-level groups leafToMember is empty so getOrDefault

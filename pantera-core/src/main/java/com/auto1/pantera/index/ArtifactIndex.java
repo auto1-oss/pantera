@@ -13,6 +13,7 @@ package com.auto1.pantera.index;
 import java.io.Closeable;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -87,11 +88,17 @@ public interface ArtifactIndex extends Closeable {
      * This is the primary operation for group lookup when the adapter type
      * is known and the name can be parsed from the URL.
      *
+     * <p>The return value distinguishes two cases:
+     * <ul>
+     *   <li>{@code Optional.of(repos)} — successful query; repos may be empty (confirmed miss)</li>
+     *   <li>{@code Optional.empty()} — DB error; caller should fall back to full fanout</li>
+     * </ul>
+     *
      * @param artifactName Artifact name as stored in the DB (adapter-specific format)
-     * @return List of repository names containing this artifact
+     * @return Future containing Optional: present=successful query, empty=DB error
      */
-    default CompletableFuture<List<String>> locateByName(final String artifactName) {
-        return locate(artifactName);
+    default CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
+        return locate(artifactName).thenApply(Optional::of);
     }
 
     /**
