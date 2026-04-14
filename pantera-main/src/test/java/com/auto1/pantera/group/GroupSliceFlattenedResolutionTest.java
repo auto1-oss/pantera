@@ -281,6 +281,28 @@ final class GroupSliceFlattenedResolutionTest {
             "Index miss + proxy 5xx → 502 (we are proxying a bad gateway)");
     }
 
+    // ---- Negative cache: second fanout for confirmed-miss is suppressed ----
+
+    @Test
+    void negativeCachePreventsSecondFanout() {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // confirmed miss
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY, staticSlice(proxyCount, RsStatus.NOT_FOUND));
+        final GroupSlice slice = buildGroup(
+            idx,
+            List.of(PROXY),
+            Set.of(PROXY),
+            slices
+        );
+        // First request: fanout → 404 → cache populated
+        slice.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        // Second request: should hit negative cache, not fanout again
+        slice.response(new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY).join();
+        assertEquals(1, proxyCount.get(),
+            "Proxy should only be queried once — second request hits negative cache");
+    }
+
     // ---- Helpers ----
 
     private static GroupSlice buildGroup(

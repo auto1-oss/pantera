@@ -132,6 +132,16 @@ public final class GroupSlice implements Slice {
     private final Set<String> proxyMembers;
 
     /**
+     * Negative cache for proxy fanout results.
+     * <p>Key: "groupName:artifactName". Value: Boolean.TRUE (present = confirmed 404 from all proxies).
+     * Prevents thundering herd when many clients request a missing artifact concurrently.
+     * TTL-based expiry — stale entries self-correct within the TTL window.
+     * <p>In-memory (Caffeine L1 only) by design: this cache is low-value to share across
+     * nodes (each node self-populates quickly) and we want fast expiry for new artifacts.
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> negativeCache;
+
+    /**
      * Request context for enhanced logging (client IP, username, trace ID, package).
      * @param clientIp Client IP address from X-Forwarded-For or X-Real-IP
      * @param username Username from Authorization header (optional)
@@ -292,6 +302,10 @@ public final class GroupSlice implements Slice {
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
         this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
         this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
+        this.negativeCache = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(java.time.Duration.ofMinutes(5))
+            .build();
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -458,7 +472,18 @@ public final class GroupSlice implements Slice {
         final RequestLine line, final Headers headers, final Content body,
         final RequestContext ctx, final String artifactName
     ) {
-        // TODO Task 5: check negative cache (group:artifactName) here
+        final String cacheKey = this.group + ":" + artifactName;
+        if (this.negativeCache.getIfPresent(cacheKey) != null) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Negative cache hit — returning 404 without fanout")
+                .eventCategory("database")
+                .eventAction("group_negative_cache_hit")
+                .field("repository.name", this.group)
+                .field("package.name", artifactName)
+                .field("url.path", line.uri().getPath())
+                .log();
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
         final List<MemberSlice> proxyOnly = this.members.stream()
             .filter(MemberSlice::isProxy)
             .toList();
@@ -484,7 +509,20 @@ public final class GroupSlice implements Slice {
             .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
             .log();
-        return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false);
+        return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
+            .thenApply(resp -> {
+                if (resp.status() == RsStatus.NOT_FOUND) {
+                    this.negativeCache.put(cacheKey, Boolean.TRUE);
+                    EcsLogger.debug("com.auto1.pantera.group")
+                        .message("Cached negative result for artifact (5min TTL)")
+                        .eventCategory("database")
+                        .eventAction("group_negative_cache_populate")
+                        .field("repository.name", this.group)
+                        .field("package.name", artifactName)
+                        .log();
+                }
+                return resp;
+            });
     }
 
     /**
