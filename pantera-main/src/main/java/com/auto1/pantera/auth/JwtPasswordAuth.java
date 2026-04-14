@@ -128,8 +128,21 @@ public final class JwtPasswordAuth implements Authentication {
                 .log();
             return Optional.empty();
         } catch (final Exception ex) {
-            // Invalid JWT - this is expected for non-JWT passwords
-            // Don't log - not an error, just means password isn't a JWT
+            // Password survived looksLikeJwt() — it has the shape of a JWT — so
+            // a verification error here is almost always diagnosable (wrong
+            // signature, wrong algorithm, mismatched key, expired, missing
+            // required claim). Log the cause at DEBUG so operators can
+            // investigate without spamming INFO on every non-JWT password in
+            // the provider chain.
+            EcsLogger.debug("com.auto1.pantera.auth")
+                .message("JWT-as-password verification failed")
+                .eventCategory("authentication")
+                .eventAction("jwt_password_auth")
+                .eventOutcome("failure")
+                .field("user.name", username)
+                .field("error.message",
+                    ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName())
+                .log();
             return Optional.empty();
         }
     }
