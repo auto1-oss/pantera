@@ -87,7 +87,7 @@ public final class GroupSlice implements Slice {
             },
             (r, executor) -> EcsLogger.debug("com.auto1.pantera.group")
                 .message("Drain queue full, discarding drain task")
-                .eventCategory("repository")
+                .eventCategory("network")
                 .eventAction("body_drain")
                 .eventOutcome("skipped")
                 .log()
@@ -172,13 +172,14 @@ public final class GroupSlice implements Slice {
 
         /**
          * Add context fields to an EcsLogger builder.
-         * NOTE: client.ip, user.name, trace.id are in MDC (set by EcsLoggingSlice).
+         * NOTE: client.ip, user.name, trace.id, repository.name, package.name
+         * are in MDC (set by EcsLoggingSlice / adapter slices).
          * EcsLayout includes all MDC entries — do NOT add them here to avoid duplicates.
          * @param logger Logger builder to enhance
          * @return Enhanced logger builder
          */
         EcsLogger addTo(final EcsLogger logger) {
-            return logger.field("package.name", this.packageName);
+            return logger;
         }
     }
 
@@ -323,9 +324,8 @@ public final class GroupSlice implements Slice {
 
         EcsLogger.debug("com.auto1.pantera.group")
             .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total, " + this.proxyMembers.size() + " proxies)")
-            .eventCategory("repository")
+            .eventCategory("configuration")
             .eventAction("group_init")
-            .field("repository.name", group)
             .log();
     }
 
@@ -373,9 +373,8 @@ public final class GroupSlice implements Slice {
             // Metadata endpoint / root path / unknown adapter → safety net
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Name unparseable, using full two-phase fanout")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("group_direct_fanout")
-                .field("repository.name", this.group)
                 .field("url.path", path)
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx)
@@ -392,7 +391,6 @@ public final class GroupSlice implements Slice {
                         .eventCategory("database")
                         .eventAction("group_index_error")
                         .eventOutcome("failure")
-                        .field("repository.name", this.group)
                         .field("url.path", path)
                         .log();
                     return fullTwoPhaseFanout(line, headers, body, ctx);
@@ -447,7 +445,6 @@ public final class GroupSlice implements Slice {
                 .eventCategory("web")
                 .eventAction("group_index_orphan")
                 .eventOutcome("failure")
-                .field("repository.name", this.group)
                 .field("url.path", line.uri().getPath())
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx);
@@ -455,9 +452,8 @@ public final class GroupSlice implements Slice {
         EcsLogger.debug("com.auto1.pantera.group")
             .message("Index hit via name: targeting "
                 + targeted.size() + " member(s)")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_index_hit")
-            .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
             .log();
         return queryTargetedMembers(targeted, line, headers, body, ctx, true);
@@ -480,8 +476,6 @@ public final class GroupSlice implements Slice {
                 .message("Negative cache hit — returning 404 without fanout")
                 .eventCategory("database")
                 .eventAction("group_negative_cache_hit")
-                .field("repository.name", this.group)
-                .field("package.name", artifactName)
                 .field("url.path", line.uri().getPath())
                 .log();
             return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
@@ -493,9 +487,8 @@ public final class GroupSlice implements Slice {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Index miss with no proxy members, returning 404"
                     + " (name: " + artifactName + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("group_index_miss")
-                .field("repository.name", this.group)
                 .field("url.path", line.uri().getPath())
                 .log();
             return CompletableFuture.completedFuture(
@@ -506,9 +499,8 @@ public final class GroupSlice implements Slice {
             .message("Index miss: fanning out to "
                 + proxyOnly.size() + " proxy member(s) only"
                 + " (name: " + artifactName + ")")
-            .eventCategory("repository")
+            .eventCategory("network")
             .eventAction("group_index_miss")
-            .field("repository.name", this.group)
             .field("url.path", line.uri().getPath())
             .log();
         return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
@@ -519,8 +511,6 @@ public final class GroupSlice implements Slice {
                         .message("Cached negative result for artifact (5min TTL)")
                         .eventCategory("database")
                         .eventAction("group_negative_cache_populate")
-                        .field("repository.name", this.group)
-                        .field("package.name", artifactName)
                         .log();
                 }
                 return resp;
@@ -581,10 +571,10 @@ public final class GroupSlice implements Slice {
                 if (!isTargetedLocalRead && member.isCircuitOpen()) {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("Member circuit OPEN, skipping: " + member.name())
-                        .eventCategory("repository")
+                        .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("skipped")
-                        .field("repository.name", this.group))
+                        .field("destination.address", member.name()))
                         .log();
                     completeIfAllExhausted(
                         pending, completed, anyServerError, result, ctx, isTargetedLocalRead
@@ -663,9 +653,8 @@ public final class GroupSlice implements Slice {
                 EcsLogger.debug("com.auto1.pantera.group")
                     .message("Hosted miss, cascading to "
                         + proxy.size() + " proxy member(s)")
-                    .eventCategory("repository")
+                    .eventCategory("network")
                     .eventAction("group_cascade_to_proxy")
-                    .field("repository.name", this.group)
                     .log();
                 return queryTargetedMembers(proxy, line, headers, body, ctx, false);
             });
@@ -732,10 +721,10 @@ public final class GroupSlice implements Slice {
                 if (latency > 1000) {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("Slow member response: " + member.name())
-                        .eventCategory("repository")
+                        .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("success")
-                        .field("repository.name", this.group)
+                        .field("destination.address", member.name())
                         .duration(latency))
                         .log();
                 }
@@ -747,9 +736,9 @@ public final class GroupSlice implements Slice {
             } else {
                 ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member '" + member.name() + "' returned success but another member already won")
-                    .eventCategory("repository")
+                    .eventCategory("network")
                     .eventAction("group_query")
-                    .field("repository.name", this.group)
+                    .field("destination.address", member.name())
                     .field("http.response.status_code", status.code()))
                     .log();
                 drainBody(member.name(), resp.body());
@@ -764,10 +753,10 @@ public final class GroupSlice implements Slice {
             if (completed.compareAndSet(false, true)) {
                 ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member '" + member.name() + "' returned FORBIDDEN (cooldown/blocked)")
-                    .eventCategory("repository")
+                    .eventCategory("network")
                     .eventAction("group_query")
                     .eventOutcome("success")
-                    .field("repository.name", this.group)
+                    .field("destination.address", member.name())
                     .field("http.response.status_code", 403))
                     .log();
                 member.recordSuccess(); // Not a failure - valid response
@@ -781,10 +770,10 @@ public final class GroupSlice implements Slice {
             // 404: try next member — individual miss is DEBUG noise, not actionable
             ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
                 .message("Group member " + member.name() + " does not have " + pathKey.string())
-                .eventCategory("group")
+                .eventCategory("web")
                 .eventAction("group_fanout_miss")
                 .eventOutcome("success")
-                .field("repository.name", this.group)
+                .field("destination.address", member.name())
                 .field("url.path", pathKey.string()))
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
@@ -794,11 +783,12 @@ public final class GroupSlice implements Slice {
             // Server errors (500, 503, etc.): record failure, try next member
             ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                 .message("Member '" + member.name() + "' returned error status (" + (pending.get() - 1) + " pending)")
-                .eventCategory("repository")
+                .eventCategory("network")
                 .eventAction("group_query")
-                .eventOutcome("failure"))
-                .field("repository.name", this.group)
-                .field("http.response.status_code", status.code())
+                .eventOutcome("failure")
+                .field("event.reason", "HTTP " + status.code() + " from member")
+                .field("destination.address", member.name())
+                .field("http.response.status_code", status.code()))
                 .log();
             member.recordFailure();
             anyServerError.set(true);
@@ -829,11 +819,12 @@ public final class GroupSlice implements Slice {
         }
         ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
             .message("Member query failed: " + member.name())
-            .eventCategory("repository")
+            .eventCategory("network")
             .eventAction("group_query")
             .eventOutcome("failure")
-            .field("repository.name", this.group)
-            .field("error.message", err.getMessage()))
+            .error(err)
+            .field("event.reason", "Member request threw " + err.getClass().getSimpleName())
+            .field("destination.address", member.name()))
             .log();
         member.recordFailure();
         anyServerError.set(true);
@@ -870,20 +861,22 @@ public final class GroupSlice implements Slice {
                 if (isTargetedLocalRead) {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("Targeted member failed on index hit, returning 500")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("group_query")
                         .eventOutcome("failure")
-                        .field("repository.name", this.group))
+                        .field("event.reason", "Index-hit member failed; bytes are local but read errored — no fallback")
+                        .field("http.response.status_code", 500))
                         .log();
                     result.complete(ResponseBuilder.internalError()
                         .textBody("Targeted member read failed").build());
                 } else {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("All members exhausted with upstream errors, returning 502")
-                        .eventCategory("repository")
+                        .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("failure")
-                        .field("repository.name", this.group))
+                        .field("event.reason", "All proxy upstreams returned 5xx or threw")
+                        .field("http.response.status_code", 502))
                         .log();
                     result.complete(ResponseBuilder.badGateway()
                         .textBody("All upstream members failed").build());
@@ -891,10 +884,9 @@ public final class GroupSlice implements Slice {
             } else {
                 ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                     .message("Artifact not found in any group member: " + ctx.packageName())
-                    .eventCategory("group")
+                    .eventCategory("web")
                     .eventAction("group_lookup_miss")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.group))
+                    .eventOutcome("failure"))
                     .log();
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
@@ -928,10 +920,10 @@ public final class GroupSlice implements Slice {
                 public void onError(final Throwable err) {
                     EcsLogger.debug("com.auto1.pantera.group")
                         .message("Failed to drain response body: " + memberName)
-                        .eventCategory("repository")
+                        .eventCategory("network")
                         .eventAction("body_drain")
                         .eventOutcome("failure")
-                        .field("repository.name", group)
+                        .field("destination.address", memberName)
                         .field("error.message", err.getMessage())
                         .log();
                 }
