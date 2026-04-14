@@ -586,14 +586,14 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-group":
+                final List<String> npmFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final Slice npmGroupSlice = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
-                    "npm-group",
-                    buildLeafMap(cfg.members())
+                    proxyMembers(npmFlatMembers),
+                    "npm-group"
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -650,14 +650,14 @@ public class RepositorySlices {
                 break;
             case "file-group":
             case "php-group":
+                final List<String> composerFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final GroupSlice composerDelegate = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
-                    cfg.type(),
-                    buildLeafMap(cfg.members())
+                    proxyMembers(composerFlatMembers),
+                    cfg.type()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -678,14 +678,14 @@ public class RepositorySlices {
                 break;
             case "maven-group":
                 // Maven groups need special metadata merging
+                final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final GroupSlice mavenDelegate = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
-                    "maven-group",
-                    buildLeafMap(cfg.members())
+                    proxyMembers(mavenFlatMembers),
+                    "maven-group"
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -711,16 +711,16 @@ public class RepositorySlices {
             case "gradle-group":
             case "pypi-group":
             case "docker-group":
+                final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new GroupSlice(
-                            this::slice, cfg.name(), cfg.members(), port, depth,
+                            this::slice, cfg.name(), genericFlatMembers, port, depth,
                             cfg.groupMemberTimeout().orElse(120L),
                             java.util.Collections.emptyList(),
                             Optional.of(this.settings.artifactIndex()),
-                            proxyMembers(cfg.members()),
-                            cfg.type(),
-                            buildLeafMap(cfg.members())
+                            proxyMembers(genericFlatMembers),
+                            cfg.type()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -953,52 +953,24 @@ public class RepositorySlices {
 
 
     /**
-     * Build a map from every leaf repo reachable through each direct member back to that
-     * direct member. Used by GroupSlice to route index hits through nested groups.
+     * Flatten nested group members into leaf repos using GroupMemberFlattener.
+     * Returns the flat list of leaf repo names for direct querying.
      *
-     * <p>Example: libs-release has members [libs-release-local, ext-release-local, remote-repos].
-     * remote-repos is itself a group with members [jboss, maven-central, groovy-plugins-release].
-     * Result: {jboss → remote-repos, maven-central → remote-repos, ...}
-     * plus identity entries for leaf direct members.
-     *
-     * @param directMembers Direct member names of the group being constructed
-     * @return leaf-to-directMember map; empty if all members are leaves
+     * @param groupName Group repository name (for cycle-detection logging)
+     * @param directMembers Direct member names declared in this group's config
+     * @return Flat, deduplicated list of leaf repo names (no nested groups)
      */
-    private java.util.Map<String, String> buildLeafMap(final List<String> directMembers) {
-        final java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
-        for (final String member : directMembers) {
-            map.put(member, member);
-            this.repos.config(member).ifPresent(cfg -> {
-                if (cfg.type() != null && cfg.type().endsWith("-group")) {
-                    collectLeaves(cfg.members(), member, map, new HashSet<>());
-                }
-            });
-        }
-        return map;
-    }
-
-    /**
-     * Recursively collect all leaf repo names reachable from {@code groupMembers},
-     * mapping each leaf to {@code directMember} (the top-level group member that roots this path).
-     */
-    private void collectLeaves(
-        final List<String> groupMembers,
-        final String directMember,
-        final java.util.Map<String, String> result,
-        final Set<String> visited
-    ) {
-        for (final String name : groupMembers) {
-            if (!visited.add(name)) {
-                continue;
-            }
-            this.repos.config(name).ifPresent(cfg -> {
-                if (cfg.type() != null && cfg.type().endsWith("-group")) {
-                    collectLeaves(cfg.members(), directMember, result, visited);
-                } else {
-                    result.putIfAbsent(name, directMember);
-                }
-            });
-        }
+    private List<String> flattenMembers(final String groupName, final List<String> directMembers) {
+        final com.auto1.pantera.group.GroupMemberFlattener flattener =
+            new com.auto1.pantera.group.GroupMemberFlattener(
+                name -> this.repos.config(name)
+                    .map(c -> c.type() != null && c.type().endsWith("-group"))
+                    .orElse(false),
+                name -> this.repos.config(name)
+                    .map(c -> c.members())
+                    .orElse(List.of())
+            );
+        return flattener.flatten(groupName);
     }
 
     /**

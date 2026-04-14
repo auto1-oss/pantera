@@ -27,13 +27,13 @@ import com.auto1.pantera.index.ArtifactIndex;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -132,13 +132,6 @@ public final class GroupSlice implements Slice {
      * content is only indexed after being cached.
      */
     private final Set<String> proxyMembers;
-
-    /**
-     * Maps leaf repo names reachable through nested group members back to the direct member
-     * of this group that contains them. E.g. for libs-release: jboss → remote-repos.
-     * Empty for groups with no nested group members (single-level groups).
-     */
-    private final Map<String, String> leafToMember;
 
     /**
      * Request context for enhanced logging (client IP, username, trace ID, package).
@@ -296,49 +289,13 @@ public final class GroupSlice implements Slice {
         final Set<String> proxyMembers,
         final String repoType
     ) {
-        this(resolver, group, members, port, depth, timeoutSeconds, routingRules,
-            artifactIndex, proxyMembers, repoType, Collections.emptyMap());
-    }
-
-    /**
-     * Full constructor with nested group support via leafToMember map.
-     *
-     * @param resolver Slice resolver/cache
-     * @param group Group repository name
-     * @param members Member repository names
-     * @param port Server port
-     * @param depth Nesting depth (ignored)
-     * @param timeoutSeconds Timeout for member requests
-     * @param routingRules Routing rules for path-based member selection
-     * @param artifactIndex Optional artifact index for O(1) lookups
-     * @param proxyMembers Names of members that are proxy repositories
-     * @param repoType Repository type for name parsing (e.g., "maven-group")
-     * @param leafToMember Map of leaf repo name → direct member of this group that
-     *   contains it; used so index hits on nested-group leaves resolve to the right
-     *   direct member (e.g. jboss → remote-repos for libs-release)
-     */
-    @SuppressWarnings("PMD.ExcessiveParameterList")
-    public GroupSlice(
-        final SliceResolver resolver,
-        final String group,
-        final List<String> members,
-        final int port,
-        final int depth,
-        final long timeoutSeconds,
-        final List<RoutingRule> routingRules,
-        final Optional<ArtifactIndex> artifactIndex,
-        final Set<String> proxyMembers,
-        final String repoType,
-        final Map<String, String> leafToMember
-    ) {
         this.group = Objects.requireNonNull(group, "group");
         this.repoType = repoType != null ? repoType : "";
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
         this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
         this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
-        this.leafToMember = leafToMember != null ? leafToMember : Collections.emptyMap();
 
-        // Deduplicate members (simple flattening for now)
+        // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
 
         // Create MemberSlice wrappers with circuit breakers and proxy flags
@@ -420,14 +377,9 @@ public final class GroupSlice implements Slice {
                 .thenCompose(optRepos -> {
                     final List<String> repos = optRepos.orElse(List.of());
                     if (!repos.isEmpty()) {
-                        // Map index hits (leaf repos) to direct members of this group.
-                        // For single-level groups leafToMember is empty so getOrDefault
-                        // returns the repo name as-is (existing behaviour).
-                        // For nested groups (e.g. libs-release → remote-repos → jboss)
-                        // this resolves jboss → remote-repos so we query the right member.
-                        final Set<String> directMembersToQuery = repos.stream()
-                            .map(r -> this.leafToMember.getOrDefault(r, r))
-                            .collect(Collectors.toSet());
+                        // Index returns leaf repo names which match the flattened members
+                        // list directly — no mapping needed.
+                        final Set<String> directMembersToQuery = new HashSet<>(repos);
                         final List<MemberSlice> targeted = this.members.stream()
                             .filter(m -> directMembersToQuery.contains(m.name()))
                             .toList();
