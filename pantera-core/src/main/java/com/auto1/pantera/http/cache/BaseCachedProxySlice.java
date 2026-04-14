@@ -56,6 +56,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -496,23 +497,32 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }).thenCompose(signal ->
                     this.signalToResponse(signal, line, key, headers, store));
             })
-            .exceptionally(error -> {
-                final long duration = System.currentTimeMillis() - startTime;
-                this.trackUpstreamFailure(error);
-                this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                    .message("Upstream request failed with exception")
-                    .eventCategory("repository")
-                    .eventAction("proxy_upstream")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("event.duration", duration)
-                    .error(error)
-                    .log();
-                return ResponseBuilder.unavailable()
-                    .textBody("Upstream temporarily unavailable")
-                    .build();
-            });
+            .handle((resp, error) -> {
+                if (error != null) {
+                    final long duration = System.currentTimeMillis() - startTime;
+                    this.trackUpstreamFailure(error);
+                    this.recordProxyMetric("exception", duration);
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Upstream request failed with exception")
+                        .eventCategory("repository")
+                        .eventAction("proxy_upstream")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("event.duration", duration)
+                        .error(error)
+                        .log();
+                    return this.tryServeStale(
+                        key,
+                        () -> CompletableFuture.completedFuture(
+                            ResponseBuilder.unavailable()
+                                .textBody("Upstream temporarily unavailable")
+                                .build()
+                        )
+                    );
+                }
+                return CompletableFuture.completedFuture(resp);
+            })
+            .thenCompose(future -> future);
     }
 
     /**
@@ -548,10 +558,13 @@ public abstract class BaseCachedProxySlice implements Slice {
                 );
             case ERROR:
             default:
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.unavailable()
-                        .textBody("Upstream temporarily unavailable")
-                        .build()
+                return this.tryServeStale(
+                    key,
+                    () -> CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable()
+                            .textBody("Upstream temporarily unavailable")
+                            .build()
+                    )
                 );
         }
     }
@@ -855,6 +868,64 @@ public abstract class BaseCachedProxySlice implements Slice {
             .thenApply(bytes -> resp.status().code() < 500
                 ? RequestDeduplicator.FetchSignal.NOT_FOUND
                 : RequestDeduplicator.FetchSignal.ERROR);
+    }
+
+    /**
+     * Try to serve stale cached bytes when upstream has failed.
+     *
+     * <p>If {@link ProxyCacheConfig#staleWhileRevalidateEnabled()} is true AND
+     * the backing storage contains bytes for {@code key}, returns a 200 response
+     * from storage with the {@code X-Pantera-Stale: true} header set.
+     *
+     * <p>Note on {@code staleMaxAge}: the backing {@link Storage} API (as implemented
+     * by {@code InMemoryStorage} and {@code FileStorage}) does not guarantee that
+     * {@code Meta.OP_UPDATED_AT} is populated. Age-based expiry is therefore not enforced
+     * here; operators should rely on cache-layer TTL or eviction policies instead.
+     *
+     * @param key Cache key for the artifact
+     * @param fallback Supplier of the original error response (used when stale is unavailable)
+     * @return Future response — either stale 200 or the original error
+     */
+    private CompletableFuture<Response> tryServeStale(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback
+    ) {
+        if (!this.config.staleWhileRevalidateEnabled() || this.storage.isEmpty()) {
+            return fallback.get();
+        }
+        final Storage store = this.storage.get();
+        return store.exists(key).thenCompose(exists -> {
+            if (!exists) {
+                return fallback.get();
+            }
+            return store.value(key)
+                .thenApply(content -> {
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Upstream failed, serving stale cached artifact")
+                        .eventCategory("network")
+                        .eventAction("stale_serve")
+                        .eventOutcome("success")
+                        .field("repository.name", this.repoName)
+                        .field("url.path", key.string())
+                        .log();
+                    return (Response) ResponseBuilder.ok()
+                        .header("X-Pantera-Stale", "true")
+                        .body(content)
+                        .build();
+                })
+                .exceptionallyCompose(err -> {
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Failed to read stale artifact from storage")
+                        .eventCategory("repository")
+                        .eventAction("stale_serve")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("url.path", key.string())
+                        .error(err)
+                        .log();
+                    return fallback.get();
+                });
+        });
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(
