@@ -310,6 +310,78 @@ final class GroupSliceFlattenedResolutionTest {
             "Proxy should only be queried once — second request hits negative cache");
     }
 
+    // ---- Request coalescing: N concurrent misses trigger only ONE fanout ----
+
+    /**
+     * When N concurrent requests arrive for the same missing artifact, the
+     * proxy member must be queried exactly once — the first request does the
+     * fanout, subsequent requests park on an in-flight "gate" future and, on
+     * wake-up, hit the freshly-populated negative cache instead of repeating
+     * the fanout.  This collapses a thundering herd of N concurrent 404s into
+     * a single upstream request.
+     */
+    @Test
+    void concurrentMissesCoalesceIntoSingleFanout() throws Exception {
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // confirmed miss
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        // Slow proxy: block for 100ms so N concurrent requests all arrive
+        // BEFORE the first fanout completes, forcing the coalescer to kick in.
+        final java.util.concurrent.ExecutorService delay = Executors.newSingleThreadExecutor();
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY, (line, headers, body) -> {
+            proxyCount.incrementAndGet();
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+                return ResponseBuilder.notFound().build();
+            }, delay);
+        });
+        final GroupSlice slice = buildGroup(
+            idx,
+            List.of(PROXY),
+            Set.of(PROXY),
+            slices
+        );
+        final int concurrency = 10;
+        final java.util.concurrent.ExecutorService pool =
+            Executors.newFixedThreadPool(concurrency);
+        final java.util.concurrent.CountDownLatch startGate =
+            new java.util.concurrent.CountDownLatch(1);
+        final List<CompletableFuture<Response>> all = new java.util.ArrayList<>();
+        for (int i = 0; i < concurrency; i++) {
+            all.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    startGate.await();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+                return slice.response(
+                    new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
+                ).join();
+            }, pool));
+        }
+        // Release all requests simultaneously
+        startGate.countDown();
+        CompletableFuture.allOf(all.toArray(new CompletableFuture<?>[0])).join();
+        pool.shutdown();
+        delay.shutdown();
+
+        // Every follower must see a 404 response
+        for (final CompletableFuture<Response> fut : all) {
+            assertEquals(RsStatus.NOT_FOUND, fut.join().status(),
+                "Every coalesced follower must receive 404");
+        }
+        // CRITICAL: the thundering herd must collapse to ONE upstream query.
+        // The first request fanouts; followers park on the gate, then re-enter
+        // proxyOnlyFanout and short-circuit via the negative cache.
+        assertEquals(1, proxyCount.get(),
+            "N concurrent misses must trigger exactly ONE upstream fanout "
+                + "(request coalescing + negative cache eliminate the thundering herd)");
+    }
+
     // ---- Internal routing header suppresses EcsLoggingSlice access logs ----
 
     /**

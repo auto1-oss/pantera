@@ -20,8 +20,6 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.http.rq.RequestLine;
-import com.auto1.pantera.http.log.EcsMdc;
-import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.slice.EcsLoggingSlice;
@@ -31,6 +29,8 @@ import com.auto1.pantera.index.ArtifactIndex;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -44,10 +44,10 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import com.auto1.pantera.http.trace.MdcPropagation;
-import org.slf4j.MDC;
 
 /**
  * High-performance group/virtual repository slice.
@@ -78,6 +78,16 @@ public final class GroupSlice implements Slice {
      */
     private static final ExecutorService DRAIN_EXECUTOR;
 
+    /**
+     * Count of drain tasks rejected because the drain queue was full.
+     * Each drop represents a response body that will not be drained until the
+     * upstream/Jetty idle-timeout closes the connection — a potential slow
+     * connection leak. Monitor this counter: sustained growth indicates the
+     * drain pool needs tuning (more threads / larger queue) or that upstream
+     * latency is producing more losers than we can drain in parallel.
+     */
+    private static final AtomicLong DRAIN_DROP_COUNT = new AtomicLong();
+
     static {
         final ThreadPoolExecutor pool = new ThreadPoolExecutor(
             4, 4,
@@ -88,12 +98,20 @@ public final class GroupSlice implements Slice {
                 t.setDaemon(true);
                 return t;
             },
-            (r, executor) -> EcsLogger.debug("com.auto1.pantera.group")
-                .message("Drain queue full, discarding drain task")
-                .eventCategory("network")
-                .eventAction("body_drain")
-                .eventOutcome("skipped")
-                .log()
+            (r, executor) -> {
+                final long dropped = DRAIN_DROP_COUNT.incrementAndGet();
+                EcsLogger.warn("com.auto1.pantera.group")
+                    .message(
+                        "Drain queue full, discarding drain task — "
+                            + "possible response body leak (total drops: " + dropped + ")"
+                    )
+                    .eventCategory("network")
+                    .eventAction("body_drain")
+                    .eventOutcome("failure")
+                    .field("event.reason", "Drain executor queue saturated")
+                    .field("pantera.drain.drop_count", dropped)
+                    .log();
+            }
         );
         DRAIN_EXECUTOR = pool;
         EcsLogger.info("com.auto1.pantera.group")
@@ -101,6 +119,16 @@ public final class GroupSlice implements Slice {
             .eventCategory("configuration")
             .eventAction("group_init")
             .log();
+    }
+
+    /**
+     * Total count of drain tasks dropped because the drain queue was saturated.
+     * Exposed for metrics integration and tests.
+     *
+     * @return monotonic total of rejected drain tasks since JVM start
+     */
+    public static long drainDropCount() {
+        return DRAIN_DROP_COUNT.get();
     }
 
     /**
@@ -148,42 +176,49 @@ public final class GroupSlice implements Slice {
     private final NegativeCache negativeCache;
 
     /**
-     * Request context for enhanced logging (client IP, username, trace ID, package).
-     * @param clientIp Client IP address from X-Forwarded-For or X-Real-IP
-     * @param username Username from Authorization header (optional)
-     * @param traceId Trace ID from MDC for distributed tracing
-     * @param packageName Package/artifact being requested
+     * In-flight proxy-only fanouts keyed by {@code group:artifactName}.
+     *
+     * <p>Serves as a request coalescer: when N concurrent requests arrive for
+     * the same missing artifact, the first registers a "gate" future here and
+     * runs the fanout.  Late arrivals find the gate already present and wait
+     * on it instead of starting their own fanout, then retry
+     * {@link #proxyOnlyFanout} once the first has completed.
+     *
+     * <p>On the retry, the negative cache now holds the result so followers
+     * return 404 immediately without touching the network.  The combination of
+     * coalescer + negative cache collapses a thundering herd of N concurrent
+     * misses into exactly ONE upstream fanout.
+     *
+     * <p>This coalescer deliberately does NOT share the winning {@link Response}
+     * object across callers: {@link Content} is a one-shot reactive stream that
+     * cannot be subscribed to twice.  Instead, followers re-enter
+     * {@code proxyOnlyFanout} and either hit the freshly-populated negative
+     * cache (404) or retry the fanout (which is cheap when the upstream proxy
+     * has cached the bytes).
      */
-    private record RequestContext(String clientIp, String username, String traceId, String packageName) {
-        /**
-         * Extract request context from headers and path.
-         * @param headers Request headers
-         * @param path Request path (package name)
-         * @return RequestContext with extracted values
-         */
-        static RequestContext from(final Headers headers, final String path) {
-            final String clientIp = EcsLogEvent.extractClientIp(headers, null);
-            // Try MDC first (set by auth middleware after authentication)
-            // then fall back to header extraction (Basic auth only)
-            // Don't default to "anonymous" - leave null if no user is authenticated
-            String username = MDC.get(EcsMdc.USER_NAME);
-            if (username == null || username.isEmpty()) {
-                username = EcsLogEvent.extractUsername(headers).orElse(null);
-            }
-            final String traceId = MDC.get(EcsMdc.TRACE_ID);
-            return new RequestContext(clientIp, username, traceId != null ? traceId : "none", path);
-        }
+    private final ConcurrentMap<String, CompletableFuture<Void>> inFlightFanouts =
+        new ConcurrentHashMap<>();
 
+    /**
+     * Request context carried through the async call chain for log messages.
+     *
+     * <p>Historically carried client IP, username, and trace ID — but all of
+     * those now live in MDC (set by {@link EcsLoggingSlice} / adapter slices)
+     * and are emitted automatically by EcsLayout.  Adding them here produced
+     * duplicate fields.  The only remaining use is the package/artifact path
+     * included in the "Artifact not found" warning message.
+     *
+     * @param packageName Package/artifact path being requested (URL path).
+     */
+    private record RequestContext(String packageName) {
         /**
-         * Add context fields to an EcsLogger builder.
-         * NOTE: client.ip, user.name, trace.id, repository.name, package.name
-         * are in MDC (set by EcsLoggingSlice / adapter slices).
-         * EcsLayout includes all MDC entries — do NOT add them here to avoid duplicates.
-         * @param logger Logger builder to enhance
-         * @return Enhanced logger builder
+         * Build a context for the given request path.
+         *
+         * @param path Request path (used as the package name in log messages)
+         * @return RequestContext
          */
-        EcsLogger addTo(final EcsLogger logger) {
-            return logger;
+        static RequestContext from(final String path) {
+            return new RequestContext(path);
         }
     }
 
@@ -425,8 +460,8 @@ public final class GroupSlice implements Slice {
             );
         }
 
-        // Extract request context for enhanced logging
-        final RequestContext ctx = RequestContext.from(headers, path);
+        // Extract request context (carries the URL path for log messages)
+        final RequestContext ctx = RequestContext.from(path);
 
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
@@ -571,6 +606,32 @@ public final class GroupSlice implements Slice {
                 ResponseBuilder.notFound().build()
             );
         }
+
+        // ---- Request coalescing: collapse concurrent misses into ONE fanout ----
+        // The dedup key combines group + artifact name. If a fanout is already in
+        // flight for this key, followers park on the existing "gate" future and
+        // retry proxyOnlyFanout when it completes — by which point the negative
+        // cache will be populated (404 case) or the upstream proxy will have
+        // cached the bytes (200 case), making the retry very cheap.
+        final String dedupKey = this.group + ":" + artifactName;
+        final CompletableFuture<Void> freshGate = new CompletableFuture<>();
+        final CompletableFuture<Void> existingGate =
+            this.inFlightFanouts.putIfAbsent(dedupKey, freshGate);
+        if (existingGate != null) {
+            // Follower: another request is already fanning out for this artifact.
+            // Wait for it to finish, then re-enter proxyOnlyFanout — the negative
+            // cache check at the top will short-circuit to 404 in the miss case.
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Coalescing with in-flight fanout for " + artifactName)
+                .eventCategory("web")
+                .eventAction("group_fanout_coalesce")
+                .field("url.path", line.uri().getPath())
+                .log();
+            return existingGate.thenCompose(MdcPropagation.withMdc(
+                ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
+            ));
+        }
+
         EcsLogger.debug("com.auto1.pantera.group")
             .message("Index miss: fanning out to "
                 + proxyOnly.size() + " proxy member(s) only"
@@ -590,7 +651,15 @@ public final class GroupSlice implements Slice {
                         .log();
                 }
                 return resp;
-            }));
+            }))
+            .whenComplete((resp, err) -> {
+                // Release the gate so followers can proceed, regardless of outcome.
+                // Order matters: remove from the map BEFORE completing the gate so
+                // followers that wake up and retry proxyOnlyFanout see a clean slate
+                // (either they hit the negative cache, or they start a fresh fanout).
+                this.inFlightFanouts.remove(dedupKey, freshGate);
+                freshGate.complete(null);
+            });
     }
 
     /**
@@ -645,12 +714,12 @@ public final class GroupSlice implements Slice {
                 // this exact member — we MUST attempt the read and surface any
                 // failure instead of masking it with a "circuit open" skip.
                 if (!isTargetedLocalRead && member.isCircuitOpen()) {
-                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("Member circuit OPEN, skipping: " + member.name())
                         .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("skipped")
-                        .field("destination.address", member.name()))
+                        .field("destination.address", member.name())
                         .log();
                     completeIfAllExhausted(
                         pending, completed, anyServerError, result, ctx, isTargetedLocalRead
@@ -795,13 +864,13 @@ public final class GroupSlice implements Slice {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
                 if (latency > 1000) {
-                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("Slow member response: " + member.name())
                         .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("success")
                         .field("destination.address", member.name())
-                        .duration(latency))
+                        .duration(latency)
                         .log();
                 }
                 member.recordSuccess();
@@ -810,12 +879,12 @@ public final class GroupSlice implements Slice {
                 recordGroupMemberLatency(member.name(), "success", latency);
                 result.complete(resp);
             } else {
-                ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
+                EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member '" + member.name() + "' returned success but another member already won")
                     .eventCategory("network")
                     .eventAction("group_query")
                     .field("destination.address", member.name())
-                    .field("http.response.status_code", status.code()))
+                    .field("http.response.status_code", status.code())
                     .log();
                 drainBody(member.name(), resp.body());
             }
@@ -827,13 +896,13 @@ public final class GroupSlice implements Slice {
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
-                ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
+                EcsLogger.debug("com.auto1.pantera.group")
                     .message("Member '" + member.name() + "' returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("network")
                     .eventAction("group_query")
                     .eventOutcome("success")
                     .field("destination.address", member.name())
-                    .field("http.response.status_code", 403))
+                    .field("http.response.status_code", 403)
                     .log();
                 member.recordSuccess(); // Not a failure - valid response
                 result.complete(resp);
@@ -844,27 +913,27 @@ public final class GroupSlice implements Slice {
             completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member — individual miss is DEBUG noise, not actionable
-            ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
+            EcsLogger.debug("com.auto1.pantera.group")
                 .message("Group member " + member.name() + " does not have " + pathKey.string())
                 .eventCategory("web")
                 .eventAction("group_fanout_miss")
                 .eventOutcome("success")
                 .field("destination.address", member.name())
-                .field("url.path", pathKey.string()))
+                .field("url.path", pathKey.string())
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
             drainBody(member.name(), resp.body());
             completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         } else {
             // Server errors (500, 503, etc.): record failure, try next member
-            ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+            EcsLogger.warn("com.auto1.pantera.group")
                 .message("Member '" + member.name() + "' returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("network")
                 .eventAction("group_query")
                 .eventOutcome("failure")
                 .field("event.reason", "HTTP " + status.code() + " from member")
                 .field("destination.address", member.name())
-                .field("http.response.status_code", status.code()))
+                .field("http.response.status_code", status.code())
                 .log();
             member.recordFailure();
             anyServerError.set(true);
@@ -876,6 +945,19 @@ public final class GroupSlice implements Slice {
 
     /**
      * Handle member query failure (exception thrown).
+     *
+     * <p><b>Cancellation edge case (intentional trade-off):</b> when the result
+     * has already been completed by another member, we call
+     * {@code future.cancel(true)} on all remaining member futures (see
+     * {@link #queryTargetedMembers}).  If a Response happened to arrive on a
+     * cancelled future before its {@code whenComplete} fired, its body is not
+     * drained here — we never held the Response object.  In practice this is
+     * low-risk: the underlying transport (Jetty/Vert.x HTTP client) eventually
+     * closes the connection via idle-timeout, so any undrained response is a
+     * transient socket-level leak rather than a permanent resource leak.
+     * Tracking the in-flight Response for drain would add a layer of wrapping
+     * futures and per-member atomic state for a scenario that has not been
+     * observed in production instrumentation; we accept the trade-off.
      */
     private void handleMemberFailure(
         final MemberSlice member,
@@ -890,17 +972,20 @@ public final class GroupSlice implements Slice {
         if (err instanceof CancellationException) {
             // Another member won the race and cancelled this future.
             // This is not a real upstream failure — do not trip the circuit breaker.
+            // See Javadoc above for the "undrained Response" edge case and why we
+            // don't try to drain here (we never hold the Response object, and
+            // Jetty idle-timeout reclaims the connection).
             completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
             return;
         }
-        ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+        EcsLogger.warn("com.auto1.pantera.group")
             .message("Member query failed: " + member.name())
             .eventCategory("network")
             .eventAction("group_query")
             .eventOutcome("failure")
             .error(err)
             .field("event.reason", "Member request threw " + err.getClass().getSimpleName())
-            .field("destination.address", member.name()))
+            .field("destination.address", member.name())
             .log();
         member.recordFailure();
         anyServerError.set(true);
@@ -935,34 +1020,34 @@ public final class GroupSlice implements Slice {
         if (pending.decrementAndGet() == 0 && !completed.get()) {
             if (anyServerError.get()) {
                 if (isTargetedLocalRead) {
-                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("Targeted member failed on index hit, returning 500")
                         .eventCategory("web")
                         .eventAction("group_query")
                         .eventOutcome("failure")
                         .field("event.reason", "Index-hit member failed; bytes are local but read errored — no fallback")
-                        .field("http.response.status_code", 500))
+                        .field("http.response.status_code", 500)
                         .log();
                     result.complete(ResponseBuilder.internalError()
                         .textBody("Targeted member read failed").build());
                 } else {
-                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                    EcsLogger.warn("com.auto1.pantera.group")
                         .message("All members exhausted with upstream errors, returning 502")
                         .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("failure")
                         .field("event.reason", "All proxy upstreams returned 5xx or threw")
-                        .field("http.response.status_code", 502))
+                        .field("http.response.status_code", 502)
                         .log();
                     result.complete(ResponseBuilder.badGateway()
                         .textBody("All upstream members failed").build());
                 }
             } else {
-                ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                EcsLogger.warn("com.auto1.pantera.group")
                     .message("Artifact not found in any group member: " + ctx.packageName())
                     .eventCategory("web")
                     .eventAction("group_lookup_miss")
-                    .eventOutcome("failure"))
+                    .eventOutcome("failure")
                     .log();
                 recordNotFound();
                 result.complete(ResponseBuilder.notFound().build());
