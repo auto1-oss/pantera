@@ -306,7 +306,7 @@ final class GroupSliceIndexRoutingTest {
         assertTrue(idx.locateCalls.isEmpty(), "locate() must never be called");
     }
 
-    // ---- Metadata/unparseable URLs → direct fanout, no index call ----
+    // ---- Metadata/unparseable URLs → full two-phase fanout, no index call ----
 
     @ParameterizedTest
     @CsvSource({
@@ -317,6 +317,9 @@ final class GroupSliceIndexRoutingTest {
         "hex-group,    /names",
     })
     void metadataUrlSkipsIndexAndFansOut(final String repoType, final String url) {
+        // member-a = proxy, member-b = hosted (not in proxy set)
+        // In the new two-phase fanout, hosted (member-b) is queried first.
+        // Since it returns 200, the proxy (member-a) is not cascaded to.
         final RecordingIndex idx = new RecordingIndex(List.of("member-a"));
         final AtomicInteger memberACount = new AtomicInteger(0);
         final AtomicInteger memberBCount = new AtomicInteger(0);
@@ -338,10 +341,51 @@ final class GroupSliceIndexRoutingTest {
             "locateByName() must NOT be called for metadata URL: " + url);
         assertTrue(idx.locateCalls.isEmpty(),
             "locate() must NOT be called for metadata URL: " + url);
-        assertEquals(1, memberACount.get(),
-            "member-a must receive request on direct fanout for: " + url);
         assertEquals(1, memberBCount.get(),
-            "member-b must receive request on direct fanout for: " + url);
+            "hosted member-b must be queried first in two-phase fanout: " + url);
+        assertEquals(0, memberACount.get(),
+            "proxy member-a must NOT be queried since hosted already served 200: "
+                + url);
+    }
+
+    /**
+     * Confirms that when hosted misses on a metadata URL, the proxy leaf IS
+     * queried (phase-2 cascade).
+     */
+    @ParameterizedTest
+    @CsvSource({
+        "helm-group,   /index.yaml",
+        "hex-group,    /names",
+    })
+    void metadataUrlCascadesToProxyWhenHostedMisses(
+        final String repoType, final String url
+    ) {
+        final RecordingIndex idx = new RecordingIndex(List.of("member-a"));
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        final AtomicInteger hostedCount = new AtomicInteger(0);
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put("proxy-a", countingSlice(proxyCount));
+        slices.put("hosted-b", (line, headers, body) -> {
+            hostedCount.incrementAndGet();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        });
+        final GroupSlice slice = new GroupSlice(
+            new MapResolver(slices),
+            repoType,
+            List.of("proxy-a", "hosted-b"),
+            8080, 0, 0,
+            Collections.emptyList(),
+            Optional.of(idx),
+            Set.of("proxy-a"),
+            repoType
+        );
+        slice.response(new RequestLine("GET", url), Headers.EMPTY, Content.EMPTY).join();
+        assertEquals(1, hostedCount.get(),
+            "hosted-b queried in phase 1");
+        assertEquals(1, proxyCount.get(),
+            "proxy-a queried in phase 2 after hosted 404");
     }
 
     // ---- locate() is never called for any known adapter type ----

@@ -22,7 +22,6 @@ import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.slice.KeyFromPath;
-import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.index.ArtifactIndex;
 
 import java.util.ArrayList;
@@ -41,7 +40,6 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.slf4j.MDC;
@@ -346,202 +344,183 @@ public final class GroupSlice implements Slice {
 
         recordRequestStart();
         final long requestStartTime = System.currentTimeMillis();
-        // Index-first: try O(1) lookup before parallel fan-out
-        if (this.artifactIndex.isPresent()) {
-            final ArtifactIndex idx = this.artifactIndex.get();
-            // Try adapter-aware name parsing first (indexed, fast)
-            final Optional<String> parsedName =
-                ArtifactNameParser.parse(this.repoType, path);
-            if (parsedName.isEmpty()) {
-                // Metadata endpoint or unknown adapter type — skip index, direct fanout
-                EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Name unparseable, using direct fanout")
-                    .eventCategory("repository")
-                    .eventAction("group_direct_fanout")
-                    .field("repository.name", this.group)
-                    .field("url.path", path)
-                    .log();
-                return queryAllMembersInParallel(line, headers, body, ctx)
-                    .whenComplete((resp, err) -> {
-                        final long duration = System.currentTimeMillis() - requestStartTime;
-                        if (err != null) {
-                            recordGroupRequest("error", duration);
-                        } else if (resp.status().success()) {
-                            recordGroupRequest("success", duration);
-                        } else {
-                            recordGroupRequest("not_found", duration);
-                        }
-                    });
-            }
-            return idx.locateByName(parsedName.get())
-                .thenCompose(optRepos -> {
-                    final List<String> repos = optRepos.orElse(List.of());
-                    if (!repos.isEmpty()) {
-                        // Index returns leaf repo names which match the flattened members
-                        // list directly — no mapping needed.
-                        final Set<String> directMembersToQuery = new HashSet<>(repos);
-                        final List<MemberSlice> targeted = this.members.stream()
-                            .filter(m -> directMembersToQuery.contains(m.name()))
-                            .toList();
-                        if (!targeted.isEmpty()) {
-                            EcsLogger.debug("com.auto1.pantera.group")
-                                .message("Index hit via name: targeting "
-                                    + targeted.size() + " member(s)")
-                                .eventCategory("repository")
-                                .eventAction("group_index_hit")
-                                .field("repository.name", this.group)
-                                .field("url.path", path)
-                                .log();
-                            return queryHostedFirstThenProxy(
-                                targeted, line, headers, body, ctx
-                            );
-                        }
-                    }
-                    // Index miss: hosted repos are fully indexed so the artifact
-                    // cannot exist in any hosted member.  Only proxy members need
-                    // to be queried (they cache on first fetch and may not yet be
-                    // in the index).
-                    final List<MemberSlice> proxyOnly = this.members.stream()
-                        .filter(MemberSlice::isProxy)
-                        .toList();
-                    if (proxyOnly.isEmpty()) {
-                        EcsLogger.debug("com.auto1.pantera.group")
-                            .message("Index miss with no proxy members, returning 404"
-                                + " (name: " + parsedName.get() + ")")
-                            .eventCategory("repository")
-                            .eventAction("group_index_miss")
-                            .field("repository.name", this.group)
-                            .field("url.path", path)
-                            .log();
-                        return CompletableFuture.completedFuture(
-                            ResponseBuilder.notFound().build()
-                        );
-                    }
-                    EcsLogger.debug("com.auto1.pantera.group")
-                        .message("Index miss: fanning out to "
-                            + proxyOnly.size() + " proxy member(s) only"
-                            + " (name: " + parsedName.get() + ")")
-                        .eventCategory("repository")
-                        .eventAction("group_index_miss")
+
+        // ---- Path 1: No index configured OR unparseable URL → full two-phase fanout ----
+        if (this.artifactIndex.isEmpty()) {
+            return fullTwoPhaseFanout(line, headers, body, ctx)
+                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+        }
+        final ArtifactIndex idx = this.artifactIndex.get();
+        final Optional<String> parsedName =
+            ArtifactNameParser.parse(this.repoType, path);
+        if (parsedName.isEmpty()) {
+            // Metadata endpoint / root path / unknown adapter → safety net
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Name unparseable, using full two-phase fanout")
+                .eventCategory("repository")
+                .eventAction("group_direct_fanout")
+                .field("repository.name", this.group)
+                .field("url.path", path)
+                .log();
+            return fullTwoPhaseFanout(line, headers, body, ctx)
+                .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+        }
+
+        // ---- Path 2: Query index ----
+        return idx.locateByName(parsedName.get())
+            .thenCompose(optRepos -> {
+                if (optRepos.isEmpty()) {
+                    // DB error → full two-phase fanout safety net
+                    EcsLogger.warn("com.auto1.pantera.group")
+                        .message("Index DB error, using full fanout safety net")
+                        .eventCategory("database")
+                        .eventAction("group_index_error")
+                        .eventOutcome("failure")
                         .field("repository.name", this.group)
                         .field("url.path", path)
                         .log();
-                    return queryTargetedMembers(proxyOnly, line, headers, body, ctx);
-                })
-                .whenComplete((resp, err) -> {
-                    final long duration = System.currentTimeMillis() - requestStartTime;
-                    if (err != null) {
-                        recordGroupRequest("error", duration);
-                    } else if (resp.status().success()) {
-                        recordGroupRequest("success", duration);
-                    } else {
-                        recordGroupRequest("not_found", duration);
-                    }
-                });
-        }
-        return queryAllMembersInParallel(line, headers, body, ctx)
-            .whenComplete((resp, err) -> {
-                final long duration = System.currentTimeMillis() - requestStartTime;
-                if (err != null) {
-                    recordGroupRequest("error", duration);
-                } else if (resp.status().success()) {
-                    recordGroupRequest("success", duration);
-                } else {
-                    recordGroupRequest("not_found", duration);
+                    return fullTwoPhaseFanout(line, headers, body, ctx);
                 }
-            });
+                final List<String> repos = optRepos.get();
+                if (repos.isEmpty()) {
+                    // Confirmed miss → proxy-only fanout
+                    return proxyOnlyFanout(line, headers, body, ctx, parsedName.get());
+                }
+                // ---- Path 3: Index hit → targeted local read ----
+                return targetedLocalRead(repos, line, headers, body, ctx);
+            })
+            .whenComplete((resp, err) -> recordMetrics(resp, err, requestStartTime));
+    }
+
+    private void recordMetrics(
+        final Response resp, final Throwable err, final long startTime
+    ) {
+        final long duration = System.currentTimeMillis() - startTime;
+        if (err != null) {
+            recordGroupRequest("error", duration);
+        } else if (resp.status().success()) {
+            recordGroupRequest("success", duration);
+        } else {
+            recordGroupRequest("not_found", duration);
+        }
     }
 
     /**
-     * Query all members in parallel, consuming ALL response bodies.
+     * Path 3: Index hit → query the member(s) directly.
+     *
+     * <p>No circuit breaker check.  No fallback fanout on 5xx.  Artifact bytes
+     * are local (hosted upload or proxy cache) — if the targeted member fails,
+     * no one else has them, so we surface a genuine 500 to the client.
+     *
+     * <p>404 is treated as authoritative (stale index scenario) and returned
+     * as-is — we do NOT fall back to a proxy, because the index says the
+     * artifact lives on this member.
      */
-    private CompletableFuture<Response> queryAllMembersInParallel(
-        final RequestLine line,
-        final Headers headers,
-        final Content body,
+    private CompletableFuture<Response> targetedLocalRead(
+        final List<String> repos,
+        final RequestLine line, final Headers headers, final Content body,
         final RequestContext ctx
     ) {
-        final long startTime = System.currentTimeMillis();
-
-        // CRITICAL: Consume incoming body ONCE before parallel queries
-        // For POST requests (npm audit), we need to preserve the body bytes
-        // and create new Content instances for each member
-        final Key pathKey = new KeyFromPath(line.uri().getPath());
-
-        return body.asBytesFuture().thenCompose(requestBytes -> {
-            // Apply routing rules to filter members for this path
-            final List<MemberSlice> eligibleMembers = this.filterByRoutingRules(
-                line.uri().getPath()
-            );
-            final CompletableFuture<Response> result = new CompletableFuture<>();
-            final AtomicBoolean completed = new AtomicBoolean(false);
-            final AtomicInteger pending = new AtomicInteger(eligibleMembers.size());
-            final AtomicBoolean anyServerError = new AtomicBoolean(false);
-            // Tracks circuit-open skips separately from real server errors.
-            // A circuit-open skip is NOT a server error — the member may or may not have
-            // the artifact, we just can't reach it right now. Keeping these separate lets
-            // completeIfAllExhausted return 503 (retry-able) instead of 404 (cached as
-            // absent by Maven) or 502 (implies a real upstream error occurred).
-            final AtomicBoolean anyCircuitOpen = new AtomicBoolean(false);
-            // Track all member futures for best-effort cancellation on first success
-            final List<CompletableFuture<Response>> memberFutures =
-                new ArrayList<>(eligibleMembers.size());
-
-            if (eligibleMembers.isEmpty()) {
-                result.complete(ResponseBuilder.notFound().build());
-                return result;
-            }
-
-            // Start eligible members in parallel
-            for (MemberSlice member : eligibleMembers) {
-                // Circuit check happens here, NOT inside queryMember, so circuit-open
-                // skips never flow through handleMemberResponse and never set anyServerError.
-                if (member.isCircuitOpen()) {
-                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                        .message("Member circuit OPEN, skipping: " + member.name())
-                        .eventCategory("repository")
-                        .eventAction("group_query")
-                        .eventOutcome("skipped")
-                        .field("repository.name", this.group))
-                        .log();
-                    anyCircuitOpen.set(true);
-                    completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
-                    continue;
-                }
-                final CompletableFuture<Response> memberFuture =
-                    queryMember(member, line, headers, requestBytes, ctx);
-                memberFutures.add(memberFuture);
-                memberFuture.whenComplete((resp, err) -> {
-                    if (err != null) {
-                        handleMemberFailure(member, err, completed, pending, anyServerError, anyCircuitOpen, result, ctx);
-                    } else {
-                        handleMemberResponse(member, resp, completed, pending, anyServerError, anyCircuitOpen, result, startTime, pathKey, ctx);
-                    }
-                });
-            }
-
-            // When first success completes the result, cancel remaining member requests
-            result.whenComplete((resp, err) -> {
-                for (CompletableFuture<Response> future : memberFutures) {
-                    if (!future.isDone()) {
-                        future.cancel(true);
-                    }
-                }
-            });
-
-            return result;
-        });
+        final Set<String> wanted = new HashSet<>(repos);
+        final List<MemberSlice> targeted = this.members.stream()
+            .filter(m -> wanted.contains(m.name()))
+            .toList();
+        if (targeted.isEmpty()) {
+            EcsLogger.warn("com.auto1.pantera.group")
+                .message("Index hit but no matching member in flattened list — safety net")
+                .eventCategory("web")
+                .eventAction("group_index_orphan")
+                .eventOutcome("failure")
+                .field("repository.name", this.group)
+                .field("url.path", line.uri().getPath())
+                .log();
+            return fullTwoPhaseFanout(line, headers, body, ctx);
+        }
+        EcsLogger.debug("com.auto1.pantera.group")
+            .message("Index hit via name: targeting "
+                + targeted.size() + " member(s)")
+            .eventCategory("repository")
+            .eventAction("group_index_hit")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .log();
+        return queryTargetedMembers(targeted, line, headers, body, ctx, true);
     }
 
     /**
-     * Query only targeted members (from index hits) in parallel.
+     * Path 4: Index confirmed miss → proxy-only fanout.
+     *
+     * <p>Hosted repos are fully indexed, so absence from the index means
+     * absence from hosted — we only query proxy members (whose content is
+     * indexed lazily on first cache).
+     */
+    private CompletableFuture<Response> proxyOnlyFanout(
+        final RequestLine line, final Headers headers, final Content body,
+        final RequestContext ctx, final String artifactName
+    ) {
+        // TODO Task 5: check negative cache (group:artifactName) here
+        final List<MemberSlice> proxyOnly = this.members.stream()
+            .filter(MemberSlice::isProxy)
+            .toList();
+        if (proxyOnly.isEmpty()) {
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Index miss with no proxy members, returning 404"
+                    + " (name: " + artifactName + ")")
+                .eventCategory("repository")
+                .eventAction("group_index_miss")
+                .field("repository.name", this.group)
+                .field("url.path", line.uri().getPath())
+                .log();
+            return CompletableFuture.completedFuture(
+                ResponseBuilder.notFound().build()
+            );
+        }
+        EcsLogger.debug("com.auto1.pantera.group")
+            .message("Index miss: fanning out to "
+                + proxyOnly.size() + " proxy member(s) only"
+                + " (name: " + artifactName + ")")
+            .eventCategory("repository")
+            .eventAction("group_index_miss")
+            .field("repository.name", this.group)
+            .field("url.path", line.uri().getPath())
+            .log();
+        return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false);
+    }
+
+    /**
+     * Path 5: Full two-phase fanout — hosted first, then proxy.
+     *
+     * <p>Used as a safety net when the artifact name could not be parsed or
+     * the index DB returned an error.  Applies routing rules.
+     */
+    private CompletableFuture<Response> fullTwoPhaseFanout(
+        final RequestLine line, final Headers headers, final Content body,
+        final RequestContext ctx
+    ) {
+        final List<MemberSlice> eligible = this.filterByRoutingRules(line.uri().getPath());
+        if (eligible.isEmpty()) {
+            return CompletableFuture.completedFuture(ResponseBuilder.notFound().build());
+        }
+        return queryHostedFirstThenProxy(eligible, line, headers, body, ctx);
+    }
+
+    /**
+     * Query a list of members in parallel.
+     *
+     * <p>When {@code isTargetedLocalRead} is {@code true} (path 3 — index hit),
+     * the circuit breaker is bypassed and a 5xx from any member surfaces as a
+     * {@code 500 Internal Error} to the client (no fallback bytes elsewhere).
+     *
+     * <p>When {@code false} (path 4 / path 5 — fanout), circuit-open members are
+     * skipped and a 5xx from every member surfaces as {@code 502 Bad Gateway}.
      */
     private CompletableFuture<Response> queryTargetedMembers(
         final List<MemberSlice> targeted,
         final RequestLine line,
         final Headers headers,
         final Content body,
-        final RequestContext ctx
+        final RequestContext ctx,
+        final boolean isTargetedLocalRead
     ) {
         final long startTime = System.currentTimeMillis();
         final Key pathKey = new KeyFromPath(line.uri().getPath());
@@ -551,12 +530,15 @@ public final class GroupSlice implements Slice {
             final AtomicBoolean completed = new AtomicBoolean(false);
             final AtomicInteger pending = new AtomicInteger(targeted.size());
             final AtomicBoolean anyServerError = new AtomicBoolean(false);
-            final AtomicBoolean anyCircuitOpen = new AtomicBoolean(false);
             final List<CompletableFuture<Response>> memberFutures =
                 new ArrayList<>(targeted.size());
 
             for (MemberSlice member : targeted) {
-                if (member.isCircuitOpen()) {
+                // Circuit breaker applies only on the fanout path.  On the
+                // targeted local read path, the index says the bytes live on
+                // this exact member — we MUST attempt the read and surface any
+                // failure instead of masking it with a "circuit open" skip.
+                if (!isTargetedLocalRead && member.isCircuitOpen()) {
                     ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                         .message("Member circuit OPEN, skipping: " + member.name())
                         .eventCategory("repository")
@@ -564,8 +546,9 @@ public final class GroupSlice implements Slice {
                         .eventOutcome("skipped")
                         .field("repository.name", this.group))
                         .log();
-                    anyCircuitOpen.set(true);
-                    completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+                    completeIfAllExhausted(
+                        pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+                    );
                     continue;
                 }
                 final CompletableFuture<Response> memberFuture =
@@ -573,9 +556,13 @@ public final class GroupSlice implements Slice {
                 memberFutures.add(memberFuture);
                 memberFuture.whenComplete((resp, err) -> {
                     if (err != null) {
-                        handleMemberFailure(member, err, completed, pending, anyServerError, anyCircuitOpen, result, ctx);
+                        handleMemberFailure(
+                            member, err, completed, pending, anyServerError, result, ctx, isTargetedLocalRead
+                        );
                     } else {
-                        handleMemberResponse(member, resp, completed, pending, anyServerError, anyCircuitOpen, result, startTime, pathKey, ctx);
+                        handleMemberResponse(
+                            member, resp, completed, pending, anyServerError, result, startTime, pathKey, ctx, isTargetedLocalRead
+                        );
                     }
                 });
             }
@@ -593,17 +580,21 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * When the index returns multiple members for the same artifact name,
-     * query hosted (non-proxy) members first. If any hosted member returns
-     * 200, serve that immediately without querying proxies. Only fall
-     * through to proxy members if ALL hosted members return non-200.
+     * Full two-phase fanout: query hosted members first; if all miss,
+     * cascade to proxy members.
      *
-     * <p>This prevents a proxy from "claiming" a package name that exists
-     * on the upstream registry (e.g. PyPI.org) but has zero published files,
-     * when a hosted member has a locally-uploaded version with real files.
+     * <p>This is the safety-net path (unparseable URL, DB error, or index
+     * returned names not present in the flattened member list).  Running
+     * hosted first prevents a proxy from "claiming" a package name that
+     * exists on the upstream registry (e.g. PyPI.org) but has zero published
+     * files, when a hosted member has a locally-uploaded version with real
+     * files.
      *
-     * <p>If all targeted members are the same type (all hosted or all proxy),
-     * this degrades to the normal parallel query.
+     * <p>If all members are the same type (all hosted or all proxy), this
+     * degrades to a single parallel query.
+     *
+     * <p>Always runs on the fanout path ({@code isTargetedLocalRead=false}):
+     * circuit-open members are skipped and any 5xx surfaces as 502.
      */
     private CompletableFuture<Response> queryHostedFirstThenProxy(
         final List<MemberSlice> targeted,
@@ -620,10 +611,10 @@ public final class GroupSlice implements Slice {
             .toList();
         // No partition possible — use standard parallel query
         if (hosted.isEmpty() || proxy.isEmpty()) {
-            return queryTargetedMembers(targeted, line, headers, body, ctx);
+            return queryTargetedMembers(targeted, line, headers, body, ctx, false);
         }
         // Try hosted first; fall to proxy only if hosted yields no 200
-        return queryTargetedMembers(hosted, line, headers, body, ctx)
+        return queryTargetedMembers(hosted, line, headers, body, ctx, false)
             .thenCompose(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(resp);
@@ -636,7 +627,7 @@ public final class GroupSlice implements Slice {
                     .eventAction("group_cascade_to_proxy")
                     .field("repository.name", this.group)
                     .log();
-                return queryTargetedMembers(proxy, line, headers, body, ctx);
+                return queryTargetedMembers(proxy, line, headers, body, ctx, false);
             });
     }
 
@@ -666,47 +657,10 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * Query a single member.
+     * Handle a response from a member.
      *
-     * @param member Member to query
-     * @param line Request line
-     * @param headers Request headers
-     * @param requestBytes Request body bytes (may be empty for GET/HEAD)
-     * @param ctx Request context for logging
-     * @return Response future
-     */
-    private CompletableFuture<Response> queryMember(
-        final MemberSlice member,
-        final RequestLine line,
-        final Headers headers,
-        final byte[] requestBytes,
-        final RequestContext ctx
-    ) {
-
-        // Create new Content instance from buffered bytes for each member
-        final Content memberBody = requestBytes.length > 0
-            ? new Content.From(requestBytes)
-            : Content.EMPTY;
-
-        final RequestLine rewritten = member.rewritePath(line);
-
-        // Log the path rewriting for troubleshooting (DEBUG: 5000 events/s at 1000 req/s × 5 members)
-        EcsLogger.debug("com.auto1.pantera.group")
-            .message(String.format("Forwarding request to member '%s': rewrote path %s to %s", member.name(), line.uri().getPath(), rewritten.uri().getPath()))
-            .eventCategory("repository")
-            .eventAction("group_forward")
-            .field("repository.name", this.group)
-            .log();
-
-        return member.slice().response(
-            rewritten,
-            dropFullPathHeader(headers),
-            memberBody
-        );
-    }
-
-    /**
-     * Handle successful response from a member.
+     * <p>See {@link #completeIfAllExhausted} for the final status code policy
+     * when all members are exhausted without a winner.
      */
     private void handleMemberResponse(
         final MemberSlice member,
@@ -714,11 +668,11 @@ public final class GroupSlice implements Slice {
         final AtomicBoolean completed,
         final AtomicInteger pending,
         final AtomicBoolean anyServerError,
-        final AtomicBoolean anyCircuitOpen,
         final CompletableFuture<Response> result,
         final long startTime,
         final Key pathKey,
-        final RequestContext ctx
+        final RequestContext ctx,
+        final boolean isTargetedLocalRead
     ) {
         final RsStatus status = resp.status();
 
@@ -756,7 +710,7 @@ public final class GroupSlice implements Slice {
             // Two-phase completion: 502/404 only fires when ALL futures have reported
             // and !completed — prevents fast-failing proxies from racing ahead of a
             // slow-but-cached local member and completing the result with 502.
-            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
@@ -774,7 +728,7 @@ public final class GroupSlice implements Slice {
                 drainBody(member.name(), resp.body());
             }
             // Always decrement (same two-phase logic as 2xx success above)
-            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member — individual miss is DEBUG noise, not actionable
             ctx.addTo(EcsLogger.debug("com.auto1.pantera.group")
@@ -787,7 +741,7 @@ public final class GroupSlice implements Slice {
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
             drainBody(member.name(), resp.body());
-            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         } else {
             // Server errors (500, 503, etc.): record failure, try next member
             ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
@@ -802,12 +756,12 @@ public final class GroupSlice implements Slice {
             anyServerError.set(true);
             recordGroupMemberRequest(member.name(), "error");
             drainBody(member.name(), resp.body());
-            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
         }
     }
 
     /**
-     * Handle member query failure.
+     * Handle member query failure (exception thrown).
      */
     private void handleMemberFailure(
         final MemberSlice member,
@@ -815,14 +769,14 @@ public final class GroupSlice implements Slice {
         final AtomicBoolean completed,
         final AtomicInteger pending,
         final AtomicBoolean anyServerError,
-        final AtomicBoolean anyCircuitOpen,
         final CompletableFuture<Response> result,
-        final RequestContext ctx
+        final RequestContext ctx,
+        final boolean isTargetedLocalRead
     ) {
         if (err instanceof CancellationException) {
             // Another member won the race and cancelled this future.
             // This is not a real upstream failure — do not trip the circuit breaker.
-            completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
             return;
         }
         ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
@@ -835,51 +789,57 @@ public final class GroupSlice implements Slice {
             .log();
         member.recordFailure();
         anyServerError.set(true);
-        completeIfAllExhausted(pending, completed, anyServerError, anyCircuitOpen, result, ctx);
+        completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
     }
 
     /**
      * Complete the result future if all members have been exhausted.
      *
-     * Three-way outcome:
-     * - anyServerError  → 502 Bad Gateway   (an active member returned 5xx or threw)
-     * - anyCircuitOpen  → 503 Unavailable   (no active error, but ≥1 member was circuit-skipped;
-     *                                         artifact may exist there — Maven will retry next build)
-     * - neither         → 404 Not Found     (all active members cleanly said "not here")
+     * <p>Final status code policy:
+     * <ul>
+     *   <li><b>Targeted local read</b> (index hit) + any 5xx → {@code 500 Internal Error}
+     *       — artifact bytes are local, nobody else has them, this is a real local failure.</li>
+     *   <li><b>Fanout</b> (miss / DB error / unparseable) + any 5xx → {@code 502 Bad Gateway}
+     *       — we ARE proxying, so a bad upstream is correctly a bad gateway.</li>
+     *   <li>All members cleanly 404 → {@code 404 Not Found}.</li>
+     * </ul>
      *
-     * Keeping circuit-open separate from real server errors prevents the case where a
-     * permanently-blocked proxy member (e.g. dead upstream) causes every "not found" response
-     * to become a 502, breaking builds for artifacts that simply don't exist in this group.
+     * <p>Note: 503 is <em>no longer</em> emitted by group resolution.  The old
+     * {@code anyCircuitOpen → 503} path has been removed; circuit-open skips
+     * on the fanout path simply cause the request to fall through to other
+     * members or, if all are skipped/miss, produce a plain 404.
      */
     private void completeIfAllExhausted(
         final AtomicInteger pending,
         final AtomicBoolean completed,
         final AtomicBoolean anyServerError,
-        final AtomicBoolean anyCircuitOpen,
         final CompletableFuture<Response> result,
-        final RequestContext ctx
+        final RequestContext ctx,
+        final boolean isTargetedLocalRead
     ) {
         if (pending.decrementAndGet() == 0 && !completed.get()) {
             if (anyServerError.get()) {
-                ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                    .message("All members exhausted with upstream errors, returning 502")
-                    .eventCategory("repository")
-                    .eventAction("group_query")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.group))
-                    .log();
-                result.complete(ResponseBuilder.badGateway()
-                    .textBody("All upstream members failed").build());
-            } else if (anyCircuitOpen.get()) {
-                ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
-                    .message("All members exhausted, some circuits open, returning 503")
-                    .eventCategory("repository")
-                    .eventAction("group_query")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.group))
-                    .log();
-                result.complete(ResponseBuilder.unavailable()
-                    .textBody("Some members temporarily unavailable, retry later").build());
+                if (isTargetedLocalRead) {
+                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                        .message("Targeted member failed on index hit, returning 500")
+                        .eventCategory("repository")
+                        .eventAction("group_query")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group))
+                        .log();
+                    result.complete(ResponseBuilder.internalError()
+                        .textBody("Targeted member read failed").build());
+                } else {
+                    ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
+                        .message("All members exhausted with upstream errors, returning 502")
+                        .eventCategory("repository")
+                        .eventAction("group_query")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.group))
+                        .log();
+                    result.complete(ResponseBuilder.badGateway()
+                        .textBody("All upstream members failed").build());
+                }
             } else {
                 ctx.addTo(EcsLogger.warn("com.auto1.pantera.group")
                     .message("Artifact not found in any group member: " + ctx.packageName())
