@@ -18,9 +18,11 @@ import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.asto.log.EcsLogger;
 import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
+import io.reactivex.Maybe;
 import io.reactivex.Single;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.nio.file.NoSuchFileException;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -67,6 +69,24 @@ public final class FromStorageCache implements Cache {
                     OptimizedStorageCache.optimizedValue(this.storage, key)
                 ).map(Optional::of)
             )
+            .onErrorResumeNext(err -> {
+                // TOCTOU: file was deleted between exists() and open().
+                // Treat as a cache miss so switchIfEmpty triggers a fresh upstream fetch.
+                // Only swallow NoSuchFileException (or a wrapped one); all other errors propagate.
+                final boolean isToctou = err instanceof NoSuchFileException
+                    || err.getCause() instanceof NoSuchFileException;
+                if (isToctou) {
+                    EcsLogger.warn("com.auto1.pantera.asto.cache")
+                        .message("Cache TOCTOU: file vanished between exists and open, falling through to upstream")
+                        .eventCategory("file")
+                        .eventAction("cache_toctou_recovered")
+                        .eventOutcome("success")
+                        .field("file.path", key.string())
+                        .log();
+                    return Maybe.empty();
+                }
+                return Maybe.error(err);
+            })
             .doOnError(err ->
                 EcsLogger.warn("com.auto1.pantera.asto")
                     .message("Failed to read cached item: " + key.string())

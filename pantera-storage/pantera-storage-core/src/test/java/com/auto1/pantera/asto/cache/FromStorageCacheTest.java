@@ -12,6 +12,7 @@ package com.auto1.pantera.asto.cache;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Meta;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
@@ -22,9 +23,11 @@ import hu.akarnokd.rxjava2.interop.SingleInterop;
 import io.reactivex.Flowable;
 import io.reactivex.Observable;
 import java.nio.ByteBuffer;
+import java.nio.file.NoSuchFileException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
@@ -113,6 +116,168 @@ final class FromStorageCacheTest {
         ).toCompletableFuture().get();
         MatcherAssert.assertThat(
             new BlockingStorage(this.storage).exists(key), Matchers.is(false)
+        );
+    }
+
+    @Test
+    void toctouWrappedNoSuchFileTriggersUpstreamFetch() throws Exception {
+        // Storage that claims key exists but throws RuntimeException(NoSuchFileException)
+        // from value() — mirrors what OptimizedStorageCache.getFileSystemContent() produces
+        // when the file is deleted between the exists() check and the file open.
+        final Key key = new Key.From("toctou-wrapped");
+        final byte[] remoteData = "remote-bytes".getBytes();
+        final AtomicBoolean remoteCalled = new AtomicBoolean(false);
+        final Storage toctouStorage = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key k) {
+                return CompletableFuture.completedFuture(true);
+            }
+
+            @Override
+            public CompletableFuture<Content> value(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new RuntimeException(
+                        "Failed to read file: " + k.string(),
+                        new NoSuchFileException(k.string())
+                    )
+                );
+            }
+
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new RuntimeException(
+                        "Failed to read file: " + k.string(),
+                        new NoSuchFileException(k.string())
+                    )
+                );
+            }
+        };
+        final Remote remote = () -> {
+            remoteCalled.set(true);
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From(remoteData))
+            );
+        };
+        final Optional<? extends Content> result = new FromStorageCache(toctouStorage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote supplier must be called when TOCTOU eviction is detected",
+            remoteCalled.get(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Result must contain remote content (not empty)",
+            result.isPresent(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Content must match remote data",
+            result.get(), new ContentIs(remoteData)
+        );
+    }
+
+    @Test
+    void toctouDirectNoSuchFileTriggersUpstreamFetch() throws Exception {
+        // Storage that claims key exists but throws NoSuchFileException directly from value().
+        // Covers the err instanceof NoSuchFileException branch.
+        final Key key = new Key.From("toctou-direct");
+        final byte[] remoteData = "remote-direct".getBytes();
+        final AtomicBoolean remoteCalled = new AtomicBoolean(false);
+        final Storage toctouStorage = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key k) {
+                return CompletableFuture.completedFuture(true);
+            }
+
+            @Override
+            public CompletableFuture<Content> value(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new NoSuchFileException(k.string())
+                );
+            }
+
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new NoSuchFileException(k.string())
+                );
+            }
+        };
+        final Remote remote = () -> {
+            remoteCalled.set(true);
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From(remoteData))
+            );
+        };
+        final Optional<? extends Content> result = new FromStorageCache(toctouStorage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote supplier must be called when direct NoSuchFileException is detected",
+            remoteCalled.get(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Result must contain remote content (not empty)",
+            result.isPresent(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Content must match remote data",
+            result.get(), new ContentIs(remoteData)
+        );
+    }
+
+    @Test
+    void toctouNonFileErrorStillPropagates() throws Exception {
+        // A non-TOCTOU error (e.g. permission denied) must NOT be swallowed;
+        // the existing .onErrorComplete() handler converts it to an empty Optional,
+        // which triggers the upstream fetch.  The key assertion is that the original
+        // error does NOT propagate all the way to the caller (the cache's onErrorComplete
+        // handles it), and the remote IS called as fallback.
+        // This documents the existing behaviour so a future refactor doesn't regress it.
+        final Key key = new Key.From("toctou-other-error");
+        final byte[] remoteData = "remote-fallback".getBytes();
+        final AtomicBoolean remoteCalled = new AtomicBoolean(false);
+        final Storage permissionDeniedStorage = new Storage.Wrap(new InMemoryStorage()) {
+            @Override
+            public CompletableFuture<Boolean> exists(final Key k) {
+                return CompletableFuture.completedFuture(true);
+            }
+
+            @Override
+            public CompletableFuture<Content> value(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new java.io.IOException("Permission denied")
+                );
+            }
+
+            @Override
+            public CompletableFuture<? extends Meta> metadata(final Key k) {
+                return CompletableFuture.failedFuture(
+                    new java.io.IOException("Permission denied")
+                );
+            }
+        };
+        final Remote remote = () -> {
+            remoteCalled.set(true);
+            return CompletableFuture.completedFuture(
+                Optional.of(new Content.From(remoteData))
+            );
+        };
+        // Non-TOCTOU error propagates through .onErrorResumeNext (not swallowed),
+        // then hits .doOnError + .onErrorComplete, giving an empty Maybe that triggers switchIfEmpty.
+        final Optional<? extends Content> result = new FromStorageCache(permissionDeniedStorage)
+            .load(key, remote, CacheControl.Standard.ALWAYS)
+            .toCompletableFuture()
+            .get();
+        MatcherAssert.assertThat(
+            "Remote supplier must be called after non-TOCTOU error is handled by onErrorComplete",
+            remoteCalled.get(), Matchers.is(true)
+        );
+        MatcherAssert.assertThat(
+            "Result must contain remote content",
+            result.isPresent(), Matchers.is(true)
         );
     }
 
