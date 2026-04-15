@@ -30,7 +30,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
@@ -182,6 +183,16 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static final String TOTAL_COUNT_SQL = "SELECT COUNT(*) FROM artifacts";
 
     /**
+     * Bounded queue capacity for the default executor.
+     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} executes
+     * the task on the submitting thread, propagating backpressure to callers instead
+     * of buffering unboundedly and OOM-ing the JVM under DB latency spikes.
+     * Configurable via PANTERA_INDEX_EXECUTOR_QUEUE env var.
+     */
+    private static final int QUEUE_SIZE =
+        ConfigDefaults.getInt("PANTERA_INDEX_EXECUTOR_QUEUE", 500);
+
+    /**
      * Thread counter for executor threads.
      */
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger(0);
@@ -203,28 +214,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Constructor with default executor.
-     * Creates a fixed thread pool sized to available processors.
+     * Creates a bounded thread pool sized to available processors.
+     * Uses a {@code QUEUE_SIZE}-slot {@link LinkedBlockingQueue} and
+     * {@link ThreadPoolExecutor.CallerRunsPolicy} to apply backpressure when the
+     * queue fills rather than buffering tasks unboundedly.
      *
      * @param source JDBC DataSource
      */
     public DbArtifactIndex(final DataSource source) {
-        this(
-            source,
-            TraceContextExecutor.wrap(
-                Executors.newFixedThreadPool(
-                    Math.max(2, Runtime.getRuntime().availableProcessors()),
-                    r -> {
-                        final Thread thread = new Thread(
-                            r,
-                            "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
-                        );
-                        thread.setDaemon(true);
-                        return thread;
-                    }
-                )
-            ),
-            true
-        );
+        this(source, createDbIndexExecutor(), true);
     }
 
     /**
@@ -253,6 +251,41 @@ public final class DbArtifactIndex implements ArtifactIndex {
         this.executor = Objects.requireNonNull(executor, "ExecutorService must not be null");
         this.ownedExecutor = ownedExecutor;
         this.warmUp();
+    }
+
+    /**
+     * Build the default bounded executor for DB index operations.
+     * Queue size is configurable via PANTERA_INDEX_EXECUTOR_QUEUE (default 500).
+     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} runs the
+     * task on the submitting thread, propagating backpressure instead of OOM-ing
+     * the JVM before the per-query statement timeout fires.
+     *
+     * @return Wrapped ExecutorService
+     */
+    private static ExecutorService createDbIndexExecutor() {
+        final int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors());
+        final ThreadPoolExecutor pool = new ThreadPoolExecutor(
+            poolSize, poolSize,
+            0L, TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(QUEUE_SIZE),
+            r -> {
+                final Thread thread = new Thread(
+                    r,
+                    "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
+                );
+                thread.setDaemon(true);
+                return thread;
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        );
+        pool.allowCoreThreadTimeOut(false);
+        EcsLogger.info("com.auto1.pantera.index")
+            .message("DbArtifactIndex executor initialised ("
+                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=caller-runs)")
+            .eventCategory("configuration")
+            .eventAction("pool_init")
+            .log();
+        return TraceContextExecutor.wrap(pool);
     }
 
     /**
