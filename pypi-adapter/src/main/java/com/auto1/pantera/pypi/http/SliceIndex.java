@@ -136,7 +136,7 @@ final class SliceIndex implements Slice {
                     return this.storage.value(indexKey).thenApply(
                         content -> {
                             if (!packageName.isEmpty()) {
-                                AuditLogger.resolution();
+                                AuditLogger.resolution(packageName);
                             }
                             return ResponseBuilder.ok()
                                 .header("Content-Type", format.contentType() + "; charset=utf-8")
@@ -333,7 +333,7 @@ final class SliceIndex implements Slice {
                         .map(
                             entries -> {
                                 final String json = SimpleJsonRenderer.render(packageName, entries);
-                                AuditLogger.resolution();
+                                AuditLogger.resolution(packageName);
                                 return ResponseBuilder.ok()
                                     .header("Content-Type", SimpleApiFormat.JSON.contentType())
                                     .body(
@@ -410,7 +410,7 @@ final class SliceIndex implements Slice {
                         .collect(StringBuilder::new, StringBuilder::append)
                         .map(
                             resp -> {
-                                AuditLogger.resolution();
+                                AuditLogger.resolution(packageName);
                                 return ResponseBuilder.ok()
                                     .htmlBody(
                                         String.format(

@@ -175,8 +175,8 @@ public final class UploadSlice implements Slice {
                     }
                 )
             ).thenApply(
-                nothing -> {
-                    this.addEvent(key, owner, size);
+                sha256 -> {
+                    this.addEvent(key, owner, size, sha256);
                     return ResponseBuilder.created().build();
                 }
             ).exceptionally(
@@ -221,12 +221,12 @@ public final class UploadSlice implements Slice {
                 if (this.shouldGenerateChecksums(key)) {
                     return this.generateChecksums(key);
                 } else {
-                    return CompletableFuture.completedFuture(null);
+                    return CompletableFuture.<String>completedFuture(null);
                 }
             }
         ).thenApply(
-            nothing -> {
-                this.addEvent(key, owner, size);
+            sha256 -> {
+                this.addEvent(key, owner, size, sha256);
                 return ResponseBuilder.created().build();
             }
         ).exceptionally(
@@ -397,25 +397,35 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Generate checksum files by reading the file from storage.
+     * Generate checksum sidecar files (MD5, SHA-1, SHA-256, SHA-512) for the
+     * given artifact and return its SHA-256 hex digest.
+     *
+     * <p>The SHA-256 is surfaced explicitly so upload handlers can attach it
+     * to the {@link ArtifactEvent} via {@link ArtifactEvent#withChecksum(String)}
+     * — the audit log uses this for {@code package.checksum}.</p>
+     *
      * @param key Original file key
-     * @return Completable future
+     * @return Completable future yielding the SHA-256 hex digest
      */
-    private CompletableFuture<Void> generateChecksums(final Key key) {
-        return CompletableFuture.allOf(
-            CHECKSUM_ALGS.stream().map(
-                alg -> this.storage.value(key).thenCompose(
-                    content -> new ContentDigest(
-                        content, Digests.valueOf(alg.toUpperCase(Locale.US))
-                    ).hex()
-                ).thenCompose(
-                    hex -> this.storage.save(
-                        new Key.From(String.format("%s.%s", key.string(), alg)),
-                        new Content.From(hex.getBytes(StandardCharsets.UTF_8))
-                    )
-                ).toCompletableFuture()
-            ).toArray(CompletableFuture[]::new)
-        );
+    private CompletableFuture<String> generateChecksums(final Key key) {
+        final List<CompletableFuture<String>> perAlg = CHECKSUM_ALGS.stream().map(
+            alg -> this.storage.value(key).thenCompose(
+                content -> new ContentDigest(
+                    content, Digests.valueOf(alg.toUpperCase(Locale.US))
+                ).hex()
+            ).thenCompose(
+                hex -> this.storage.save(
+                    new Key.From(String.format("%s.%s", key.string(), alg)),
+                    new Content.From(hex.getBytes(StandardCharsets.UTF_8))
+                ).thenApply(ignored -> "sha256".equalsIgnoreCase(alg) ? hex : null)
+            ).toCompletableFuture()
+        ).toList();
+        return CompletableFuture.allOf(perAlg.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> perAlg.stream()
+                .map(CompletableFuture::join)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null));
     }
 
     /**
@@ -438,7 +448,7 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void addEvent(final Key key, final String owner, final long size) {
+    private void addEvent(final Key key, final String owner, final long size, final String sha256) {
         if (this.events.isEmpty()) {
             return;
         }
@@ -457,7 +467,7 @@ public final class UploadSlice implements Slice {
 
         // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
         final String pkg = path.substring(0, path.lastIndexOf('/'));
-        this.createAndAddEvent(pkg, owner, size);
+        this.createAndAddEvent(pkg, owner, size, sha256);
     }
 
     /**
@@ -506,33 +516,35 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void createAndAddEvent(final String pkg, final String owner, final long size) {
+    private void createAndAddEvent(final String pkg, final String owner, final long size,
+        final String sha256) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
         final String version = parts.length > 0 ? parts[parts.length - 1] : "unknown";
-        
+
         // Remove version from pkg to get group/artifact only
         String groupArtifact = pkg.substring(0, pkg.lastIndexOf('/'));
-        
+
         // Remove leading slash if present
         if (groupArtifact.startsWith("/")) {
             groupArtifact = groupArtifact.substring(1);
         }
-        
+
         // Format artifact name as group.artifact (replacing / with .)
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
-        
+
+        final ArtifactEvent event = new ArtifactEvent(
+            "maven",
+            this.rname,
+            owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
+            artifactName,
+            version,
+            size,
+            System.currentTimeMillis(),
+            (Long) null  // No release date for uploads
+        );
         this.events.get().add(
-            new ArtifactEvent(
-                "maven",
-                this.rname,
-                owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
-                artifactName,
-                version,
-                size,
-                System.currentTimeMillis(),
-                (Long) null  // No release date for uploads
-            )
+            sha256 == null ? event : event.withChecksum(sha256)
         );
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")

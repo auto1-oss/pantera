@@ -69,10 +69,30 @@ public final class AuditLogger {
 
     /**
      * Log a successful artifact metadata resolution.
+     *
+     * <p>Repo-level index queries (no specific package) are suppressed; this
+     * method is a no-op when {@code packageName} is null or empty. Callers
+     * should pass the resolved package name explicitly because the MDC slot
+     * for {@code package.name} is often empty by the time a metadata-render
+     * pipeline emits this event (the MDC is detached from the HTTP request
+     * scope inside RxJava chains).
+     *
+     * @param packageName Resolved package name — required
      */
-    public static void resolution() {
-        emit("Artifact metadata resolved", "artifact_resolution")
-            .log();
+    public static void resolution(final String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return;
+        }
+        final EcsLogger logger = EcsLogger.info(LOGGER)
+            .message("Artifact metadata resolved")
+            .eventCategory("file")
+            .eventAction("artifact_resolution")
+            .eventOutcome("success")
+            .field("package.name", packageName);
+        mdcField(logger, "repository.type", EcsMdc.REPO_TYPE);
+        mdcField(logger, "repository.name", EcsMdc.REPO_NAME);
+        mdcField(logger, "package.version", EcsMdc.PACKAGE_VERSION);
+        logger.log();
     }
 
     /**
@@ -84,32 +104,37 @@ public final class AuditLogger {
      * @param size File size in bytes
      * @param owner Owner/uploader name
      * @param releaseDate Release timestamp epoch-millis, or {@code null} if absent
+     * @param checksum SHA-256 hex digest, or {@code null} when unavailable
      */
     public static void publish(final String repoName, final String repoType,
         final String artifactName, final String version,
-        final double size, final String owner, final Long releaseDate) {
+        final double size, final String owner, final Long releaseDate,
+        final String checksum) {
         final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(releaseDate != null
                 ? String.format("Artifact publish recorded (release=%d)", releaseDate)
                 : "Artifact publish recorded")
-            .field("event.category", "database")
-            .field("event.action", "artifact_publish")
-            .field("event.outcome", "success")
+            .eventCategory("database")
+            .eventAction("artifact_publish")
+            .eventOutcome("success")
             .field("repository.type", repoType)
             .field("repository.name", repoName)
             .field("package.name", artifactName)
             .field("package.version", version)
             .field("package.size", size)
             .field("user.name", owner);
+        if (checksum != null && !checksum.isEmpty()) {
+            logger.field("package.checksum", checksum);
+        }
         logger.log();
     }
 
     private static EcsLogger emit(final String message, final String action) {
         final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(message)
-            .field("event.category", "file")
-            .field("event.action", action)
-            .field("event.outcome", "success");
+            .eventCategory("file")
+            .eventAction(action)
+            .eventOutcome("success");
         mdcField(logger, "repository.type", EcsMdc.REPO_TYPE);
         mdcField(logger, "repository.name", EcsMdc.REPO_NAME);
         mdcField(logger, "package.name", EcsMdc.PACKAGE_NAME);

@@ -11,10 +11,12 @@
 package com.auto1.pantera.db;
 
 import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.trace.TraceContextExecutor;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
+import org.slf4j.MDC;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
 import io.reactivex.rxjava3.core.Scheduler;
@@ -124,18 +126,41 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
     /**
      * Emit ECS audit log for successful artifact publish operations.
+     *
+     * <p>Restores the originating HTTP {@code trace.id} captured on the event
+     * (see {@link ArtifactEvent#traceId()}) into MDC for the duration of the
+     * log emission so the audit entry can be correlated to its HTTP request
+     * in Kibana — {@link co.elastic.logging.log4j2.EcsLayout} reads MDC when
+     * serialising the ECS {@code trace.id} field. The prior MDC state of the
+     * DB-consumer thread is saved and restored so pool threads are not
+     * polluted across batches.</p>
+     *
      * @param record Artifact event that was persisted
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
-        AuditLogger.publish(
-            normalizeRepoName(record.repoName()),
-            record.repoType(),
-            record.artifactName(),
-            record.artifactVersion(),
-            record.size(),
-            record.owner(),
-            record.releaseDate().orElse(null)
-        );
+        final String priorTraceId = MDC.get(EcsMdc.TRACE_ID);
+        final String eventTraceId = record.traceId();
+        if (eventTraceId != null) {
+            MDC.put(EcsMdc.TRACE_ID, eventTraceId);
+        }
+        try {
+            AuditLogger.publish(
+                normalizeRepoName(record.repoName()),
+                record.repoType(),
+                record.artifactName(),
+                record.artifactVersion(),
+                record.size(),
+                record.owner(),
+                record.releaseDate().orElse(null),
+                record.checksum()
+            );
+        } finally {
+            if (priorTraceId != null) {
+                MDC.put(EcsMdc.TRACE_ID, priorTraceId);
+            } else if (eventTraceId != null) {
+                MDC.remove(EcsMdc.TRACE_ID);
+            }
+        }
     }
 
     /**

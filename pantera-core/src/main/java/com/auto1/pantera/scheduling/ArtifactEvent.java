@@ -10,8 +10,10 @@
  */
 package com.auto1.pantera.scheduling;
 
+import com.auto1.pantera.http.log.EcsMdc;
 import java.util.Objects;
 import java.util.Optional;
+import org.slf4j.MDC;
 
 /**
  * Artifact data record.
@@ -75,6 +77,20 @@ public final class ArtifactEvent {
     private final String pathPrefix;
 
     /**
+     * Originating HTTP trace.id — captured from MDC at construction time so
+     * audit logs emitted later (on the DB-consumer thread) can be correlated
+     * back to the HTTP request that produced the event. Nullable.
+     */
+    private final String traceId;
+
+    /**
+     * Artifact SHA-256 digest (hex) — populated when known (maven UploadSlice
+     * runs {@code generateChecksums} after the upload completes and attaches
+     * the digest via {@link #withChecksum(String)}). Nullable.
+     */
+    private final String checksum;
+
+    /**
      * Ctor for the event to remove all artifact versions.
      * @param repoType Repository type
      * @param repoName Repository name
@@ -112,6 +128,19 @@ public final class ArtifactEvent {
                           String artifactName, String version, long size,
                           long created, Optional<Long> release, String pathPrefix,
                           Type etype) {
+        this(repoType, repoName, owner, artifactName, version, size, created,
+            release, pathPrefix, etype, MDC.get(EcsMdc.TRACE_ID), null);
+    }
+
+    /**
+     * Full-args ctor used by the public {@link #withChecksum(String)} copy path
+     * and by the auto-trace-capture delegate above. The {@code traceId} is
+     * captured once at event-construction time; later copies preserve it.
+     */
+    private ArtifactEvent(String repoType, String repoName, String owner,
+                          String artifactName, String version, long size,
+                          long created, Optional<Long> release, String pathPrefix,
+                          Type etype, String traceId, String checksum) {
         this.repoType = repoType;
         this.repoName = repoName;
         this.owner = owner;
@@ -122,6 +151,41 @@ public final class ArtifactEvent {
         this.release = release == null ? Optional.empty() : release;
         this.pathPrefix = pathPrefix;
         this.eventType = etype;
+        this.traceId = traceId;
+        this.checksum = checksum;
+    }
+
+    /**
+     * Return a copy of this event with the provided SHA-256 checksum attached.
+     * Used by upload paths that compute the digest asynchronously after
+     * construction (e.g. maven {@code UploadSlice.generateChecksums}).
+     *
+     * @param sha256Hex SHA-256 digest as lowercase hex, or {@code null} to clear
+     * @return Copy with the checksum set
+     */
+    public ArtifactEvent withChecksum(final String sha256Hex) {
+        return new ArtifactEvent(
+            this.repoType, this.repoName, this.owner, this.artifactName,
+            this.version, this.size, this.created, this.release,
+            this.pathPrefix, this.eventType, this.traceId, sha256Hex
+        );
+    }
+
+    /**
+     * Originating HTTP {@code trace.id} captured at construction time.
+     * @return Trace id, or {@code null} when the event was produced outside
+     *     a request scope (e.g. scheduled jobs, import CLI).
+     */
+    public String traceId() {
+        return this.traceId;
+    }
+
+    /**
+     * Artifact SHA-256 digest (hex).
+     * @return Checksum, or {@code null} when not yet computed.
+     */
+    public String checksum() {
+        return this.checksum;
     }
 
     /**
