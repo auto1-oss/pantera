@@ -29,6 +29,8 @@ import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.jcabi.xml.XMLDocument;
 
+import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -38,6 +40,14 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import org.w3c.dom.Document;
+import org.xml.sax.ErrorHandler;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
 
 /**
  * Simple upload slice that saves files directly to storage, similar to Gradle adapter.
@@ -249,7 +259,11 @@ public final class UploadSlice implements Slice {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 final String xml = new String(bytes, StandardCharsets.UTF_8);
-                final XMLDocument doc = new XMLDocument(xml);
+                // Parse via our own DocumentBuilder with a silent ErrorHandler so
+                // malformed XML (BOM, HTML error pages served as metadata) does
+                // NOT spill "[Fatal Error] :1:1: ..." to stderr — the SAX default
+                // handler prints before the exception propagates.
+                final XMLDocument doc = new XMLDocument(parseSilently(xml));
                 final List<String> versions = doc.xpath("//version/text()");
                 if (versions.isEmpty()) {
                     return bytes;
@@ -316,7 +330,8 @@ public final class UploadSlice implements Slice {
                     .field("package.version", newLatest)
                     .log();
                 return result.getBytes(StandardCharsets.UTF_8);
-            } catch (IllegalArgumentException ex) {
+            } catch (final IllegalArgumentException | SAXException | IOException
+                           | ParserConfigurationException ex) {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to parse metadata XML, using original")
                     .eventCategory("web")
@@ -327,6 +342,44 @@ public final class UploadSlice implements Slice {
                 return bytes;
             }
         });
+    }
+
+    /**
+     * Silent SAX error handler — lets the exception propagate so the caller
+     * logs a structured WARN, but prevents the default handler from writing
+     * {@code [Fatal Error] :1:1: Content is not allowed in prolog.} to stderr.
+     */
+    private static final ErrorHandler SILENT_SAX_HANDLER = new ErrorHandler() {
+        @Override
+        public void warning(final SAXParseException ex) { /* ignore */ }
+
+        @Override
+        public void error(final SAXParseException ex) throws SAXException {
+            throw ex;
+        }
+
+        @Override
+        public void fatalError(final SAXParseException ex) throws SAXException {
+            throw ex;
+        }
+    };
+
+    /**
+     * Parse XML into a DOM document without printing SAX errors to stderr.
+     * Disallows DOCTYPE declarations to defuse XXE and billion-laughs attacks.
+     */
+    private static Document parseSilently(final String xml)
+        throws SAXException, IOException, ParserConfigurationException {
+        final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        final DocumentBuilder builder = factory.newDocumentBuilder();
+        builder.setErrorHandler(SILENT_SAX_HANDLER);
+        return builder.parse(new InputSource(new StringReader(xml)));
     }
 
     /**
