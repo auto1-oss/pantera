@@ -30,6 +30,38 @@ public final class ArtifactNameParser {
     private static final Pattern DOCKER_PATH =
         Pattern.compile("/v2/(.+?)/(manifests|blobs|tags)/.*");
 
+    /**
+     * Composer p2 / p path: p2?/{vendor}/{package}(${hash})?.json
+     */
+    private static final Pattern COMPOSER_PACKAGE =
+        Pattern.compile("p2?/([^/]+)/([^/$]+)(?:\\$[a-f0-9]+)?\\.json$");
+
+    /**
+     * Extract name before the first "-{digit}" (greedy).
+     * Shared by helm, hex and gem filename parsers.
+     */
+    private static final Pattern NAME_BEFORE_VERSION_GREEDY =
+        Pattern.compile("^(.+)-\\d");
+
+    /**
+     * Extract name before the first "-{digit}" (lazy) — used by PyPI filenames
+     * where the name itself may contain hyphens before the version.
+     */
+    private static final Pattern NAME_BEFORE_VERSION_LAZY =
+        Pattern.compile("^(.+?)-\\d");
+
+    /**
+     * PyPI project-name normalization: collapse runs of -_. to a single hyphen.
+     */
+    private static final Pattern PYPI_NAME_SEPARATORS =
+        Pattern.compile("[-_.]+");
+
+    /**
+     * Repo-type suffix strip: "maven-group" -> "maven", "npm-proxy" -> "npm".
+     */
+    private static final Pattern REPO_TYPE_SUFFIX =
+        Pattern.compile("-(group|proxy|local|remote)$");
+
     private ArtifactNameParser() {
     }
 
@@ -65,7 +97,7 @@ public final class ArtifactNameParser {
      * Strip group/proxy/local suffix: "maven-group" -> "maven", "npm-proxy" -> "npm".
      */
     static String normalizeType(final String repoType) {
-        return repoType.replaceAll("-(group|proxy|local|remote)$", "");
+        return REPO_TYPE_SUFFIX.matcher(repoType).replaceAll("");
     }
 
     /**
@@ -286,9 +318,7 @@ public final class ArtifactNameParser {
     static Optional<String> parseComposer(final String urlPath) {
         final String clean = stripLeadingSlash(urlPath);
         // /p2/vendor/package.json or /p/vendor/package.json
-        final Matcher matcher = Pattern.compile(
-            "p2?/([^/]+)/([^/$]+)(?:\\$[a-f0-9]+)?\\.json$"
-        ).matcher(clean);
+        final Matcher matcher = COMPOSER_PACKAGE.matcher(clean);
         if (matcher.find()) {
             return Optional.of(matcher.group(1) + "/" + matcher.group(2));
         }
@@ -320,7 +350,7 @@ public final class ArtifactNameParser {
             return Optional.empty();
         }
         // filename is now "{name}-{version}"; extract name before last "-{digit}"
-        final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+        final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(filename);
         if (m.find()) {
             return Optional.of(m.group(1));
         }
@@ -395,7 +425,7 @@ public final class ArtifactNameParser {
                 return Optional.empty();
             }
             filename = filename.substring(0, filename.length() - ".tar".length());
-            final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+            final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(filename);
             if (m.find()) {
                 return Optional.of(m.group(1));
             }
@@ -446,7 +476,7 @@ public final class ArtifactNameParser {
             return Optional.empty();
         }
         // Name is everything before the LAST "-{digit}" pattern
-        final Matcher m = Pattern.compile("^(.+)-\\d").matcher(base);
+        final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(base);
         if (m.find()) {
             return Optional.of(m.group(1));
         }
@@ -457,7 +487,7 @@ public final class ArtifactNameParser {
      * Normalize a PyPI project name: replace [-_.] runs with single hyphen, lowercase.
      */
     private static String normalizePypiName(final String name) {
-        return name.replaceAll("[-_.]+", "-").toLowerCase();
+        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase();
     }
 
     /**
@@ -477,7 +507,7 @@ public final class ArtifactNameParser {
         }
         // Name is everything before the first hyphen followed by a digit
         // e.g., "numpy-1.24.0" -> "numpy", "my_package-2.0.0rc1" -> "my_package"
-        final Matcher m = Pattern.compile("^(.+?)-\\d").matcher(base);
+        final Matcher m = NAME_BEFORE_VERSION_LAZY.matcher(base);
         if (m.find()) {
             return Optional.of(normalizePypiName(m.group(1)));
         }
