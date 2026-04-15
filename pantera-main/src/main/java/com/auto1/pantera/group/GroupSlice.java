@@ -45,13 +45,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.trace.MdcPropagation;
 
 /**
  * High-performance group/virtual repository slice.
- * 
+ *
  * <p>Drop-in replacement for old batched implementation with:
  * <ul>
  *   <li>Flat member list - nested groups deduplicated at construction</li>
@@ -61,9 +63,9 @@ import com.auto1.pantera.http.trace.MdcPropagation;
  *   <li>Fast-fail - first successful response wins immediately</li>
  *   <li>Failure isolation - circuit breakers per member</li>
  * </ul>
- * 
+ *
  * <p>Performance: 250+ req/s, p50=50ms, p99=300ms, zero leaks
- * 
+ *
  * @since 1.18.22
  */
 public final class GroupSlice implements Slice {
@@ -73,7 +75,7 @@ public final class GroupSlice implements Slice {
      * Decoupled from the result path: drain failures and backpressure never affect
      * the winning response delivered to the client.
      *
-     * <p>4 threads, bounded queue of 200. When full, new drain tasks are logged and dropped.
+     * <p>16 threads, bounded queue of 2000. When full, new drain tasks are logged and dropped.
      * Each thread is daemon so it does not prevent JVM shutdown.
      */
     private static final ExecutorService DRAIN_EXECUTOR;
@@ -90,9 +92,9 @@ public final class GroupSlice implements Slice {
 
     static {
         final ThreadPoolExecutor pool = new ThreadPoolExecutor(
-            4, 4,
+            16, 16,
             60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(200),
+            new LinkedBlockingQueue<>(2000),
             r -> {
                 final Thread t = new Thread(r, "group-drain-" + System.identityHashCode(r));
                 t.setDaemon(true);
@@ -111,11 +113,16 @@ public final class GroupSlice implements Slice {
                     .field("event.reason", "Drain executor queue saturated")
                     .field("pantera.drain.drop_count", dropped)
                     .log();
+                final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
+                    com.auto1.pantera.metrics.GroupSliceMetrics.instance();
+                if (metrics != null) {
+                    metrics.recordDrainDropped();
+                }
             }
         );
         DRAIN_EXECUTOR = pool;
         EcsLogger.info("com.auto1.pantera.group")
-            .message("GroupSlice drain executor initialised (4 threads, queue=200)")
+            .message("GroupSlice drain executor initialised (16 threads, queue=2000)")
             .eventCategory("configuration")
             .eventAction("group_init")
             .log();
@@ -402,7 +409,90 @@ public final class GroupSlice implements Slice {
             .toList();
 
         EcsLogger.debug("com.auto1.pantera.group")
-            .message("GroupSlice initialized with members (" + this.members.size() + " unique, " + members.size() + " total, " + this.proxyMembers.size() + " proxies)")
+            .message("GroupSlice initialized with members ("
+                + this.members.size() + " unique, "
+                + members.size() + " total, "
+                + this.proxyMembers.size() + " proxies)")
+            .eventCategory("configuration")
+            .eventAction("group_init")
+            .log();
+    }
+
+    /**
+     * Full constructor with shared per-member circuit-breaker registries.
+     * The {@code registrySupplier} is called once per member name to obtain (or create)
+     * the shared {@link AutoBlockRegistry} for that upstream.  This allows a single
+     * registry to be shared across all groups that reference the same physical member,
+     * so circuit-breaker trips/recoveries are consolidated rather than per-group.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     * @param proxyMembers Names of members that are proxy repositories
+     * @param repoType Repository type for name parsing (e.g., "maven-group")
+     * @param negativeCache Pre-constructed negative cache (e.g. YAML-driven two-tier)
+     * @param registrySupplier Function mapping member name to its shared AutoBlockRegistry
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache,
+        final Function<String, AutoBlockRegistry> registrySupplier
+    ) {
+        this.group = Objects.requireNonNull(group, "group");
+        this.repoType = repoType != null ? repoType : "";
+        this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
+        this.artifactIndex = artifactIndex != null ? artifactIndex : Optional.empty();
+        this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
+        this.negativeCache = negativeCache != null
+            ? negativeCache
+            : defaultNegativeCache(this.group);
+
+        // Deduplicate members while preserving order
+        final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
+        final Function<String, AutoBlockRegistry> supplier =
+            registrySupplier != null ? registrySupplier : n -> null;
+
+        // Create MemberSlice wrappers with shared circuit-breaker registries
+        this.members = flatMembers.stream()
+            .map(name -> {
+                final AutoBlockRegistry reg = supplier.apply(name);
+                if (reg != null) {
+                    return new MemberSlice(
+                        name,
+                        resolver.slice(new Key.From(name), port, 0),
+                        reg,
+                        this.proxyMembers.contains(name)
+                    );
+                }
+                return new MemberSlice(
+                    name,
+                    resolver.slice(new Key.From(name), port, 0),
+                    this.proxyMembers.contains(name)
+                );
+            })
+            .toList();
+
+        EcsLogger.debug("com.auto1.pantera.group")
+            .message("GroupSlice initialized with members ("
+                + this.members.size() + " unique, "
+                + members.size() + " total, "
+                + this.proxyMembers.size() + " proxies,"
+                + " shared registries: " + (registrySupplier != null) + ")")
             .eventCategory("configuration")
             .eventAction("group_init")
             .log();
@@ -552,7 +642,8 @@ public final class GroupSlice implements Slice {
             .toList();
         if (targeted.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.group")
-                .message("Index hit references repo not in flattened member list — falling through to full fanout safety net")
+                .message("Index hit references repo not in flattened member list"
+                    + " — falling through to full fanout safety net")
                 .eventCategory("web")
                 .eventAction("group_index_orphan")
                 .field("url.path", line.uri().getPath())
@@ -749,11 +840,13 @@ public final class GroupSlice implements Slice {
                 memberFuture.whenComplete((resp, err) -> {
                     if (err != null) {
                         handleMemberFailure(
-                            member, err, completed, pending, anyServerError, result, ctx, isTargetedLocalRead
+                            member, err, completed, pending,
+                            anyServerError, result, ctx, isTargetedLocalRead
                         );
                     } else {
                         handleMemberResponse(
-                            member, resp, completed, pending, anyServerError, result, startTime, pathKey, ctx, isTargetedLocalRead
+                            member, resp, completed, pending, anyServerError,
+                            result, startTime, pathKey, ctx, isTargetedLocalRead
                         );
                     }
                 });
@@ -876,7 +969,9 @@ public final class GroupSlice implements Slice {
         final RsStatus status = resp.status();
 
         // Success: 200 OK, 206 Partial Content, or 304 Not Modified
-        if (status == RsStatus.OK || status == RsStatus.PARTIAL_CONTENT || status == RsStatus.NOT_MODIFIED) {
+        if (status == RsStatus.OK
+            || status == RsStatus.PARTIAL_CONTENT
+            || status == RsStatus.NOT_MODIFIED) {
             if (completed.compareAndSet(false, true)) {
                 final long latency = System.currentTimeMillis() - startTime;
                 // Only log slow responses
@@ -897,7 +992,8 @@ public final class GroupSlice implements Slice {
                 result.complete(resp);
             } else {
                 EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Member '" + member.name() + "' returned success but another member already won")
+                    .message("Member '" + member.name()
+                        + "' returned success but another member already won")
                     .eventCategory("network")
                     .eventAction("group_query")
                     .field("destination.address", member.name())
@@ -909,12 +1005,15 @@ public final class GroupSlice implements Slice {
             // Two-phase completion: 502/404 only fires when ALL futures have reported
             // and !completed — prevents fast-failing proxies from racing ahead of a
             // slow-but-cached local member and completing the result with 502.
-            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+            completeIfAllExhausted(
+                pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+            );
         } else if (status == RsStatus.FORBIDDEN) {
             // Blocked/cooldown: propagate 403 to client (artifact exists but is blocked)
             if (completed.compareAndSet(false, true)) {
                 EcsLogger.debug("com.auto1.pantera.group")
-                    .message("Member '" + member.name() + "' returned FORBIDDEN (cooldown/blocked)")
+                    .message("Member '" + member.name()
+                        + "' returned FORBIDDEN (cooldown/blocked)")
                     .eventCategory("network")
                     .eventAction("group_query")
                     .eventOutcome("success")
@@ -927,11 +1026,14 @@ public final class GroupSlice implements Slice {
                 drainBody(member.name(), resp.body());
             }
             // Always decrement (same two-phase logic as 2xx success above)
-            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+            completeIfAllExhausted(
+                pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+            );
         } else if (status == RsStatus.NOT_FOUND) {
             // 404: try next member — individual miss is DEBUG noise, not actionable
             EcsLogger.debug("com.auto1.pantera.group")
-                .message("Group member " + member.name() + " does not have " + pathKey.string())
+                .message("Group member " + member.name()
+                    + " does not have " + pathKey.string())
                 .eventCategory("web")
                 .eventAction("group_fanout_miss")
                 .eventOutcome("success")
@@ -940,11 +1042,14 @@ public final class GroupSlice implements Slice {
                 .log();
             recordGroupMemberRequest(member.name(), "not_found");
             drainBody(member.name(), resp.body());
-            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+            completeIfAllExhausted(
+                pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+            );
         } else {
             // Server errors (500, 503, etc.): record failure, try next member
             EcsLogger.warn("com.auto1.pantera.group")
-                .message("Member '" + member.name() + "' returned error status (" + (pending.get() - 1) + " pending)")
+                .message("Member '" + member.name()
+                    + "' returned error status (" + (pending.get() - 1) + " pending)")
                 .eventCategory("network")
                 .eventAction("group_query")
                 .eventOutcome("failure")
@@ -956,7 +1061,9 @@ public final class GroupSlice implements Slice {
             anyServerError.set(true);
             recordGroupMemberRequest(member.name(), "error");
             drainBody(member.name(), resp.body());
-            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+            completeIfAllExhausted(
+                pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+            );
         }
     }
 
@@ -992,7 +1099,9 @@ public final class GroupSlice implements Slice {
             // See Javadoc above for the "undrained Response" edge case and why we
             // don't try to drain here (we never hold the Response object, and
             // Jetty idle-timeout reclaims the connection).
-            completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+            completeIfAllExhausted(
+                pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+            );
             return;
         }
         EcsLogger.warn("com.auto1.pantera.group")
@@ -1001,12 +1110,15 @@ public final class GroupSlice implements Slice {
             .eventAction("group_query")
             .eventOutcome("failure")
             .error(err)
-            .field("event.reason", "Member request threw " + err.getClass().getSimpleName())
+            .field("event.reason",
+                "Member request threw " + err.getClass().getSimpleName())
             .field("destination.address", member.name())
             .log();
         member.recordFailure();
         anyServerError.set(true);
-        completeIfAllExhausted(pending, completed, anyServerError, result, ctx, isTargetedLocalRead);
+        completeIfAllExhausted(
+            pending, completed, anyServerError, result, ctx, isTargetedLocalRead
+        );
     }
 
     /**
@@ -1042,7 +1154,9 @@ public final class GroupSlice implements Slice {
                         .eventCategory("web")
                         .eventAction("group_query")
                         .eventOutcome("failure")
-                        .field("event.reason", "Index-hit member failed; bytes are local but read errored — no fallback")
+                        .field("event.reason",
+                            "Index-hit member failed; bytes are local but read errored"
+                            + " — no fallback")
                         .field("http.response.status_code", 500)
                         .log();
                     result.complete(ResponseBuilder.internalError()
@@ -1053,7 +1167,8 @@ public final class GroupSlice implements Slice {
                         .eventCategory("network")
                         .eventAction("group_query")
                         .eventOutcome("failure")
-                        .field("event.reason", "All proxy upstreams returned 5xx or threw")
+                        .field("event.reason",
+                            "All proxy upstreams returned 5xx or threw")
                         .field("http.response.status_code", 502)
                         .log();
                     result.complete(ResponseBuilder.badGateway()
@@ -1061,7 +1176,8 @@ public final class GroupSlice implements Slice {
                 }
             } else {
                 EcsLogger.warn("com.auto1.pantera.group")
-                    .message("Artifact not found in any group member: " + ctx.packageName())
+                    .message("Artifact not found in any group member: "
+                        + ctx.packageName())
                     .eventCategory("web")
                     .eventAction("group_lookup_miss")
                     .eventOutcome("failure")
@@ -1123,7 +1239,7 @@ public final class GroupSlice implements Slice {
     }
 
     // Metrics helpers
-    
+
     private void recordRequestStart() {
         final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
             com.auto1.pantera.metrics.GroupSliceMetrics.instance();
@@ -1131,7 +1247,7 @@ public final class GroupSlice implements Slice {
             metrics.recordRequest(this.group);
         }
     }
-    
+
     private void recordSuccess(final String member, final long latency) {
         final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
             com.auto1.pantera.metrics.GroupSliceMetrics.instance();
@@ -1140,7 +1256,7 @@ public final class GroupSlice implements Slice {
             metrics.recordBatch(this.group, this.members.size(), latency);
         }
     }
-    
+
     private void recordNotFound() {
         final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
             com.auto1.pantera.metrics.GroupSliceMetrics.instance();
@@ -1165,7 +1281,9 @@ public final class GroupSlice implements Slice {
         }
     }
 
-    private void recordGroupMemberLatency(final String memberName, final String result, final long latencyMs) {
+    private void recordGroupMemberLatency(
+        final String memberName, final String result, final long latencyMs
+    ) {
         if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
             com.auto1.pantera.metrics.MicrometerMetrics.getInstance()
                 .recordGroupMemberLatency(this.group, memberName, result, latencyMs);

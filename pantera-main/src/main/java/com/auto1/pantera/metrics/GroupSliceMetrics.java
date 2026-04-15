@@ -76,4 +76,28 @@ public final class GroupSliceMetrics {
     public void recordError(final String groupName, final String errorType) {
         // Errors tracked separately in Micrometer
     }
+
+    /**
+     * Increment the {@code pantera.group.drain.dropped} Micrometer counter.
+     *
+     * <p>Called from the {@code DRAIN_EXECUTOR} rejection handler in
+     * {@link com.auto1.pantera.group.GroupSlice} whenever a drain task is dropped
+     * because the bounded queue is full.  Each increment represents one undrained
+     * loser response body — a potential Jetty socket leak until idle-timeout.
+     * Ops should alert on any sustained non-zero rate of this counter.
+     */
+    public void recordDrainDropped() {
+        if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+            io.micrometer.core.instrument.Counter
+                .builder("pantera.group.drain.dropped")
+                .description(
+                    "Response body drain tasks dropped due to saturated drain executor. "
+                    + "Each drop = leaked Jetty connection until idle-timeout."
+                )
+                .register(
+                    com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry()
+                )
+                .increment();
+        }
+    }
 }
