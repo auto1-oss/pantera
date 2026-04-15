@@ -80,7 +80,7 @@ public final class OperationControl {
             .eventOutcome(res ? "success" : "failure")
             .field("user.name", user.name())
             .field("user.roles", this.perms.toString())
-            .field("event.outcome", res ? "allowed" : "denied")
+            .field("event.reason", res ? "allowed" : "denied")
             .log();
         return res;
     }

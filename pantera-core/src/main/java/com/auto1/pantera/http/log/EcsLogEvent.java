@@ -62,6 +62,19 @@ public final class EcsLogEvent {
         // event.category and event.type must be arrays per ECS 8.11
         fields.put("event.category", List.of("web"));
         fields.put("event.type", List.of("access"));
+        // Default action for HTTP access entries; override via action() for
+        // more specific classifications (e.g. health-check probes).
+        fields.put("event.action", "http_request");
+    }
+
+    /**
+     * Override the default {@code event.action} ({@code http_request}).
+     * @param action Event action
+     * @return this
+     */
+    public EcsLogEvent action(final String action) {
+        fields.put("event.action", action);
+        return this;
     }
 
     /**
