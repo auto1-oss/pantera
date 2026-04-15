@@ -15,6 +15,7 @@ import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.ThreadContext;
+import org.apache.logging.log4j.message.MapMessage;
 
 import java.util.HashMap;
 import java.util.List;
@@ -31,10 +32,11 @@ import java.util.Optional;
  *   <li>Using structured fields instead of verbose messages</li>
  * </ul>
  *
- * <p>Architecture: event-specific fields are injected via {@link CloseableThreadContext}
- * for the duration of one logger call. MDC-owned fields (trace.id, client.ip, user.name)
- * are set by {@link EcsLoggingSlice} and must NOT be set here — that would create
- * duplicate keys in Elasticsearch and cause document rejection.
+ * <p>Architecture: event-specific fields are emitted in a Log4j2 {@link MapMessage}
+ * so their native types (Long, Integer, List) are preserved in the JSON output by
+ * {@link co.elastic.logging.log4j2.EcsLayout}. MDC-owned fields (trace.id, client.ip,
+ * user.name, etc.) are set by {@link EcsLoggingSlice} and must NOT be set here —
+ * that would create duplicate keys in Elasticsearch and cause document rejection.
  *
  * @see <a href="https://www.elastic.co/docs/reference/ecs">ECS Reference</a>
  * @since 1.18.23
@@ -242,13 +244,19 @@ public final class EcsLogEvent {
     /**
      * Log at appropriate level based on outcome.
      *
-     * <p>Uses {@link CloseableThreadContext} to inject event-specific fields as MDC entries
-     * for the duration of one logger call. This avoids MapMessage's duplicate-message
-     * issue while still producing structured ECS JSON output via EcsLayout.
+     * <p>Uses Log4j2 {@link MapMessage} to emit typed field values as a structured
+     * payload. {@link co.elastic.logging.log4j2.EcsLayout} 1.6+ serializes
+     * {@code MapMessage} values with correct JSON types (status codes as integers,
+     * durations as long, {@code event.category}/{@code event.type} as arrays).
+     * The {@code message} field inside the payload becomes the top-level ECS
+     * {@code message} string.
      *
-     * <p>MDC-owned fields (trace.id, client.ip, user.name) are set by EcsLoggingSlice and
-     * must not appear in this field map — EcsLayout merges both sources and ES rejects
-     * documents with duplicate top-level keys.
+     * <p>MDC-owned fields (trace.id, client.ip, user.name, repository.*, package.*)
+     * are set by {@link EcsLoggingSlice} in ThreadContext and emitted by EcsLayout
+     * from there. When such a key is already present in ThreadContext, its value
+     * here is dropped from the MapMessage payload to prevent a duplicate top-level
+     * field in the Elasticsearch document. When ThreadContext does not have that
+     * key, the field value is kept so it still reaches the JSON output.
      *
      * <p>Strategy to reduce log volume:
      * <ul>
@@ -266,28 +274,45 @@ public final class EcsLogEvent {
             ? this.message
             : buildDefaultMessage(statusCode);
 
-        // Inject event-specific fields into ThreadContext for this log call.
-        // ThreadContext.putAll/remove are used directly (not CloseableThreadContext) to avoid
-        // a NPE in CloseableThreadContext.putAll() when ThreadContext map is null in test env.
-        final Map<String, String> added = toStringMap(this.fields);
-        ThreadContext.putAll(added);
-        try {
-            final boolean failureOutcome = "failure".equals(fields.get("event.outcome"));
-            if (statusCode != null && statusCode >= 500) {
-                LOGGER.error(logMessage);
-            } else if (statusCode != null && statusCode >= 400) {
-                LOGGER.warn(logMessage);
-            } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
-                LOGGER.warn(String.format("Slow request: %dms - %s", durationMs, logMessage));
-            } else if (failureOutcome) {
-                LOGGER.warn(logMessage);
-            } else {
-                LOGGER.debug(logMessage);
+        // Build payload preserving typed values. For MDC-owned keys, drop them from
+        // the payload ONLY when the same key is already populated in ThreadContext —
+        // that is the condition that would cause Elasticsearch to reject the document
+        // with a duplicate top-level field. When MDC is empty for that key, the
+        // field() value is kept so it still reaches the JSON output.
+        final Map<String, Object> payload = new HashMap<>(this.fields.size() + 1);
+        for (final Map.Entry<String, Object> entry : this.fields.entrySet()) {
+            final String key = entry.getKey();
+            if (EcsMdc.isMdcKey(key) && ThreadContext.containsKey(key)) {
+                continue;
             }
-        } finally {
-            for (final String key : added.keySet()) {
-                ThreadContext.remove(key);
-            }
+            payload.put(key, entry.getValue());
+        }
+
+        final boolean failureOutcome = "failure".equals(fields.get("event.outcome"));
+        final String effectiveMessage;
+        if (statusCode != null && statusCode >= 400) {
+            effectiveMessage = logMessage;
+        } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
+            effectiveMessage = String.format("Slow request: %dms - %s", durationMs, logMessage);
+        } else {
+            effectiveMessage = logMessage;
+        }
+        // The ECS top-level "message" string is produced from this entry by EcsLayout.
+        payload.put("message", effectiveMessage);
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        final MapMessage mapMessage = new MapMessage(payload);
+
+        if (statusCode != null && statusCode >= 500) {
+            LOGGER.error(mapMessage);
+        } else if (statusCode != null && statusCode >= 400) {
+            LOGGER.warn(mapMessage);
+        } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
+            LOGGER.warn(mapMessage);
+        } else if (failureOutcome) {
+            LOGGER.warn(mapMessage);
+        } else {
+            LOGGER.debug(mapMessage);
         }
     }
 
@@ -322,31 +347,6 @@ public final class EcsLogEvent {
             return "Client error";
         }
         return "Request processed";
-    }
-
-    /**
-     * Convert field map to String map for CloseableThreadContext.
-     * List values (event.category, event.type) are serialized as JSON arrays
-     * so EcsLayout can write them as proper keyword[] arrays in JSON output.
-     */
-    private static Map<String, String> toStringMap(final Map<String, Object> fields) {
-        final Map<String, String> result = new HashMap<>(fields.size());
-        for (Map.Entry<String, Object> entry : fields.entrySet()) {
-            final Object value = entry.getValue();
-            if (value instanceof List<?> list) {
-                // Serialize as JSON array string — EcsLayout preserves raw JSON strings
-                final StringBuilder sb = new StringBuilder("[");
-                for (int i = 0; i < list.size(); i++) {
-                    if (i > 0) sb.append(",");
-                    sb.append("\"").append(list.get(i)).append("\"");
-                }
-                sb.append("]");
-                result.put(entry.getKey(), sb.toString());
-            } else if (value != null) {
-                result.put(entry.getKey(), value.toString());
-            }
-        }
-        return result;
     }
 
     /**
