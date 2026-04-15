@@ -205,13 +205,26 @@ final class BaseCachedProxySliceStaleTest {
         final Key key = new Key.From("com/example/foo/1.0/foo-1.0.jar");
         storage.save(key, new Content.From(CACHED_BYTES)).join();
 
+        // v2.1.3+: staleWhileRevalidateEnabled() defaults to true, so we must
+        // explicitly disable it to test the propagate-error path.
+        final ProxyCacheConfig swrDisabled = new ProxyCacheConfig(
+            com.amihaiemil.eoyaml.Yaml.createYamlMappingBuilder()
+                .add("cache",
+                    com.amihaiemil.eoyaml.Yaml.createYamlMappingBuilder()
+                        .add("stale_while_revalidate",
+                            com.amihaiemil.eoyaml.Yaml.createYamlMappingBuilder()
+                                .add("enabled", "false")
+                                .build())
+                        .build())
+                .build()
+        );
         final StaleTestSlice slice = new StaleTestSlice(
             (line, headers, body) -> CompletableFuture.failedFuture(
                 new SocketTimeoutException("upstream timed out")
             ),
             storage,
             new AlwaysMissCache(),
-            ProxyCacheConfig.defaults()  // staleWhileRevalidateEnabled() = false by default
+            swrDisabled
         );
 
         final Response response = slice.response(
