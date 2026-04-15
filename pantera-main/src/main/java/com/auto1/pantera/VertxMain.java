@@ -380,6 +380,10 @@ public final class VertxMain {
                 }
             }
         );
+        // Warm up all configured repository slices before accepting traffic, so
+        // the first request per repo does not block its Vert.x event-loop thread
+        // on SharedClient.startFuture.join() during Jetty client initialisation.
+        slices.warmUp(java.time.Duration.ofSeconds(30));
         final int main = this.listenOn(
             new MainSlice(settings, slices),
             this.port,

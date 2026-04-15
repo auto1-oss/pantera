@@ -349,6 +349,52 @@ public class RepositorySlices {
     }
 
     /**
+     * Pre-build slices for every configured repository so their shared Jetty
+     * clients finish starting before request traffic begins. Without this,
+     * the first request for an uninitialized repo blocks its event-loop thread
+     * inside {@code SharedClient.client()} on the {@code startFuture.join()}
+     * until SSL context setup and connection-pool construction complete
+     * (~100–500 ms).
+     *
+     * <p>Must be called from startup code (never an event-loop thread). The
+     * call builds slices sequentially; slice construction is cheap — the real
+     * cost is in async Jetty start which happens on {@code RESOLVE_EXECUTOR}
+     * in parallel across all acquired clients, and is then awaited once.
+     *
+     * @param timeout Maximum time to wait for all clients to finish starting.
+     */
+    public void warmUp(final java.time.Duration timeout) {
+        if (this.repos == null) {
+            return;
+        }
+        int warmed = 0;
+        for (final RepoConfig cfg : this.repos.configs()) {
+            final int port = cfg.port().orElse(0);
+            try {
+                this.slice(new Key.From(cfg.name()), port);
+                warmed += 1;
+            } catch (final RuntimeException ex) {
+                EcsLogger.warn("com.auto1.pantera.settings")
+                    .message("Repository slice warm-up failed")
+                    .eventCategory("configuration")
+                    .eventAction("slice_warmup")
+                    .eventOutcome("failure")
+                    .field("repository.name", cfg.name())
+                    .error(ex)
+                    .log();
+            }
+        }
+        this.sharedClients.awaitAllStarted(timeout);
+        EcsLogger.info("com.auto1.pantera.settings")
+            .message("Repository slices warmed up")
+            .eventCategory("configuration")
+            .eventAction("slice_warmup")
+            .eventOutcome("success")
+            .field("repository.count", warmed)
+            .log();
+    }
+
+    /**
      * Access underlying repositories registry.
      *
      * @return Repositories instance
@@ -1126,6 +1172,41 @@ public class RepositorySlices {
         void enableMetrics(final MeterRegistry registry) {
             this.metrics.set(registry);
             this.clients.values().forEach(client -> client.registerMetrics(registry));
+        }
+
+        /**
+         * Block until every currently-tracked {@link SharedClient} has finished
+         * its asynchronous Jetty start. Intended to be called from startup code
+         * (never the event-loop) after all repositories have been pre-acquired,
+         * so later {@code client()} calls find their {@code startFuture} already
+         * complete and return without parking the caller.
+         *
+         * @param timeout Max time to wait for all clients to start.
+         * @throws IllegalStateException if any client fails to start within the
+         *     timeout; partially-started clients remain tracked for later retry.
+         */
+        void awaitAllStarted(final java.time.Duration timeout) {
+            final java.util.List<CompletableFuture<Void>> futures = this.clients.values().stream()
+                .map(c -> c.startFuture)
+                .toList();
+            if (futures.isEmpty()) {
+                return;
+            }
+            try {
+                CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                    "Interrupted while waiting for Jetty clients to start", ex
+                );
+            } catch (final java.util.concurrent.ExecutionException
+                           | java.util.concurrent.TimeoutException ex) {
+                throw new IllegalStateException(
+                    "Jetty client warm-up did not complete within " + timeout, ex
+                );
+            }
         }
 
         private void release(final HttpClientSettingsKey key, final SharedClient shared) {
