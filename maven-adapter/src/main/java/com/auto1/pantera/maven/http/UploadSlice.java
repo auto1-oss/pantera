@@ -366,7 +366,21 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Add artifact event to queue for actual artifacts (not metadata/checksums).
+     * Add artifact event to queue for primary artifact uploads.
+     *
+     * <p>Uses structural filename-prefix detection — NOT an extension whitelist.
+     * An upload qualifies as a primary artifact when:
+     * <ul>
+     *   <li>It lives under the Maven layout: {@code /{groupId}/{artifactId}/{version}/{filename}}</li>
+     *   <li>The filename starts with {@code {artifactId}-} (Maven naming convention)</li>
+     *   <li>It is NOT a companion file: metadata, checksum, signature, sources, or javadoc</li>
+     * </ul>
+     *
+     * <p>This matches the invariant used by {@code ArtifactNameParser.parseMaven} on the
+     * read path, keeping write- and read-side logic consistent. Any extension — {@code .yaml},
+     * {@code .json}, {@code .zip}, future types — gets indexed as long as the filename follows
+     * Maven naming.
+     *
      * @param key Artifact key
      * @param owner Owner
      * @param size Artifact size
@@ -375,24 +389,49 @@ public final class UploadSlice implements Slice {
         if (this.events.isEmpty()) {
             return;
         }
-        
+
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
-        
-        // Skip metadata and checksum files
-        if (this.isMetadataOrChecksum(path)) {
+
+        if (!this.isPrimaryArtifactPath(path)) {
             EcsLogger.debug("com.auto1.pantera.maven")
-                .message("Skipping metadata/checksum file for event")
+                .message("Skipping non-primary artifact file for event")
                 .eventCategory("web")
                 .eventAction("event_creation")
                 .field("package.path", path)
                 .log();
             return;
         }
-        
-        final Matcher matcher = MavenSlice.ARTIFACT.matcher(path);
-        if (matcher.matches()) {
-            this.createAndAddEvent(matcher.group("pkg"), owner, size);
+
+        // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
+        final String pkg = path.substring(0, path.lastIndexOf('/'));
+        this.createAndAddEvent(pkg, owner, size);
+    }
+
+    /**
+     * Check if a path represents a primary Maven artifact worth indexing.
+     * See {@link #addEvent} for the full contract.
+     *
+     * @param path File path (always starts with '/')
+     * @return True if this upload should produce an {@link ArtifactEvent}
+     */
+    private boolean isPrimaryArtifactPath(final String path) {
+        if (this.isMetadataOrChecksum(path)) {
+            return false;
         }
+        if (path.endsWith(".asc") || path.endsWith(".sig")) {
+            return false;
+        }
+        if (path.endsWith("-sources.jar") || path.endsWith("-javadoc.jar")) {
+            return false;
+        }
+        final String[] segments = path.split("/");
+        // Minimum: ["", groupId, artifactId, version, filename] = 5 segments
+        if (segments.length < 5) {
+            return false;
+        }
+        final String artifactId = segments[segments.length - 3];
+        final String filename = segments[segments.length - 1];
+        return filename.startsWith(artifactId + "-");
     }
 
     /**
@@ -401,10 +440,10 @@ public final class UploadSlice implements Slice {
      * @return True if metadata or checksum
      */
     private boolean isMetadataOrChecksum(final String path) {
-        return path.contains("maven-metadata.xml") 
-            || path.endsWith(".md5") 
-            || path.endsWith(".sha1") 
-            || path.endsWith(".sha256") 
+        return path.contains("maven-metadata.xml")
+            || path.endsWith(".md5")
+            || path.endsWith(".sha1")
+            || path.endsWith(".sha256")
             || path.endsWith(".sha512");
     }
 
