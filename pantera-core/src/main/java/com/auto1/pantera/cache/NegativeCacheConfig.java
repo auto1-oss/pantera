@@ -276,15 +276,29 @@ public final class NegativeCacheConfig {
     }
 
     /**
-     * Parse configuration from YAML.
+     * Parse configuration from YAML under the {@code negative} sub-key.
      * @param caches The caches YAML mapping
      * @return Parsed config
      */
     public static NegativeCacheConfig fromYaml(final YamlMapping caches) {
-        if (caches == null) {
+        return fromYaml(caches, "negative");
+    }
+
+    /**
+     * Parse configuration from YAML under a caller-specified sub-key.
+     * Enables reuse of the same structural schema for differently named
+     * negative caches (for example {@code group-negative}) without mutating
+     * the global singleton.
+     *
+     * @param caches The caches YAML mapping
+     * @param subKey Sub-key under {@code caches} to read (e.g. "negative", "group-negative")
+     * @return Parsed config, or defaults if the sub-key is absent
+     */
+    public static NegativeCacheConfig fromYaml(final YamlMapping caches, final String subKey) {
+        if (caches == null || subKey == null || subKey.isEmpty()) {
             return new NegativeCacheConfig();
         }
-        final YamlMapping negative = caches.yamlMapping("negative");
+        final YamlMapping negative = caches.yamlMapping(subKey);
         if (negative == null) {
             return new NegativeCacheConfig();
         }

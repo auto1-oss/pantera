@@ -56,7 +56,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
         if (this.asto == null || this.packages == null || this.events == null) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Composer proxy processor not initialized properly - stopping job")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .log();
@@ -64,7 +64,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
         } else {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Composer proxy processor running (queue size: " + this.packages.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_processor")
                 .log();
             while (!this.packages.isEmpty()) {
@@ -73,7 +73,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     final Key key = event.artifactKey();
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Processing Composer proxy event")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_processor")
                         .field("package.path", key.string())
                         .log();
@@ -84,7 +84,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                         if (parts.length < 3) {
                             EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("Invalid event key format (expected vendor/package/version)")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_processor")
                                 .eventOutcome("failure")
                                 .field("package.path", key.string())
@@ -142,7 +142,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
 
                         EcsLogger.info("com.auto1.pantera.composer")
                             .message("Recorded Composer proxy download")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_processor")
                             .eventOutcome("success")
                             .field("package.name", normalizedName)
@@ -160,7 +160,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                     } catch (final Exception err) {
                         EcsLogger.error("com.auto1.pantera.composer")
                             .message("Failed to process composer proxy package")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_processor")
                             .eventOutcome("failure")
                             .field("package.path", key.string())
@@ -260,7 +260,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
             if (!this.asto.exists(metadataKey).join()) {
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Metadata not found, cannot extract release date")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_processor")
                     .field("package.name", packageName)
                     .log();
@@ -301,7 +301,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
                 final long releaseMillis = instant.toEpochMilli();
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Extracted release date from metadata")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_processor")
                     .field("package.name", packageName)
                     .field("package.version", version)
@@ -314,7 +314,7 @@ public final class ComposerProxyPackageProcessor extends QuartzJob {
         } catch (final Exception err) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to extract release date")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_processor")
                 .eventOutcome("failure")
                 .field("package.name", packageName)

@@ -107,7 +107,7 @@ public final class ComposerImportMerge {
 
         EcsLogger.info("com.auto1.pantera.composer")
             .message("Starting Composer import merge from staging area")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_merge")
             .field("file.directory", stagingRoot.string())
             .log();
@@ -119,7 +119,7 @@ public final class ComposerImportMerge {
                 if (packages.isEmpty()) {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("No staged imports found, nothing to merge")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_merge")
                         .eventOutcome("success")
                         .field("file.directory", ".versions/")
@@ -131,7 +131,7 @@ public final class ComposerImportMerge {
 
                 EcsLogger.info("com.auto1.pantera.composer")
                     .message("Found " + packages.size() + " packages to merge")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .log();
                 
@@ -153,7 +153,7 @@ public final class ComposerImportMerge {
                 if (result.failedPackages == 0) {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions), cleaning up staging area")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_merge")
                         .eventOutcome("success")
                         .log();
@@ -162,9 +162,10 @@ public final class ComposerImportMerge {
                 }
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
-                    .eventOutcome("partial_failure")
+                    .eventOutcome("failure")
+                    .field("event.reason", "partial_failure")
                     .log();
                 return CompletableFuture.completedFuture(result);
             });
@@ -182,7 +183,7 @@ public final class ComposerImportMerge {
                 // If .versions doesn't exist, return empty list
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Staging area not found or empty")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .field("file.directory", stagingRoot.string())
                     .field("error.message", ex.getMessage())
@@ -251,7 +252,7 @@ public final class ComposerImportMerge {
             .exceptionally(ex -> {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to extract package name from file")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", fileKey.string())
@@ -271,7 +272,7 @@ public final class ComposerImportMerge {
     private CompletionStage<Void> mergePackage(final String packageName) {
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Merging package")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_merge")
             .field("package.name", packageName)
             .log();
@@ -300,7 +301,7 @@ public final class ComposerImportMerge {
                 if (versionMetadataList.isEmpty()) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("No valid version files found for package")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_merge")
                         .eventOutcome("failure")
                         .field("package.name", packageName)
@@ -318,7 +319,7 @@ public final class ComposerImportMerge {
 
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Package '" + packageName + "' version breakdown: " + stableVersions.size() + " stable, " + devVersions.size() + " dev")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .field("package.name", packageName)
                     .log();
@@ -344,7 +345,7 @@ public final class ComposerImportMerge {
             .exceptionally(error -> {
                 EcsLogger.error("com.auto1.pantera.composer")
                     .message("Failed to merge package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("package.name", packageName)
@@ -476,7 +477,7 @@ public final class ComposerImportMerge {
                 } catch (final Exception error) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Failed to parse version file")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_merge")
                         .eventOutcome("failure")
                         .field("file.name", key.string())
@@ -488,7 +489,7 @@ public final class ComposerImportMerge {
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to read version file")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("file.name", key.string())
@@ -518,7 +519,7 @@ public final class ComposerImportMerge {
             .exceptionally(error -> {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Failed to cleanup staging area")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("import_merge")
                     .eventOutcome("failure")
                     .field("error.message", error.getMessage())

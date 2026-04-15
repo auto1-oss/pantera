@@ -44,7 +44,7 @@ public abstract class NpmPath {
             final String path = matcher.group(1);
             EcsLogger.debug("com.auto1.pantera.npm")
                 .message("Determined path")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("path_resolution")
                 .field("url.path", path)
                 .log();

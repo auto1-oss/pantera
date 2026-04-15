@@ -54,7 +54,7 @@ public final class ComposerGroup implements Slice {
         this.repositories = repositories;
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Created Composer group (" + this.repositories.size() + " repositories)")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_create")
             .log();
     }
@@ -67,7 +67,7 @@ public final class ComposerGroup implements Slice {
     ) {
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Composer group request")
-            .eventCategory("http")
+            .eventCategory("web")
             .eventAction("group_request")
             .field("url.path", line.uri().getPath())
             .log();
@@ -83,7 +83,7 @@ public final class ComposerGroup implements Slice {
         if (index >= this.repositories.size()) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("No repository in group could serve request")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("group_request")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
@@ -96,7 +96,7 @@ public final class ComposerGroup implements Slice {
             if (response.status().success()) {
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Repository served request successfully (index: " + index + ")")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("group_request")
                     .eventOutcome("success")
                     .field("url.path", line.uri().getPath())
@@ -105,7 +105,7 @@ public final class ComposerGroup implements Slice {
             }
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Repository failed, trying next (index: " + index + ")")
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("group_request")
                 .eventOutcome("failure")
                 .field("http.response.status_code", response.status().code())

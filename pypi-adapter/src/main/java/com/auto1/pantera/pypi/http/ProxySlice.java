@@ -296,9 +296,9 @@ final class ProxySlice implements Slice {
                     // Cache HIT - serve immediately without any network calls
                     EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Cache hit, serving cached artifact (offline-safe)")
-                        .eventCategory("repository")
-                        .eventAction("proxy_request")
-                        .eventOutcome("cache_hit")
+                        .eventCategory("web")
+                        .eventAction("cache_hit")
+                        .eventOutcome("success")
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
                         .log();
@@ -345,7 +345,7 @@ final class ProxySlice implements Slice {
         );
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Evaluating cooldown for artifact")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cooldown_evaluation")
             .field("package.name", info.artifact())
             .field("package.version", info.version())
@@ -357,7 +357,7 @@ final class ProxySlice implements Slice {
             if (evaluation.blocked()) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("Artifact BLOCKED by cooldown")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_evaluation")
                     .eventOutcome("failure")
                     .field("package.name", info.artifact())
@@ -369,7 +369,7 @@ final class ProxySlice implements Slice {
             }
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Artifact ALLOWED by cooldown - serving content")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_evaluation")
                 .eventOutcome("success")
                 .field("package.name", info.artifact())
@@ -413,7 +413,7 @@ final class ProxySlice implements Slice {
         }).exceptionally(err -> {
             EcsLogger.warn("com.auto1.pantera.pypi")
                 .message("Non-artifact request failed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
@@ -511,7 +511,7 @@ final class ProxySlice implements Slice {
         if (mirror != null) {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Serving via cached mirror")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", line.uri().getPath())
                 .field("destination.address", mirror.toString())
@@ -524,7 +524,7 @@ final class ProxySlice implements Slice {
             );
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Package file request -> files.pythonhosted.org")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", line.uri().getPath())
                 .log();
@@ -535,7 +535,7 @@ final class ProxySlice implements Slice {
             : Headers.EMPTY;
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Forwarding to primary upstream")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("url.path", line.uri().getPath())
             .log();
@@ -586,7 +586,7 @@ final class ProxySlice implements Slice {
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("Write-time rewriting failed, caching original")
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("pre_rewrite")
                     .eventOutcome("failure")
                     .error(ex)
@@ -657,7 +657,7 @@ final class ProxySlice implements Slice {
                             // Not modified — keep cached version
                             EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh: 304 Not Modified for key '%s'", keyStr))
-                                .eventCategory("cache")
+                                .eventCategory("database")
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("success")
                                 .log();
@@ -695,7 +695,7 @@ final class ProxySlice implements Slice {
                         if (err != null) {
                             EcsLogger.warn("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh failed for key '%s'", keyStr))
-                                .eventCategory("cache")
+                                .eventCategory("database")
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("failure")
                                 .error(err)
@@ -703,7 +703,7 @@ final class ProxySlice implements Slice {
                         } else {
                             EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message(String.format("Background refresh completed for key '%s'", keyStr))
-                                .eventCategory("cache")
+                                .eventCategory("database")
                                 .eventAction("stale_while_revalidate")
                                 .eventOutcome("success")
                                 .log();
@@ -713,7 +713,7 @@ final class ProxySlice implements Slice {
                 this.refreshing.remove(keyStr);
                 EcsLogger.warn("com.auto1.pantera.pypi")
                     .message(String.format("Background refresh exception for key '%s'", keyStr))
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("stale_while_revalidate")
                     .eventOutcome("failure")
                     .error(ex)
@@ -771,7 +771,7 @@ final class ProxySlice implements Slice {
                     if (mirror != null) {
                         EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Serving via cached mirror")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", mirror.toString())
@@ -784,7 +784,7 @@ final class ProxySlice implements Slice {
                         final URI filesUri = URI.create("https://files.pythonhosted.org" + line.uri().getPath());
                         EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Package file request (no mirror) -> fetching from files.pythonhosted.org")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", filesUri.toString())
@@ -792,7 +792,7 @@ final class ProxySlice implements Slice {
                         fetch = this.fetchFromMirror(line, filesUri).thenApply(resp -> {
                             EcsLogger.debug("com.auto1.pantera.pypi")
                                 .message("files.pythonhosted.org response")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_request")
                                 .field("url.path", line.uri().getPath())
                                 .field("http.response.status_code", resp.status().code())
@@ -803,7 +803,7 @@ final class ProxySlice implements Slice {
                         // For other paths without mirrors, forward to upstream
                         EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Forwarding to primary upstream")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
                             .field("url.path", line.uri().getPath())
                             .field("destination.address", upstream.uri().toString())
@@ -920,29 +920,13 @@ final class ProxySlice implements Slice {
 
         final ArtifactCoordinates info = coords.get();
         final String user = new Login(rqheaders).getValue();
-        
-        // Use content from cache (passed as parameter) instead of reading from storage again.
-        return new com.auto1.pantera.asto.streams.ContentAsStream<ContentAndCoords>(content)
-            .process(stream -> {
-                try {
-                    final byte[] data = stream.readAllBytes();
-                    EcsLogger.debug("com.auto1.pantera.pypi")
-                        .message("Responding with cached artifact")
-                        .eventCategory("repository")
-                        .eventAction("proxy_request")
-                        .field("package.name", key.string())
-                        .field("package.size", data.length)
-                        .log();
-                    final Content payload = new Content.From(data);
-                    return new ContentAndCoords(payload, info, data.length, data);
-                } catch (final java.io.IOException ex) {
-                    throw new com.auto1.pantera.asto.PanteraIOException(ex);
-                }
-            })
-            .toCompletableFuture()
-            .thenCompose(cac -> this.resolveRelease(info, remote, remoteSuccess)
-            .thenCompose(ctx -> {
-                // Cache hit path: enqueue event here (remote fetch path enqueues earlier).
+
+        // Stream Content directly instead of materialising to byte[] — avoids
+        // multi-MB heap allocation per request on the cache-hit artifact path.
+        // All current callers pass remoteSuccess=false (cache hits); remote-fetch
+        // flows save to storage inside this.cache.load(...), not here.
+        return this.resolveRelease(info, remote, remoteSuccess)
+            .thenApply(ctx -> {
                 if (!remoteSuccess && this.events.isPresent()) {
                     this.events.get().add(
                         new ProxyArtifactEvent(
@@ -953,20 +937,23 @@ final class ProxySlice implements Slice {
                         )
                     );
                 }
-
-                // Save to backing storage only when content was fetched from remote.
-                if (remoteSuccess) {
-                    CompletableFuture.runAsync(() -> this.storage.save(key, cac.bytes));
-                }
-
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.ok()
-                        .headers(Headers.from(ProxySlice.contentType(remote, line)))
-                        .body(cac.payload)
-                        .header(new com.auto1.pantera.http.headers.ContentLength((long) cac.length), true)
-                        .build()
+                EcsLogger.debug("com.auto1.pantera.pypi")
+                    .message("Responding with cached artifact")
+                    .eventCategory("web")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .field("package.size", content.size().orElse(-1L))
+                    .log();
+                final ResponseBuilder builder = ResponseBuilder.ok()
+                    .headers(Headers.from(ProxySlice.contentType(remote, line)))
+                    .body(content);
+                content.size().ifPresent(size ->
+                    builder.header(
+                        new com.auto1.pantera.http.headers.ContentLength(size), true
+                    )
                 );
-            }));
+                return builder.build();
+            }).toCompletableFuture();
     }
 
     /**
@@ -994,7 +981,7 @@ final class ProxySlice implements Slice {
                     if (bytes.length > MAX_INDEX_SIZE) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("PyPI index too large (" + bytes.length + " bytes, max: " + MAX_INDEX_SIZE + " bytes)")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("index_rewrite")
                             .eventOutcome("failure")
                             .log();
@@ -1021,7 +1008,7 @@ final class ProxySlice implements Slice {
                     if (error != null) {
                         EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("Failed to rewrite PyPI index content")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("index_rewrite")
                             .eventOutcome("failure")
                             .error(error)
@@ -1076,7 +1063,7 @@ final class ProxySlice implements Slice {
         final String base = this.extractBasePath(line);
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Rewriting index body")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("index_rewrite")
             .field("url.path", line.uri().getPath())
             .field("url.path", base)
@@ -1207,7 +1194,7 @@ final class ProxySlice implements Slice {
         final boolean isPackage = path.startsWith("/packages/");
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("isPackageFilePath check: " + path + " (repo prefix: " + repoPrefix + ", is package: " + isPackage + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("path_classification")
             .field("url.original", line.uri().getPath())
             .log();
@@ -1259,7 +1246,7 @@ final class ProxySlice implements Slice {
         this.mirrors.put(path, upstream);
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Registered mirror mapping")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("mirror_registration")
             .field("url.path", path)
             .field("destination.address", upstream.toString())
@@ -1269,7 +1256,7 @@ final class ProxySlice implements Slice {
             this.mirrors.put(path + ".metadata", metadata);
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("Registered metadata mirror mapping (cache size: " + this.mirrors.estimatedSize() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("mirror_registration")
                 .field("url.path", path + ".metadata")
                 .field("url.original", metadata.toString())
@@ -1526,21 +1513,4 @@ final class ProxySlice implements Slice {
         return res;
     }
 
-    /**
-     * Helper class to hold cached artifact content along with its coordinates and size.
-     * Used to ensure the same content bytes flow through the entire response pipeline.
-     */
-    private static final class ContentAndCoords {
-        private final Content payload;
-        private final ArtifactCoordinates coords;
-        private final int length;
-        private final byte[] bytes;
-
-        ContentAndCoords(final Content payload, final ArtifactCoordinates coords, final int length, final byte[] bytes) {
-            this.payload = payload;
-            this.coords = coords;
-            this.length = length;
-            this.bytes = bytes;
-        }
-    }
 }

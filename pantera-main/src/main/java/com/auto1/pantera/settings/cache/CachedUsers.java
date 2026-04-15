@@ -121,7 +121,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         EcsLogger.info("com.auto1.pantera.settings.cache")
             .message(String.format("Auth cache initialized - JWT-as-password bypasses cache: basicAuthTtl=%ds, jwtExpiry=%ds",
                 this.ttl.toSeconds(), jwtSettings != null ? jwtSettings.expirySeconds() : -1))
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("init")
             .log();
         
@@ -461,7 +461,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
             } catch (final Exception ex) {
                 EcsLogger.warn("com.auto1.pantera.settings.cache")
                     .message("invalidateAll: failed to flush L2 auth cache")
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("invalidate_all")
                     .eventOutcome("failure")
                     .error(ex)
@@ -506,7 +506,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
                 EcsLogger.warn("com.auto1.pantera.settings.cache")
                     .message("Failed to flush L2 auth cache on password change "
                         + "— stale entries will age out via TTL")
-                    .eventCategory("cache")
+                    .eventCategory("database")
                     .eventAction("invalidate_by_username")
                     .eventOutcome("failure")
                     .field("user.name", username)
@@ -516,7 +516,7 @@ public final class CachedUsers implements Authentication, Cleanable<String> {
         }
         EcsLogger.info("com.auto1.pantera.settings.cache")
             .message("Auth cache flushed after password change")
-            .eventCategory("cache")
+            .eventCategory("database")
             .eventAction("invalidate_by_username")
             .eventOutcome("success")
             .field("user.name", username)

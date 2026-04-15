@@ -129,12 +129,9 @@ final class LocateHitRateTest {
             // Sources/javadoc
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre-sources.jar",
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre-javadoc.jar",
-            // Metadata
-            "/com/google/guava/guava/maven-metadata.xml",
-            "/org/apache/commons/commons-lang3/maven-metadata.xml",
-            "/org/slf4j/slf4j-api/maven-metadata.xml",
-            "/org/slf4j/slf4j-api/2.0.9/maven-metadata.xml",
-            "/com/google/guava/guava/maven-metadata.xml.sha1",
+            // Metadata URLs are intentionally excluded: per the v2.1.3 parser,
+            // maven-metadata.xml correctly returns Optional.empty() (triggers
+            // full fanout, not indexed lookup). They are not artifact files.
             // Gradle module
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.module",
             // Plugins
@@ -143,7 +140,6 @@ final class LocateHitRateTest {
             "/org/apache/maven/plugins/maven-surefire-plugin/3.2.3/maven-surefire-plugin-3.2.3.jar",
             // SNAPSHOT
             "/org/example/mylib/1.0-SNAPSHOT/mylib-1.0-20230101.120000-1.jar",
-            "/org/example/mylib/1.0-SNAPSHOT/maven-metadata.xml",
         };
 
         int hits = 0;
@@ -151,7 +147,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("maven-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -213,7 +209,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("npm-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -266,7 +262,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("docker-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -319,7 +315,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("pypi-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -367,7 +363,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("helm-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -414,7 +410,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("debian-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -463,7 +459,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("hex-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -508,7 +504,7 @@ final class LocateHitRateTest {
         for (final String url : urls) {
             final Optional<String> parsed = ArtifactNameParser.parse("file-group", url);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }
@@ -579,12 +575,12 @@ final class LocateHitRateTest {
         }
 
         final String[][] cases = {
+            // Metadata URLs (maven-metadata.xml) intentionally omitted — v2.1.3
+            // parser correctly returns Optional.empty() for them (full fanout path).
             {"maven-group", "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar"},
-            {"maven-group", "/com/google/guava/guava/maven-metadata.xml"},
             {"maven-group", "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.pom"},
             {"maven-group", "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar.sha1"},
             {"maven-group", "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"},
-            {"maven-group", "/org/apache/commons/commons-lang3/maven-metadata.xml"},
             {"maven-group", "/org/slf4j/slf4j-api/2.0.9/slf4j-api-2.0.9.jar"},
             {"maven-group", "/junit/junit/4.13.2/junit-4.13.2.jar"},
             {"maven-group", "/io/netty/netty-all/4.1.100.Final/netty-all-4.1.100.Final.jar"},
@@ -618,7 +614,7 @@ final class LocateHitRateTest {
         for (final String[] tc : cases) {
             final Optional<String> parsed = ArtifactNameParser.parse(tc[0], tc[1]);
             if (parsed.isPresent()) {
-                final List<String> repos = this.index.locateByName(parsed.get()).join();
+                final List<String> repos = this.index.locateByName(parsed.get()).join().orElseThrow();
                 if (!repos.isEmpty()) {
                     hits++;
                 }

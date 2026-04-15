@@ -135,7 +135,7 @@ public final class CacheLayers implements Layers {
                             this.recordUpstreamErrorMetric(error);
                             EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Both cache and origin failed for blob")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("blob_get")
                                 .eventOutcome("failure")
                                 .error(error)

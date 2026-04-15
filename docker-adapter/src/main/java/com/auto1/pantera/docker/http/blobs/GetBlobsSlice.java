@@ -66,7 +66,7 @@ public class GetBlobsSlice extends DockerActionSlice {
                 .exceptionally(err -> {
                     EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Blob GET failed with exception, returning 404")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("blob_get")
                         .eventOutcome("failure")
                         .field("package.checksum", request.digest().string())

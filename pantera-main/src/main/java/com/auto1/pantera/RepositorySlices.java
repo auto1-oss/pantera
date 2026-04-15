@@ -21,6 +21,8 @@ import com.auto1.pantera.adapters.pypi.PypiProxy;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.SubStorage;
 import com.auto1.pantera.auth.LoggingAuth;
+import com.auto1.pantera.cache.NegativeCacheConfig;
+import com.auto1.pantera.http.cache.NegativeCache;
 import com.auto1.pantera.composer.AstoRepository;
 import com.auto1.pantera.composer.http.PhpComposer;
 import com.auto1.pantera.conan.ItemTokenizer;
@@ -61,6 +63,8 @@ import com.auto1.pantera.http.client.ProxySettings;
 import com.auto1.pantera.http.client.jetty.JettyClientSlices;
 import com.auto1.pantera.http.filter.FilterSlice;
 import com.auto1.pantera.http.filter.Filters;
+import com.auto1.pantera.http.timeout.AutoBlockRegistry;
+import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.TrimPathSlice;
@@ -170,6 +174,25 @@ public class RepositorySlices {
     private final SharedJettyClients sharedClients;
 
     /**
+     * Negative cache configuration for group fanout 404s.
+     * <p>Loaded once from {@code meta.caches.group-negative} in pantera.yml; falls
+     * back to a 5 min TTL / 10K entry in-memory default when absent.  Each
+     * {@code *-group} repo receives a dedicated {@link NegativeCache} built from
+     * this config so key-prefixing isolates entries per group.
+     */
+    private final NegativeCacheConfig groupNegativeCacheConfig;
+
+    /**
+     * Shared circuit-breaker registries keyed by physical repo name.
+     * One {@link AutoBlockRegistry} per upstream — shared across every group that
+     * references that upstream.  When maven-central is a member of both
+     * libs-release and libs-snapshot, both groups trip the same circuit after N
+     * failures; recovery is also detected once rather than independently per group.
+     */
+    private final ConcurrentMap<String, AutoBlockRegistry> memberRegistries =
+        new ConcurrentHashMap<>();
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -193,6 +216,12 @@ public class RepositorySlices {
             }
         }
         this.sharedClients = new SharedJettyClients();
+        // Load group-negative cache config once at construction time.  When the
+        // sub-key is absent from pantera.yml, fromYaml returns the default
+        // single-tier config (24h TTL / 50K entries) which we override below to
+        // preserve the pre-YAML group-slice defaults (5m / 10K) unless the
+        // operator explicitly opts in.
+        this.groupNegativeCacheConfig = loadGroupNegativeCacheConfig(settings);
         this.slices = CacheBuilder.newBuilder()
             .maximumSize(500)
             .expireAfterAccess(30, java.util.concurrent.TimeUnit.MINUTES)
@@ -249,7 +278,7 @@ public class RepositorySlices {
         if (cached != null) {
             EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved from cache")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
@@ -262,7 +291,7 @@ public class RepositorySlices {
             this.slices.put(skey, resolved.get());
             EcsLogger.debug("com.auto1.pantera.settings")
                 .message("Repository slice resolved and cached from config")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("slice_resolve")
                 .eventOutcome("success")
                 .field("repository.name", name.string())
@@ -273,7 +302,7 @@ public class RepositorySlices {
         // Not found is NOT cached to allow dynamic repo addition without restart
         EcsLogger.warn("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("slice_resolve")
             .eventOutcome("failure")
             .field("repository.name", name.string())
@@ -317,6 +346,52 @@ public class RepositorySlices {
 
     public void enableJettyMetrics(final MeterRegistry registry) {
         this.sharedClients.enableMetrics(registry);
+    }
+
+    /**
+     * Pre-build slices for every configured repository so their shared Jetty
+     * clients finish starting before request traffic begins. Without this,
+     * the first request for an uninitialized repo blocks its event-loop thread
+     * inside {@code SharedClient.client()} on the {@code startFuture.join()}
+     * until SSL context setup and connection-pool construction complete
+     * (~100–500 ms).
+     *
+     * <p>Must be called from startup code (never an event-loop thread). The
+     * call builds slices sequentially; slice construction is cheap — the real
+     * cost is in async Jetty start which happens on {@code RESOLVE_EXECUTOR}
+     * in parallel across all acquired clients, and is then awaited once.
+     *
+     * @param timeout Maximum time to wait for all clients to finish starting.
+     */
+    public void warmUp(final java.time.Duration timeout) {
+        if (this.repos == null) {
+            return;
+        }
+        int warmed = 0;
+        for (final RepoConfig cfg : this.repos.configs()) {
+            final int port = cfg.port().orElse(0);
+            try {
+                this.slice(new Key.From(cfg.name()), port);
+                warmed += 1;
+            } catch (final RuntimeException ex) {
+                EcsLogger.warn("com.auto1.pantera.settings")
+                    .message("Repository slice warm-up failed")
+                    .eventCategory("configuration")
+                    .eventAction("slice_warmup")
+                    .eventOutcome("failure")
+                    .field("repository.name", cfg.name())
+                    .error(ex)
+                    .log();
+            }
+        }
+        this.sharedClients.awaitAllStarted(timeout);
+        EcsLogger.info("com.auto1.pantera.settings")
+            .message("Repository slices warmed up")
+            .eventCategory("configuration")
+            .eventAction("slice_warmup")
+            .eventOutcome("success")
+            .field("repository.count", warmed)
+            .log();
     }
 
     /**
@@ -586,14 +661,16 @@ public class RepositorySlices {
                 );
                 break;
             case "npm-group":
+                final List<String> npmFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final Slice npmGroupSlice = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), npmFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
+                    proxyMembers(npmFlatMembers),
                     "npm-group",
-                    buildLeafMap(cfg.members())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -650,14 +727,16 @@ public class RepositorySlices {
                 break;
             case "file-group":
             case "php-group":
+                final List<String> composerFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final GroupSlice composerDelegate = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), composerFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
+                    proxyMembers(composerFlatMembers),
                     cfg.type(),
-                    buildLeafMap(cfg.members())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -678,14 +757,16 @@ public class RepositorySlices {
                 break;
             case "maven-group":
                 // Maven groups need special metadata merging
+                final List<String> mavenFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 final GroupSlice mavenDelegate = new GroupSlice(
-                    this::slice, cfg.name(), cfg.members(), port, depth,
+                    this::slice, cfg.name(), mavenFlatMembers, port, depth,
                     cfg.groupMemberTimeout().orElse(120L),
                     java.util.Collections.emptyList(),
                     Optional.of(this.settings.artifactIndex()),
-                    proxyMembers(cfg.members()),
+                    proxyMembers(mavenFlatMembers),
                     "maven-group",
-                    buildLeafMap(cfg.members())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -711,16 +792,18 @@ public class RepositorySlices {
             case "gradle-group":
             case "pypi-group":
             case "docker-group":
+                final List<String> genericFlatMembers = flattenMembers(cfg.name(), cfg.members());
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
                         new GroupSlice(
-                            this::slice, cfg.name(), cfg.members(), port, depth,
+                            this::slice, cfg.name(), genericFlatMembers, port, depth,
                             cfg.groupMemberTimeout().orElse(120L),
                             java.util.Collections.emptyList(),
                             Optional.of(this.settings.artifactIndex()),
-                            proxyMembers(cfg.members()),
+                            proxyMembers(genericFlatMembers),
                             cfg.type(),
-                            buildLeafMap(cfg.members())
+                            newGroupNegativeCache(cfg.name()),
+                            this::getOrCreateMemberRegistry
                         ),
                         authentication(),
                         tokens.auth(),
@@ -953,52 +1036,96 @@ public class RepositorySlices {
 
 
     /**
-     * Build a map from every leaf repo reachable through each direct member back to that
-     * direct member. Used by GroupSlice to route index hits through nested groups.
+     * Load negative cache config for group fanout 404s.
      *
-     * <p>Example: libs-release has members [libs-release-local, ext-release-local, remote-repos].
-     * remote-repos is itself a group with members [jboss, maven-central, groovy-plugins-release].
-     * Result: {jboss → remote-repos, maven-central → remote-repos, ...}
-     * plus identity entries for leaf direct members.
+     * <p>Reads {@code meta.caches.group-negative} via {@link NegativeCacheConfig#fromYaml}.
+     * When the sub-key is absent the helper returns the package defaults (24h /
+     * 50K); we substitute the historical GroupSlice values (5 min / 10K /
+     * L1-only) so upgrades without YAML changes preserve prior behaviour.
      *
-     * @param directMembers Direct member names of the group being constructed
-     * @return leaf-to-directMember map; empty if all members are leaves
+     * @param settings Pantera settings
+     * @return Group-specific negative cache config
      */
-    private java.util.Map<String, String> buildLeafMap(final List<String> directMembers) {
-        final java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
-        for (final String member : directMembers) {
-            map.put(member, member);
-            this.repos.config(member).ifPresent(cfg -> {
-                if (cfg.type() != null && cfg.type().endsWith("-group")) {
-                    collectLeaves(cfg.members(), member, map, new HashSet<>());
-                }
-            });
+    private static NegativeCacheConfig loadGroupNegativeCacheConfig(final Settings settings) {
+        final com.amihaiemil.eoyaml.YamlMapping caches = settings != null && settings.meta() != null
+            ? settings.meta().yamlMapping("caches")
+            : null;
+        final boolean hasGroupNegative = caches != null
+            && caches.yamlMapping("group-negative") != null;
+        if (!hasGroupNegative) {
+            // Preserve pre-YAML defaults: 5 min TTL, 10K entries, in-memory only
+            return new NegativeCacheConfig(
+                java.time.Duration.ofMinutes(5),
+                10_000,
+                false,
+                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L1_TTL,
+                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L2_TTL
+            );
         }
-        return map;
+        return NegativeCacheConfig.fromYaml(caches, "group-negative");
     }
 
     /**
-     * Recursively collect all leaf repo names reachable from {@code groupMembers},
-     * mapping each leaf to {@code directMember} (the top-level group member that roots this path).
+     * Construct a per-group {@link NegativeCache} backed by the shared config.
+     * The group name is used as the cache-key prefix so entries for different
+     * groups cannot collide in either L1 or L2.
+     *
+     * @param groupName Group repository name
+     * @return Negative cache scoped to this group
      */
-    private void collectLeaves(
-        final List<String> groupMembers,
-        final String directMember,
-        final java.util.Map<String, String> result,
-        final Set<String> visited
-    ) {
-        for (final String name : groupMembers) {
-            if (!visited.add(name)) {
-                continue;
+    private NegativeCache newGroupNegativeCache(final String groupName) {
+        return new NegativeCache(
+            "group-negative",
+            groupName,
+            this.groupNegativeCacheConfig
+        );
+    }
+
+    /**
+     * Flatten nested group members into leaf repos using GroupMemberFlattener.
+     * Returns the flat list of leaf repo names for direct querying.
+     *
+     * @param groupName Group repository name (for cycle-detection logging)
+     * @param directMembers Direct member names declared in this group's config
+     * @return Flat, deduplicated list of leaf repo names (no nested groups)
+     */
+    private List<String> flattenMembers(final String groupName, final List<String> directMembers) {
+        final com.auto1.pantera.group.GroupMemberFlattener flattener =
+            new com.auto1.pantera.group.GroupMemberFlattener(
+                name -> this.repos.config(name)
+                    .map(c -> c.type() != null && c.type().endsWith("-group"))
+                    .orElse(false),
+                name -> this.repos.config(name)
+                    .map(c -> c.members())
+                    .orElse(List.of())
+            );
+        return flattener.flatten(groupName);
+    }
+
+    /**
+     * Return the shared {@link AutoBlockRegistry} for {@code memberName}, creating one
+     * with default settings on first access.  Subsequent lookups for the same name
+     * (from different groups) return the same instance so circuit-breaker state is
+     * consolidated across all groups that share a physical upstream.
+     *
+     * @param memberName Physical leaf repo name
+     * @return Shared registry for that upstream
+     */
+    private AutoBlockRegistry getOrCreateMemberRegistry(final String memberName) {
+        return this.memberRegistries.computeIfAbsent(
+            memberName,
+            n -> {
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Member circuit-breaker registry created for upstream: " + n
+                        + " (total shared registries: " + (this.memberRegistries.size() + 1) + ")")
+                    .eventCategory("configuration")
+                    .eventAction("circuit_breaker_init")
+                    .log();
+                return new AutoBlockRegistry(AutoBlockSettings.defaults());
             }
-            this.repos.config(name).ifPresent(cfg -> {
-                if (cfg.type() != null && cfg.type().endsWith("-group")) {
-                    collectLeaves(cfg.members(), directMember, result, visited);
-                } else {
-                    result.putIfAbsent(name, directMember);
-                }
-            });
-        }
+        );
     }
 
     /**
@@ -1045,6 +1172,41 @@ public class RepositorySlices {
         void enableMetrics(final MeterRegistry registry) {
             this.metrics.set(registry);
             this.clients.values().forEach(client -> client.registerMetrics(registry));
+        }
+
+        /**
+         * Block until every currently-tracked {@link SharedClient} has finished
+         * its asynchronous Jetty start. Intended to be called from startup code
+         * (never the event-loop) after all repositories have been pre-acquired,
+         * so later {@code client()} calls find their {@code startFuture} already
+         * complete and return without parking the caller.
+         *
+         * @param timeout Max time to wait for all clients to start.
+         * @throws IllegalStateException if any client fails to start within the
+         *     timeout; partially-started clients remain tracked for later retry.
+         */
+        void awaitAllStarted(final java.time.Duration timeout) {
+            final java.util.List<CompletableFuture<Void>> futures = this.clients.values().stream()
+                .map(c -> c.startFuture)
+                .toList();
+            if (futures.isEmpty()) {
+                return;
+            }
+            try {
+                CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                    "Interrupted while waiting for Jetty clients to start", ex
+                );
+            } catch (final java.util.concurrent.ExecutionException
+                           | java.util.concurrent.TimeoutException ex) {
+                throw new IllegalStateException(
+                    "Jetty client warm-up did not complete within " + timeout, ex
+                );
+            }
         }
 
         private void release(final HttpClientSettingsKey key, final SharedClient shared) {
@@ -1119,7 +1281,7 @@ public class RepositorySlices {
                 if (remaining == 0 && this.references.get() == 0) {
                     EcsLogger.debug("com.auto1.pantera")
                         .message(String.format("Jetty client reference count reached zero for settings key '%s'", this.key.metricId()))
-                        .eventCategory("http_client")
+                        .eventCategory("network")
                         .eventAction("client_release")
                         .log();
                 }

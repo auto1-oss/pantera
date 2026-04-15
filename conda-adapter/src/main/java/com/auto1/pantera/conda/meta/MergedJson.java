@@ -41,6 +41,12 @@ public interface MergedJson {
     final class Jackson implements MergedJson {
 
         /**
+         * Shared Jackson mapper — thread-safe once configured; reused across all
+         * parse/generate calls to avoid per-request construction cost.
+         */
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        /**
          * Json object name `packages`.
          */
         private static final String PACKAGES = "packages";
@@ -142,11 +148,11 @@ public interface MergedJson {
                 || prsr.getCurrentName().endsWith(Jackson.CONDA))) {
                 final String name = prsr.getCurrentName();
                 prsr.nextToken();
-                prsr.setCodec(new ObjectMapper());
+                prsr.setCodec(Jackson.MAPPER);
                 final ObjectNode nodes = prsr.<ObjectNode>readValueAsTree();
                 if (!items.containsKey(name)) {
                     this.gnrt.writeFieldName(name);
-                    this.gnrt.setCodec(new ObjectMapper());
+                    this.gnrt.setCodec(Jackson.MAPPER);
                     this.gnrt.writeTree(nodes);
                 }
             } else {
@@ -196,8 +202,8 @@ public interface MergedJson {
             for (final String pckg : items.keySet()) {
                 if (pckg.endsWith(type)) {
                     this.gnrt.writeFieldName(pckg);
-                    this.gnrt.setCodec(new ObjectMapper());
-                    this.gnrt.writeTree(new ObjectMapper().readTree(items.get(pckg).toString()));
+                    this.gnrt.setCodec(Jackson.MAPPER);
+                    this.gnrt.writeTree(Jackson.MAPPER.readTree(items.get(pckg).toString()));
                 }
             }
         }

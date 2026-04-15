@@ -80,7 +80,7 @@ public final class EventsProcessor<T> implements Job {
         try {
             EcsLogger.error("com.auto1.pantera.asto")
                 .message("Events queue or action is null, processing failed. Stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())
@@ -88,7 +88,7 @@ public final class EventsProcessor<T> implements Job {
             new StdSchedulerFactory().getScheduler().deleteJob(key);
             EcsLogger.error("com.auto1.pantera.asto")
                 .message("Job stopped")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("success")
                 .field("process.name", key.toString())
@@ -96,7 +96,7 @@ public final class EventsProcessor<T> implements Job {
         } catch (final SchedulerException error) {
             EcsLogger.error("com.auto1.pantera.asto")
                 .message("Error while stopping job")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("job_stop")
                 .eventOutcome("failure")
                 .field("process.name", key.toString())

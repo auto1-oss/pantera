@@ -161,7 +161,7 @@ public final class FileSystemBrowseSlice implements Slice {
                 final long elapsed = System.currentTimeMillis() - startTime;
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("FileSystem browse completed")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("filesystem_browse")
                     .eventOutcome("success")
                     .field("url.path", key.string())
@@ -176,7 +176,7 @@ public final class FileSystemBrowseSlice implements Slice {
             } catch (Exception e) {
                 EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to browse directory")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("filesystem_browse")
                     .eventOutcome("failure")
                     .field("url.path", key.string())

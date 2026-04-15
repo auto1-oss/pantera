@@ -11,6 +11,7 @@
 package com.auto1.pantera.cooldown;
 
 import com.auto1.pantera.cache.ValkeyConnection;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
@@ -212,7 +213,7 @@ public final class CooldownCache {
                     // Track L2 error - metrics handled elsewhere
                     return null;  // L2 failure → skip to database
                 })
-                .thenCompose(l2Bytes -> {
+                .thenCompose(MdcPropagation.withMdc(l2Bytes -> {
                     final long durationMs = (System.nanoTime() - l2StartNanos) / 1_000_000;
 
                     if (l2Bytes != null) {
@@ -236,7 +237,7 @@ public final class CooldownCache {
 
                     // Query database
                     return this.queryAndCache(key, dbQuery);
-                });
+                }));
         }
         
         // Single-tier: Query database
@@ -262,7 +263,7 @@ public final class CooldownCache {
         
         // Query database
         final CompletableFuture<Boolean> future = dbQuery.get()
-            .whenComplete((blocked, error) -> {
+            .whenComplete(MdcPropagation.withMdcBiConsumer((blocked, error) -> {
                 this.inflight.remove(key);
                 if (error == null && blocked != null) {
                     // Cache in L1
@@ -273,7 +274,7 @@ public final class CooldownCache {
                         this.putL2Boolean(key, false, this.l2AllowedTtlSeconds);
                     }
                 }
-            });
+            }));
         
         // Register inflight to deduplicate concurrent requests
         this.inflight.put(key, future);
@@ -459,7 +460,7 @@ public final class CooldownCache {
     ) {
         return this.l2.scan(cursor, ScanArgs.Builder.matches(pattern).limit(100))
             .toCompletableFuture()
-            .thenCompose(result -> {
+            .thenCompose(MdcPropagation.withMdc(result -> {
                 for (final String key : result.getKeys()) {
                     this.l2.setex(key, this.l2AllowedTtlSeconds, "false".getBytes());
                 }
@@ -467,7 +468,7 @@ public final class CooldownCache {
                     return CompletableFuture.completedFuture(null);
                 }
                 return this.scanAndUpdateStep(result, pattern);
-            });
+            }));
     }
 
 }

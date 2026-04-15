@@ -18,7 +18,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.pypi.http.CachedPyProxySlice;
 import com.auto1.pantera.pypi.http.PyProxySlice;
@@ -57,7 +57,7 @@ public final class PypiProxy implements Slice {
         
         // Support multiple remotes with GroupSlice (like maven-proxy)
         // Each remote gets its own PyProxySlice, evaluated in priority order
-        this.slice = new GroupSlice(
+        this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
                     // Create PyProxySlice for this remote

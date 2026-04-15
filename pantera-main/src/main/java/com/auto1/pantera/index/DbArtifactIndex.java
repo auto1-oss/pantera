@@ -12,6 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -26,9 +27,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.auto1.pantera.index.SearchQueryParser.FieldFilter;
@@ -129,6 +132,17 @@ public final class DbArtifactIndex implements ArtifactIndex {
         ConfigDefaults.getLong("PANTERA_SEARCH_LIKE_TIMEOUT_MS", 3000L);
 
     /**
+     * Statement timeout for locateByName queries (ms).
+     * Configurable via PANTERA_INDEX_LOCATE_TIMEOUT_MS env var.
+     * The query uses idx_artifacts_locate btree and should complete in &lt;1ms;
+     * 500ms ceiling only triggers on pathological conditions (DB pressure,
+     * missing index, lock contention). Timeout surfaces as SQLException which
+     * already maps to Optional.empty() → full fanout safety net.
+     */
+    private static final long LOCATE_BY_NAME_TIMEOUT_MS =
+        ConfigDefaults.getLong("PANTERA_INDEX_LOCATE_TIMEOUT_MS", 500L);
+
+    /**
      * Statement timeout for FTS aggregation queries (ms).
      * Fix 6: prevents slow facet aggregations from blocking the response.
      */
@@ -169,6 +183,16 @@ public final class DbArtifactIndex implements ArtifactIndex {
     private static final String TOTAL_COUNT_SQL = "SELECT COUNT(*) FROM artifacts";
 
     /**
+     * Bounded queue capacity for the default executor.
+     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} executes
+     * the task on the submitting thread, propagating backpressure to callers instead
+     * of buffering unboundedly and OOM-ing the JVM under DB latency spikes.
+     * Configurable via PANTERA_INDEX_EXECUTOR_QUEUE env var.
+     */
+    private static final int QUEUE_SIZE =
+        ConfigDefaults.getInt("PANTERA_INDEX_EXECUTOR_QUEUE", 500);
+
+    /**
      * Thread counter for executor threads.
      */
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger(0);
@@ -190,26 +214,15 @@ public final class DbArtifactIndex implements ArtifactIndex {
 
     /**
      * Constructor with default executor.
-     * Creates a fixed thread pool sized to available processors.
+     * Creates a bounded thread pool sized to available processors.
+     * Uses a {@code QUEUE_SIZE}-slot {@link LinkedBlockingQueue} and
+     * {@link ThreadPoolExecutor.CallerRunsPolicy} to apply backpressure when the
+     * queue fills rather than buffering tasks unboundedly.
      *
      * @param source JDBC DataSource
      */
     public DbArtifactIndex(final DataSource source) {
-        this(
-            source,
-            Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors()),
-                r -> {
-                    final Thread thread = new Thread(
-                        r,
-                        "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
-                    );
-                    thread.setDaemon(true);
-                    return thread;
-                }
-            ),
-            true
-        );
+        this(source, createDbIndexExecutor(), true);
     }
 
     /**
@@ -241,6 +254,41 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     /**
+     * Build the default bounded executor for DB index operations.
+     * Queue size is configurable via PANTERA_INDEX_EXECUTOR_QUEUE (default 500).
+     * When the queue is full, {@link ThreadPoolExecutor.CallerRunsPolicy} runs the
+     * task on the submitting thread, propagating backpressure instead of OOM-ing
+     * the JVM before the per-query statement timeout fires.
+     *
+     * @return Wrapped ExecutorService
+     */
+    private static ExecutorService createDbIndexExecutor() {
+        final int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors());
+        final ThreadPoolExecutor pool = new ThreadPoolExecutor(
+            poolSize, poolSize,
+            0L, TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(QUEUE_SIZE),
+            r -> {
+                final Thread thread = new Thread(
+                    r,
+                    "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
+                );
+                thread.setDaemon(true);
+                return thread;
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        );
+        pool.allowCoreThreadTimeOut(false);
+        EcsLogger.info("com.auto1.pantera.index")
+            .message("DbArtifactIndex executor initialised ("
+                + poolSize + " threads, queue=" + QUEUE_SIZE + ", policy=caller-runs)")
+            .eventCategory("configuration")
+            .eventAction("pool_init")
+            .log();
+        return TraceContextExecutor.wrap(pool);
+    }
+
+    /**
      * Eagerly warm executor threads and JDBC connection so the first real
      * request doesn't pay the ~100ms cold-start penalty.
      */
@@ -265,7 +313,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to index artifact")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_index")
                     .eventOutcome("failure")
                     .field("package.name", doc.artifactPath())
@@ -287,7 +335,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to remove artifact")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_remove")
                     .eventOutcome("failure")
                     .field("repository.name", repoName)
@@ -361,7 +409,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -436,7 +484,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: " + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -1126,7 +1174,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
                             .message("FTS aggregation timed out, returning empty facets")
-                            .eventCategory("search")
+                            .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
                             .log();
@@ -1244,7 +1292,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                         // Fix 6: on timeout, return empty facet maps
                         EcsLogger.warn("com.auto1.pantera.index")
                             .message("FTS aggregation timed out, returning empty facets")
-                            .eventCategory("search")
+                            .eventCategory("database")
                             .eventAction("db_fts_agg_timeout")
                             .error(ex)
                             .log();
@@ -1370,7 +1418,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         } catch (final SQLException ex) {
             EcsLogger.error("com.auto1.pantera.index")
                 .message("Filtered LIKE search failed for pattern: " + pattern)
-                .eventCategory("search")
+                .eventCategory("database")
                 .eventAction("db_search_filtered_like")
                 .eventOutcome("failure")
                 .error(ex)
@@ -1480,7 +1528,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                 EcsLogger.warn("com.auto1.pantera.index")
                     .message("FTS search failed, falling back to LIKE: "
                         + ex.getMessage())
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_fts_fallback")
                     .error(ex)
                     .log();
@@ -1636,7 +1684,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
         } catch (final SQLException ex) {
             EcsLogger.error("com.auto1.pantera.index")
                 .message("LIKE search failed for pattern: " + pattern)
-                .eventCategory("search")
+                .eventCategory("database")
                 .eventAction("db_search_like")
                 .eventOutcome("failure")
                 .error(ex)
@@ -1667,7 +1715,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Locate failed for path: " + artifactPath)
-                    .eventCategory("search")
+                    .eventCategory("database")
                     .eventAction("db_locate")
                     .eventOutcome("failure")
                     .error(ex)
@@ -1679,28 +1727,42 @@ public final class DbArtifactIndex implements ArtifactIndex {
     }
 
     @Override
-    public CompletableFuture<List<String>> locateByName(final String artifactName) {
+    public CompletableFuture<Optional<List<String>>> locateByName(final String artifactName) {
         return CompletableFuture.supplyAsync(() -> {
             final List<String> repos = new ArrayList<>();
-            try (Connection conn = this.source.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(LOCATE_BY_NAME_SQL)) {
-                stmt.setString(1, artifactName);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        repos.add(rs.getString("repo_name"));
+            try (Connection conn = this.source.getConnection()) {
+                // SET LOCAL requires an explicit transaction block to persist across statements
+                conn.setAutoCommit(false);
+                try {
+                    try (java.sql.Statement guard = conn.createStatement()) {
+                        guard.execute(
+                            "SET LOCAL statement_timeout = '" + LOCATE_BY_NAME_TIMEOUT_MS + "ms'"
+                        );
                     }
+                    try (PreparedStatement stmt = conn.prepareStatement(LOCATE_BY_NAME_SQL)) {
+                        stmt.setString(1, artifactName);
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            while (rs.next()) {
+                                repos.add(rs.getString("repo_name"));
+                            }
+                        }
+                    }
+                    conn.commit();
+                } catch (final SQLException inner) {
+                    conn.rollback();
+                    throw inner;
                 }
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("LocateByName failed for: " + artifactName)
-                    .eventCategory("search")
-                    .eventAction("db_locate_by_name")
+                    .eventCategory("database")
+                    .eventAction("locate_by_name")
                     .eventOutcome("failure")
                     .error(ex)
                     .log();
-                return List.of();
+                return Optional.empty();
             }
-            return repos;
+            return Optional.of(repos);
         }, this.executor);
     }
 
@@ -1781,7 +1843,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
                     // View may not exist — fall through to COUNT(*)
                     EcsLogger.warn("com.auto1.pantera.index")
                         .message("mv_artifact_totals unavailable, falling back to COUNT(*)")
-                        .eventCategory("index")
+                        .eventCategory("database")
                         .eventAction("db_stats_mv_fallback")
                         .error(ex)
                         .log();
@@ -1797,7 +1859,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to get index stats")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_stats")
                     .eventOutcome("failure")
                     .error(ex)
@@ -1829,7 +1891,7 @@ public final class DbArtifactIndex implements ArtifactIndex {
             } catch (final SQLException ex) {
                 EcsLogger.error("com.auto1.pantera.index")
                     .message("Failed to batch index " + docs.size() + " artifacts")
-                    .eventCategory("index")
+                    .eventCategory("database")
                     .eventAction("db_index_batch")
                     .eventOutcome("failure")
                     .error(ex)

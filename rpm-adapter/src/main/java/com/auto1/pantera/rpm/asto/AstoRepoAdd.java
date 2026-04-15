@@ -143,7 +143,7 @@ public final class AstoRepoAdd {
                     throwable -> {
                         EcsLogger.warn("com.auto1.pantera.rpm")
                             .message("Failed to parse rpm package")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("package_parsing")
                             .eventOutcome("failure")
                             .field("package.name", key.string())

@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.http.trace;
 
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
@@ -93,5 +95,68 @@ final class MdcPropagationTest {
         );
         future.get();
         MatcherAssert.assertThat(captured.get(), Matchers.equalTo("runnable-trace"));
+    }
+
+    @Test
+    void capturedMdcRestoredInRunWith() {
+        MDC.put("trace.id", "test-abc");
+        final Map<String, String> snapshot = MdcPropagation.capture();
+        MDC.clear();
+
+        final AtomicReference<String> seen = new AtomicReference<>();
+        MdcPropagation.runWith(
+            snapshot, () -> seen.set(MDC.get("trace.id"))
+        );
+
+        MatcherAssert.assertThat(seen.get(), Matchers.equalTo("test-abc"));
+        // prior state restored (was empty after clear)
+        MatcherAssert.assertThat(MDC.get("trace.id"), Matchers.nullValue());
+    }
+
+    @Test
+    void captureReturnsNullOnEmptyMdc() {
+        MDC.clear();
+        MatcherAssert.assertThat(MdcPropagation.capture(), Matchers.nullValue());
+    }
+
+    @Test
+    void runWithNullSnapshotIsNoOpForMdc() {
+        MDC.put("trace.id", "prior");
+        final AtomicReference<String> seen = new AtomicReference<>();
+        MdcPropagation.runWith(null, () -> seen.set(MDC.get("trace.id")));
+        MatcherAssert.assertThat(seen.get(), Matchers.equalTo("prior"));
+        MatcherAssert.assertThat(MDC.get("trace.id"), Matchers.equalTo("prior"));
+    }
+
+    @Test
+    void runWithRestoresPriorMdcAfterException() {
+        MDC.put("trace.id", "prior");
+        final Map<String, String> snap = Map.of("trace.id", "snap");
+        final AtomicReference<String> inside = new AtomicReference<>();
+        try {
+            MdcPropagation.runWith(snap, () -> {
+                inside.set(MDC.get("trace.id"));
+                throw new IllegalStateException("boom");
+            });
+        } catch (final IllegalStateException ignore) {
+            // expected
+        }
+        MatcherAssert.assertThat(inside.get(), Matchers.equalTo("snap"));
+        // prior restored even though action threw
+        MatcherAssert.assertThat(MDC.get("trace.id"), Matchers.equalTo("prior"));
+    }
+
+    @Test
+    void consumerVariantPropagatesMdc() throws Exception {
+        MDC.put("trace.id", "consumer-trace");
+        final AtomicReference<String> seen = new AtomicReference<>();
+        final Consumer<String> wrapped = MdcPropagation.withMdcConsumer(
+            arg -> seen.set(MDC.get("trace.id") + ":" + arg)
+        );
+        MDC.clear();
+        // Run on worker thread so there is no MDC to start with
+        final Future<?> future = this.pool.submit(() -> wrapped.accept("x"));
+        future.get();
+        MatcherAssert.assertThat(seen.get(), Matchers.equalTo("consumer-trace:x"));
     }
 }

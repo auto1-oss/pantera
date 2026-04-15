@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useNotificationStore } from '@/stores/notifications'
-import { generateTokenForSession } from '@/api/auth'
+import { generateTokenForSession, getAuthSettings } from '@/api/auth'
 import HealthIndicator from '@/components/common/HealthIndicator.vue'
 import Button from 'primevue/button'
 import Menu from 'primevue/menu'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
-import InputNumber from 'primevue/inputnumber'
+import Select from 'primevue/select'
 
 defineProps<{ sidebarCollapsed: boolean }>()
 const emit = defineEmits<{ toggleSidebar: [] }>()
@@ -37,6 +37,31 @@ const tokenLabel = ref('API Token')
 const tokenExpiryDays = ref(30)
 const generating = ref(false)
 const generatedToken = ref<string | null>(null)
+
+const expiryOptions = ref([
+  { label: '30 days', value: 30 },
+  { label: '90 days', value: 90 },
+])
+
+onMounted(async () => {
+  try {
+    const settings = await getAuthSettings()
+    const maxTtlDays = Math.floor(parseInt(settings.api_token_max_ttl_seconds ?? '31536000') / 86400)
+    const allowPermanent = settings.api_token_allow_permanent === 'true'
+    const opts = []
+    if (maxTtlDays >= 30) opts.push({ label: '30 days', value: 30 })
+    if (maxTtlDays >= 90) opts.push({ label: '90 days', value: 90 })
+    if (maxTtlDays >= 180) opts.push({ label: '180 days', value: 180 })
+    if (maxTtlDays >= 365) opts.push({ label: '365 days', value: 365 })
+    if (allowPermanent) opts.push({ label: 'Permanent', value: 0 })
+    if (opts.length > 0) {
+      expiryOptions.value = opts
+      tokenExpiryDays.value = opts[0].value
+    }
+  } catch {
+    // Keep defaults if settings unavailable
+  }
+})
 
 async function handleGenerateToken() {
   generating.value = true
@@ -115,9 +140,14 @@ function closeTokenDialog() {
           <InputText v-model="tokenLabel" placeholder="e.g. CI/CD Pipeline" class="w-full" />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">Expires in (days)</label>
-          <InputNumber v-model="tokenExpiryDays" :min="0" :max="365" class="w-full" />
-          <p class="text-xs text-gray-500 mt-1">Set to 0 for a permanent token</p>
+          <label class="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">Expires in</label>
+          <Select
+            v-model="tokenExpiryDays"
+            :options="expiryOptions"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
         </div>
       </div>
 

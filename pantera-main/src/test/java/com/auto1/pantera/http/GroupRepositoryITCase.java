@@ -12,7 +12,7 @@ package com.auto1.pantera.http;
 
 import com.auto1.pantera.files.FileProxySlice;
 import com.auto1.pantera.http.client.jetty.JettyClientSlices;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.hm.RsHasStatus;
 import com.auto1.pantera.http.hm.SliceHasResponse;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -55,7 +55,7 @@ final class GroupRepositoryITCase {
     @Test
     void fetchesCorrectContentFromGroupedFilesProxy() throws Exception {
         MatcherAssert.assertThat(
-            new GroupSlice(
+            new RaceSlice(
                 this.proxy("/pantera/none-2/"),
                 this.proxy("/pantera/tests/"),
                 this.proxy("/pantera/none-1/")

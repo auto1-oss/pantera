@@ -10,11 +10,16 @@
  */
 package com.auto1.pantera.db;
 
+import com.auto1.pantera.audit.AuditLogger;
+import com.auto1.pantera.http.log.EcsMdc;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
+import org.slf4j.MDC;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observer;
+import io.reactivex.rxjava3.core.Scheduler;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
@@ -25,6 +30,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -47,6 +54,26 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      */
     private static final int DEFAULT_BUFFER_SIZE =
         ConfigDefaults.getInt("PANTERA_DB_BATCH_SIZE", 200);
+
+    /**
+     * Thread factory for the DbConsumer single-thread scheduler.
+     */
+    private static final ThreadFactory DB_CONSUMER_TF = runnable -> {
+        final Thread thread = new Thread(runnable, "pantera.db-consumer");
+        thread.setDaemon(true);
+        return thread;
+    };
+
+    /**
+     * Dedicated RxJava Scheduler backed by a single-thread executor wrapped in
+     * {@link TraceContextExecutor} so MDC (trace.id, client.ip, etc.) flows
+     * onto the consumer thread. Replaces {@link Schedulers#io()} which loses
+     * per-request context.
+     */
+    private static final Scheduler DB_CONSUMER_SCHEDULER =
+        Schedulers.from(
+            TraceContextExecutor.wrap(Executors.newSingleThreadExecutor(DB_CONSUMER_TF))
+        );
 
     /**
      * Publish subject
@@ -77,7 +104,7 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
     public DbConsumer(final DataSource source, final int bufferTimeSeconds, final int bufferSize) {
         this.source = source;
         this.subject = PublishSubject.create();
-        this.subject.subscribeOn(Schedulers.io())
+        this.subject.subscribeOn(DB_CONSUMER_SCHEDULER)
             .buffer(bufferTimeSeconds, TimeUnit.SECONDS, bufferSize)
             .subscribe(new DbObserver());
     }
@@ -99,24 +126,41 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
 
     /**
      * Emit ECS audit log for successful artifact publish operations.
+     *
+     * <p>Restores the originating HTTP {@code trace.id} captured on the event
+     * (see {@link ArtifactEvent#traceId()}) into MDC for the duration of the
+     * log emission so the audit entry can be correlated to its HTTP request
+     * in Kibana — {@link co.elastic.logging.log4j2.EcsLayout} reads MDC when
+     * serialising the ECS {@code trace.id} field. The prior MDC state of the
+     * DB-consumer thread is saved and restored so pool threads are not
+     * polluted across batches.</p>
+     *
      * @param record Artifact event that was persisted
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
-        final String msg = record.releaseDate().isPresent()
-            ? String.format("Artifact publish recorded (release=%s)", record.releaseDate().get())
-            : "Artifact publish recorded";
-        EcsLogger.info("com.auto1.pantera.audit")
-            .message(msg)
-            .eventCategory("artifact")
-            .eventAction("artifact_publish")
-            .eventOutcome("success")
-            .field("repository.type", record.repoType())
-            .field("repository.name", normalizeRepoName(record.repoName()))
-            .field("package.name", record.artifactName())
-            .field("package.version", record.artifactVersion())
-            .field("package.size", record.size())
-            .field("user.name", record.owner())
-            .log();
+        final String priorTraceId = MDC.get(EcsMdc.TRACE_ID);
+        final String eventTraceId = record.traceId();
+        if (eventTraceId != null) {
+            MDC.put(EcsMdc.TRACE_ID, eventTraceId);
+        }
+        try {
+            AuditLogger.publish(
+                normalizeRepoName(record.repoName()),
+                record.repoType(),
+                record.artifactName(),
+                record.artifactVersion(),
+                record.size(),
+                record.owner(),
+                record.releaseDate().orElse(null),
+                record.checksum()
+            );
+        } finally {
+            if (priorTraceId != null) {
+                MDC.put(EcsMdc.TRACE_ID, priorTraceId);
+            } else if (eventTraceId != null) {
+                MDC.remove(EcsMdc.TRACE_ID);
+            }
+        }
     }
 
     /**

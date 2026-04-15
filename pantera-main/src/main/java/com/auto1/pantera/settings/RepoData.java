@@ -77,7 +77,7 @@ public final class RepoData {
                             nothing ->
                                 EcsLogger.info("com.auto1.pantera.settings")
                                     .message("Removed data from repository")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("data_remove")
                                     .eventOutcome("success")
                                     .field("repository.name", repo)
@@ -110,7 +110,7 @@ public final class RepoData {
                                     .thenApply(nothing -> {
                                         EcsLogger.info("com.auto1.pantera.settings")
                                             .message("Deleted artifact directory from repository, " + keys.size() + " files removed")
-                                            .eventCategory("repository")
+                                            .eventCategory("web")
                                             .eventAction("artifact_delete")
                                             .eventOutcome("success")
                                             .field("repository.name", repo)
@@ -125,7 +125,7 @@ public final class RepoData {
                         .thenApply(nothing -> {
                             EcsLogger.info("com.auto1.pantera.settings")
                                 .message("Deleted artifact file from repository")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("artifact_delete")
                                 .eventOutcome("success")
                                 .field("repository.name", repo)
@@ -178,7 +178,7 @@ public final class RepoData {
     private void logPackageDelete(final String repo, final String packagePath) {
         EcsLogger.info("com.auto1.pantera.settings")
             .message("Deleted package folder from repository")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("package_delete")
             .eventOutcome("success")
             .field("repository.name", repo)
@@ -210,7 +210,7 @@ public final class RepoData {
                             nothing ->
                                 EcsLogger.info("com.auto1.pantera.settings")
                                     .message("Moved data from repository (" + repo.toString() + " -> " + nrepo.toString() + ")")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("data_move")
                                     .eventOutcome("success")
                                     .log()

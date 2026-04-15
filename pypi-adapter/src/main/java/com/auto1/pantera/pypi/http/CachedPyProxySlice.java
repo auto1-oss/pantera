@@ -167,7 +167,7 @@ public final class CachedPyProxySlice implements Slice {
         if (this.negativeCache.isNotFound(key)) {
             EcsLogger.debug("com.auto1.pantera.pypi")
                 .message("PyPI package cached as 404 (negative cache hit)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("package.name", key.string())
                 .log();
@@ -208,7 +208,7 @@ public final class CachedPyProxySlice implements Slice {
             if (meta.isPresent()) {
                 EcsLogger.debug("com.auto1.pantera.pypi")
                     .message("PyPI proxy: serving from metadata cache")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_request")
                     .field("package.name", key.string())
                     .log();
@@ -236,7 +236,7 @@ public final class CachedPyProxySlice implements Slice {
         final long startTime = System.currentTimeMillis();
         EcsLogger.debug("com.auto1.pantera.pypi")
             .message("PyPI proxy: fetching upstream")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("package.name", key.string())
             .log();
@@ -247,7 +247,7 @@ public final class CachedPyProxySlice implements Slice {
                 if (response.status().code() == 404) {
                     EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("PyPI proxy: caching 404")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_request")
                         .field("package.name", key.string())
                         .log();
@@ -263,7 +263,7 @@ public final class CachedPyProxySlice implements Slice {
                         // Cache successful response metadata
                         EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("PyPI proxy: caching metadata")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
                             .field("package.name", key.string())
                             .log();

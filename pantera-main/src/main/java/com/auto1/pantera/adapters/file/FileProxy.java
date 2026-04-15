@@ -23,7 +23,7 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
 import com.auto1.pantera.http.client.UriClientSlice;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.settings.repo.RepoConfig;
@@ -55,7 +55,7 @@ public final class FileProxy implements Slice {
         
         // Support multiple remotes with GroupSlice (like maven-proxy)
         // Each remote gets its own FileProxySlice, evaluated in priority order
-        this.slice = new GroupSlice(
+        this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> new FileProxySlice(
                     new AuthClientSlice(

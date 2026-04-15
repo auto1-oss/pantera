@@ -132,7 +132,7 @@ public final class MetadataRebuildSlice implements Slice {
     private void rebuildMetadataAsync(final MavenCoords coords, final String uploadPath) {
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Triggering metadata rebuild")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("metadata_rebuild_trigger")
             .field("package.group", coords.groupId)
             .field("package.name", coords.artifactId)
@@ -155,7 +155,7 @@ public final class MetadataRebuildSlice implements Slice {
                 // For now, just log the intention
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Metadata rebuild queued")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_rebuild")
                     .field("package.group", coords.groupId)
                     .field("package.name", coords.artifactId)
@@ -174,7 +174,7 @@ public final class MetadataRebuildSlice implements Slice {
                 final long duration = System.currentTimeMillis() - startTime;
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Metadata rebuild failed")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_rebuild")
                     .eventOutcome("failure")
                     .error(e)

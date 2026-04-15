@@ -138,7 +138,7 @@ public final class VertxFileStorage implements Storage {
                 }
                 EcsLogger.debug("com.auto1.pantera.asto")
                     .message("Found " + keys.size() + " objects by prefix: " + prefix.string())
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("list_keys")
                     .eventOutcome("success")
                     .field("file.path", path.toString())
@@ -211,7 +211,7 @@ public final class VertxFileStorage implements Storage {
                             + prefix.string() + "' (" + files.size()
                             + " files, " + directories.size() + " directories)"
                     )
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("list_hierarchical")
                     .eventOutcome("success")
                     .field("file.path", path.toString())

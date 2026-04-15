@@ -111,7 +111,7 @@ public final class StorageArtifactSlice implements Slice {
         if (unwrapped instanceof FileStorage) {
             EcsLogger.debug("com.auto1.pantera.http")
                 .message("Using FileSystemArtifactSlice for direct NIO access (detected: " + unwrapped.getClass().getSimpleName() + ", wrapper: " + this.storage.getClass().getSimpleName() + ")")
-                .eventCategory("storage")
+                .eventCategory("file")
                 .eventAction("artifact_slice_select")
                 .eventOutcome("success")
                 .log();
@@ -125,7 +125,7 @@ public final class StorageArtifactSlice implements Slice {
         // TODO: Add S3ArtifactSlice when needed (requires refactoring module dependencies)
         EcsLogger.debug("com.auto1.pantera.http")
             .message("Using generic storage abstraction (type: " + unwrapped.getClass().getSimpleName() + ")")
-            .eventCategory("storage")
+            .eventCategory("file")
             .eventAction("artifact_slice_select")
             .eventOutcome("success")
             .log();
@@ -257,7 +257,7 @@ public final class StorageArtifactSlice implements Slice {
             }).exceptionally(throwable -> {
                 EcsLogger.error("com.auto1.pantera.http")
                     .message("Failed to serve artifact at key: " + key.string())
-                    .eventCategory("storage")
+                    .eventCategory("file")
                     .eventAction("artifact_serve")
                     .eventOutcome("failure")
                     .error(throwable)

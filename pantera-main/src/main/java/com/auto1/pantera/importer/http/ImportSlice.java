@@ -83,7 +83,7 @@ public final class ImportSlice implements Slice {
                     }
                     EcsLogger.error("com.auto1.pantera.importer")
                         .message("Import processing failed")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_artifact")
                         .eventOutcome("failure")
                         .error(cause)
@@ -95,7 +95,7 @@ public final class ImportSlice implements Slice {
         } catch (final Exception ex) {
             EcsLogger.error("com.auto1.pantera.importer")
                 .message("Import processing failed")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("import_artifact")
                 .eventOutcome("failure")
                 .error(ex)

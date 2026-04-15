@@ -44,7 +44,7 @@ public class HeadManifestSlice extends DockerActionSlice {
 
         EcsLogger.debug("com.auto1.pantera.docker")
             .message("HEAD manifest request")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("manifest_head")
             .field("container.image.name", request.name())
             .field("container.image.tag", request.reference().digest())
@@ -66,7 +66,7 @@ public class HeadManifestSlice extends DockerActionSlice {
 
                             EcsLogger.debug("com.auto1.pantera.docker")
                                 .message("Manifest found")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("manifest_head")
                                 .eventOutcome("success")
                                 .field("container.image.name", request.name())
@@ -85,7 +85,7 @@ public class HeadManifestSlice extends DockerActionSlice {
                         () -> {
                             EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Manifest not found")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("manifest_head")
                                 .eventOutcome("failure")
                                 .field("container.image.name", request.name())

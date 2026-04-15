@@ -38,6 +38,12 @@ public interface JsonMaid {
     final class Jackson implements JsonMaid {
 
         /**
+         * Shared Jackson mapper — thread-safe once configured; reused across all
+         * clean() calls to avoid per-request construction cost.
+         */
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        /**
          * Json generator.
          */
         private final JsonGenerator gnrt;
@@ -68,11 +74,11 @@ public interface JsonMaid {
                         || this.parser.getCurrentName().endsWith(".conda"))) {
                     final String name = this.parser.getCurrentName();
                     this.parser.nextToken();
-                    this.parser.setCodec(new ObjectMapper());
+                    this.parser.setCodec(Jackson.MAPPER);
                     final ObjectNode nodes = this.parser.<ObjectNode>readValueAsTree();
                     if (!checksums.contains(nodes.get("sha256").asText())) {
                         this.gnrt.writeFieldName(name);
-                        this.gnrt.setCodec(new ObjectMapper());
+                        this.gnrt.setCodec(Jackson.MAPPER);
                         this.gnrt.writeTree(nodes);
                     }
                 } else {

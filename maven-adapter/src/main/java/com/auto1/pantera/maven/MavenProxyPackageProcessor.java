@@ -121,7 +121,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
 
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Processing Maven batch (batch size: " + batch.size() + ", unique: " + uniquePackages.size() + ", duplicates removed: " + duplicatesRemoved + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("batch_processing")
             .log();
 
@@ -139,7 +139,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.info("com.auto1.pantera.maven")
                 .message("Maven batch processing complete (" + uniquePackages.size() + " packages)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
@@ -148,7 +148,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.error("com.auto1.pantera.maven")
                 .message("Maven batch processing failed (" + uniquePackages.size() + " packages)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("failure")
                 .duration(duration)
@@ -178,9 +178,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                     if (filtered.isEmpty()) {
                         EcsLogger.debug("com.auto1.pantera.maven")
                             .message("Maven package has only temporary files, skipping (will retry later)")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_package_process")
-                            .eventOutcome("skipped")
+                            .eventOutcome("unknown")
+                            .field("event.reason", "skipped")
                             .field("repository.type", REPO_TYPE)
                             .field("package.name", event.artifactKey().string())
                             .log();
@@ -220,7 +221,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
 
                             EcsLogger.debug("com.auto1.pantera.maven")
                                 .message("Recorded Maven proxy artifact")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_artifact_record")
                                 .eventOutcome("success")
                                 .field("repository.type", REPO_TYPE)
@@ -236,7 +237,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
                 } catch (final RuntimeException err) {
                     EcsLogger.error("com.auto1.pantera.maven")
                         .message("Failed to extract Maven archive from keys")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_package_process")
                         .eventOutcome("failure")
                         .field("repository.type", REPO_TYPE)
@@ -248,7 +249,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
             .exceptionally(err -> {
                 EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to process Maven package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_package_process")
                     .eventOutcome("failure")
                     .field("repository.type", REPO_TYPE)
@@ -353,9 +354,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
 
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Maven package not found (likely still being written), retrying (attempt " + (currentRetries + 1) + "/" + MavenProxyPackageProcessor.MAX_RETRIES + ")")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_package_retry")
-                    .eventOutcome("retry")
+                    .eventOutcome("failure")
+                    .field("event.reason", "retry_exhausted")
                     .field("repository.type", REPO_TYPE)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
@@ -366,9 +368,10 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
 
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Maven package not found after " + MavenProxyPackageProcessor.MAX_RETRIES + " retries, giving up")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_package_retry")
-                    .eventOutcome("abandoned")
+                    .eventOutcome("failure")
+                    .field("event.reason", "request_abandoned")
                     .field("repository.type", REPO_TYPE)
                     .field("package.name", event.artifactKey().string())
                     .error(err)
@@ -377,7 +380,7 @@ public final class MavenProxyPackageProcessor extends QuartzJob {
         } else {
             EcsLogger.error("com.auto1.pantera.maven")
                 .message("Failed to read Maven artifact metadata")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_package_process")
                 .eventOutcome("failure")
                 .field("repository.type", REPO_TYPE)

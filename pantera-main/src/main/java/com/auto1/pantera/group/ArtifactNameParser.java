@@ -31,11 +31,36 @@ public final class ArtifactNameParser {
         Pattern.compile("/v2/(.+?)/(manifests|blobs|tags)/.*");
 
     /**
-     * Maven file extensions (artifact files, checksums, signatures, metadata).
+     * Composer p2 / p path: p2?/{vendor}/{package}(${hash})?.json
      */
-    private static final Pattern MAVEN_FILE_EXT = Pattern.compile(
-        ".*\\.(jar|pom|xml|war|aar|ear|module|sha1|sha256|sha512|md5|asc|sig)$"
-    );
+    private static final Pattern COMPOSER_PACKAGE =
+        Pattern.compile("p2?/([^/]+)/([^/$]+)(?:\\$[a-f0-9]+)?\\.json$");
+
+    /**
+     * Extract name before the first "-{digit}" (greedy).
+     * Shared by helm, hex and gem filename parsers.
+     */
+    private static final Pattern NAME_BEFORE_VERSION_GREEDY =
+        Pattern.compile("^(.+)-\\d");
+
+    /**
+     * Extract name before the first "-{digit}" (lazy) — used by PyPI filenames
+     * where the name itself may contain hyphens before the version.
+     */
+    private static final Pattern NAME_BEFORE_VERSION_LAZY =
+        Pattern.compile("^(.+?)-\\d");
+
+    /**
+     * PyPI project-name normalization: collapse runs of -_. to a single hyphen.
+     */
+    private static final Pattern PYPI_NAME_SEPARATORS =
+        Pattern.compile("[-_.]+");
+
+    /**
+     * Repo-type suffix strip: "maven-group" -> "maven", "npm-proxy" -> "npm".
+     */
+    private static final Pattern REPO_TYPE_SUFFIX =
+        Pattern.compile("-(group|proxy|local|remote)$");
 
     private ArtifactNameParser() {
     }
@@ -72,48 +97,57 @@ public final class ArtifactNameParser {
      * Strip group/proxy/local suffix: "maven-group" -> "maven", "npm-proxy" -> "npm".
      */
     static String normalizeType(final String repoType) {
-        return repoType.replaceAll("-(group|proxy|local|remote)$", "");
+        return REPO_TYPE_SUFFIX.matcher(repoType).replaceAll("");
     }
 
     /**
-     * Maven URL path to artifact name.
+     * Maven URL path to artifact name using the filename-prefix structural invariant.
      * <p>
-     * Maven URLs follow: {groupId-path}/{artifactId}/{version}/{filename}
-     * DB name format: groupId.artifactId (slashes replaced with dots)
+     * Maven layout: {@code {groupId-path}/{artifactId}/{version}/{filename}}
+     * where {@code filename} always starts with {@code {artifactId}-}.
+     * This invariant holds for all artifact files (JARs, POMs, WARs, checksums,
+     * signatures, and any other extension) regardless of version format.
+     * <p>
+     * Algorithm:
+     * <ol>
+     *   <li>Split path into segments (minimum 4 required)</li>
+     *   <li>{@code artifactId = segments[n-3]}, {@code filename = segments[n-1]}</li>
+     *   <li>If {@code filename} starts with {@code "{artifactId}-"}: artifact file —
+     *       return {@code segments[0..n-3]} joined with dots (groupId + "." + artifactId)</li>
+     *   <li>Otherwise: metadata endpoint (e.g. {@code maven-metadata.xml}) —
+     *       return empty to trigger full fan-out</li>
+     * </ol>
      * <p>
      * Examples:
      * <ul>
-     *   <li>{@code com/google/guava/guava/31.1/guava-31.1.jar} -> {@code com.google.guava.guava}</li>
-     *   <li>{@code com/google/guava/guava/maven-metadata.xml} -> {@code com.google.guava.guava}</li>
+     *   <li>{@code com/google/guava/guava/31.1/guava-31.1.jar} -&gt; {@code com.google.guava.guava}</li>
+     *   <li>{@code com/example/config/1.0.0/config-1.0.0.yaml} -&gt; {@code com.example.config}</li>
+     *   <li>{@code org/springframework/data/spring-data/Arabba-SR10/spring-data-Arabba-SR10.jar}
+     *       -&gt; {@code org.springframework.data.spring-data}</li>
+     *   <li>{@code com/google/guava/guava/maven-metadata.xml} -&gt; empty (fan-out)</li>
      *   <li>{@code org/apache/maven/plugins/maven-compiler-plugin/3.11.0/maven-compiler-plugin-3.11.0.pom}
-     *       -> {@code org.apache.maven.plugins.maven-compiler-plugin}</li>
+     *       -&gt; {@code org.apache.maven.plugins.maven-compiler-plugin}</li>
      * </ul>
      */
     static Optional<String> parseMaven(final String urlPath) {
         final String clean = stripLeadingSlash(urlPath);
         final String[] segments = clean.split("/");
-        if (segments.length < 2) {
+        // Require at least: groupId / artifactId / version / filename (4 segments)
+        if (segments.length < 4) {
             return Optional.empty();
         }
-        int end = segments.length;
-        // Strip filename if last segment looks like a file
-        if (MAVEN_FILE_EXT.matcher(segments[end - 1]).matches()) {
-            end--;
-        }
-        if (end < 1) {
+        final int last = segments.length - 1;
+        final String artifactId = segments[last - 2];
+        final String filename = segments[last];
+        // Structural invariant: artifact filenames always start with "{artifactId}-"
+        if (!filename.startsWith(artifactId + "-")) {
+            // Not an artifact file (e.g. maven-metadata.xml) — full fan-out
             return Optional.empty();
         }
-        // Strip version directory if it starts with a digit
-        if (end > 1 && !segments[end - 1].isEmpty()
-            && Character.isDigit(segments[end - 1].charAt(0))) {
-            end--;
-        }
-        if (end < 1) {
-            return Optional.empty();
-        }
-        // Join remaining segments with dots
+        // Join groupId path + artifactId segments with dots
+        // That is: segments[0] .. segments[last-2] (inclusive)
         final StringBuilder name = new StringBuilder();
-        for (int i = 0; i < end; i++) {
+        for (int i = 0; i <= last - 2; i++) {
             if (i > 0) {
                 name.append('.');
             }
@@ -284,9 +318,7 @@ public final class ArtifactNameParser {
     static Optional<String> parseComposer(final String urlPath) {
         final String clean = stripLeadingSlash(urlPath);
         // /p2/vendor/package.json or /p/vendor/package.json
-        final Matcher matcher = Pattern.compile(
-            "p2?/([^/]+)/([^/$]+)(?:\\$[a-f0-9]+)?\\.json$"
-        ).matcher(clean);
+        final Matcher matcher = COMPOSER_PACKAGE.matcher(clean);
         if (matcher.find()) {
             return Optional.of(matcher.group(1) + "/" + matcher.group(2));
         }
@@ -318,7 +350,7 @@ public final class ArtifactNameParser {
             return Optional.empty();
         }
         // filename is now "{name}-{version}"; extract name before last "-{digit}"
-        final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+        final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(filename);
         if (m.find()) {
             return Optional.of(m.group(1));
         }
@@ -393,7 +425,7 @@ public final class ArtifactNameParser {
                 return Optional.empty();
             }
             filename = filename.substring(0, filename.length() - ".tar".length());
-            final Matcher m = Pattern.compile("^(.+)-\\d").matcher(filename);
+            final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(filename);
             if (m.find()) {
                 return Optional.of(m.group(1));
             }
@@ -444,7 +476,7 @@ public final class ArtifactNameParser {
             return Optional.empty();
         }
         // Name is everything before the LAST "-{digit}" pattern
-        final Matcher m = Pattern.compile("^(.+)-\\d").matcher(base);
+        final Matcher m = NAME_BEFORE_VERSION_GREEDY.matcher(base);
         if (m.find()) {
             return Optional.of(m.group(1));
         }
@@ -455,7 +487,7 @@ public final class ArtifactNameParser {
      * Normalize a PyPI project name: replace [-_.] runs with single hyphen, lowercase.
      */
     private static String normalizePypiName(final String name) {
-        return name.replaceAll("[-_.]+", "-").toLowerCase();
+        return PYPI_NAME_SEPARATORS.matcher(name).replaceAll("-").toLowerCase();
     }
 
     /**
@@ -475,7 +507,7 @@ public final class ArtifactNameParser {
         }
         // Name is everything before the first hyphen followed by a digit
         // e.g., "numpy-1.24.0" -> "numpy", "my_package-2.0.0rc1" -> "my_package"
-        final Matcher m = Pattern.compile("^(.+?)-\\d").matcher(base);
+        final Matcher m = NAME_BEFORE_VERSION_LAZY.matcher(base);
         if (m.find()) {
             return Optional.of(normalizePypiName(m.group(1)));
         }

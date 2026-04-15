@@ -41,11 +41,40 @@ All log entries are emitted as single-line JSON objects. Example:
 
 | Field | Description | Values |
 |-------|-------------|--------|
-| `event.category` | Event category | `api`, `authentication`, `storage`, `cache`, `group`, `repository`, `pypi`, `cooldown` |
+| `event.category` | Event category (ECS-compliant) | `api`, `authentication`, `configuration`, `database`, `file`, `host`, `iam`, `network`, `package`, `process`, `web` |
 | `event.action` | Specific action | `server_start`, `artifact_upload`, `token_validate`, `group_fanout_miss`, `group_lookup_miss`, `sso_callback`, etc. |
 | `event.outcome` | Result of the action | `success`, `failure`, `unknown` (ECS-compliant values only) |
-| `event.duration` | Duration in nanoseconds | Long integer |
+| `event.duration` | Duration in milliseconds | Long integer |
 | `event.reason` | Human-readable reason for the outcome | Free text |
+
+**Note (v2.1.3+):** Pantera now uses ECS-compliant event.category values per
+https://www.elastic.co/docs/reference/ecs/ecs-allowed-values-event-category .
+Earlier versions used custom categories (`repository`, `group`, `cache`,
+`cooldown`, `pypi`, etc.). If you have existing Kibana saved queries or
+dashboards filtering on the old categories, update them using the migration
+table below:
+
+| Old category | New ECS category |
+|--------------|------------------|
+| repository, http, server, group, pypi, npm, maven, docker | web |
+| cache, cooldown, search, index, artifact | database |
+| storage | file |
+| scheduling, metrics, scripting, events | process |
+| cluster, system, memory | host |
+| user, admin | iam |
+| security | authentication |
+| webhook, http_client | network |
+| factory | configuration |
+
+**Note (v2.1.3+):** `event.duration` is in **milliseconds** (Pantera convention,
+deviates from ECS nanoseconds standard). Historical logs may have nanosecond
+values — check the timestamp before applying queries. If you have Kibana saved
+queries comparing event.duration to nanosecond thresholds (e.g. `> 1000000000`
+for 1s), divide by 1_000_000 to convert.
+
+Example slow-request query (>5s):
+- Old (nanoseconds): `event.duration > 5000000000`
+- New (milliseconds): `event.duration > 5000`
 
 ### HTTP Fields (request/response logging)
 
@@ -313,7 +342,7 @@ docker logs pantera 2>&1 | jq 'select(.["http.response.status_code"] >= 400)'
 docker logs pantera 2>&1 | jq 'select(.["repository.name"] == "pypi-proxy")'
 
 # Show request details for slow requests (>1s)
-docker logs pantera 2>&1 | jq 'select(.["event.duration"] > 1000000000) | {method: .["http.request.method"], path: .["url.original"], status: .["http.response.status_code"], duration_ms: (.["event.duration"] / 1000000)}'
+docker logs pantera 2>&1 | jq 'select(.["event.duration"] > 1000) | {method: .["http.request.method"], path: .["url.original"], status: .["http.response.status_code"], duration_ms: .["event.duration"]}'
 
 # Filter group lookup failures (artifact not found in any member)
 docker logs pantera 2>&1 | jq 'select(.["event.action"] == "group_lookup_miss")'
@@ -337,10 +366,10 @@ event.action: "group_lookup_miss"
 event.category: "authentication" AND event.outcome: "failure"
 
 # Slow requests (>2 seconds)
-event.duration > 2000000000
+event.duration > 2000
 
-# Specific package operations
-package.name: "pydantic" AND event.category: "cooldown"
+# Specific package operations (cooldown checks are now event.category: "database")
+package.name: "pydantic" AND event.category: "database"
 ```
 
 > **Note:** Individual group member 404s during fanout are logged at `DEBUG` level with `event.action: "group_fanout_miss"`. These are expected behavior and not visible at default INFO level. Only the aggregate "not found in any member" is logged at `WARN` with `event.action: "group_lookup_miss"`.

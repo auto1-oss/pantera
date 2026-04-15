@@ -65,4 +65,31 @@ final class MemberSliceTest {
         registry.recordFailure("test-member");
         assertThat(member.circuitState(), equalTo("BLOCKED"));
     }
+
+    @Test
+    void sharedRegistryAcrossGroupsReducesSignalFragmentation() {
+        // One shared registry for "maven-central" — simulates RepositorySlices.getOrCreateMemberRegistry
+        final AutoBlockRegistry sharedRegistry = new AutoBlockRegistry(new AutoBlockSettings(
+            2, Duration.ofMinutes(5), Duration.ofMinutes(60)
+        ));
+
+        // Two groups both containing "maven-central" — each wraps the same shared registry
+        final MemberSlice libsRelease = new MemberSlice("maven-central", null, sharedRegistry);
+        final MemberSlice libsSnapshot = new MemberSlice("maven-central", null, sharedRegistry);
+
+        // Initially both views agree: circuit is ONLINE
+        assertThat(libsRelease.isCircuitOpen(), is(false));
+        assertThat(libsSnapshot.isCircuitOpen(), is(false));
+
+        // Cause N failures through libs-release (threshold = 2)
+        libsRelease.recordFailure();
+        assertThat(libsRelease.isCircuitOpen(), is(false));
+        libsRelease.recordFailure();
+
+        // libs-release has now tripped the circuit
+        assertThat(libsRelease.isCircuitOpen(), is(true));
+
+        // libs-snapshot immediately sees the same BLOCKED state — no extra failures needed
+        assertThat(libsSnapshot.isCircuitOpen(), is(true));
+    }
 }

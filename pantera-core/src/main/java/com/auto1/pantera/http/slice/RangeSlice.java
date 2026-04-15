@@ -261,7 +261,7 @@ public final class RangeSlice implements Slice {
             } else {
                 EcsLogger.warn("com.auto1.pantera.http")
                     .message("Error after range stream completion (state: completed)")
-                    .eventCategory("http")
+                    .eventCategory("web")
                     .eventAction("range_stream_error")
                     .eventOutcome("failure")
                     .field("error.message", error.getMessage())

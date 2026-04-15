@@ -142,7 +142,7 @@ public interface MergePackage {
             final JsonObjectBuilder bldr = Json.createObjectBuilder();
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Merging package versions (" + vrsns.size() + " local versions, remote present: " + rmt.isPresent() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("package_merge")
                 .field("package.name", this.name)
                 .log();

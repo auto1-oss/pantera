@@ -133,7 +133,7 @@ public final class DbNodeRegistry {
             pstmt.executeUpdate();
             EcsLogger.info(DbNodeRegistry.LOGGER)
                 .message("Node registered: " + node.nodeId())
-                .eventCategory("cluster")
+                .eventCategory("host")
                 .eventAction("node_register")
                 .eventOutcome("success")
                 .log();
@@ -159,14 +159,14 @@ public final class DbNodeRegistry {
             if (updated == 0) {
                 EcsLogger.warn(DbNodeRegistry.LOGGER)
                     .message("Heartbeat for unknown node: " + nodeId)
-                    .eventCategory("cluster")
+                    .eventCategory("host")
                     .eventAction("node_heartbeat")
                     .eventOutcome("failure")
                     .log();
             } else {
                 EcsLogger.debug(DbNodeRegistry.LOGGER)
                     .message("Heartbeat received: " + nodeId)
-                    .eventCategory("cluster")
+                    .eventCategory("host")
                     .eventAction("node_heartbeat")
                     .eventOutcome("success")
                     .log();
@@ -191,7 +191,7 @@ public final class DbNodeRegistry {
             pstmt.executeUpdate();
             EcsLogger.info(DbNodeRegistry.LOGGER)
                 .message("Node deregistered: " + nodeId)
-                .eventCategory("cluster")
+                .eventCategory("host")
                 .eventAction("node_deregister")
                 .eventOutcome("success")
                 .log();
@@ -238,7 +238,7 @@ public final class DbNodeRegistry {
         }
         EcsLogger.debug(DbNodeRegistry.LOGGER)
             .message("Live nodes query: " + result.size() + " nodes (timeout=" + heartbeatTimeoutMs + "ms)")
-            .eventCategory("cluster")
+            .eventCategory("host")
             .eventAction("live_nodes_query")
             .eventOutcome("success")
             .log();
@@ -267,7 +267,7 @@ public final class DbNodeRegistry {
         if (evicted > 0) {
             EcsLogger.info(DbNodeRegistry.LOGGER)
                 .message("Evicted " + evicted + " stale nodes (timeout=" + heartbeatTimeoutMs + "ms)")
-                .eventCategory("cluster")
+                .eventCategory("host")
                 .eventAction("node_evict")
                 .eventOutcome("success")
                 .log();

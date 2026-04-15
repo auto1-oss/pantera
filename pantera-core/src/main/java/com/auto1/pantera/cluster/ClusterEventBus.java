@@ -99,7 +99,7 @@ public final class ClusterEventBus implements AutoCloseable {
                 "Cluster event bus started (instance: "
                     + this.instanceId.substring(0, 8) + ")"
             )
-            .eventCategory("cluster")
+            .eventCategory("host")
             .eventAction("eventbus_start")
             .eventOutcome("success")
             .log();
@@ -121,7 +121,7 @@ public final class ClusterEventBus implements AutoCloseable {
         this.pubCommands.publish(channel, message);
         EcsLogger.debug("com.auto1.pantera.cluster")
             .message("Event published: " + topic)
-            .eventCategory("cluster")
+            .eventCategory("host")
             .eventAction("event_publish")
 
             .eventOutcome("success")
@@ -147,7 +147,7 @@ public final class ClusterEventBus implements AutoCloseable {
             this.subConn.async().subscribe(channel);
             EcsLogger.debug("com.auto1.pantera.cluster")
                 .message("Subscribed to topic: " + topic)
-                .eventCategory("cluster")
+                .eventCategory("host")
                 .eventAction("topic_subscribe")
     
                 .eventOutcome("success")
@@ -179,7 +179,7 @@ public final class ClusterEventBus implements AutoCloseable {
         this.pubConn.close();
         EcsLogger.info("com.auto1.pantera.cluster")
             .message("Cluster event bus closed")
-            .eventCategory("cluster")
+            .eventCategory("host")
             .eventAction("eventbus_stop")
             .eventOutcome("success")
             .log();
@@ -221,7 +221,7 @@ public final class ClusterEventBus implements AutoCloseable {
                             "Event handler failed for topic: " + topic
                         )
                         .error(ex)
-                        .eventCategory("cluster")
+                        .eventCategory("host")
                         .eventAction("event_dispatch")
             
                         .eventOutcome("failure")
@@ -233,7 +233,7 @@ public final class ClusterEventBus implements AutoCloseable {
                     "Event dispatched: " + topic + " to "
                         + topicHandlers.size() + " handler(s)"
                 )
-                .eventCategory("cluster")
+                .eventCategory("host")
                 .eventAction("event_dispatch")
     
                 .eventOutcome("success")

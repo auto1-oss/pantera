@@ -17,6 +17,7 @@ import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import org.slf4j.MDC;
 
 import java.time.Duration;
@@ -174,7 +175,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         if (!this.settings.enabledFor(repoType)) {
             EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message("Cooldown disabled for repo type, returning raw metadata")
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metadata_filter")
                 .field("repository.type", repoType)
                 .field("package.name", packageName)
@@ -211,7 +212,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         final Optional<CooldownInspector> inspectorOpt,
         final long startTime
     ) {
-        return CompletableFuture.supplyAsync(() -> {
+        return CompletableFuture.supplyAsync(MdcPropagation.withMdcSupplier(() -> {
             // Step 1: Parse metadata
             final T parsed = parser.parse(rawMetadata);
             final List<String> allVersions = parser.extractVersions(parsed);
@@ -219,7 +220,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             if (allVersions.isEmpty()) {
                 EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                     .message("No versions in metadata")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metadata_filter")
                     .field("repository.type", repoType)
                     .field("package.name", packageName)
@@ -303,7 +304,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 .message(String.format(
                     "Evaluating cooldown for versions: %d total, %d to evaluate",
                     allVersions.size(), versionsToEvaluate.size()))
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metadata_filter")
                 .field("repository.type", repoType)
                 .field("package.name", packageName)
@@ -314,14 +315,14 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 allVersions, sortedVersions, versionsToEvaluate,
                 parser, filter, rewriter, inspectorOpt, startTime
             );
-        }, this.executor).thenCompose(ctx -> {
+        }), this.executor).thenCompose(MdcPropagation.withMdc(ctx -> {
             if (ctx instanceof FilteredMetadataCache.CacheEntry) {
                 return CompletableFuture.completedFuture((FilteredMetadataCache.CacheEntry) ctx);
             }
             @SuppressWarnings("unchecked")
             final FilterContext<T> context = (FilterContext<T>) ctx;
             return this.evaluateAndFilter(context);
-        });
+        }));
     }
 
     /**
@@ -337,7 +338,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             .collect(Collectors.toList());
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .thenApply(ignored -> {
+            .thenApply(MdcPropagation.withMdcFunction(ignored -> {
                 // Step 5: Collect blocked versions and find earliest blockedUntil
                 final Set<String> blockedVersions = new HashSet<>();
                 Instant earliestBlockedUntil = null;
@@ -357,7 +358,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                     .message(String.format(
                         "Cooldown evaluation complete: %d versions blocked", blockedVersions.size()))
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metadata_filter")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
@@ -392,7 +393,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                             .message(String.format(
                                 "Updated latest version (by release date): %s -> %s",
                                 currentLatest.get(), newLatest.get()))
-                            .eventCategory("cooldown")
+                            .eventCategory("database")
                             .eventAction("metadata_filter")
                             .field("package.name", ctx.packageName)
                             .log();
@@ -408,12 +409,12 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     .message(String.format(
                         "Metadata filtering complete: %d total versions, %d blocked",
                         ctx.allVersions.size(), blockedVersions.size()))
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metadata_filter")
                     .eventOutcome("success")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
-                    .field("event.duration", durationMs * 1_000_000L)
+                    .field("event.duration", durationMs)
                     .log();
 
                 // Record metrics via CooldownMetrics
@@ -431,7 +432,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     );
                 }
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(resultBytes, this.maxTtl);
-            }).whenComplete((result, error) -> {
+            })).whenComplete((result, error) -> {
                 // Clear preloaded dates
                 ctx.inspectorOpt.ifPresent(inspector -> {
                     if (inspector instanceof MetadataAwareInspector) {
@@ -509,7 +510,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
                 .message(String.format(
                     "Preloaded %d release dates from metadata", releaseDates.size()))
-                .eventCategory("cooldown")
+                .eventCategory("database")
                 .eventAction("metadata_filter")
                 .log();
         }
@@ -527,7 +528,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         }
         EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
             .message("Invalidated metadata cache")
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("cache_invalidate")
             .field("repository.type", repoType)
             .field("repository.name", repoName)
@@ -543,7 +544,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         }
         EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
             .message("Invalidated all metadata cache for repository")
-            .eventCategory("cooldown")
+            .eventCategory("database")
             .eventAction("cache_invalidate")
             .field("repository.type", repoType)
             .field("repository.name", repoName)

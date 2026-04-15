@@ -76,7 +76,7 @@ public final class ComposerImportPostProcessor {
     public CompletionStage<ComposerImportMerge.MergeResult> process() {
         EcsLogger.info("com.auto1.pantera.importer")
             .message("Starting Composer import post-processing")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("import_post_process")
             .field("repository.name", this.repoName)
             .log();
@@ -91,7 +91,7 @@ public final class ComposerImportPostProcessor {
                 if (error != null) {
                     EcsLogger.error("com.auto1.pantera.importer")
                         .message("Composer import merge failed")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_post_process")
                         .eventOutcome("failure")
                         .field("repository.name", this.repoName)
@@ -100,15 +100,16 @@ public final class ComposerImportPostProcessor {
                 } else if (result.failedPackages > 0) {
                     EcsLogger.warn("com.auto1.pantera.importer")
                         .message("Composer import merge completed with errors (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged, " + result.failedPackages + " failed)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_post_process")
-                        .eventOutcome("partial_failure")
+                        .eventOutcome("failure")
+                        .field("event.reason", "partial_failure")
                         .field("repository.name", this.repoName)
                         .log();
                 } else {
                     EcsLogger.info("com.auto1.pantera.importer")
                         .message("Composer import merge completed successfully (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged)")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("import_post_process")
                         .eventOutcome("success")
                         .field("repository.name", this.repoName)

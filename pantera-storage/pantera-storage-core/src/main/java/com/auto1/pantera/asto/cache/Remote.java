@@ -64,7 +64,7 @@ public interface Remote extends Supplier<CompletionStage<Optional<? extends Cont
                     } else {
                         EcsLogger.error("com.auto1.pantera.asto")
                             .message("Remote content retrieval failed")
-                            .eventCategory("cache")
+                            .eventCategory("database")
                             .eventAction("remote_get")
                             .eventOutcome("failure")
                             .error(throwable)

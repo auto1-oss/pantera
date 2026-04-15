@@ -244,7 +244,7 @@ public final class CachedNpmProxySlice implements Slice {
                 this.recordUpstreamErrorMetric(error);
                 EcsLogger.warn("com.auto1.pantera.npm")
                     .message("NPM proxy: upstream request failed")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_request")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)

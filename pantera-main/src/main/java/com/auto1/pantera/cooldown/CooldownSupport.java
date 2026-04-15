@@ -172,7 +172,7 @@ public final class CooldownSupport {
             } catch (final Exception err) {
                 EcsLogger.warn("com.auto1.pantera.cooldown")
                     .message("onBlockRemoved: metadata invalidation failed")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("metadata_cache_invalidate")
                     .eventOutcome("failure")
                     .field("package.name", artifact)

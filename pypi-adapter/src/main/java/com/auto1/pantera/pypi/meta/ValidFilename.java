@@ -33,7 +33,7 @@ public final class ValidFilename {
      * <a href="https://www.python.org/dev/peps/pep-0427/#file-name-convention">docs</a>.
      */
     private static final Pattern WHEEL_PTRN =
-        Pattern.compile("(?<name>.*?)-(?<version>[0-9a-z.]+)(-\\d+)?-((py\\d.?)+)-(.*)-(.*).whl");
+        Pattern.compile("(?<name>.*?)-(?<version>[0-9a-z.]+)(-\\d+)?-(((cp|pp|py)\\d[0-9a-z]*\\.?)+)-(.*)-(.*).whl");
 
     /**
      * Package info data.

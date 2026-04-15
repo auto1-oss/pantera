@@ -78,7 +78,7 @@ public final class DockerProxy implements Slice {
         final long start = System.currentTimeMillis();
         EcsLogger.info("com.auto1.pantera.docker.proxy")
             .message("DockerProxy request")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("http.request.method", line.method().value())
             .field("url.path", line.uri().getPath())
@@ -89,7 +89,7 @@ public final class DockerProxy implements Slice {
                 if (err != null) {
                     EcsLogger.error("com.auto1.pantera.docker.proxy")
                         .message("DockerProxy error")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_request")
                         .eventOutcome("failure")
                         .field("url.path", line.uri().getPath())
@@ -99,7 +99,7 @@ public final class DockerProxy implements Slice {
                 } else {
                     EcsLogger.info("com.auto1.pantera.docker.proxy")
                         .message("DockerProxy response")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_request")
                         .eventOutcome(resp.status().success() ? "success" : "failure")
                         .field("url.path", line.uri().getPath())

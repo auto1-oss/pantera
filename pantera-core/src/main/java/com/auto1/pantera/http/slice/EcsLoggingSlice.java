@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * ECS-compliant HTTP access logging slice.
- * 
+ *
  * <p>Replaces the old LoggingSlice with proper ECS field mapping and trace context.
  * Automatically logs all HTTP requests with:
  * <ul>
@@ -35,13 +35,27 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>Request/response timing</li>
  *   <li>Automatic log level selection (ERROR for 5xx, WARN for 4xx, DEBUG for success)</li>
  * </ul>
- * 
+ *
+ * <p>Access log emission is suppressed when the request carries the
+ * {@link #INTERNAL_ROUTING_HEADER} header, which GroupSlice sets when dispatching
+ * to member slices. Internal routing is already captured as DEBUG application logs
+ * in GroupSlice itself (event.action=group_index_hit, group_proxy_fanout, etc.).
+ *
  * <p>This slice should be used at the top level of the slice chain to ensure
  * all HTTP requests are logged consistently.
- * 
+ *
  * @since 1.18.24
  */
 public final class EcsLoggingSlice implements Slice {
+
+    /**
+     * Request header set by GroupSlice when dispatching to a member slice.
+     * When present, EcsLoggingSlice skips access log emission to avoid ~105K
+     * noise entries per 30 min from internal group-to-member queries.
+     * The header is group-internal and does NOT propagate to upstream remotes
+     * (proxy slice implementations forward {@code Headers.EMPTY} upstream).
+     */
+    public static final String INTERNAL_ROUTING_HEADER = "X-Pantera-Internal";
 
     /**
      * Origin slice.
@@ -131,31 +145,42 @@ public final class EcsLoggingSlice implements Slice {
             MDC.put(EcsMdc.REPO_TYPE, this.repoType);
         }
 
+        // Capture the internal-routing flag synchronously here (at request entry),
+        // before the async chain starts.  The headers object is captured in the
+        // closure below, but reading it here makes the intent explicit and avoids
+        // repeated iteration in the hot path.
+        final boolean internalRouting = !headers.find(INTERNAL_ROUTING_HEADER).isEmpty();
+
         return this.origin.response(line, headers, body)
             .thenApply(response -> {
                 final long duration = System.currentTimeMillis() - startTime;
 
-                // Build ECS log event
-                // NOTE: client.ip, user.name, trace.id are already in MDC (set above).
-                // EcsLayout includes all MDC entries in JSON output automatically.
-                // Do NOT add them to MapMessage — that causes duplicate fields in Elastic.
-                final EcsLogEvent logEvent = new EcsLogEvent()
-                    .httpMethod(line.method().value())
-                    .httpVersion(line.version())
-                    .httpStatus(response.status())
-                    .urlPath(line.uri().getPath())
-                    .urlOriginal(line.uri().toString())
-                    .userAgent(headers)
-                    .duration(duration);
+                // Skip access log for GroupSlice → member internal dispatches.
+                // Internal routing is captured as DEBUG application logs in GroupSlice
+                // (event.action=group_index_hit, group_proxy_fanout, etc.).
+                if (!internalRouting) {
+                    // Build ECS log event
+                    // NOTE: client.ip, user.name, trace.id are already in MDC (set above).
+                    // EcsLayout includes all MDC entries in JSON output automatically.
+                    // Do NOT add them to MapMessage — that causes duplicate fields in Elastic.
+                    final EcsLogEvent logEvent = new EcsLogEvent()
+                        .httpMethod(line.method().value())
+                        .httpVersion(line.version())
+                        .httpStatus(response.status())
+                        .urlPath(line.uri().getPath())
+                        .urlOriginal(line.uri().toString())
+                        .userAgent(headers)
+                        .duration(duration);
 
-                // Add query string if present
-                final String query = line.uri().getQuery();
-                if (query != null && !query.isEmpty()) {
-                    logEvent.urlQuery(query);
+                    // Add query string if present
+                    final String query = line.uri().getQuery();
+                    if (query != null && !query.isEmpty()) {
+                        logEvent.urlQuery(query);
+                    }
+
+                    // Log the event (automatically selects log level based on status)
+                    logEvent.log();
                 }
-
-                // Log the event (automatically selects log level based on status)
-                logEvent.log();
 
                 // Add traceparent response header for downstream correlation
                 final Headers responseHeaders = response.headers().copy()

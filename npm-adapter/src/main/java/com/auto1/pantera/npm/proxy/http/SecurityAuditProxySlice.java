@@ -51,7 +51,7 @@ final class SecurityAuditProxySlice implements Slice {
 
         EcsLogger.info("com.auto1.pantera.npm")
             .message("NPM Audit Proxy - Streaming request (repo: " + this.repo + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("audit_proxy")
             .field("url.original", line.uri().getPath())
             .field("url.path", upstreamLine.uri().getPath())

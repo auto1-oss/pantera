@@ -111,7 +111,7 @@ public final class TempFileCleanupJob implements Job {
         if (dir == null) {
             EcsLogger.warn("com.auto1.pantera.scheduling")
                 .message("TempFileCleanupJob: no cleanupDir configured, skipping")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
                 .log();
@@ -124,7 +124,7 @@ public final class TempFileCleanupJob implements Job {
                         "TempFileCleanupJob: directory does not exist: %s", dir
                     )
                 )
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
                 .log();
@@ -152,7 +152,7 @@ public final class TempFileCleanupJob implements Job {
                                         file
                                     )
                                 )
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("temp_cleanup_delete")
                                 .eventOutcome("success")
                                 .log();
@@ -164,7 +164,7 @@ public final class TempFileCleanupJob implements Job {
                                         "TempFileCleanupJob: failed to delete: %s", file
                                     )
                                 )
-                                .eventCategory("scheduling")
+                                .eventCategory("process")
                                 .eventAction("temp_cleanup_delete")
                                 .eventOutcome("failure")
                                 .error(ex)
@@ -184,7 +184,7 @@ public final class TempFileCleanupJob implements Job {
                                 "TempFileCleanupJob: cannot access file: %s", file
                             )
                         )
-                        .eventCategory("scheduling")
+                        .eventCategory("process")
                         .eventAction("temp_cleanup")
                         .eventOutcome("failure")
                         .error(exc)
@@ -199,7 +199,7 @@ public final class TempFileCleanupJob implements Job {
                         "TempFileCleanupJob: error walking directory: %s", dir
                     )
                 )
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("temp_cleanup")
                 .eventOutcome("failure")
                 .error(ex)
@@ -212,7 +212,7 @@ public final class TempFileCleanupJob implements Job {
                     dir, deleted.get(), failed.get()
                 )
             )
-            .eventCategory("scheduling")
+            .eventCategory("process")
             .eventAction("temp_cleanup")
             .eventOutcome("success")
             .log();

@@ -31,6 +31,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import io.reactivex.Flowable;
@@ -42,6 +43,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -56,6 +58,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -418,7 +421,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(cached -> {
+            .thenCompose(MdcPropagation.withMdc(cached -> {
                 if (cached.isPresent()) {
                     this.logDebug("Cache hit", path);
                     // Fast path: serve from cache with async metadata
@@ -431,7 +434,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }
                 // Cache miss: evaluate cooldown then fetch
                 return this.evaluateCooldownAndFetch(line, headers, key, path, store);
-            }).toCompletableFuture();
+            })).toCompletableFuture();
     }
 
     /**
@@ -451,14 +454,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.buildCooldownRequest(path, headers);
             if (request.isPresent()) {
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
-                    .thenCompose(result -> {
+                    .thenCompose(MdcPropagation.withMdc(result -> {
                         if (result.blocked()) {
                             return CompletableFuture.completedFuture(
                                 CooldownResponses.forbidden(result.block().orElseThrow())
                             );
                         }
                         return this.fetchAndCache(line, key, headers, store);
-                    });
+                    }));
             }
         }
         return this.fetchAndCache(line, key, headers, store);
@@ -477,7 +480,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final String owner = new Login(headers).getValue();
         final long startTime = System.currentTimeMillis();
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
+            .thenCompose(MdcPropagation.withMdc(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
@@ -495,24 +498,33 @@ public abstract class BaseCachedProxySlice implements Slice {
                         .thenApply(r -> RequestDeduplicator.FetchSignal.SUCCESS);
                 }).thenCompose(signal ->
                     this.signalToResponse(signal, line, key, headers, store));
-            })
-            .exceptionally(error -> {
-                final long duration = System.currentTimeMillis() - startTime;
-                this.trackUpstreamFailure(error);
-                this.recordProxyMetric("exception", duration);
-                EcsLogger.warn("com.auto1.pantera." + this.repoType)
-                    .message("Upstream request failed with exception")
-                    .eventCategory("repository")
-                    .eventAction("proxy_upstream")
-                    .eventOutcome("failure")
-                    .field("repository.name", this.repoName)
-                    .field("event.duration", duration)
-                    .error(error)
-                    .log();
-                return ResponseBuilder.unavailable()
-                    .textBody("Upstream temporarily unavailable")
-                    .build();
-            });
+            }))
+            .handle(MdcPropagation.withMdcBiFunction((resp, error) -> {
+                if (error != null) {
+                    final long duration = System.currentTimeMillis() - startTime;
+                    this.trackUpstreamFailure(error);
+                    this.recordProxyMetric("exception", duration);
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Upstream request failed with exception")
+                        .eventCategory("web")
+                        .eventAction("proxy_upstream")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("event.duration", duration)
+                        .error(error)
+                        .log();
+                    return this.tryServeStale(
+                        key,
+                        () -> CompletableFuture.completedFuture(
+                            ResponseBuilder.unavailable()
+                                .textBody("Upstream temporarily unavailable")
+                                .build()
+                        )
+                    );
+                }
+                return CompletableFuture.completedFuture(resp);
+            }))
+            .thenCompose(future -> future);
     }
 
     /**
@@ -548,10 +560,13 @@ public abstract class BaseCachedProxySlice implements Slice {
                 );
             case ERROR:
             default:
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.unavailable()
-                        .textBody("Upstream temporarily unavailable")
-                        .build()
+                return this.tryServeStale(
+                    key,
+                    () -> CompletableFuture.completedFuture(
+                        ResponseBuilder.unavailable()
+                            .textBody("Upstream temporarily unavailable")
+                            .build()
+                    )
                 );
         }
     }
@@ -581,7 +596,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         } catch (final IOException ex) {
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to create temp file for cache streaming")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName)
@@ -619,7 +634,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 streamDone::completeExceptionally,
                 () -> streamDone.complete(null)
             );
-        return streamDone.thenCompose(v -> {
+        return streamDone.thenCompose(MdcPropagation.withMdc(v -> {
             final Map<String, String> digestResults =
                 DigestComputer.finalizeDigests(digests);
             final long size = totalSize.get();
@@ -666,11 +681,11 @@ public abstract class BaseCachedProxySlice implements Slice {
                     deleteTempQuietly(tempFile);
                     return RequestDeduplicator.FetchSignal.SUCCESS;
                 });
-        }).exceptionally(err -> {
+        })).exceptionally(MdcPropagation.withMdcFunction(err -> {
             deleteTempQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_cache")
                 .eventOutcome("failure")
                 .field("repository.name", this.repoName)
@@ -678,7 +693,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .error(err)
                 .log();
             return RequestDeduplicator.FetchSignal.ERROR;
-        });
+        }));
     }
 
     /**
@@ -809,13 +824,13 @@ public abstract class BaseCachedProxySlice implements Slice {
                     )
                 );
             })
-            .exceptionally(error -> {
+            .exceptionally(MdcPropagation.withMdcFunction(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Direct upstream request failed with exception")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_upstream")
                     .eventOutcome("failure")
                     .field("repository.name", this.repoName)
@@ -825,7 +840,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
                     .build();
-            });
+            }));
     }
 
     private CompletableFuture<RequestDeduplicator.FetchSignal> handle404(
@@ -857,11 +872,110 @@ public abstract class BaseCachedProxySlice implements Slice {
                 : RequestDeduplicator.FetchSignal.ERROR);
     }
 
+    /**
+     * Try to serve stale cached bytes when upstream has failed.
+     *
+     * <p>If {@link ProxyCacheConfig#staleWhileRevalidateEnabled()} is true AND
+     * the backing storage contains bytes for {@code key}, returns a 200 response
+     * from storage with the {@code X-Pantera-Stale: true} header set.
+     *
+     * <p>Note on {@code staleMaxAge}: the backing {@link Storage} API (as implemented
+     * by {@code InMemoryStorage} and {@code FileStorage}) does not guarantee that
+     * {@code Meta.OP_UPDATED_AT} is populated. Age-based expiry is therefore not enforced
+     * here; operators should rely on cache-layer TTL or eviction policies instead.
+     *
+     * @param key Cache key for the artifact
+     * @param fallback Supplier of the original error response (used when stale is unavailable)
+     * @return Future response — either stale 200 or the original error
+     */
+    private CompletableFuture<Response> tryServeStale(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback
+    ) {
+        if (!this.config.staleWhileRevalidateEnabled() || this.storage.isEmpty()) {
+            return fallback.get();
+        }
+        if (this.metadataStore.isPresent()) {
+            return this.metadataStore.get().load(key).thenCompose(MdcPropagation.withMdc(metaOpt -> {
+                if (metaOpt.isEmpty()) {
+                    return this.serveStaleFromStorage(key, fallback);
+                }
+                final CachedArtifactMetadataStore.Metadata meta = metaOpt.get();
+                final Duration age = Duration.between(meta.savedAt(), Instant.now());
+                if (age.compareTo(this.config.staleMaxAge()) > 0) {
+                    EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                        .message("Stale artifact too old, refusing to serve")
+                        .eventCategory("network")
+                        .eventAction("stale_too_old")
+                        .eventOutcome("failure")
+                        .field("repository.name", this.repoName)
+                        .field("url.path", key.string())
+                        .field("stale.age.seconds", age.getSeconds())
+                        .field("stale.max.age.seconds", this.config.staleMaxAge().getSeconds())
+                        .log();
+                    return fallback.get();
+                }
+                return this.serveStaleFromStorageWithAge(key, fallback, age);
+            }));
+        }
+        return this.serveStaleFromStorage(key, fallback);
+    }
+
+    private CompletableFuture<Response> serveStaleFromStorage(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback
+    ) {
+        final Storage store = this.storage.get();
+        return store.exists(key).thenCompose(MdcPropagation.withMdc(exists -> {
+            if (!exists) {
+                return fallback.get();
+            }
+            return serveStaleFromStorageWithAge(key, fallback, null);
+        }));
+    }
+
+    private CompletableFuture<Response> serveStaleFromStorageWithAge(
+        final Key key,
+        final Supplier<CompletableFuture<Response>> fallback,
+        final Duration age
+    ) {
+        final Storage store = this.storage.get();
+        return store.value(key)
+            .thenApply(MdcPropagation.withMdcFunction(content -> {
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("Upstream failed, serving stale cached artifact")
+                    .eventCategory("network")
+                    .eventAction("stale_serve")
+                    .eventOutcome("success")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", key.string())
+                    .log();
+                final ResponseBuilder builder = ResponseBuilder.ok()
+                    .header("X-Pantera-Stale", "true");
+                if (age != null) {
+                    builder.header("Age", String.valueOf(age.getSeconds()));
+                }
+                return (Response) builder.body(content).build();
+            }))
+            .exceptionallyCompose(MdcPropagation.withMdc(err -> {
+                EcsLogger.warn("com.auto1.pantera." + this.repoType)
+                    .message("Failed to read stale artifact from storage")
+                    .eventCategory("web")
+                    .eventAction("stale_serve")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .field("url.path", key.string())
+                    .error(err)
+                    .log();
+                return fallback.get();
+            }));
+    }
+
     private CompletableFuture<Response> serveChecksumFromStorage(
         final RequestLine line, final Key key, final String owner
     ) {
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(cached -> {
+            .thenCompose(MdcPropagation.withMdc(cached -> {
                 if (cached.isPresent()) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.ok()
@@ -871,7 +985,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return this.fetchDirect(line, key, owner);
-            }).toCompletableFuture();
+            })).toCompletableFuture();
     }
 
     private CompletableFuture<Response> handleRootPath(final RequestLine line) {
@@ -942,7 +1056,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     private void logDebug(final String message, final String path) {
         EcsLogger.debug("com.auto1.pantera." + this.repoType)
             .message(message)
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("repository.name", this.repoName)
             .field("url.path", path)

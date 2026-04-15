@@ -52,7 +52,7 @@ public final class QuartzSchema {
             QuartzSchema.createIndexes(stmt);
             EcsLogger.info("com.auto1.pantera.scheduling")
                 .message("Quartz JDBC schema created or verified")
-                .eventCategory("scheduling")
+                .eventCategory("process")
                 .eventAction("schema_create")
                 .eventOutcome("success")
                 .log();

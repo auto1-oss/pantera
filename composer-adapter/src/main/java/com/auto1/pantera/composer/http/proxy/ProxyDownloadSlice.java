@@ -151,14 +151,14 @@ public final class ProxyDownloadSlice implements Slice {
             final String path = line.uri().getPath();
             EcsLogger.info("com.auto1.pantera.composer")
                 .message("ProxyDownloadSlice handling request")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("url.path", path)
                 .field("http.request.method", line.method().value())
                 .log();
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Full request URI")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("url.full", line.uri().toString())
                 .log();
@@ -168,7 +168,7 @@ public final class ProxyDownloadSlice implements Slice {
             if (!matcher.matches()) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("URL doesn't match download pattern (expected pattern: /dist/vendor/package/version)")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
                     .field("url.path", path)
@@ -184,7 +184,7 @@ public final class ProxyDownloadSlice implements Slice {
 
             EcsLogger.info("com.auto1.pantera.composer")
                 .message("Download request for package")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("package.name", packageName)
                 .field("package.version", version)
@@ -219,9 +219,9 @@ public final class ProxyDownloadSlice implements Slice {
                 if (foundKey != null) {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cache HIT for dist artifact")
-                        .eventCategory("repository")
-                        .eventAction("proxy_download")
-                        .eventOutcome("cache_hit")
+                        .eventCategory("web")
+                        .eventAction("cache_hit")
+                        .eventOutcome("success")
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .log();
@@ -238,9 +238,10 @@ public final class ProxyDownloadSlice implements Slice {
                     if (result.blocked()) {
                         EcsLogger.info("com.auto1.pantera.composer")
                             .message("Cooldown blocked download")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_download")
-                            .eventOutcome("blocked")
+                            .eventOutcome("failure")
+                            .field("event.reason", "cooldown_active")
                             .field("package.name", packageName)
                             .field("package.version", version)
                             .log();
@@ -270,7 +271,7 @@ public final class ProxyDownloadSlice implements Slice {
             if (originalUrl.isEmpty()) {
                 EcsLogger.error("com.auto1.pantera.composer")
                     .message("Could not find original URL for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
                     .field("package.name", packageName)
@@ -295,7 +296,7 @@ public final class ProxyDownloadSlice implements Slice {
             final Headers out = buildUpstreamHeaders(headers);
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Fetching dist from upstream")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("url.original", orig)
                 .log();
@@ -303,7 +304,7 @@ public final class ProxyDownloadSlice implements Slice {
                 if (!response.status().success()) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Upstream download failed")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_download")
                         .eventOutcome("failure")
                         .field("package.name", packageName)
@@ -316,7 +317,7 @@ public final class ProxyDownloadSlice implements Slice {
                 return response.body().asBytesFuture().thenCompose(bytes -> {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Caching dist artifact to storage")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_download")
                         .eventOutcome("success")
                         .field("package.name", packageName)
@@ -433,7 +434,7 @@ public final class ProxyDownloadSlice implements Slice {
             if (!exists) {
                 EcsLogger.warn("com.auto1.pantera.composer")
                     .message("Metadata not found for package")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_download")
                     .eventOutcome("failure")
                     .field("package.name", packageName)
@@ -493,7 +494,7 @@ public final class ProxyDownloadSlice implements Slice {
                             originalUrl = dist.getString("original_url");
                             EcsLogger.info("com.auto1.pantera.composer")
                                 .message("Using original_url from metadata")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_download")
                                 .field("package.name", packageName)
                                 .field("package.version", version)
@@ -504,7 +505,7 @@ public final class ProxyDownloadSlice implements Slice {
                             originalUrl = dist.getString("url");
                             EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("No original_url found in dist, using url field")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_download")
                                 .field("package.name", packageName)
                                 .field("package.version", version)
@@ -514,7 +515,7 @@ public final class ProxyDownloadSlice implements Slice {
                         if (originalUrl == null || originalUrl.isEmpty()) {
                             EcsLogger.warn("com.auto1.pantera.composer")
                                 .message("No dist URL found for package")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_download")
                                 .eventOutcome("failure")
                                 .field("package.name", packageName)
@@ -524,7 +525,7 @@ public final class ProxyDownloadSlice implements Slice {
                         }
                         EcsLogger.info("com.auto1.pantera.composer")
                             .message("Found original URL for package")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_download")
                             .field("package.name", packageName)
                             .field("package.version", version)
@@ -534,7 +535,7 @@ public final class ProxyDownloadSlice implements Slice {
                     } catch (Exception ex) {
                         EcsLogger.error("com.auto1.pantera.composer")
                             .message("Failed to parse metadata")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_download")
                             .eventOutcome("failure")
                             .field("package.name", packageName)
@@ -569,7 +570,7 @@ public final class ProxyDownloadSlice implements Slice {
         if (this.events.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Events queue is empty, skipping event")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_download")
                 .field("package.name", packageName)
                 .log();
@@ -588,7 +589,7 @@ public final class ProxyDownloadSlice implements Slice {
         );
         EcsLogger.info("com.auto1.pantera.composer")
             .message("Emitted download event (queue size: " + this.events.get().size() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_download")
             .eventOutcome("success")
             .field("package.name", packageName)

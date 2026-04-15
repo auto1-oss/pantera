@@ -12,6 +12,7 @@ package com.auto1.pantera.cooldown.metadata;
 
 import com.auto1.pantera.cache.ValkeyConnection;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
@@ -250,8 +251,8 @@ public final class FilteredMetadataCache {
             return this.l2Connection.async().get(key)
                 .toCompletableFuture()
                 .orTimeout(100, TimeUnit.MILLISECONDS)
-                .exceptionally(err -> null)
-                .thenCompose(l2Bytes -> {
+                .exceptionally(MdcPropagation.<Throwable, byte[]>withMdcFunction(err -> null))
+                .thenCompose(MdcPropagation.withMdc(l2Bytes -> {
                     if (l2Bytes != null) {
                         this.l2Hits++;
                         if (CooldownMetrics.isAvailable()) {
@@ -271,7 +272,7 @@ public final class FilteredMetadataCache {
                         CooldownMetrics.getInstance().recordCacheMiss();
                     }
                     return this.loadAndCache(key, loader);
-                });
+                }));
         }
 
         // Single-tier: load and cache
@@ -298,7 +299,7 @@ public final class FilteredMetadataCache {
 
         // Start loading
         final CompletableFuture<CacheEntry> future = loader.get()
-            .whenComplete((entry, error) -> {
+            .whenComplete(MdcPropagation.withMdcBiConsumer((entry, error) -> {
                 this.inflight.remove(key);
                 if (error == null && entry != null) {
                     // Cache in L1 with L1 TTL (skip in L2-only mode)
@@ -319,7 +320,7 @@ public final class FilteredMetadataCache {
                         }
                     }
                 }
-            });
+            }));
 
         this.inflight.put(key, future);
         return future.thenApply(CacheEntry::data);
@@ -375,11 +376,11 @@ public final class FilteredMetadataCache {
         // L2: Pattern delete (expensive but rare)
         if (this.l2Connection != null) {
             this.l2Connection.async().keys(prefix + "*")
-                .thenAccept(keys -> {
+                .thenAccept(MdcPropagation.withMdcConsumer(keys -> {
                     if (keys != null && !keys.isEmpty()) {
                         this.l2Connection.async().del(keys.toArray(new String[0]));
                     }
-                });
+                }));
         }
     }
 

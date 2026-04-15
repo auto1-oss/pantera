@@ -3,13 +3,12 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
-import { generateTokenForSession, listTokens, revokeToken, getAuthSettings, type ApiToken } from '@/api/auth'
+import { listTokens, revokeToken, type ApiToken } from '@/api/auth'
 import { changePassword } from '@/api/users'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
-import Select from 'primevue/select'
 import Message from 'primevue/message'
 import PasswordComplexityForm from '@/components/auth/PasswordComplexityForm.vue'
 
@@ -27,34 +26,12 @@ const permissionEntries = computed(() =>
   Object.entries(auth.user?.permissions ?? {}).filter(([, v]) => v),
 )
 
-// Token generation
-const generatedToken = ref('')
-const tokenLoading = ref(false)
-const selectedExpiry = ref(30)
-const expiryOptions = ref([
-  { label: '30 days', value: 30 },
-  { label: '90 days', value: 90 },
-])
-
 // Existing tokens
 const tokens = ref<ApiToken[]>([])
 const tokensLoading = ref(false)
 
-onMounted(async () => {
+onMounted(() => {
   loadTokens()
-  try {
-    const settings = await getAuthSettings()
-    const maxTtlDays = Math.floor(parseInt(settings.api_token_max_ttl_seconds ?? '7776000') / 86400)
-    const allowPermanent = settings.api_token_allow_permanent === 'true'
-    const opts = []
-    if (maxTtlDays >= 30) opts.push({ label: '30 days', value: 30 })
-    if (maxTtlDays >= 90) opts.push({ label: '90 days', value: 90 })
-    if (maxTtlDays >= 365) opts.push({ label: '1 year', value: 365 })
-    if (allowPermanent) opts.push({ label: 'Permanent (no expiry)', value: 0 })
-    if (opts.length > 0) expiryOptions.value = opts
-  } catch {
-    // Keep defaults if settings unavailable
-  }
 })
 
 async function loadTokens() {
@@ -68,21 +45,6 @@ async function loadTokens() {
   }
 }
 
-async function handleGenerateToken() {
-  tokenLoading.value = true
-  generatedToken.value = ''
-  try {
-    const resp = await generateTokenForSession(selectedExpiry.value)
-    generatedToken.value = resp.token
-    notify.success('Token generated', 'Copy it now — it will not be shown again.')
-    await loadTokens()
-  } catch {
-    notify.error('Token generation failed', 'Could not generate token. Try logging in again.')
-  } finally {
-    tokenLoading.value = false
-  }
-}
-
 async function handleRevoke(tokenId: string) {
   try {
     await revokeToken(tokenId)
@@ -91,11 +53,6 @@ async function handleRevoke(tokenId: string) {
   } catch {
     notify.error('Revoke failed', 'Could not revoke the token.')
   }
-}
-
-function copyToken() {
-  navigator.clipboard.writeText(generatedToken.value)
-  notify.success('Copied', 'Token copied to clipboard.')
 }
 
 function formatDate(iso: string): string {
@@ -210,42 +167,6 @@ async function submitPasswordChange() {
               :disabled="!pwValid"
             />
           </form>
-        </template>
-      </Card>
-
-      <Card class="shadow-sm">
-        <template #title>Generate API Token</template>
-        <template #content>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
-            Generate an API token for CLI and CI/CD use. The token inherits your account permissions.
-          </p>
-          <div class="flex items-end gap-3">
-            <div>
-              <label class="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Expiry</label>
-              <Select
-                v-model="selectedExpiry"
-                :options="expiryOptions"
-                optionLabel="label"
-                optionValue="value"
-                class="w-48"
-              />
-            </div>
-            <Button
-              label="Generate"
-              icon="pi pi-key"
-              :loading="tokenLoading"
-              @click="handleGenerateToken"
-            />
-          </div>
-          <div v-if="generatedToken" class="mt-3">
-            <div class="flex items-center gap-2">
-              <code class="flex-1 p-2 bg-gray-100 dark:bg-gray-700 rounded text-sm font-mono break-all">
-                {{ generatedToken }}
-              </code>
-              <Button icon="pi pi-copy" severity="secondary" text @click="copyToken" />
-            </div>
-            <p class="text-xs text-orange-500 mt-1">Copy this token now — it will not be shown again.</p>
-          </div>
         </template>
       </Card>
 

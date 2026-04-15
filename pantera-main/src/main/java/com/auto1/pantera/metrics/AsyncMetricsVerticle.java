@@ -254,7 +254,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
             } catch (Exception e) {
                 EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message("Metrics scrape failed, using stale cache")
-                    .eventCategory("metrics")
+                    .eventCategory("process")
                     .eventAction("scrape")
                     .eventOutcome("failure")
                     .error(e)
@@ -339,9 +339,10 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
         if (scrapeDuration > 1000) {
             EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                 .message(String.format("Slow metrics scrape detected: %d bytes", result.getBytes(StandardCharsets.UTF_8).length))
-                .eventCategory("metrics")
+                .eventCategory("process")
                 .eventAction("scrape")
-                .eventOutcome("slow")
+                .eventOutcome("success")
+                .field("event.reason", "slow_response")
                 .field("event.duration", scrapeDuration)
                 .log();
         }
@@ -439,7 +440,7 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
             if (ar.failed()) {
                 EcsLogger.warn("com.auto1.pantera.metrics.AsyncMetricsVerticle")
                     .message("Cache refresh failed")
-                    .eventCategory("metrics")
+                    .eventCategory("process")
                     .eventAction("cache_refresh")
                     .eventOutcome("failure")
                     .error(ar.cause())

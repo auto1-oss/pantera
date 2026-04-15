@@ -29,6 +29,8 @@ import com.auto1.pantera.maven.metadata.Version;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.jcabi.xml.XMLDocument;
 
+import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -38,6 +40,14 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import org.w3c.dom.Document;
+import org.xml.sax.ErrorHandler;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
 
 /**
  * Simple upload slice that saves files directly to storage, similar to Gradle adapter.
@@ -107,7 +117,7 @@ public final class UploadSlice implements Slice {
             sanitizedPath = path.substring(0, semicolonIndex);
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Stripped metadata properties from path: " + path + " -> " + sanitizedPath)
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("path_sanitization")
                 .log();
         } else {
@@ -142,7 +152,7 @@ public final class UploadSlice implements Slice {
         if (keyPath.contains("maven-metadata.xml") && !keyPath.endsWith(".sha1") && !keyPath.endsWith(".md5")) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Intercepting maven-metadata.xml upload for fixing")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("metadata_upload")
                 .field("package.path", keyPath)
                 .log();
@@ -154,7 +164,7 @@ public final class UploadSlice implements Slice {
                             nothing -> {
                                 EcsLogger.debug("com.auto1.pantera.maven")
                                     .message("Saved fixed maven-metadata.xml, generating checksums")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("metadata_upload")
                                     .field("package.path", keyPath)
                                     .log();
@@ -165,15 +175,15 @@ public final class UploadSlice implements Slice {
                     }
                 )
             ).thenApply(
-                nothing -> {
-                    this.addEvent(key, owner, size);
+                sha256 -> {
+                    this.addEvent(key, owner, size, sha256);
                     return ResponseBuilder.created().build();
                 }
             ).exceptionally(
                 throwable -> {
                     EcsLogger.error("com.auto1.pantera.maven")
                         .message("Failed to save artifact")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("artifact_upload")
                         .eventOutcome("failure")
                         .error(throwable)
@@ -188,7 +198,7 @@ public final class UploadSlice implements Slice {
         if (keyPath.contains("maven-metadata.xml") && (keyPath.endsWith(".sha1") || keyPath.endsWith(".md5") || keyPath.endsWith(".sha256") || keyPath.endsWith(".sha512"))) {
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Skipping Maven-uploaded checksum for metadata (using generated checksums)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("checksum_upload")
                 .field("package.path", keyPath)
                 .log();
@@ -201,7 +211,7 @@ public final class UploadSlice implements Slice {
             nothing -> {
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Saved artifact file")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("artifact_upload")
                     .field("package.path", keyPath)
                     .field("package.size", size)
@@ -211,19 +221,19 @@ public final class UploadSlice implements Slice {
                 if (this.shouldGenerateChecksums(key)) {
                     return this.generateChecksums(key);
                 } else {
-                    return CompletableFuture.completedFuture(null);
+                    return CompletableFuture.<String>completedFuture(null);
                 }
             }
         ).thenApply(
-            nothing -> {
-                this.addEvent(key, owner, size);
+            sha256 -> {
+                this.addEvent(key, owner, size, sha256);
                 return ResponseBuilder.created().build();
             }
         ).exceptionally(
             throwable -> {
                 EcsLogger.error("com.auto1.pantera.maven")
                     .message("Failed to save artifact")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("artifact_upload")
                     .eventOutcome("failure")
                     .error(throwable)
@@ -249,7 +259,11 @@ public final class UploadSlice implements Slice {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 final String xml = new String(bytes, StandardCharsets.UTF_8);
-                final XMLDocument doc = new XMLDocument(xml);
+                // Parse via our own DocumentBuilder with a silent ErrorHandler so
+                // malformed XML (BOM, HTML error pages served as metadata) does
+                // NOT spill "[Fatal Error] :1:1: ..." to stderr — the SAX default
+                // handler prints before the exception propagates.
+                final XMLDocument doc = new XMLDocument(parseSilently(xml));
                 final List<String> versions = doc.xpath("//version/text()");
                 if (versions.isEmpty()) {
                     return bytes;
@@ -310,16 +324,17 @@ public final class UploadSlice implements Slice {
 
                 EcsLogger.debug("com.auto1.pantera.maven")
                     .message("Normalised maven-metadata.xml")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("success")
                     .field("package.version", newLatest)
                     .log();
                 return result.getBytes(StandardCharsets.UTF_8);
-            } catch (IllegalArgumentException ex) {
+            } catch (final IllegalArgumentException | SAXException | IOException
+                           | ParserConfigurationException ex) {
                 EcsLogger.warn("com.auto1.pantera.maven")
                     .message("Failed to parse metadata XML, using original")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("metadata_fix")
                     .eventOutcome("failure")
                     .field("error.message", ex.getMessage())
@@ -327,6 +342,44 @@ public final class UploadSlice implements Slice {
                 return bytes;
             }
         });
+    }
+
+    /**
+     * Silent SAX error handler — lets the exception propagate so the caller
+     * logs a structured WARN, but prevents the default handler from writing
+     * {@code [Fatal Error] :1:1: Content is not allowed in prolog.} to stderr.
+     */
+    private static final ErrorHandler SILENT_SAX_HANDLER = new ErrorHandler() {
+        @Override
+        public void warning(final SAXParseException ex) { /* ignore */ }
+
+        @Override
+        public void error(final SAXParseException ex) throws SAXException {
+            throw ex;
+        }
+
+        @Override
+        public void fatalError(final SAXParseException ex) throws SAXException {
+            throw ex;
+        }
+    };
+
+    /**
+     * Parse XML into a DOM document without printing SAX errors to stderr.
+     * Disallows DOCTYPE declarations to defuse XXE and billion-laughs attacks.
+     */
+    private static Document parseSilently(final String xml)
+        throws SAXException, IOException, ParserConfigurationException {
+        final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        final DocumentBuilder builder = factory.newDocumentBuilder();
+        builder.setErrorHandler(SILENT_SAX_HANDLER);
+        return builder.parse(new InputSource(new StringReader(xml)));
     }
 
     /**
@@ -344,55 +397,104 @@ public final class UploadSlice implements Slice {
     }
 
     /**
-     * Generate checksum files by reading the file from storage.
+     * Generate checksum sidecar files (MD5, SHA-1, SHA-256, SHA-512) for the
+     * given artifact and return its SHA-256 hex digest.
+     *
+     * <p>The SHA-256 is surfaced explicitly so upload handlers can attach it
+     * to the {@link ArtifactEvent} via {@link ArtifactEvent#withChecksum(String)}
+     * — the audit log uses this for {@code package.checksum}.</p>
+     *
      * @param key Original file key
-     * @return Completable future
+     * @return Completable future yielding the SHA-256 hex digest
      */
-    private CompletableFuture<Void> generateChecksums(final Key key) {
-        return CompletableFuture.allOf(
-            CHECKSUM_ALGS.stream().map(
-                alg -> this.storage.value(key).thenCompose(
-                    content -> new ContentDigest(
-                        content, Digests.valueOf(alg.toUpperCase(Locale.US))
-                    ).hex()
-                ).thenCompose(
-                    hex -> this.storage.save(
-                        new Key.From(String.format("%s.%s", key.string(), alg)),
-                        new Content.From(hex.getBytes(StandardCharsets.UTF_8))
-                    )
-                ).toCompletableFuture()
-            ).toArray(CompletableFuture[]::new)
-        );
+    private CompletableFuture<String> generateChecksums(final Key key) {
+        final List<CompletableFuture<String>> perAlg = CHECKSUM_ALGS.stream().map(
+            alg -> this.storage.value(key).thenCompose(
+                content -> new ContentDigest(
+                    content, Digests.valueOf(alg.toUpperCase(Locale.US))
+                ).hex()
+            ).thenCompose(
+                hex -> this.storage.save(
+                    new Key.From(String.format("%s.%s", key.string(), alg)),
+                    new Content.From(hex.getBytes(StandardCharsets.UTF_8))
+                ).thenApply(ignored -> "sha256".equalsIgnoreCase(alg) ? hex : null)
+            ).toCompletableFuture()
+        ).toList();
+        return CompletableFuture.allOf(perAlg.toArray(new CompletableFuture[0]))
+            .thenApply(ignored -> perAlg.stream()
+                .map(CompletableFuture::join)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null));
     }
 
     /**
-     * Add artifact event to queue for actual artifacts (not metadata/checksums).
+     * Add artifact event to queue for primary artifact uploads.
+     *
+     * <p>Uses structural filename-prefix detection — NOT an extension whitelist.
+     * An upload qualifies as a primary artifact when:
+     * <ul>
+     *   <li>It lives under the Maven layout: {@code /{groupId}/{artifactId}/{version}/{filename}}</li>
+     *   <li>The filename starts with {@code {artifactId}-} (Maven naming convention)</li>
+     *   <li>It is NOT a companion file: metadata, checksum, signature, sources, or javadoc</li>
+     * </ul>
+     *
+     * <p>This matches the invariant used by {@code ArtifactNameParser.parseMaven} on the
+     * read path, keeping write- and read-side logic consistent. Any extension — {@code .yaml},
+     * {@code .json}, {@code .zip}, future types — gets indexed as long as the filename follows
+     * Maven naming.
+     *
      * @param key Artifact key
      * @param owner Owner
      * @param size Artifact size
      */
-    private void addEvent(final Key key, final String owner, final long size) {
+    private void addEvent(final Key key, final String owner, final long size, final String sha256) {
         if (this.events.isEmpty()) {
             return;
         }
-        
+
         final String path = key.string().startsWith("/") ? key.string() : "/" + key.string();
-        
-        // Skip metadata and checksum files
-        if (this.isMetadataOrChecksum(path)) {
+
+        if (!this.isPrimaryArtifactPath(path)) {
             EcsLogger.debug("com.auto1.pantera.maven")
-                .message("Skipping metadata/checksum file for event")
-                .eventCategory("repository")
+                .message("Skipping non-primary artifact file for event")
+                .eventCategory("web")
                 .eventAction("event_creation")
                 .field("package.path", path)
                 .log();
             return;
         }
-        
-        final Matcher matcher = MavenSlice.ARTIFACT.matcher(path);
-        if (matcher.matches()) {
-            this.createAndAddEvent(matcher.group("pkg"), owner, size);
+
+        // pkg = "{groupId}/{artifactId}/{version}" (everything before the filename)
+        final String pkg = path.substring(0, path.lastIndexOf('/'));
+        this.createAndAddEvent(pkg, owner, size, sha256);
+    }
+
+    /**
+     * Check if a path represents a primary Maven artifact worth indexing.
+     * See {@link #addEvent} for the full contract.
+     *
+     * @param path File path (always starts with '/')
+     * @return True if this upload should produce an {@link ArtifactEvent}
+     */
+    private boolean isPrimaryArtifactPath(final String path) {
+        if (this.isMetadataOrChecksum(path)) {
+            return false;
         }
+        if (path.endsWith(".asc") || path.endsWith(".sig")) {
+            return false;
+        }
+        if (path.endsWith("-sources.jar") || path.endsWith("-javadoc.jar")) {
+            return false;
+        }
+        final String[] segments = path.split("/");
+        // Minimum: ["", groupId, artifactId, version, filename] = 5 segments
+        if (segments.length < 5) {
+            return false;
+        }
+        final String artifactId = segments[segments.length - 3];
+        final String filename = segments[segments.length - 1];
+        return filename.startsWith(artifactId + "-");
     }
 
     /**
@@ -401,10 +503,10 @@ public final class UploadSlice implements Slice {
      * @return True if metadata or checksum
      */
     private boolean isMetadataOrChecksum(final String path) {
-        return path.contains("maven-metadata.xml") 
-            || path.endsWith(".md5") 
-            || path.endsWith(".sha1") 
-            || path.endsWith(".sha256") 
+        return path.contains("maven-metadata.xml")
+            || path.endsWith(".md5")
+            || path.endsWith(".sha1")
+            || path.endsWith(".sha256")
             || path.endsWith(".sha512");
     }
 
@@ -414,37 +516,39 @@ public final class UploadSlice implements Slice {
      * @param owner Owner
      * @param size Artifact size
      */
-    private void createAndAddEvent(final String pkg, final String owner, final long size) {
+    private void createAndAddEvent(final String pkg, final String owner, final long size,
+        final String sha256) {
         // Extract version (last directory before the file)
         final String[] parts = pkg.split("/");
         final String version = parts.length > 0 ? parts[parts.length - 1] : "unknown";
-        
+
         // Remove version from pkg to get group/artifact only
         String groupArtifact = pkg.substring(0, pkg.lastIndexOf('/'));
-        
+
         // Remove leading slash if present
         if (groupArtifact.startsWith("/")) {
             groupArtifact = groupArtifact.substring(1);
         }
-        
+
         // Format artifact name as group.artifact (replacing / with .)
         final String artifactName = MavenSlice.EVENT_INFO.formatArtifactName(groupArtifact);
-        
+
+        final ArtifactEvent event = new ArtifactEvent(
+            "maven",
+            this.rname,
+            owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
+            artifactName,
+            version,
+            size,
+            System.currentTimeMillis(),
+            (Long) null  // No release date for uploads
+        );
         this.events.get().add(
-            new ArtifactEvent(
-                "maven",
-                this.rname,
-                owner == null || owner.isBlank() ? ArtifactEvent.DEF_OWNER : owner,
-                artifactName,
-                version,
-                size,
-                System.currentTimeMillis(),
-                (Long) null  // No release date for uploads
-            )
+            sha256 == null ? event : event.withChecksum(sha256)
         );
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Added artifact event")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("event_creation")
             .eventOutcome("success")
             .field("package.name", artifactName)

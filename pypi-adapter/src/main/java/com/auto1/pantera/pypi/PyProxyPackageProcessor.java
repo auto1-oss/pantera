@@ -88,7 +88,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         final long startTime = System.currentTimeMillis();
         EcsLogger.info("com.auto1.pantera.pypi")
             .message("Processing PyPI batch (size: " + batch.size() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("batch_processing")
             .log();
 
@@ -103,7 +103,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.info("com.auto1.pantera.pypi")
                 .message("PyPI batch processing complete (size: " + batch.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("success")
                 .duration(duration)
@@ -112,7 +112,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             final long duration = System.currentTimeMillis() - startTime;
             EcsLogger.error("com.auto1.pantera.pypi")
                 .message("PyPI batch processing failed (size: " + batch.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("batch_processing")
                 .eventOutcome("failure")
                 .duration(duration)
@@ -134,7 +134,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
             if (!exists) {
                 EcsLogger.debug("com.auto1.pantera.pypi")
                     .message("Artifact not yet cached, re-queuing for retry")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("package_processing")
                     .field("package.name", key.string())
                     .log();
@@ -176,7 +176,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
 
                             EcsLogger.info("com.auto1.pantera.pypi")
                                 .message("Recorded PyPI proxy release")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("package_processing")
                                 .eventOutcome("success")
                                 .field("package.name", project)
@@ -187,18 +187,19 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     : Instant.ofEpochMilli(release).toString())
                                 .log();
                         } else {
-                            EcsLogger.error("com.auto1.pantera.pypi")
-                                .message("Python proxy package is not valid")
-                                .eventCategory("repository")
+                            EcsLogger.warn("com.auto1.pantera.pypi")
+                                .message("Python proxy package failed filename validation")
+                                .eventCategory("package")
                                 .eventAction("package_processing")
                                 .eventOutcome("failure")
-                                .field("package.name", key.string())
+                                .field("event.reason", "filename did not match WHEEL_PTRN or ARCHIVE_PTRN")
+                                .field("file.name", filename)
                                 .log();
                         }
                     } catch (final Exception err) {
                         EcsLogger.error("com.auto1.pantera.pypi")
                             .message("Failed to parse/check python proxy package")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("package_processing")
                             .eventOutcome("failure")
                             .field("package.name", key.string())
@@ -209,7 +210,7 @@ public final class PyProxyPackageProcessor extends QuartzJob {
         }).exceptionally(err -> {
             EcsLogger.error("com.auto1.pantera.pypi")
                 .message("Failed to process PyPI package")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("package_processing")
                 .eventOutcome("failure")
                 .field("package.name", key.string())

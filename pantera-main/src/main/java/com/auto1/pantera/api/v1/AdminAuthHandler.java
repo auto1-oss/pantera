@@ -157,7 +157,7 @@ public final class AdminAuthHandler {
         ).onSuccess(ignored -> {
             EcsLogger.info("com.auto1.pantera.api.v1")
                 .message("Admin updated auth settings")
-                .eventCategory("admin")
+                .eventCategory("iam")
                 .eventAction("auth_settings_update")
                 .eventOutcome("success")
                 .field("settings.keys", String.join(",", body.fieldNames()))
@@ -188,7 +188,7 @@ public final class AdminAuthHandler {
             }
             EcsLogger.info("com.auto1.pantera.api.v1")
                 .message("Admin revoked all tokens for user")
-                .eventCategory("admin")
+                .eventCategory("iam")
                 .eventAction("user_revoke")
                 .eventOutcome("success")
                 .field("user.name", username)

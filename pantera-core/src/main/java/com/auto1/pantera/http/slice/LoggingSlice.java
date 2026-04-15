@@ -65,7 +65,7 @@ public final class LoggingSlice implements Slice {
         if (this.level.intValue() <= Level.FINE.intValue()) {
             EcsLogger.debug("com.auto1.pantera.http")
                 .message("HTTP request: " + msg.toString())
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("request")
                 .log();
         }
@@ -80,7 +80,7 @@ public final class LoggingSlice implements Slice {
                 if (LoggingSlice.this.level.intValue() <= Level.FINE.intValue()) {
                     EcsLogger.debug("com.auto1.pantera.http")
                         .message("HTTP response: " + sb.toString())
-                        .eventCategory("http")
+                        .eventCategory("web")
                         .eventAction("response")
                         .log();
                 }

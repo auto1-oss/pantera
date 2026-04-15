@@ -21,7 +21,7 @@ import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
 import com.auto1.pantera.http.client.auth.AuthClientSlice;
 import com.auto1.pantera.http.client.auth.GenericAuthenticator;
-import com.auto1.pantera.http.group.GroupSlice;
+import com.auto1.pantera.http.group.RaceSlice;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.npm.proxy.http.CachedNpmProxySlice;
@@ -70,7 +70,7 @@ public final class NpmProxyAdapter implements Slice {
         // Support multiple remotes with GroupSlice (similar to maven-proxy).
         // Each remote gets its own NpmProxy + NpmProxySlice, evaluated in
         // priority order.
-        this.slice = new GroupSlice(
+        this.slice = new RaceSlice(
             cfg.remotes().stream().map(
                 remote -> {
                     // Create authenticated client slice for this remote

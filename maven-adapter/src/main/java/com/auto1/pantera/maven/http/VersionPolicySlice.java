@@ -118,7 +118,7 @@ public final class VersionPolicySlice implements Slice {
         if (this.policy == Policy.RELEASE && isSnapshot) {
             EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Rejected SNAPSHOT version in RELEASE repository (policy: RELEASE)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("version_policy_check")
                 .eventOutcome("failure")
                 .field("package.version", version)
@@ -140,7 +140,7 @@ public final class VersionPolicySlice implements Slice {
         if (this.policy == Policy.SNAPSHOT && !isSnapshot) {
             EcsLogger.warn("com.auto1.pantera.maven")
                 .message("Rejected RELEASE version in SNAPSHOT repository (policy: SNAPSHOT)")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("version_policy_check")
                 .eventOutcome("failure")
                 .field("package.version", version)
@@ -162,7 +162,7 @@ public final class VersionPolicySlice implements Slice {
         // Policy check passed
         EcsLogger.debug("com.auto1.pantera.maven")
             .message("Version policy check passed (policy: " + this.policy.toString() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("version_policy_check")
             .eventOutcome("success")
             .field("package.path", path)

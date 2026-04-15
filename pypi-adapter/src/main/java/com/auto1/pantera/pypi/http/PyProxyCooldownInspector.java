@@ -135,7 +135,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
         );
         com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.pypi")
             .message("Fetching release date from PyPI JSON API")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("cooldown_inspection")
             .field("package.name", artifact)
             .field("package.version", version)
@@ -149,7 +149,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
             if (!response.status().success()) {
                 com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                     .message("PyPI JSON API returned non-success status")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_inspection")
                     .eventOutcome("failure")
                     .field("package.name", artifact)
@@ -168,7 +168,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     if (urls == null || urls.isEmpty()) {
                         com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("No 'urls' field or empty urls array in PyPI JSON response")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cooldown_inspection")
                             .eventOutcome("failure")
                             .field("package.name", artifact)
@@ -182,7 +182,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     if (iso == null) {
                         com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("No upload_time_iso_8601 field in PyPI JSON response")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cooldown_inspection")
                             .eventOutcome("failure")
                             .field("package.name", artifact)
@@ -194,7 +194,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                         final java.time.Instant releaseDate = java.time.Instant.parse(iso);
                         com.auto1.pantera.http.log.EcsLogger.debug("com.auto1.pantera.pypi")
                             .message("Found release date")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cooldown_inspection")
                             .eventOutcome("success")
                             .field("package.name", artifact)
@@ -205,7 +205,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                     } catch (final Exception ex) {
                         com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                             .message("Failed to parse upload_time_iso_8601: " + iso)
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cooldown_inspection")
                             .eventOutcome("failure")
                             .field("package.name", artifact)
@@ -217,7 +217,7 @@ final class PyProxyCooldownInspector implements CooldownInspector,
                 } catch (final Exception ex) {
                     com.auto1.pantera.http.log.EcsLogger.warn("com.auto1.pantera.pypi")
                         .message("Failed to parse PyPI JSON response")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("cooldown_inspection")
                         .eventOutcome("failure")
                         .field("package.name", artifact)

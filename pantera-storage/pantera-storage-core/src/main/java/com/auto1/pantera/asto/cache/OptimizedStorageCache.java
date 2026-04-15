@@ -241,9 +241,10 @@ public final class OptimizedStorageCache {
                             // This is expected during client cancellation, log and stop streaming
                             EcsLogger.debug("com.auto1.pantera.asto.cache")
                                 .message("Subscriber rejected chunk - response already written")
-                                .eventCategory("cache")
+                                .eventCategory("database")
                                 .eventAction("stream_file")
-                                .eventOutcome("cancelled")
+                                .eventOutcome("failure")
+                                .field("event.reason", "request_cancelled")
                                 .field("file.path", filePath.toString())
                                 .field("file.size", fileSize)
                                 .field("http.response.body.bytes", totalRead)
@@ -319,7 +320,7 @@ public final class OptimizedStorageCache {
                     // Last resort: let GC handle it eventually
                     EcsLogger.warn("com.auto1.pantera.asto.cache")
                         .message("Failed to explicitly clean direct buffer, relying on GC")
-                        .eventCategory("memory")
+                        .eventCategory("host")
                         .eventAction("buffer_cleanup")
                         .eventOutcome("failure")
                         .error(ex)

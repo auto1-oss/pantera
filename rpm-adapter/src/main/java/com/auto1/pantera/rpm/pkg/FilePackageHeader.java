@@ -79,7 +79,7 @@ public final class FilePackageHeader {
             final Header header = format.getHeader();
             EcsLogger.debug("com.auto1.pantera.rpm")
                 .message("Parsed RPM header: " + header.toString())
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("package_parsing")
                 .log();
             final int bufsize = 1024;

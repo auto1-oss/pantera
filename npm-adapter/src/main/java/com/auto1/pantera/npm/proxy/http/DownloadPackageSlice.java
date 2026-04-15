@@ -155,7 +155,7 @@ public final class DownloadPackageSlice implements Slice {
             final Throwable cause = unwrapException(error);
             EcsLogger.error("com.auto1.pantera.npm")
                 .message("Error processing package request")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("get_package")
                 .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
@@ -328,7 +328,7 @@ public final class DownloadPackageSlice implements Slice {
                     if (cause instanceof AllVersionsBlockedException) {
                         EcsLogger.info("com.auto1.pantera.npm")
                             .message("All versions blocked by cooldown (full fallback)")
-                            .eventCategory("cooldown")
+                            .eventCategory("database")
                             .eventAction("all_versions_blocked")
                             .field("package.name", packageName)
                             .log();
@@ -344,7 +344,7 @@ public final class DownloadPackageSlice implements Slice {
                 }
                 EcsLogger.warn("com.auto1.pantera.npm")
                     .message("Cooldown filter error (full fallback) - serving unfiltered")
-                    .eventCategory("cooldown")
+                    .eventCategory("database")
                     .eventAction("filter_error")
                     .field("package.name", packageName)
                     .error(ex)
@@ -387,7 +387,7 @@ public final class DownloadPackageSlice implements Slice {
                         if (cause instanceof AllVersionsBlockedException) {
                             EcsLogger.info("com.auto1.pantera.npm")
                                 .message("All versions blocked by cooldown (abbreviated)")
-                                .eventCategory("cooldown")
+                                .eventCategory("database")
                                 .eventAction("all_versions_blocked")
                                 .field("package.name", packageName)
                                 .log();
@@ -403,7 +403,7 @@ public final class DownloadPackageSlice implements Slice {
                     }
                     EcsLogger.warn("com.auto1.pantera.npm")
                         .message("Cooldown filter error (abbreviated) - falling back to unfiltered")
-                        .eventCategory("cooldown")
+                        .eventCategory("database")
                         .eventAction("filter_error")
                         .field("package.name", packageName)
                         .error(ex)
@@ -469,7 +469,7 @@ public final class DownloadPackageSlice implements Slice {
                                                 if (cause instanceof AllVersionsBlockedException) {
                                                     EcsLogger.info("com.auto1.pantera.npm")
                                                         .message("All versions blocked by cooldown")
-                                                        .eventCategory("cooldown")
+                                                        .eventCategory("database")
                                                         .eventAction("all_versions_blocked")
                                                         .field("package.name", packageName)
                                                         .log();
@@ -485,7 +485,7 @@ public final class DownloadPackageSlice implements Slice {
                                             }
                                             EcsLogger.warn("com.auto1.pantera.npm")
                                                 .message("Cooldown filter error - falling back to unfiltered")
-                                                .eventCategory("cooldown")
+                                                .eventCategory("database")
                                                 .eventAction("filter_error")
                                                 .field("package.name", packageName)
                                                 .error(ex)

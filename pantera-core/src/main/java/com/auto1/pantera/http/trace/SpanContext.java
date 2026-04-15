@@ -283,8 +283,8 @@ public final class SpanContext {
                     fieldName, safeValue, safeUa
                 )
             )
-            .field("event.action", "trace_id_regenerated")
-            .field("event.category", "configuration")
+            .eventAction("trace_id_regenerated")
+            .eventCategory("configuration")
             .log();
     }
 

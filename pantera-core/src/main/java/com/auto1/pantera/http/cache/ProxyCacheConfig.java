@@ -162,11 +162,17 @@ public final class ProxyCacheConfig {
 
     /**
      * Check if stale-while-revalidate is enabled.
-     * @return True if enabled (default: false)
+     *
+     * <p>Default: {@code true} — serves cached bytes with 200 + {@code X-Pantera-Stale}
+     * header when upstream fails (timeout, 5xx, connection refused), as long as the
+     * cached artifact is within {@link #staleMaxAge()}. Operators can disable per-repo
+     * via {@code cache.stale_while_revalidate.enabled: false} in YAML.
+     *
+     * @return True if enabled (default: true)
      */
     public boolean staleWhileRevalidateEnabled() {
         return this.boolValue("cache", "stale_while_revalidate", "enabled")
-            .orElse(false);
+            .orElse(true);
     }
 
     /**

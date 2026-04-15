@@ -10,6 +10,8 @@
  */
 package com.auto1.pantera.http.log;
 
+import java.util.Set;
+
 /**
  * ECS MDC field key constants.
  *
@@ -91,6 +93,30 @@ public final class EcsMdc {
      * Set by adapter-specific slices when a version can be derived.
      */
     public static final String PACKAGE_VERSION = "package.version";
+
+    /**
+     * The set of ECS field keys that are owned by MDC (ThreadContext) and must not
+     * be duplicated in per-event structured payloads (e.g. {@code MapMessage}).
+     *
+     * <p>EcsLayout reads these from ThreadContext and writes them as top-level ECS
+     * JSON fields. Duplicating them in a per-event {@code MapMessage} causes
+     * Elasticsearch to reject the document with a duplicate-field error.
+     */
+    public static final Set<String> MDC_OWNED_KEYS = Set.of(
+        TRACE_ID, SPAN_ID, PARENT_SPAN_ID, CLIENT_IP, USER_NAME,
+        REPO_TYPE, REPO_NAME, PACKAGE_NAME, PACKAGE_VERSION
+    );
+
+    /**
+     * Check whether a field key is owned by MDC (and therefore must be excluded
+     * from per-event payload builders like {@code MapMessage}).
+     *
+     * @param key ECS field key
+     * @return {@code true} if the key is MDC-owned
+     */
+    public static boolean isMdcKey(final String key) {
+        return MDC_OWNED_KEYS.contains(key);
+    }
 
     private EcsMdc() {
         // constants only

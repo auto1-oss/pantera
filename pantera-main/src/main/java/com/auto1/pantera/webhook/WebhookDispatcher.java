@@ -112,7 +112,7 @@ public final class WebhookDispatcher {
             if (ar.succeeded() && ar.result().statusCode() < 300) {
                 EcsLogger.debug("com.auto1.pantera.webhook")
                     .message("Webhook delivered")
-                    .eventCategory("webhook")
+                    .eventCategory("network")
                     .eventAction("deliver")
                     .eventOutcome("success")
                     .field("url.full", webhook.url())
@@ -129,7 +129,7 @@ public final class WebhookDispatcher {
                     : ar.cause().getMessage();
                 EcsLogger.warn("com.auto1.pantera.webhook")
                     .message("Webhook delivery failed after retries")
-                    .eventCategory("webhook")
+                    .eventCategory("network")
                     .eventAction("deliver")
                     .eventOutcome("failure")
                     .field("url.full", webhook.url())

@@ -286,7 +286,7 @@ public final class RepositoryHandler {
     /**
      * PUT /api/v1/repositories/:name — create or update repository.
      * @param ctx Routing context
-     * @checkstyle ExecutableStatementCountCheck (60 lines)
+     * @checkstyle ExecutableStatementCountCheck (70 lines)
      */
     private void createOrUpdateRepository(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
@@ -313,8 +313,18 @@ public final class RepositoryHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Repository type is required");
             return;
         }
-        if (!repo.containsKey("storage")) {
-            ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Repository storage is required");
+        final String repoType = repo.getString("type");
+        if (RepositoryHandler.isGroupType(repoType)) {
+            if (!repo.containsKey("members")
+                || !(repo.get("members") instanceof javax.json.JsonArray)
+                || repo.getJsonArray("members").isEmpty()) {
+                ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                    "Group repository requires non-empty 'members' array");
+                return;
+            }
+        } else if (!repo.containsKey("storage")) {
+            ApiResponse.sendError(ctx, 400, "BAD_REQUEST",
+                "Repository storage is required for non-group repositories");
             return;
         }
         final boolean exists = this.crs.exists(rname);
@@ -435,6 +445,18 @@ public final class RepositoryHandler {
         ).onFailure(
             err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
         );
+    }
+
+    /**
+     * Returns true when the given repository type is a group type
+     * (i.e. its name ends with the {@code -group} suffix).
+     * Group repositories are pure routing abstractions — they have no
+     * storage of their own, only a {@code members} list.
+     * @param type Repository type string (may be null)
+     * @return True if the type ends with {@code -group}
+     */
+    private static boolean isGroupType(final String type) {
+        return type != null && type.endsWith("-group");
     }
 
     /**

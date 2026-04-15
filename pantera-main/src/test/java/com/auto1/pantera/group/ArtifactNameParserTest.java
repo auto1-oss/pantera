@@ -84,23 +84,26 @@ final class ArtifactNameParserTest {
     }
 
     // ---- Maven: metadata requests ----
+    // With the structural filename-prefix algorithm, maven-metadata.xml URLs do NOT
+    // start with "{artifactId}-" so they return empty and trigger full fan-out.
+    // This is intentional: metadata must be fetched from all group members anyway.
 
     @ParameterizedTest
-    @CsvSource({
+    @ValueSource(strings = {
         // Metadata at artifact level (no version directory)
-        "/com/google/guava/guava/maven-metadata.xml, com.google.guava.guava",
+        "/com/google/guava/guava/maven-metadata.xml",
         // Metadata checksum
-        "/com/google/guava/guava/maven-metadata.xml.sha1, com.google.guava.guava",
+        "/com/google/guava/guava/maven-metadata.xml.sha1",
         // Metadata at version level
-        "/com/google/guava/guava/31.1.3-jre/maven-metadata.xml, com.google.guava.guava",
+        "/com/google/guava/guava/31.1.3-jre/maven-metadata.xml",
         // Plugin metadata
-        "/org/apache/maven/plugins/maven-compiler-plugin/maven-metadata.xml, org.apache.maven.plugins.maven-compiler-plugin",
+        "/org/apache/maven/plugins/maven-compiler-plugin/maven-metadata.xml",
     })
-    void mavenMetadata(final String url, final String expected) {
+    void mavenMetadataTriggersFullFanout(final String url) {
         MatcherAssert.assertThat(
-            "Maven metadata: " + url,
+            "Maven metadata should trigger fanout (empty): " + url,
             ArtifactNameParser.parse("maven-group", url),
-            new IsEqual<>(Optional.of(expected))
+            new IsEqual<>(Optional.empty())
         );
     }
 
@@ -292,13 +295,21 @@ final class ArtifactNameParserTest {
         "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar, com.google.guava.guava",
         "/org/gradle/gradle-tooling-api/8.5/gradle-tooling-api-8.5.jar, org.gradle.gradle-tooling-api",
         "/com/android/tools/build/gradle/8.2.0/gradle-8.2.0.pom, com.android.tools.build.gradle",
-        "/com/google/guava/guava/maven-metadata.xml, com.google.guava.guava",
     })
     void gradleUsessameparserAsMaven(final String url, final String expected) {
         MatcherAssert.assertThat(
             "Gradle: " + url,
             ArtifactNameParser.parse("gradle-group", url),
             new IsEqual<>(Optional.of(expected))
+        );
+    }
+
+    @Test
+    void gradleMetadataTriggersFullFanout() {
+        MatcherAssert.assertThat(
+            "Gradle metadata should trigger fanout (empty)",
+            ArtifactNameParser.parse("gradle-group", "/com/google/guava/guava/maven-metadata.xml"),
+            new IsEqual<>(Optional.empty())
         );
     }
 
@@ -701,6 +712,9 @@ final class ArtifactNameParserTest {
 
     @Test
     void mavenHitRateAbove95Percent() {
+        // Only artifact files count toward the hit rate.
+        // maven-metadata.xml URLs intentionally return empty to trigger fanout —
+        // they are not counted in this test.
         final String[] urls = {
             // Standard artifacts
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar",
@@ -713,17 +727,11 @@ final class ArtifactNameParserTest {
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar.md5",
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.pom.sha1",
             "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.pom.sha256",
-            // Metadata
-            "/com/google/guava/guava/maven-metadata.xml",
-            "/com/google/guava/guava/maven-metadata.xml.sha1",
-            "/com/google/guava/guava/31.1.3-jre/maven-metadata.xml",
             // Different libraries
             "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar",
             "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom",
-            "/org/apache/commons/commons-lang3/maven-metadata.xml",
             "/org/slf4j/slf4j-api/2.0.9/slf4j-api-2.0.9.jar",
             "/org/slf4j/slf4j-api/2.0.9/slf4j-api-2.0.9.pom",
-            "/org/slf4j/slf4j-api/maven-metadata.xml",
             "/junit/junit/4.13.2/junit-4.13.2.jar",
             "/junit/junit/4.13.2/junit-4.13.2.pom",
             "/io/netty/netty-all/4.1.100.Final/netty-all-4.1.100.Final.jar",
@@ -733,7 +741,6 @@ final class ArtifactNameParserTest {
             "/org/projectlombok/lombok/1.18.30/lombok-1.18.30.jar",
             // SNAPSHOT
             "/org/example/mylib/1.0-SNAPSHOT/mylib-1.0-20230101.120000-1.jar",
-            "/org/example/mylib/1.0-SNAPSHOT/maven-metadata.xml",
             // Plugins
             "/org/apache/maven/plugins/maven-compiler-plugin/3.11.0/maven-compiler-plugin-3.11.0.jar",
             "/org/apache/maven/plugins/maven-surefire-plugin/3.2.3/maven-surefire-plugin-3.2.3.jar",
@@ -874,13 +881,13 @@ final class ArtifactNameParserTest {
 
     @Test
     void overallHitRateAbove95Percent() {
+        // Note: maven-metadata.xml URLs are intentionally excluded from this hit-rate
+        // count — they trigger fanout (empty result) by design in the structural algorithm.
         final String[][] cases = {
             {"maven-group", "/com/google/guava/guava/31.1.3-jre/guava-31.1.3-jre.jar"},
-            {"maven-group", "/com/google/guava/guava/maven-metadata.xml"},
             {"maven-group", "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"},
             {"maven-group", "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom"},
             {"maven-group", "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar.sha1"},
-            {"maven-group", "/org/apache/commons/commons-lang3/maven-metadata.xml"},
             {"maven-group", "/io/netty/netty-all/4.1.100.Final/netty-all-4.1.100.Final.jar"},
             {"maven-group", "/junit/junit/4.13.2/junit-4.13.2.jar"},
             {"npm-group", "/lodash"},

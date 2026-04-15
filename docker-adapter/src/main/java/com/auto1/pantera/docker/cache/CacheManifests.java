@@ -136,7 +136,7 @@ public final class CacheManifests implements Manifests {
                         this.recordProxyMetric("success", duration);
                         EcsLogger.info("com.auto1.pantera.docker.proxy")
                             .message("CacheManifests origin returned manifest")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cache_manifest_get")
                             .eventOutcome("success")
                             .field("repository.name", this.rname)
@@ -155,7 +155,7 @@ public final class CacheManifests implements Manifests {
                         } else {
                             EcsLogger.warn("com.auto1.pantera.docker")
                                 .message("Cannot add manifest to cache")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("manifest_cache")
                                 .eventOutcome("failure")
                                 .field("repository.name", this.rname)
@@ -169,9 +169,10 @@ public final class CacheManifests implements Manifests {
                         this.recordProxyMetric("not_found", duration);
                         EcsLogger.info("com.auto1.pantera.docker.proxy")
                             .message("CacheManifests origin returned empty, falling back to cache")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("cache_manifest_get")
-                            .eventOutcome("not_found")
+                            .eventOutcome("failure")
+                            .field("event.reason", "artifact_not_found")
                             .field("repository.name", this.rname)
                             .field("container.image.name", this.name)
                             .field("container.image.hash.all", ref.digest())
@@ -185,7 +186,7 @@ public final class CacheManifests implements Manifests {
                     this.recordUpstreamErrorMetric(throwable);
                     EcsLogger.error("com.auto1.pantera.docker")
                         .message("Failed getting manifest")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("manifest_get")
                         .eventOutcome("failure")
                         .field("repository.name", this.rname)
@@ -224,7 +225,7 @@ public final class CacheManifests implements Manifests {
                     if (ex != null) {
                         EcsLogger.error("com.auto1.pantera.docker")
                             .message("Failed to cache manifest")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("manifest_cache")
                             .eventOutcome("failure")
                             .field("repository.name", this.rname)
@@ -258,7 +259,7 @@ public final class CacheManifests implements Manifests {
                 .exceptionally(ex -> {
                     EcsLogger.warn("com.auto1.pantera.docker")
                         .message("Failed to extract release timestamp")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("manifest_cache")
                         .eventOutcome("failure")
                         .field("repository.name", this.rname)
@@ -373,7 +374,7 @@ public final class CacheManifests implements Manifests {
         } catch (final DateTimeParseException | JsonException ex) {
             EcsLogger.debug("com.auto1.pantera.docker")
                 .message("Unable to parse manifest config `created` field")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("manifest_cache")
                 .field("repository.name", this.rname)
                 .field("container.image.name", this.name)

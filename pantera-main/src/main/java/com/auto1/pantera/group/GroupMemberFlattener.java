@@ -107,7 +107,7 @@ public final class GroupMemberFlattener {
 
         EcsLogger.debug("com.auto1.pantera.group")
             .message("Flattened group members (" + flat.size() + " total, " + deduplicated.size() + " unique)")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_flatten")
             .eventOutcome("success")
             .field("repository.name", groupName)
@@ -145,7 +145,7 @@ public final class GroupMemberFlattener {
         if (this.isGroup.apply(repoName)) {
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Flattening group repository (recursion depth: " + visited.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("group_flatten_recursive")
                 .field("repository.name", repoName)
                 .log();
@@ -165,7 +165,7 @@ public final class GroupMemberFlattener {
             // Leaf repository - add directly
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Adding leaf repository")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("group_add_leaf")
                 .field("repository.name", repoName)
                 .log();
@@ -189,7 +189,7 @@ public final class GroupMemberFlattener {
 
         EcsLogger.debug("com.auto1.pantera.group")
             .message("Flattened and deduplicated group (" + unique.size() + " unique members)")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("group_flatten_deduplicate")
             .eventOutcome("success")
             .field("repository.name", groupName)

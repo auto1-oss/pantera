@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Tests for {@link DbArtifactIndex}.
@@ -324,21 +325,24 @@ class DbArtifactIndexTest {
             "2.0.9", 50_000L, Instant.now(), "proxy"
         )).join();
         // locateByName should find both repos for guava
-        final List<String> guavaRepos = this.index.locateByName("com.google.guava.guava").join();
+        final List<String> guavaRepos =
+            this.index.locateByName("com.google.guava.guava").join().orElseThrow();
         MatcherAssert.assertThat(
             "Should find guava in both repos",
             guavaRepos,
             Matchers.containsInAnyOrder("maven-central", "maven-releases")
         );
         // locateByName should find only maven-central for slf4j
-        final List<String> slf4jRepos = this.index.locateByName("org.slf4j.slf4j-api").join();
+        final List<String> slf4jRepos =
+            this.index.locateByName("org.slf4j.slf4j-api").join().orElseThrow();
         MatcherAssert.assertThat(
             "Should find slf4j in maven-central only",
             slf4jRepos,
             Matchers.contains("maven-central")
         );
         // locateByName with non-existent name
-        final List<String> missing = this.index.locateByName("com.nonexistent.lib").join();
+        final List<String> missing =
+            this.index.locateByName("com.nonexistent.lib").join().orElseThrow();
         MatcherAssert.assertThat(
             "Should return empty for missing artifact",
             missing,
@@ -371,22 +375,22 @@ class DbArtifactIndexTest {
         )).join();
         MatcherAssert.assertThat(
             "Maven name lookup",
-            this.index.locateByName("com.google.guava.guava").join(),
+            this.index.locateByName("com.google.guava.guava").join().orElseThrow(),
             Matchers.contains("repo1")
         );
         MatcherAssert.assertThat(
             "npm scoped name lookup",
-            this.index.locateByName("@babel/core").join(),
+            this.index.locateByName("@babel/core").join().orElseThrow(),
             Matchers.contains("repo2")
         );
         MatcherAssert.assertThat(
             "Docker image name lookup",
-            this.index.locateByName("library/nginx").join(),
+            this.index.locateByName("library/nginx").join().orElseThrow(),
             Matchers.contains("repo3")
         );
         MatcherAssert.assertThat(
             "PyPI name lookup",
-            this.index.locateByName("numpy").join(),
+            this.index.locateByName("numpy").join().orElseThrow(),
             Matchers.contains("repo4")
         );
     }
@@ -415,7 +419,7 @@ class DbArtifactIndexTest {
         }
         int hits = 0;
         for (final String name : mavenNames) {
-            final List<String> repos = this.index.locateByName(name).join();
+            final List<String> repos = this.index.locateByName(name).join().orElseThrow();
             if (!repos.isEmpty()) {
                 hits++;
             }

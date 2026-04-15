@@ -221,7 +221,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             } catch (Exception err) {
                 EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to get user permissions")
-                    .eventCategory("security")
+                    .eventCategory("authentication")
                     .eventAction("permissions_get")
                     .eventOutcome("failure")
                     .field("user.name", user.name())
@@ -271,7 +271,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
         } catch (final IOException | ValueNotFoundException err) {
             EcsLogger.error("com.auto1.pantera.security")
                 .message("Failed to read/parse role permissions file")
-                .eventCategory("security")
+                .eventCategory("authentication")
                 .eventAction("role_permissions_read")
                 .eventOutcome("failure")
                 .field("file.name", filename)
@@ -472,7 +472,7 @@ public final class CachedYamlPolicy implements Policy<UserPermissions>, Cleanabl
             } catch (final IOException | ValueNotFoundException err) {
                 EcsLogger.error("com.auto1.pantera.security")
                     .message("Failed to read or parse user file")
-                    .eventCategory("security")
+                    .eventCategory("authentication")
                     .eventAction("user_file_read")
                     .eventOutcome("failure")
                     .field("file.name", filename)

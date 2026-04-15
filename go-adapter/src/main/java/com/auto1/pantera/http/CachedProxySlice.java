@@ -158,7 +158,7 @@ final class CachedProxySlice implements Slice {
         final String path = line.uri().getPath();
         EcsLogger.info("com.auto1.pantera.go")
             .message("Processing Go proxy request")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("url.path", path)
             .field("repository.name", this.rname)
@@ -167,7 +167,7 @@ final class CachedProxySlice implements Slice {
         if ("/".equals(path) || path.isEmpty()) {
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Handling root path")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .log();
             return this.handleRootPath(line);
@@ -179,7 +179,7 @@ final class CachedProxySlice implements Slice {
         if (!matcher.matches()) {
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Non-artifact path, skipping cooldown")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("package.name", key.string())
                 .log();
@@ -192,7 +192,7 @@ final class CachedProxySlice implements Slice {
         final String user = new Login(headers).getValue();
         EcsLogger.debug("com.auto1.pantera.go")
             .message("Go artifact request")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("proxy_request")
             .field("package.name", module)
             .field("package.version", version)
@@ -210,9 +210,9 @@ final class CachedProxySlice implements Slice {
                 // Cache HIT - serve immediately without any network calls
                 EcsLogger.info("com.auto1.pantera.go")
                     .message("Cache hit, serving cached artifact (offline-safe)")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .eventOutcome("cache_hit")
+                    .eventCategory("web")
+                    .eventAction("cache_hit")
+                    .eventOutcome("success")
                     .field("package.name", module)
                     .field("package.version", version)
                     .log();
@@ -230,9 +230,9 @@ final class CachedProxySlice implements Slice {
             // Cache MISS - now we need network, evaluate cooldown
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Cache miss, evaluating cooldown")
-                .eventCategory("repository")
-                .eventAction("proxy_request")
-                .eventOutcome("cache_miss")
+                .eventCategory("web")
+                .eventAction("cache_miss")
+                .eventOutcome("success")
                 .field("package.name", module)
                 .field("package.version", version)
                 .log();
@@ -251,9 +251,10 @@ final class CachedProxySlice implements Slice {
                     if (result.blocked()) {
                         EcsLogger.info("com.auto1.pantera.go")
                             .message("Blocked Go artifact due to cooldown: " + result.block().orElseThrow().reason())
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
-                            .eventOutcome("blocked")
+                            .eventOutcome("failure")
+                            .field("event.reason", "cooldown_active")
                             .field("package.name", module)
                             .field("package.version", version)
                             .log();
@@ -263,7 +264,7 @@ final class CachedProxySlice implements Slice {
                     }
                     EcsLogger.debug("com.auto1.pantera.go")
                         .message("Cooldown passed, proceeding with fetch")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("proxy_request")
                         .field("package.name", module)
                         .field("package.version", version)
@@ -274,7 +275,7 @@ final class CachedProxySlice implements Slice {
                         .thenCompose(releaseDate -> {
                             EcsLogger.debug("com.auto1.pantera.go")
                                 .message("Release date retrieved")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_request")
                                 .field("package.name", module)
                                 .field("package.version", version)
@@ -317,9 +318,9 @@ final class CachedProxySlice implements Slice {
                 // Cache HIT - serve immediately without contacting remote
                 EcsLogger.debug("com.auto1.pantera.go")
                     .message("Cache hit, serving cached content")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .eventOutcome("cache_hit")
+                    .eventCategory("web")
+                    .eventAction("cache_hit")
+                    .eventOutcome("success")
                     .field("package.name", key.string())
                     .log();
                 // Record event for .zip files
@@ -335,9 +336,9 @@ final class CachedProxySlice implements Slice {
             // Cache MISS - fetch from remote with checksum validation
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Cache miss, fetching from remote")
-                .eventCategory("repository")
-                .eventAction("proxy_request")
-                .eventOutcome("cache_miss")
+                .eventCategory("web")
+                .eventAction("cache_miss")
+                .eventOutcome("success")
                 .field("package.name", key.string())
                 .log();
             return this.fetchFromRemoteAndCache(line, key, owner, artifactPath, releaseDate, rshdr);
@@ -372,9 +373,10 @@ final class CachedProxySlice implements Slice {
                 // This allows cache to work in degraded mode (no checksum validation)
                 EcsLogger.warn("com.auto1.pantera.go")
                     .message("Remote HEAD failed, proceeding without checksum validation")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("proxy_request")
-                    .eventOutcome("degraded")
+                    .eventOutcome("success")
+                    .field("event.reason", "degraded_response")
                     .field("package.name", key.string())
                     .field("error.message", err.getMessage())
                     .log();
@@ -409,7 +411,7 @@ final class CachedProxySlice implements Slice {
                                 // Network error during fetch - complete with empty
                                 EcsLogger.warn("com.auto1.pantera.go")
                                     .message("Remote fetch failed")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("proxy_request")
                                     .eventOutcome("failure")
                                     .field("package.name", key.string())
@@ -429,7 +431,7 @@ final class CachedProxySlice implements Slice {
                         if (key.string().endsWith(".zip") && artifactPath.isPresent()) {
                             EcsLogger.debug("com.auto1.pantera.go")
                                 .message("Attempting to enqueue Go proxy event")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("proxy_request")
                                 .field("package.name", key.string())
                                 .field("file.path", artifactPath.get())
@@ -450,7 +452,7 @@ final class CachedProxySlice implements Slice {
                     if (throwable != null) {
                         EcsLogger.error("com.auto1.pantera.go")
                             .message("Failed to fetch through cache")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
                             .eventOutcome("failure")
                             .error(throwable)
@@ -458,9 +460,10 @@ final class CachedProxySlice implements Slice {
                     } else {
                         EcsLogger.warn("com.auto1.pantera.go")
                             .message("Cache load returned empty, returning 404")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("proxy_request")
-                            .eventOutcome("not_found")
+                            .eventOutcome("failure")
+                            .field("event.reason", "artifact_not_found")
                             .field("package.name", key.string())
                             .field("repository.name", this.rname)
                             .log();
@@ -487,7 +490,7 @@ final class CachedProxySlice implements Slice {
         } catch (final DateTimeParseException ex) {
             EcsLogger.warn("com.auto1.pantera.go")
                 .message("Failed to parse Last-Modified header: " + ex.getParsedString())
-                .eventCategory("http")
+                .eventCategory("web")
                 .eventAction("header_parse")
                 .eventOutcome("failure")
                 .log();
@@ -533,7 +536,7 @@ final class CachedProxySlice implements Slice {
         if (this.events.isEmpty()) {
             EcsLogger.error("com.auto1.pantera.go")
                 .message("Events queue is NOT present - cannot enqueue events")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .eventOutcome("failure")
                 .log();
@@ -550,7 +553,7 @@ final class CachedProxySlice implements Slice {
             queue.add(event);
             EcsLogger.debug("com.auto1.pantera.go")
                 .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("package.name", key.string())
                 .field("repository.name", this.rname)

@@ -200,7 +200,7 @@ final class CachedProxySlice implements Slice {
             final String path = line.uri().getPath();
             EcsLogger.info("com.auto1.pantera.composer")
                 .message("Composer proxy request")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .log();
@@ -240,9 +240,9 @@ final class CachedProxySlice implements Slice {
             if (cached.isPresent()) {
                 EcsLogger.info("com.auto1.pantera.composer")
                     .message("Cache hit, serving cached metadata (offline-safe)")
-                    .eventCategory("repository")
-                    .eventAction("proxy_request")
-                    .eventOutcome("cache_hit")
+                    .eventCategory("web")
+                    .eventAction("cache_hit")
+                    .eventOutcome("success")
                     .field("package.name", name)
                     .log();
                 return cached.get().asBytesFuture().thenCompose(bytes -> {
@@ -281,9 +281,10 @@ final class CachedProxySlice implements Slice {
                 if (result.blocked()) {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cooldown blocked cached metadata request")
-                        .eventCategory("repository")
+                        .eventCategory("web")
                         .eventAction("cooldown_check")
-                        .eventOutcome("blocked")
+                        .eventOutcome("failure")
+                        .field("event.reason", "cooldown_active")
                         .field("package.name", name)
                         .log();
                     return CooldownResponses.forbidden(result.block().orElseThrow());
@@ -318,7 +319,7 @@ final class CachedProxySlice implements Slice {
         if (cooldownReq.isPresent()) {
             EcsLogger.debug("com.auto1.pantera.composer")
                 .message("Evaluating cooldown for package")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_check")
                 .field("package.name", name)
                 .log();
@@ -347,11 +348,11 @@ final class CachedProxySlice implements Slice {
         if (result.blocked()) {
             EcsLogger.info("com.auto1.pantera.composer")
                 .message("Cooldown blocked request")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_check")
-                .eventOutcome("blocked")
+                .eventOutcome("failure")
+                .field("event.reason", "cooldown_active")
                 .field("package.name", name)
-                .field("event.reason", result.block().orElseThrow().reason())
                 .log();
             return CompletableFuture.completedFuture(
                 CooldownResponses.forbidden(result.block().orElseThrow())
@@ -359,9 +360,9 @@ final class CachedProxySlice implements Slice {
         }
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Cooldown allowed request")
-            .eventCategory("repository")
-            .eventAction("cooldown_check")
-            .eventOutcome("allowed")
+            .eventCategory("web")
+            .eventAction("allowed")
+            .eventOutcome("success")
             .field("package.name", name)
             .log();
         return this.fetchThroughCache(line, name, headers);
@@ -387,7 +388,7 @@ final class CachedProxySlice implements Slice {
                     this.fetchThroughCache(line, name, headers).join();
                     EcsLogger.debug("com.auto1.pantera.composer")
                         .message("Background refresh completed")
-                        .eventCategory("cache")
+                        .eventCategory("database")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("success")
                         .field("package.name", name)
@@ -395,7 +396,7 @@ final class CachedProxySlice implements Slice {
                 } catch (final Exception err) {
                     EcsLogger.warn("com.auto1.pantera.composer")
                         .message("Background refresh failed")
-                        .eventCategory("cache")
+                        .eventCategory("database")
                         .eventAction("stale_while_revalidate")
                         .eventOutcome("failure")
                         .field("package.name", name)
@@ -440,7 +441,7 @@ final class CachedProxySlice implements Slice {
                                 final byte[] rewritten = this.rewriteMetadata(bytes);
                                 EcsLogger.debug("com.auto1.pantera.composer")
                                     .message("Pre-rewrote metadata URLs at write time")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("metadata_rewrite")
                                     .field("package.name", name)
                                     .log();
@@ -451,7 +452,7 @@ final class CachedProxySlice implements Slice {
                         }
                         EcsLogger.debug("com.auto1.pantera.composer")
                             .message("No content from remote for package")
-                            .eventCategory("repository")
+                            .eventCategory("web")
                             .eventAction("metadata_fetch")
                             .field("package.name", name)
                             .log();
@@ -472,9 +473,10 @@ final class CachedProxySlice implements Slice {
                         if (result.blocked()) {
                             EcsLogger.info("com.auto1.pantera.composer")
                                 .message("Cooldown blocked metadata request")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("cooldown_check")
-                                .eventOutcome("blocked")
+                                .eventOutcome("failure")
+                                .field("event.reason", "cooldown_active")
                                 .field("package.name", name)
                                 .log();
                             return CompletableFuture.completedFuture(
@@ -487,7 +489,7 @@ final class CachedProxySlice implements Slice {
                             .thenApply(ignored -> {
                                 EcsLogger.debug("com.auto1.pantera.composer")
                                     .message("Saved metadata to storage")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("metadata_save")
                                     .field("package.name", metadataKey.string())
                                     .log();
@@ -501,7 +503,7 @@ final class CachedProxySlice implements Slice {
         }).exceptionally(throwable -> {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to read cached item")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cache_read")
                 .eventOutcome("failure")
                 .field("error.message", throwable.getMessage())
@@ -527,7 +529,7 @@ final class CachedProxySlice implements Slice {
             if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
                 EcsLogger.debug("com.auto1.pantera.composer")
                     .message("Satis format detected (packages is array), skipping cooldown check")
-                    .eventCategory("repository")
+                    .eventCategory("web")
                     .eventAction("cooldown_check")
                     .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
@@ -560,7 +562,7 @@ final class CachedProxySlice implements Slice {
         } catch (Exception e) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Failed to parse metadata for cooldown check")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("cooldown_check")
                 .eventOutcome("failure")
                 .field("error.message", LogSanitizer.sanitizeMessage(e.getMessage()))
@@ -640,7 +642,7 @@ final class CachedProxySlice implements Slice {
         } catch (Exception ex) {
             EcsLogger.error("com.auto1.pantera.composer")
                 .message("Failed to rewrite metadata")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("metadata_rewrite")
                 .eventOutcome("failure")
                 .error(ex)
@@ -675,7 +677,7 @@ final class CachedProxySlice implements Slice {
         if (this.events.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Events queue is empty, cannot emit event")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("event_creation")
                 .eventOutcome("failure")
                 .field("package.name", name)
@@ -685,7 +687,7 @@ final class CachedProxySlice implements Slice {
         if (content.isEmpty()) {
             EcsLogger.warn("com.auto1.pantera.composer")
                 .message("Content is empty, cannot emit event")
-                .eventCategory("repository")
+                .eventCategory("web")
                 .eventAction("event_creation")
                 .eventOutcome("failure")
                 .field("package.name", name)
@@ -704,7 +706,7 @@ final class CachedProxySlice implements Slice {
         );
         EcsLogger.info("com.auto1.pantera.composer")
             .message("Added Composer proxy event (queue size: " + this.events.get().size() + ")")
-            .eventCategory("repository")
+            .eventCategory("web")
             .eventAction("event_creation")
             .eventOutcome("success")
             .field("package.name", name)
@@ -755,7 +757,7 @@ final class CachedProxySlice implements Slice {
                             final long duration = System.currentTimeMillis() - startTime;
                             EcsLogger.debug("com.auto1.pantera.composer")
                                 .message("Remote response received")
-                                .eventCategory("repository")
+                                .eventCategory("web")
                                 .eventAction("remote_fetch")
                                 .field("url.path", line.uri().getPath())
                                 .field("http.response.status_code", response.status().code())
@@ -781,7 +783,7 @@ final class CachedProxySlice implements Slice {
                                 }
                                 EcsLogger.warn("com.auto1.pantera.composer")
                                     .message("Remote returned non-success status")
-                                    .eventCategory("repository")
+                                    .eventCategory("web")
                                     .eventAction("remote_fetch")
                                     .eventOutcome("failure")
                                     .field("url.path", line.uri().getPath())
