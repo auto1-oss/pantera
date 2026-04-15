@@ -413,7 +413,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     .eventOutcome("success")
                     .field("repository.type", ctx.repoType)
                     .field("package.name", ctx.packageName)
-                    .field("event.duration", durationMs * 1_000_000L)
+                    .field("event.duration", durationMs)
                     .log();
 
                 // Record metrics via CooldownMetrics

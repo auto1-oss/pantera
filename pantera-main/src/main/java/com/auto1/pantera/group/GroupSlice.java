@@ -620,13 +620,24 @@ public final class GroupSlice implements Slice {
             // Follower: another request is already fanning out for this artifact.
             // Wait for it to finish, then re-enter proxyOnlyFanout — the negative
             // cache check at the top will short-circuit to 404 in the miss case.
+            //
+            // CRITICAL: use thenComposeAsync, NOT thenCompose.  The leader
+            // completes the gate BEFORE removing it from inFlightFanouts
+            // (see whenComplete below — intentional ordering to avoid a
+            // separate putIfAbsent race).  If the gate is already completed
+            // when the follower calls .thenCompose, the callback runs
+            // synchronously on the same stack; the retry then hits the SAME
+            // (still-present) gate and recurses, blowing the stack with a
+            // StackOverflowError before the leader's remove() can run.
+            // thenComposeAsync dispatches the retry to the common pool so
+            // the leader's whenComplete queue can drain remove() first.
             EcsLogger.debug("com.auto1.pantera.group")
                 .message("Coalescing with in-flight fanout for " + artifactName)
                 .eventCategory("web")
                 .eventAction("group_fanout_coalesce")
                 .field("url.path", line.uri().getPath())
                 .log();
-            return existingGate.thenCompose(MdcPropagation.withMdc(
+            return existingGate.thenComposeAsync(MdcPropagation.withMdc(
                 ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
             ));
         }

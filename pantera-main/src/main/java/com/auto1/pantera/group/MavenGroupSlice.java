@@ -328,7 +328,7 @@ public final class MavenGroupSlice implements Slice {
                                     .field("event.reason", "stale_cache_fallback")
                                     .field("repository.name", MavenGroupSlice.this.group)
                                     .field("url.path", path)
-                                    .field("event.duration", fetchDuration * 1_000_000L)
+                                    .field("event.duration", fetchDuration)
                                     .log();
                                 return ResponseBuilder.ok()
                                     .header("Content-Type", "application/xml")
@@ -342,7 +342,7 @@ public final class MavenGroupSlice implements Slice {
                                 .eventOutcome("failure")
                                 .field("repository.name", MavenGroupSlice.this.group)
                                 .field("url.path", path)
-                                .field("event.duration", fetchDuration * 1_000_000L)
+                                .field("event.duration", fetchDuration)
                                 .log();
                             return ResponseBuilder.notFound().build();
                         });
@@ -373,7 +373,7 @@ public final class MavenGroupSlice implements Slice {
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("event.duration", fetchDuration * 1_000_000L)
+                                .field("event.duration", fetchDuration)
                                 .log();
                         }
 
@@ -386,7 +386,7 @@ public final class MavenGroupSlice implements Slice {
                                 .eventOutcome("success")
                                 .field("repository.name", this.group)
                                 .field("url.path", path)
-                                .field("event.duration", mergeDuration * 1_000_000L)
+                                .field("event.duration", mergeDuration)
                                 .log();
                         }
 
