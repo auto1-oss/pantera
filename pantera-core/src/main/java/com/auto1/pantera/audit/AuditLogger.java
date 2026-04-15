@@ -75,6 +75,35 @@ public final class AuditLogger {
             .log();
     }
 
+    /**
+     * Log a successful artifact publish (DB index record written).
+     * @param repoName Repository name
+     * @param repoType Repository type
+     * @param artifactName Artifact/package name
+     * @param version Artifact version
+     * @param size File size in bytes
+     * @param owner Owner/uploader name
+     * @param releaseDate Release timestamp epoch-millis, or {@code null} if absent
+     */
+    public static void publish(final String repoName, final String repoType,
+        final String artifactName, final String version,
+        final double size, final String owner, final Long releaseDate) {
+        final EcsLogger logger = EcsLogger.info(LOGGER)
+            .message(releaseDate != null
+                ? String.format("Artifact publish recorded (release=%d)", releaseDate)
+                : "Artifact publish recorded")
+            .field("event.category", "database")
+            .field("event.action", "artifact_publish")
+            .field("event.outcome", "success")
+            .field("repository.type", repoType)
+            .field("repository.name", repoName)
+            .field("package.name", artifactName)
+            .field("package.version", version)
+            .field("package.size", size)
+            .field("user.name", owner);
+        logger.log();
+    }
+
     private static EcsLogger emit(final String message, final String action) {
         final EcsLogger logger = EcsLogger.info(LOGGER)
             .message(message)

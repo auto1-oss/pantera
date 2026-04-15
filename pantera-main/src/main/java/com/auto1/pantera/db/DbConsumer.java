@@ -10,6 +10,7 @@
  */
 package com.auto1.pantera.db;
 
+import com.auto1.pantera.audit.AuditLogger;
 import com.auto1.pantera.scheduling.ArtifactEvent;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
@@ -102,21 +103,15 @@ public final class DbConsumer implements Consumer<ArtifactEvent> {
      * @param record Artifact event that was persisted
      */
     private static void logArtifactPublish(final ArtifactEvent record) {
-        final String msg = record.releaseDate().isPresent()
-            ? String.format("Artifact publish recorded (release=%s)", record.releaseDate().get())
-            : "Artifact publish recorded";
-        EcsLogger.info("com.auto1.pantera.audit")
-            .message(msg)
-            .eventCategory("database")
-            .eventAction("artifact_publish")
-            .eventOutcome("success")
-            .field("repository.type", record.repoType())
-            .field("repository.name", normalizeRepoName(record.repoName()))
-            .field("package.name", record.artifactName())
-            .field("package.version", record.artifactVersion())
-            .field("package.size", record.size())
-            .field("user.name", record.owner())
-            .log();
+        AuditLogger.publish(
+            normalizeRepoName(record.repoName()),
+            record.repoType(),
+            record.artifactName(),
+            record.artifactVersion(),
+            record.size(),
+            record.owner(),
+            record.releaseDate().orElse(null)
+        );
     }
 
     /**
