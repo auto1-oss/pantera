@@ -187,12 +187,13 @@ public final class PyProxyPackageProcessor extends QuartzJob {
                                     : Instant.ofEpochMilli(release).toString())
                                 .log();
                         } else {
-                            EcsLogger.error("com.auto1.pantera.pypi")
-                                .message("Python proxy package is not valid")
-                                .eventCategory("web")
+                            EcsLogger.warn("com.auto1.pantera.pypi")
+                                .message("Python proxy package failed filename validation")
+                                .eventCategory("package")
                                 .eventAction("package_processing")
                                 .eventOutcome("failure")
-                                .field("package.name", key.string())
+                                .field("event.reason", "filename did not match WHEEL_PTRN or ARCHIVE_PTRN")
+                                .field("file.name", filename)
                                 .log();
                         }
                     } catch (final Exception err) {
