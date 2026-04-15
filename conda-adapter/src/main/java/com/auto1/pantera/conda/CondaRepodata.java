@@ -35,6 +35,12 @@ import javax.json.JsonObject;
 public interface CondaRepodata {
 
     /**
+     * Shared Jackson {@link JsonFactory} — thread-safe once configured; reused
+     * across all {@code perform()} calls to avoid per-request construction cost.
+     */
+    JsonFactory JSON_FACTORY = new JsonFactory();
+
+    /**
      * Removes records about conda packages from repodata file.
      * Output/Input streams are not closed by this implementation, these operation should
      * be done from outside.
@@ -68,10 +74,10 @@ public interface CondaRepodata {
          * @throws PanteraIOException On IO errors
          */
         public void perform(final Set<String> checksums) {
-            final JsonFactory factory = new JsonFactory();
             try {
                 new JsonMaid.Jackson(
-                    factory.createGenerator(this.out), factory.createParser(this.input)
+                    JSON_FACTORY.createGenerator(this.out),
+                    JSON_FACTORY.createParser(this.input)
                 ).clean(checksums);
             } catch (final IOException err) {
                 throw new PanteraIOException(err);
@@ -149,11 +155,10 @@ public interface CondaRepodata {
                         .build()
                 );
             }
-            final JsonFactory factory = new JsonFactory();
             try {
                 new MergedJson.Jackson(
-                    factory.createGenerator(this.out),
-                    this.input.map(new UncheckedIOFunc<>(factory::createParser))
+                    JSON_FACTORY.createGenerator(this.out),
+                    this.input.map(new UncheckedIOFunc<>(JSON_FACTORY::createParser))
                 ).merge(items);
             } catch (final IOException err) {
                 throw new PanteraIOException(err);

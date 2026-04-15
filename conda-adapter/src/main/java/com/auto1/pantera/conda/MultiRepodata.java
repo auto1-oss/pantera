@@ -55,6 +55,12 @@ public interface MultiRepodata {
     final class Unique implements MultiRepodata {
 
         /**
+         * Shared Jackson mapper — thread-safe once configured; reused across all
+         * merge() calls to avoid per-request construction cost.
+         */
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        /**
          * Temp file extension.
          */
         private static final String EXT = "json";
@@ -71,7 +77,7 @@ public interface MultiRepodata {
 
         @Override
         public void merge(final Collection<InputStream> inputs, final OutputStream result) {
-            final JsonFactory factory = new JsonFactory();
+            final JsonFactory factory = CondaRepodata.JSON_FACTORY;
             try {
                 final Path ftars = Files.createTempFile("tars", Unique.EXT);
                 ftars.toFile().deleteOnExit();
@@ -147,11 +153,11 @@ public interface MultiRepodata {
             throws IOException {
             final String name = parser.getCurrentName();
             parser.nextToken();
-            parser.setCodec(new ObjectMapper());
+            parser.setCodec(Unique.MAPPER);
             final ObjectNode nodes = parser.<ObjectNode>readValueAsTree();
             if (this.pckgs.add(name)) {
                 generator.writeFieldName(name);
-                generator.setCodec(new ObjectMapper());
+                generator.setCodec(Unique.MAPPER);
                 generator.writeTree(nodes);
             }
         }

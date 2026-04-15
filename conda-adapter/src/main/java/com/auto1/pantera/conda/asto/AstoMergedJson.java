@@ -16,6 +16,7 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.misc.UncheckedIOFunc;
 import com.auto1.pantera.asto.streams.StorageValuePipeline;
 import com.auto1.pantera.conda.meta.MergedJson;
+import com.auto1.pantera.conda.CondaRepodata;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import java.io.IOException;
@@ -60,7 +61,7 @@ public final class AstoMergedJson {
         return new StorageValuePipeline<>(this.asto, this.key).process(
             (opt, out) -> {
                 try {
-                    final JsonFactory factory = new JsonFactory();
+                    final JsonFactory factory = CondaRepodata.JSON_FACTORY;
                     final Optional<JsonParser> parser = opt.map(
                         new UncheckedIOFunc<>(factory::createParser)
                     );
