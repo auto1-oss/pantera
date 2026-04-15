@@ -551,11 +551,10 @@ public final class GroupSlice implements Slice {
             .filter(m -> wanted.contains(m.name()))
             .toList();
         if (targeted.isEmpty()) {
-            EcsLogger.warn("com.auto1.pantera.group")
-                .message("Index hit but no matching member in flattened list — safety net")
+            EcsLogger.debug("com.auto1.pantera.group")
+                .message("Index hit references repo not in flattened member list — falling through to full fanout safety net")
                 .eventCategory("web")
                 .eventAction("group_index_orphan")
-                .eventOutcome("failure")
                 .field("url.path", line.uri().getPath())
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx);
