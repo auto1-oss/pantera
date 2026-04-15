@@ -63,6 +63,8 @@ import com.auto1.pantera.http.client.ProxySettings;
 import com.auto1.pantera.http.client.jetty.JettyClientSlices;
 import com.auto1.pantera.http.filter.FilterSlice;
 import com.auto1.pantera.http.filter.Filters;
+import com.auto1.pantera.http.timeout.AutoBlockRegistry;
+import com.auto1.pantera.http.timeout.AutoBlockSettings;
 import com.auto1.pantera.http.slice.PathPrefixStripSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.http.slice.TrimPathSlice;
@@ -179,6 +181,16 @@ public class RepositorySlices {
      * this config so key-prefixing isolates entries per group.
      */
     private final NegativeCacheConfig groupNegativeCacheConfig;
+
+    /**
+     * Shared circuit-breaker registries keyed by physical repo name.
+     * One {@link AutoBlockRegistry} per upstream — shared across every group that
+     * references that upstream.  When maven-central is a member of both
+     * libs-release and libs-snapshot, both groups trip the same circuit after N
+     * failures; recovery is also detected once rather than independently per group.
+     */
+    private final ConcurrentMap<String, AutoBlockRegistry> memberRegistries =
+        new ConcurrentHashMap<>();
 
     /**
      * @param settings Pantera settings
@@ -611,7 +623,8 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(npmFlatMembers),
                     "npm-group",
-                    newGroupNegativeCache(cfg.name())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -676,7 +689,8 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(composerFlatMembers),
                     cfg.type(),
-                    newGroupNegativeCache(cfg.name())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -705,7 +719,8 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(mavenFlatMembers),
                     "maven-group",
-                    newGroupNegativeCache(cfg.name())
+                    newGroupNegativeCache(cfg.name()),
+                    this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -741,7 +756,8 @@ public class RepositorySlices {
                             Optional.of(this.settings.artifactIndex()),
                             proxyMembers(genericFlatMembers),
                             cfg.type(),
-                            newGroupNegativeCache(cfg.name())
+                            newGroupNegativeCache(cfg.name()),
+                            this::getOrCreateMemberRegistry
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1040,6 +1056,30 @@ public class RepositorySlices {
                     .orElse(List.of())
             );
         return flattener.flatten(groupName);
+    }
+
+    /**
+     * Return the shared {@link AutoBlockRegistry} for {@code memberName}, creating one
+     * with default settings on first access.  Subsequent lookups for the same name
+     * (from different groups) return the same instance so circuit-breaker state is
+     * consolidated across all groups that share a physical upstream.
+     *
+     * @param memberName Physical leaf repo name
+     * @return Shared registry for that upstream
+     */
+    private AutoBlockRegistry getOrCreateMemberRegistry(final String memberName) {
+        return this.memberRegistries.computeIfAbsent(
+            memberName,
+            n -> {
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Member circuit-breaker registry created for upstream: " + n
+                        + " (total shared registries: " + (this.memberRegistries.size() + 1) + ")")
+                    .eventCategory("configuration")
+                    .eventAction("circuit_breaker_init")
+                    .log();
+                return new AutoBlockRegistry(AutoBlockSettings.defaults());
+            }
+        );
     }
 
     /**
