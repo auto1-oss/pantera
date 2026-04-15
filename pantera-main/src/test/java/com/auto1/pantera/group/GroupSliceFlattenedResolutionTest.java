@@ -382,6 +382,92 @@ final class GroupSliceFlattenedResolutionTest {
                 + "(request coalescing + negative cache eliminate the thundering herd)");
     }
 
+    // ---- Stack-safety regression: coalescer is safe at high N ----
+
+    /**
+     * Stack-safety regression guard for the coalescer.
+     *
+     * Before commit 7c30f01f the coalescer used .thenCompose on the gate.
+     * When the leader completed the gate synchronously, followers whose
+     * callbacks were already queued ran on the SAME stack, each retrying
+     * proxyOnlyFanout which re-hit the still-in-map gate and recursed,
+     * blowing the stack at ~400 frames.
+     *
+     * The fix (thenComposeAsync) dispatches retries to the common pool,
+     * keeping the stack flat regardless of follower count.
+     *
+     * This test locks in that guarantee at N=1000 — well beyond the
+     * observed production reproducer (~15 concurrent graphql-codegen
+     * requests) and far above the point where synchronous recursion
+     * would overflow.
+     */
+    @Test
+    void coalescingIsStackSafeAtHighConcurrency() throws Exception {
+        final int N = 1000;
+        final RecordingIndex idx = new RecordingIndex(Optional.of(List.of())); // confirmed miss
+        final AtomicInteger proxyCount = new AtomicInteger(0);
+        final java.util.concurrent.CountDownLatch startLatch =
+            new java.util.concurrent.CountDownLatch(1);
+
+        // Slow proxy to keep the gate open while followers pile up
+        final Map<String, Slice> slices = new HashMap<>();
+        slices.put(PROXY, (line, headers, body) -> {
+            proxyCount.incrementAndGet();
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return ResponseBuilder.notFound().build();
+            });
+        });
+
+        final GroupSlice slice = buildGroup(
+            idx,
+            List.of(PROXY),
+            Set.of(PROXY),
+            slices
+        );
+
+        // Launch N concurrent requests
+        final java.util.concurrent.ExecutorService pool =
+            Executors.newFixedThreadPool(Math.min(N, 64));
+        final List<CompletableFuture<Response>> futures = new java.util.ArrayList<>(N);
+        try {
+            for (int i = 0; i < N; i++) {
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    try {
+                        startLatch.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                    return slice.response(
+                        new RequestLine("GET", JAR_PATH),
+                        Headers.EMPTY,
+                        Content.EMPTY
+                    ).join();
+                }, pool));
+            }
+            startLatch.countDown();
+            // Wait for all — if ANY threw StackOverflowError, CompletableFuture.join rethrows it
+            for (CompletableFuture<Response> f : futures) {
+                final Response r = f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(RsStatus.NOT_FOUND, r.status(),
+                    "All " + N + " concurrent requests must receive 404");
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // Coalescing invariant at scale: exactly one proxy query despite N followers
+        assertEquals(1, proxyCount.get(),
+            "At N=" + N + " concurrent missers, proxy must be queried exactly once — "
+                + "the coalescer + negative cache must collapse the herd. Actual: "
+                + proxyCount.get());
+    }
+
     // ---- Internal routing header suppresses EcsLoggingSlice access logs ----
 
     /**
