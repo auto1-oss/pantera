@@ -15,6 +15,7 @@ import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -24,6 +25,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -228,31 +230,45 @@ public class NpmProxy {
      * Trigger background refresh of a package (stale-while-revalidate pattern).
      * Serves stale content immediately while refreshing in background.
      * Uses a ConcurrentHashMap.KeySetView to deduplicate in-flight refreshes.
+     *
+     * <p>Captures the caller's MDC snapshot at wrap time and restores it
+     * inside the RxJava subscribe callbacks; without this the
+     * {@code Schedulers.io()} pool thread would emit logs without
+     * {@code trace.id} / {@code client.ip}, which is ~3.3k entries/day per
+     * production observation.</p>
+     *
      * @param name Package name
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(final String name) {
         if (this.refreshing.add(name)) {
+            // Capture caller MDC so subscribe callbacks on Schedulers.io()
+            // still carry trace.id / client.ip when they log.
+            final Map<String, String> mdc = MdcPropagation.capture();
             // Try conditional request first if we have a stored upstream ETag
             this.conditionalRefresh(name)
                 .subscribeOn(Schedulers.io())
                 .doFinally(() -> this.refreshing.remove(name))
                 .subscribe(
-                    saved -> EcsLogger.debug("com.auto1.pantera.npm.proxy")
-                        .message("Background refresh completed")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("success")
-                        .field("package.name", name)
-                        .log(),
-                    err -> EcsLogger.warn("com.auto1.pantera.npm.proxy")
-                        .message("Background refresh failed")
-                        .eventCategory("database")
-                        .eventAction("stale_while_revalidate")
-                        .eventOutcome("failure")
-                        .field("package.name", name)
-                        .error(err)
-                        .log(),
+                    saved -> MdcPropagation.runWith(mdc, () ->
+                        EcsLogger.debug("com.auto1.pantera.npm.proxy")
+                            .message("Background refresh completed")
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("success")
+                            .field("package.name", name)
+                            .log()
+                    ),
+                    err -> MdcPropagation.runWith(mdc, () ->
+                        EcsLogger.warn("com.auto1.pantera.npm.proxy")
+                            .message("Background refresh failed")
+                            .eventCategory("database")
+                            .eventAction("stale_while_revalidate")
+                            .eventOutcome("failure")
+                            .field("package.name", name)
+                            .error(err)
+                            .log()
+                    ),
                     () -> this.refreshing.remove(name)
                 );
         }

@@ -12,6 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.trace.TraceContextExecutor;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -209,16 +210,18 @@ public final class DbArtifactIndex implements ArtifactIndex {
     public DbArtifactIndex(final DataSource source) {
         this(
             source,
-            Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors()),
-                r -> {
-                    final Thread thread = new Thread(
-                        r,
-                        "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
-                    );
-                    thread.setDaemon(true);
-                    return thread;
-                }
+            TraceContextExecutor.wrap(
+                Executors.newFixedThreadPool(
+                    Math.max(2, Runtime.getRuntime().availableProcessors()),
+                    r -> {
+                        final Thread thread = new Thread(
+                            r,
+                            "db-artifact-index-" + THREAD_COUNTER.incrementAndGet()
+                        );
+                        thread.setDaemon(true);
+                        return thread;
+                    }
+                )
             ),
             true
         );

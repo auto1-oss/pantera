@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.http.trace;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import org.slf4j.MDC;
 
@@ -224,5 +226,107 @@ public final class MdcPropagation {
                 }
             }
         };
+    }
+
+    /**
+     * Wrap a single-argument {@link Consumer} so it restores the caller's MDC
+     * context on whichever thread the callback runs.
+     *
+     * <p>Useful for RxJava subscribe callbacks and other async APIs that take a
+     * plain {@code Consumer<T>} (e.g. onSuccess / onError lambdas). The captured
+     * MDC is the one present at wrap time; pool threads are not polluted after
+     * the consumer completes.</p>
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * observable.subscribe(
+     *     MdcPropagation.withMdcConsumer(result -> logger.info("done: {}", result)),
+     *     MdcPropagation.withMdcConsumer(error -> logger.warn("failed", error))
+     * );
+     * }</pre>
+     *
+     * @param consumer The original consumer
+     * @param <T> Input type
+     * @return A consumer that installs + restores MDC around the original
+     */
+    public static <T> Consumer<T> withMdcConsumer(final Consumer<T> consumer) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return value -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                consumer.accept(value);
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Capture the current MDC context into a detached map.
+     *
+     * <p>Returns a defensive copy so callers can restore this snapshot later on
+     * a different thread via {@link #runWith(Map, Runnable)}. Returns
+     * {@code null} when the current MDC is null or empty so callers can treat
+     * the absence of context as a simple no-op.</p>
+     *
+     * <p>Use this when the async callback is a non-standard functional
+     * interface (e.g. RxJava {@code Consumer} in a 3-arg subscribe) and the
+     * pre-wrapped {@link #withMdcConsumer(Consumer)} overload doesn't match.
+     * Capture once at the boundary, then call {@link #runWith} inside the
+     * callback body.</p>
+     *
+     * @return MDC snapshot, or {@code null} when the current MDC is empty
+     */
+    public static Map<String, String> capture() {
+        final Map<String, String> ctx = MDC.getCopyOfContextMap();
+        if (ctx == null || ctx.isEmpty()) {
+            return null;
+        }
+        return new HashMap<>(ctx);
+    }
+
+    /**
+     * Run an action with the given MDC snapshot installed, restoring the
+     * thread's prior MDC when the action completes.
+     *
+     * <p>Companion to {@link #capture()}. If {@code snapshot} is {@code null}
+     * the action is invoked without touching the current MDC.</p>
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * final Map<String, String> snap = MdcPropagation.capture();
+     * future.subscribe(result -> MdcPropagation.runWith(snap, () -> {
+     *     logger.info("result received: {}", result);
+     * }));
+     * }</pre>
+     *
+     * @param snapshot MDC snapshot from {@link #capture()} (may be null)
+     * @param action Action to run with the snapshot installed
+     */
+    public static void runWith(final Map<String, String> snapshot, final Runnable action) {
+        if (snapshot == null) {
+            action.run();
+            return;
+        }
+        final Map<String, String> prior = MDC.getCopyOfContextMap();
+        try {
+            MDC.setContextMap(snapshot);
+            action.run();
+        } finally {
+            if (prior != null) {
+                MDC.setContextMap(prior);
+            } else {
+                MDC.clear();
+            }
+        }
     }
 }
