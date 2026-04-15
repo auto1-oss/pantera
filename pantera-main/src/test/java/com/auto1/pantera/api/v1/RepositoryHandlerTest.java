@@ -13,6 +13,7 @@ package com.auto1.pantera.api.v1;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
@@ -145,6 +146,96 @@ public final class RepositoryHandlerTest extends AsyncApiTestBase {
                 Assertions.assertEquals("NOT_FOUND", body.getString("error"));
                 Assertions.assertEquals(404, body.getInteger("status"));
                 Assertions.assertNotNull(body.getString("message"));
+            }
+        );
+    }
+
+    @Test
+    void editGroupRepoWithoutStorageReturns200(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject groupBody = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-group")
+                    .put("members", new JsonArray().add("maven-hosted-1").add("maven-proxy-1"))
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/my-maven-group",
+            groupBody,
+            res -> Assertions.assertEquals(200, res.statusCode())
+        );
+    }
+
+    @Test
+    void editGroupRepoWithoutMembersReturns400(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject groupBody = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "npm-group")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/my-npm-group",
+            groupBody,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject body = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", body.getString("error"));
+                Assertions.assertTrue(
+                    body.getString("message").contains("members"),
+                    "Error message should mention 'members'"
+                );
+            }
+        );
+    }
+
+    @Test
+    void editGroupRepoWithEmptyMembersReturns400(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject groupBody = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "docker-group")
+                    .put("members", new JsonArray())
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/my-docker-group",
+            groupBody,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject body = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", body.getString("error"));
+            }
+        );
+    }
+
+    @Test
+    void editNonGroupRepoWithoutStorageReturns400(final Vertx vertx, final VertxTestContext ctx)
+        throws Exception {
+        final JsonObject noStorageBody = new JsonObject()
+            .put(
+                "repo",
+                new JsonObject()
+                    .put("type", "maven-proxy")
+            );
+        this.request(
+            vertx, ctx,
+            HttpMethod.PUT, "/api/v1/repositories/my-maven-proxy",
+            noStorageBody,
+            res -> {
+                Assertions.assertEquals(400, res.statusCode());
+                final JsonObject body = res.bodyAsJsonObject();
+                Assertions.assertEquals("BAD_REQUEST", body.getString("error"));
+                Assertions.assertTrue(
+                    body.getString("message").contains("storage"),
+                    "Error message should mention 'storage'"
+                );
             }
         );
     }
