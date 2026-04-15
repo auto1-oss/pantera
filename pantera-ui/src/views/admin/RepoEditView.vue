@@ -5,40 +5,51 @@ import { getRepo, putRepo } from '@/api/repos'
 import { useNotificationStore } from '@/stores/notifications'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import RepoTypeBadge from '@/components/common/RepoTypeBadge.vue'
-import Textarea from 'primevue/textarea'
+import RepoConfigForm from '@/components/admin/RepoConfigForm.vue'
 import Button from 'primevue/button'
+import type { RepoConfigEnvelope } from '@/types/repo'
 
 const props = defineProps<{ name: string }>()
 const router = useRouter()
 const notify = useNotificationStore()
 
-const configJson = ref('')
+const initialConfig = ref<RepoConfigEnvelope | null>(null)
+const config = ref<RepoConfigEnvelope | null>(null)
 const repoType = ref('')
-const saving = ref(false)
+const isValid = ref(false)
 const loading = ref(true)
+const saving = ref(false)
+const loadError = ref('')
+const saveError = ref('')
 
 onMounted(async () => {
   try {
     const raw = await getRepo(props.name)
-    const repo = (raw as Record<string, unknown>).repo as Record<string, unknown> | undefined
-    repoType.value = (repo?.type as string) ?? ''
-    configJson.value = JSON.stringify(raw, null, 2)
-  } catch {
+    const envelope = raw as RepoConfigEnvelope
+    repoType.value = (envelope.repo?.type as string) ?? ''
+    initialConfig.value = envelope
+    config.value = envelope
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+    loadError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
     notify.error('Failed to load repository')
   } finally {
     loading.value = false
   }
 })
 
-async function handleSave() {
+async function save() {
+  if (!config.value) return
   saving.value = true
+  saveError.value = ''
   try {
-    const config = JSON.parse(configJson.value)
-    await putRepo(props.name, config)
+    await putRepo(props.name, config.value as Record<string, unknown>)
     notify.success('Repository updated', props.name)
     router.push('/admin/repositories')
-  } catch (e: unknown) {
-    notify.error('Failed to update', e instanceof Error ? e.message : 'Invalid JSON')
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: { message?: string } }; message?: string }
+    saveError.value = axiosErr.response?.data?.message ?? axiosErr.message ?? 'Unknown error'
+    notify.error(`Failed to update: ${saveError.value}`)
   } finally {
     saving.value = false
   }
@@ -53,16 +64,38 @@ async function handleSave() {
         <RepoTypeBadge v-if="repoType" :type="repoType" size="md" />
       </div>
 
-      <div v-if="!loading" class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm space-y-4">
-        <div>
-          <label class="block text-sm font-medium mb-1">Configuration (JSON)</label>
-          <Textarea v-model="configJson" rows="16" class="w-full font-mono text-sm" />
+      <div v-if="loading" class="text-sm text-gray-500">Loading…</div>
+
+      <div v-else-if="loadError" class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-sm text-red-700 dark:text-red-300">
+        Failed to load repository: {{ loadError }}
+      </div>
+
+      <template v-else>
+        <RepoConfigForm
+          v-model:config="config"
+          :initial-config="initialConfig"
+          :read-only-type="true"
+          @valid-change="isValid = $event"
+        />
+
+        <div
+          v-if="saveError"
+          class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 text-sm text-red-700 dark:text-red-300"
+        >
+          Failed to update: {{ saveError }}
         </div>
-        <div class="flex gap-3">
-          <Button label="Save" icon="pi pi-check" :loading="saving" @click="handleSave" />
+
+        <div class="flex gap-3 pt-2">
+          <Button
+            label="Save"
+            icon="pi pi-check"
+            :loading="saving"
+            :disabled="!isValid || saving"
+            @click="save"
+          />
           <Button label="Cancel" severity="secondary" text @click="router.back()" />
         </div>
-      </div>
+      </template>
     </div>
   </AppLayout>
 </template>
