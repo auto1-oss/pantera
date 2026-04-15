@@ -1037,6 +1037,13 @@ public final class VertxMain {
             // Initialize MicrometerMetrics with the registry
             com.auto1.pantera.metrics.MicrometerMetrics.initialize(registry);
 
+            // Initialize GroupSliceMetrics so the drain-drop counter
+            // (pantera.group.drain.dropped) registers with Prometheus. Without
+            // this call, GroupSliceMetrics.instance() returns null and the
+            // counter is never emitted — operators fly blind on drain pool
+            // saturation even though the code-level counter increments.
+            com.auto1.pantera.metrics.GroupSliceMetrics.initialize(registry);
+
             // Initialize storage metrics recorder
             com.auto1.pantera.metrics.StorageMetricsRecorder.initialize();
 
