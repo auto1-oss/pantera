@@ -7,7 +7,6 @@ import type { RepoConfigEnvelope } from '@/types/repo'
 import type { StorageAlias } from '@/types'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
-import Textarea from 'primevue/textarea'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Checkbox from 'primevue/checkbox'
@@ -47,13 +46,41 @@ const s3Region = ref('')
 const s3Endpoint = ref('')
 const s3AliasName = ref('')
 
-// Proxy fields
-const remoteUrl = ref('')
-const remoteUsername = ref('')
-const remotePassword = ref('')
+// Proxy fields — list of remotes (proxies may have multiple fallback upstreams)
+interface RemoteEntry { url: string; username: string; password: string }
+const remotes = ref<RemoteEntry[]>([{ url: '', username: '', password: '' }])
 
-// Group fields (newline-separated for textarea; comma-separated also accepted)
-const groupMembers = ref('')
+function addRemote() {
+  remotes.value.push({ url: '', username: '', password: '' })
+}
+
+function removeRemote(idx: number) {
+  if (remotes.value.length > 1) remotes.value.splice(idx, 1)
+  else remotes.value[0] = { url: '', username: '', password: '' }
+}
+
+// Group fields — array of member repo names (edited as a reorderable list)
+const groupMembers = ref<string[]>([])
+
+function addMember() {
+  groupMembers.value.push('')
+}
+
+function removeMember(idx: number) {
+  groupMembers.value.splice(idx, 1)
+}
+
+function moveMemberUp(idx: number) {
+  if (idx <= 0) return
+  const arr = groupMembers.value
+  ;[arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]
+}
+
+function moveMemberDown(idx: number) {
+  const arr = groupMembers.value
+  if (idx >= arr.length - 1) return
+  ;[arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]
+}
 
 // Cooldown
 const cooldownEnabled = ref(false)
@@ -70,7 +97,8 @@ const repoTypes = REPO_TYPE_CREATE_OPTIONS
 // ---------------------------------------------------------------------------
 const isValid = computed<boolean>(() => {
   if (!repoType.value) return false
-  if (isProxy.value && !remoteUrl.value) return false
+  if (isProxy.value && !remotes.value.some(r => r.url.trim())) return false
+  if (isGroup.value && groupMembers.value.length === 0) return false
   if (cooldownEnabled.value && !cooldownDuration.value) return false
   return true
 })
@@ -109,10 +137,8 @@ onMounted(() => { loadStorages() })
 // Reset derivative proxy/group fields when type changes (only in create mode)
 watch(repoType, () => {
   if (!props.readOnlyType) {
-    remoteUrl.value = ''
-    remoteUsername.value = ''
-    remotePassword.value = ''
-    groupMembers.value = ''
+    remotes.value = [{ url: '', username: '', password: '' }]
+    groupMembers.value = []
   }
 })
 
@@ -148,16 +174,25 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
     s3Endpoint.value = repo.storage.endpoint ?? ''
   }
 
-  // Remotes (proxy repos store [{url, username?, password?}])
-  const firstRemote = Array.isArray(repo.remotes) ? repo.remotes[0] : undefined
-  if (firstRemote && typeof firstRemote === 'object' && 'url' in firstRemote) {
-    remoteUrl.value = firstRemote.url ?? ''
-    remoteUsername.value = firstRemote.username ?? ''
-    remotePassword.value = firstRemote.password ?? ''
+  // Remotes (proxy repos store [{url, username?, password?}, ...] — can be multiple)
+  if (Array.isArray(repo.remotes)
+      && repo.remotes.length > 0
+      && typeof repo.remotes[0] === 'object' && 'url' in (repo.remotes[0] as object)) {
+    remotes.value = (repo.remotes as Array<{ url?: string; username?: string; password?: string }>)
+      .map(r => ({
+        url: r.url ?? '',
+        username: r.username ?? '',
+        password: r.password ?? '',
+      }))
+    if (remotes.value.length === 0) {
+      remotes.value = [{ url: '', username: '', password: '' }]
+    }
+  } else {
+    remotes.value = [{ url: '', username: '', password: '' }]
   }
 
-  // Members (group repos — stored as array of name strings in the remotes
-  // field OR in a dedicated members field depending on server version)
+  // Members (group repos — stored as array of name strings in the members field,
+  // or — on older server versions — as an array of strings in the remotes field)
   const members: string[] = []
   if (Array.isArray(repo.members)) {
     for (const m of repo.members) {
@@ -168,7 +203,7 @@ function decomposeConfig(raw: RepoConfigEnvelope) {
       if (typeof m === 'string') members.push(m)
     }
   }
-  groupMembers.value = members.join('\n')
+  groupMembers.value = members
 
   // Cooldown
   cooldownEnabled.value = !!repo.cooldown
@@ -205,21 +240,24 @@ function buildConfig(): RepoConfigEnvelope {
     storage,
   }
 
-  if (isProxy.value && remoteUrl.value) {
-    const remote: { url: string; username?: string; password?: string } = {
-      url: remoteUrl.value,
-    }
-    if (remoteUsername.value) {
-      remote.username = remoteUsername.value
-      remote.password = remotePassword.value
-    }
-    repo.remotes = [remote]
+  if (isProxy.value) {
+    // Emit every non-empty remote entry, preserving order. Multi-remote proxies
+    // (fallback upstreams) are fully round-tripped.
+    const built = remotes.value
+      .filter(r => r.url.trim())
+      .map(r => {
+        const out: { url: string; username?: string; password?: string } = { url: r.url.trim() }
+        if (r.username.trim()) {
+          out.username = r.username.trim()
+          out.password = r.password
+        }
+        return out
+      })
+    if (built.length > 0) repo.remotes = built
   }
 
-  if (isGroup.value && groupMembers.value) {
-    // Accept both comma and newline as separators
+  if (isGroup.value && groupMembers.value.length > 0) {
     const members = groupMembers.value
-      .split(/[\n,]+/)
       .map(m => m.trim())
       .filter(Boolean)
     repo.members = members
@@ -237,16 +275,18 @@ function emitConfig() {
   emit('update:config', buildConfig())
 }
 
-// Watch all individual form fields and re-emit the built config
+// Watch all individual form fields and re-emit the built config.
+// Arrays/objects are watched deep to catch edits within remote entries.
 watch(
   [
     repoType, storageType, storagePath, selectedS3Alias,
     s3Bucket, s3Region, s3Endpoint,
-    remoteUrl, remoteUsername, remotePassword,
-    groupMembers, cooldownEnabled, cooldownDuration,
+    cooldownEnabled, cooldownDuration,
   ],
   () => { emitConfig() },
 )
+watch(remotes, () => { emitConfig() }, { deep: true })
+watch(groupMembers, () => { emitConfig() }, { deep: true })
 </script>
 
 <template>
@@ -338,40 +378,151 @@ watch(
     </template>
   </Card>
 
-  <!-- Proxy: Remote upstream -->
+  <!-- Proxy: Remote upstreams (list of fallback URLs) -->
   <Card v-if="isProxy" class="shadow-sm">
-    <template #title>Remote Upstream</template>
+    <template #title>
+      <div class="flex items-center justify-between">
+        <span>Remote Upstreams</span>
+        <span class="text-xs font-normal text-gray-500">
+          {{ remotes.length }} {{ remotes.length === 1 ? 'remote' : 'remotes' }}
+        </span>
+      </div>
+    </template>
     <template #content>
+      <p class="text-xs text-gray-500 mb-3">
+        Multiple remotes act as fallbacks: if the first returns 4xx/5xx, the next is tried in order.
+      </p>
       <div class="space-y-3">
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Remote URL</label>
-          <InputText v-model="remoteUrl" placeholder="https://repo1.maven.org/maven2" class="w-full" />
+        <div
+          v-for="(remote, idx) in remotes"
+          :key="idx"
+          class="border border-gray-200 dark:border-gray-700 rounded-md p-3 space-y-2 bg-gray-50 dark:bg-gray-800/50"
+        >
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-gray-600 dark:text-gray-400">
+              Remote #{{ idx + 1 }}
+            </span>
+            <Button
+              icon="pi pi-times"
+              severity="danger"
+              text
+              rounded
+              size="small"
+              :disabled="remotes.length === 1 && !remote.url && !remote.username"
+              :aria-label="`Remove remote ${idx + 1}`"
+              @click="removeRemote(idx)"
+            />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">URL</label>
+            <InputText
+              v-model="remote.url"
+              placeholder="https://repo1.maven.org/maven2"
+              class="w-full"
+            />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Username (optional)</label>
+              <InputText
+                v-model="remote.username"
+                placeholder="Anonymous"
+                class="w-full"
+                autocomplete="off"
+              />
+            </div>
+            <div v-if="remote.username">
+              <label class="block text-xs text-gray-500 mb-1">Password</label>
+              <InputText
+                v-model="remote.password"
+                type="password"
+                class="w-full"
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
         </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Username (optional)</label>
-          <InputText v-model="remoteUsername" placeholder="Leave empty for anonymous" class="w-full" />
-        </div>
-        <div v-if="remoteUsername">
-          <label class="block text-xs text-gray-500 mb-1">Password</label>
-          <InputText v-model="remotePassword" type="password" class="w-full" />
-        </div>
+        <Button
+          icon="pi pi-plus"
+          label="Add remote"
+          severity="secondary"
+          outlined
+          size="small"
+          @click="addRemote"
+        />
       </div>
     </template>
   </Card>
 
-  <!-- Group: Members -->
+  <!-- Group: Members (chips / list editor) -->
   <Card v-if="isGroup" class="shadow-sm">
-    <template #title>Group Members</template>
-    <template #content>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">
-          Member repositories (one per line or comma-separated)
-        </label>
-        <Textarea v-model="groupMembers" rows="4" placeholder="maven-local&#10;maven-proxy" class="w-full font-mono text-sm" />
-        <p class="text-xs text-gray-400 mt-1">
-          Enter the names of repositories to include in this group.
-        </p>
+    <template #title>
+      <div class="flex items-center justify-between">
+        <span>Group Members</span>
+        <span class="text-xs font-normal text-gray-500">
+          {{ groupMembers.length }} {{ groupMembers.length === 1 ? 'member' : 'members' }}
+        </span>
       </div>
+    </template>
+    <template #content>
+      <p class="text-xs text-gray-500 mb-3">
+        Resolution order matters: the first matching member wins. Drag or remove to reorder.
+      </p>
+      <ul
+        v-if="groupMembers.length > 0"
+        class="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-md mb-3"
+      >
+        <li
+          v-for="(member, idx) in groupMembers"
+          :key="idx"
+          class="flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-900"
+        >
+          <span class="text-xs text-gray-400 w-6 tabular-nums">{{ idx + 1 }}.</span>
+          <InputText
+            v-model="groupMembers[idx]"
+            placeholder="repository-name"
+            class="flex-1"
+          />
+          <Button
+            icon="pi pi-arrow-up"
+            text
+            rounded
+            size="small"
+            :disabled="idx === 0"
+            :aria-label="`Move ${member || 'member'} up`"
+            @click="moveMemberUp(idx)"
+          />
+          <Button
+            icon="pi pi-arrow-down"
+            text
+            rounded
+            size="small"
+            :disabled="idx === groupMembers.length - 1"
+            :aria-label="`Move ${member || 'member'} down`"
+            @click="moveMemberDown(idx)"
+          />
+          <Button
+            icon="pi pi-times"
+            severity="danger"
+            text
+            rounded
+            size="small"
+            :aria-label="`Remove ${member || 'member'}`"
+            @click="removeMember(idx)"
+          />
+        </li>
+      </ul>
+      <div v-else class="text-sm text-gray-400 italic mb-3">
+        No members yet — add at least one to enable saving.
+      </div>
+      <Button
+        icon="pi pi-plus"
+        label="Add member"
+        severity="secondary"
+        outlined
+        size="small"
+        @click="addMember"
+      />
     </template>
   </Card>
 
