@@ -168,8 +168,10 @@ public final class DownloadAssetSlice implements Slice {
         // NpmProxy.getAsset checks storage first internally, but we need to check BEFORE
         // calling cooldown.evaluate() which may make network calls.
         // Use a non-blocking check that returns asset from storage if present.
+        // Wrap RxJava/CompletableFuture continuations with MDC propagation so
+        // cache-hit logs carry trace.id/user.name on worker threads.
         return this.npm.getAsset(tgz)
-            .map(asset -> {
+            .map(com.auto1.pantera.http.trace.MdcPropagation.withMdcRxFunction(asset -> {
                 // Asset found in storage cache - check if it's served from cache (not remote)
                 // Since getAsset tries storage first, if we have it, serve immediately
                 EcsLogger.info("com.auto1.pantera.npm")
@@ -214,11 +216,11 @@ public final class DownloadAssetSlice implements Slice {
                     .header("Last-Modified", lastModified)
                     .body(asset.dataPublisher())
                     .build();
-            })
+            }))
             .toSingle(ResponseBuilder.notFound().build())
             .to(SingleInterop.get())
             .toCompletableFuture()
-            .thenCompose(response -> {
+            .thenCompose(com.auto1.pantera.http.trace.MdcPropagation.withMdc(response -> {
                 // If we got a 404 (not in storage), now we need to go to remote
                 // At this point, we should evaluate cooldown first
                 if (response.status().code() == 404) {
@@ -226,7 +228,7 @@ public final class DownloadAssetSlice implements Slice {
                 }
                 // Asset was served from cache - return it
                 return CompletableFuture.completedFuture(response);
-            });
+            }));
     }
 
     /**

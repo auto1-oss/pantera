@@ -18,6 +18,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import org.slf4j.MDC;
 
 /**
@@ -263,6 +264,74 @@ public final class MdcPropagation {
             }
             try {
                 runnable.run();
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap an RxJava {@link io.reactivex.functions.Function} so it restores
+     * the caller's MDC context on whichever thread the operator executes.
+     *
+     * <p>Use for RxJava {@code Maybe.map}, {@code Single.map},
+     * {@code Flowable.map} and similar — whose continuations run on the
+     * thread that completed the upstream signal (often a worker pool with
+     * empty MDC).</p>
+     *
+     * @param fn The original RxJava function
+     * @param <T> Input type
+     * @param <R> Return type
+     * @return A function that installs + restores MDC around the original
+     */
+    public static <T, R> io.reactivex.functions.Function<T, R> withMdcRxFunction(
+        final io.reactivex.functions.Function<T, R> fn
+    ) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return value -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                return fn.apply(value);
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a {@link Supplier} so it restores the caller's MDC context on
+     * whichever thread executes it. Primarily for use with
+     * {@link CompletableFuture#supplyAsync(Supplier, java.util.concurrent.Executor)},
+     * whose lambdas otherwise run on worker threads with empty MDC.
+     *
+     * @param supplier The original supplier
+     * @param <T> Return type
+     * @return A supplier that installs + restores MDC around the original
+     */
+    public static <T> Supplier<T> withMdcSupplier(final Supplier<T> supplier) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return () -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                return supplier.get();
             } finally {
                 if (prior != null) {
                     MDC.setContextMap(prior);
