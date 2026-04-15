@@ -31,6 +31,7 @@ import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 
 import io.reactivex.Flowable;
@@ -420,7 +421,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(cached -> {
+            .thenCompose(MdcPropagation.withMdc(cached -> {
                 if (cached.isPresent()) {
                     this.logDebug("Cache hit", path);
                     // Fast path: serve from cache with async metadata
@@ -433,7 +434,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }
                 // Cache miss: evaluate cooldown then fetch
                 return this.evaluateCooldownAndFetch(line, headers, key, path, store);
-            }).toCompletableFuture();
+            })).toCompletableFuture();
     }
 
     /**
@@ -453,14 +454,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.buildCooldownRequest(path, headers);
             if (request.isPresent()) {
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
-                    .thenCompose(result -> {
+                    .thenCompose(MdcPropagation.withMdc(result -> {
                         if (result.blocked()) {
                             return CompletableFuture.completedFuture(
                                 CooldownResponses.forbidden(result.block().orElseThrow())
                             );
                         }
                         return this.fetchAndCache(line, key, headers, store);
-                    });
+                    }));
             }
         }
         return this.fetchAndCache(line, key, headers, store);
@@ -479,7 +480,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final String owner = new Login(headers).getValue();
         final long startTime = System.currentTimeMillis();
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(resp -> {
+            .thenCompose(MdcPropagation.withMdc(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
@@ -497,8 +498,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                         .thenApply(r -> RequestDeduplicator.FetchSignal.SUCCESS);
                 }).thenCompose(signal ->
                     this.signalToResponse(signal, line, key, headers, store));
-            })
-            .handle((resp, error) -> {
+            }))
+            .handle(MdcPropagation.withMdcBiFunction((resp, error) -> {
                 if (error != null) {
                     final long duration = System.currentTimeMillis() - startTime;
                     this.trackUpstreamFailure(error);
@@ -522,7 +523,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
-            })
+            }))
             .thenCompose(future -> future);
     }
 
@@ -633,7 +634,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 streamDone::completeExceptionally,
                 () -> streamDone.complete(null)
             );
-        return streamDone.thenCompose(v -> {
+        return streamDone.thenCompose(MdcPropagation.withMdc(v -> {
             final Map<String, String> digestResults =
                 DigestComputer.finalizeDigests(digests);
             final long size = totalSize.get();
@@ -680,7 +681,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     deleteTempQuietly(tempFile);
                     return RequestDeduplicator.FetchSignal.SUCCESS;
                 });
-        }).exceptionally(err -> {
+        })).exceptionally(MdcPropagation.withMdcFunction(err -> {
             deleteTempQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
@@ -692,7 +693,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .error(err)
                 .log();
             return RequestDeduplicator.FetchSignal.ERROR;
-        });
+        }));
     }
 
     /**
@@ -823,7 +824,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     )
                 );
             })
-            .exceptionally(error -> {
+            .exceptionally(MdcPropagation.withMdcFunction(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
@@ -839,7 +840,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
                     .build();
-            });
+            }));
     }
 
     private CompletableFuture<RequestDeduplicator.FetchSignal> handle404(
@@ -895,7 +896,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             return fallback.get();
         }
         if (this.metadataStore.isPresent()) {
-            return this.metadataStore.get().load(key).thenCompose(metaOpt -> {
+            return this.metadataStore.get().load(key).thenCompose(MdcPropagation.withMdc(metaOpt -> {
                 if (metaOpt.isEmpty()) {
                     return this.serveStaleFromStorage(key, fallback);
                 }
@@ -915,7 +916,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return fallback.get();
                 }
                 return this.serveStaleFromStorageWithAge(key, fallback, age);
-            });
+            }));
         }
         return this.serveStaleFromStorage(key, fallback);
     }
@@ -925,12 +926,12 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Supplier<CompletableFuture<Response>> fallback
     ) {
         final Storage store = this.storage.get();
-        return store.exists(key).thenCompose(exists -> {
+        return store.exists(key).thenCompose(MdcPropagation.withMdc(exists -> {
             if (!exists) {
                 return fallback.get();
             }
             return serveStaleFromStorageWithAge(key, fallback, null);
-        });
+        }));
     }
 
     private CompletableFuture<Response> serveStaleFromStorageWithAge(
@@ -940,7 +941,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         final Storage store = this.storage.get();
         return store.value(key)
-            .thenApply(content -> {
+            .thenApply(MdcPropagation.withMdcFunction(content -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Upstream failed, serving stale cached artifact")
                     .eventCategory("network")
@@ -955,8 +956,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                     builder.header("Age", String.valueOf(age.getSeconds()));
                 }
                 return (Response) builder.body(content).build();
-            })
-            .exceptionallyCompose(err -> {
+            }))
+            .exceptionallyCompose(MdcPropagation.withMdc(err -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Failed to read stale artifact from storage")
                     .eventCategory("web")
@@ -967,14 +968,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .error(err)
                     .log();
                 return fallback.get();
-            });
+            }));
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(
         final RequestLine line, final Key key, final String owner
     ) {
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(cached -> {
+            .thenCompose(MdcPropagation.withMdc(cached -> {
                 if (cached.isPresent()) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.ok()
@@ -984,7 +985,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return this.fetchDirect(line, key, owner);
-            }).toCompletableFuture();
+            })).toCompletableFuture();
     }
 
     private CompletableFuture<Response> handleRootPath(final RequestLine line) {

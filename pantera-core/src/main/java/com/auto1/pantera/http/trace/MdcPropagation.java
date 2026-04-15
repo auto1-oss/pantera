@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.slf4j.MDC;
@@ -190,6 +191,50 @@ public final class MdcPropagation {
             }
             try {
                 consumer.accept(result, err);
+            } finally {
+                if (prior != null) {
+                    MDC.setContextMap(prior);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a {@link BiFunction} for use in {@code CompletableFuture.handle()} so
+     * it restores the caller's MDC context on whichever thread the callback runs.
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * future.handle(MdcPropagation.withMdcBiFunction((result, err) -> {
+     *     // MDC is restored here regardless of which thread executes this
+     *     return transform(result, err);
+     * }))
+     * }</pre>
+     *
+     * <p>The prior MDC state of the executing thread is saved and restored after
+     * the function completes, so pool threads are not polluted with request context.
+     *
+     * @param fn The original bi-function
+     * @param <T> Result type
+     * @param <U> Throwable type
+     * @param <R> Return type
+     * @return A bi-function that installs + restores MDC around the original
+     */
+    public static <T, U extends Throwable, R> BiFunction<T, U, R> withMdcBiFunction(
+        final BiFunction<T, U, R> fn
+    ) {
+        final Map<String, String> captured = MDC.getCopyOfContextMap();
+        return (result, err) -> {
+            final Map<String, String> prior = MDC.getCopyOfContextMap();
+            if (captured != null) {
+                MDC.setContextMap(captured);
+            } else {
+                MDC.clear();
+            }
+            try {
+                return fn.apply(result, err);
             } finally {
                 if (prior != null) {
                     MDC.setContextMap(prior);
