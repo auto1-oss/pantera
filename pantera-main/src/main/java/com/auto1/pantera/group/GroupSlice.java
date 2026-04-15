@@ -653,12 +653,18 @@ public final class GroupSlice implements Slice {
                 return resp;
             }))
             .whenComplete((resp, err) -> {
-                // Release the gate so followers can proceed, regardless of outcome.
-                // Order matters: remove from the map BEFORE completing the gate so
-                // followers that wake up and retry proxyOnlyFanout see a clean slate
-                // (either they hit the negative cache, or they start a fresh fanout).
-                this.inFlightFanouts.remove(dedupKey, freshGate);
+                // Complete the gate BEFORE removing from the map.
+                // This closes the race window where a late request could arrive
+                // between remove() and complete(): if we removed first, the late
+                // request's putIfAbsent would succeed (empty map) and start a
+                // second fanout — defeating coalescing. By completing first, any
+                // concurrent follower that read the gate before removal sees it
+                // already done; any late request that arrives after completion
+                // will do putIfAbsent against the still-present (but completed)
+                // gate, observe it's done, and short-circuit through the negative
+                // cache check on retry.
                 freshGate.complete(null);
+                this.inFlightFanouts.remove(dedupKey, freshGate);
             });
     }
 
