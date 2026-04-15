@@ -330,7 +330,8 @@ final class JettyClientSlice implements Slice {
                         .message(String.format("Response reading idle timeout (120s without data) after %d iterations", iterations))
                         .eventCategory("web")
                         .eventAction("http_response_read")
-                        .eventOutcome("timeout")
+                        .eventOutcome("failure")
+                        .field("event.reason", "request_timeout")
                         .field("url.full", this.response.getRequest().getURI().toString())
                         .log();
                     final TimeoutException timeout =

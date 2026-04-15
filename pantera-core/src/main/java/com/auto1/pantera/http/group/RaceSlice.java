@@ -98,8 +98,8 @@ public final class RaceSlice implements Slice {
                 EcsLogger.debug("com.auto1.pantera.http")
                     .message("Sending request to target (index: " + index + ")")
                     .eventCategory("web")
-                    .eventAction("group_race")
-                    .eventOutcome("pending")
+                    .eventAction("pending")
+                    .eventOutcome("unknown")
                     .field("url.path", line.uri().getPath())
                     .log();
                 target.response(line, headers, memberBody)
@@ -110,7 +110,8 @@ public final class RaceSlice implements Slice {
                             .message("Repository response arrived after race completed (index: " + index + ")")
                             .eventCategory("web")
                             .eventAction("group_race")
-                            .eventOutcome("late")
+                            .eventOutcome("success")
+                            .field("event.reason", "late_response")
                             .log();
                         // Consume body even if this response lost the race to
                         // avoid leaking underlying HTTP resources.
@@ -122,7 +123,8 @@ public final class RaceSlice implements Slice {
                             .message("Repository returned 404 (index: " + index + ")")
                             .eventCategory("web")
                             .eventAction("group_race")
-                            .eventOutcome("not_found")
+                            .eventOutcome("failure")
+                            .field("event.reason", "artifact_not_found")
                             .log();
                         // Consume 404 response bodies as well to avoid leaks.
                         return res.body().asBytesFuture().thenApply(ignored -> {

@@ -220,8 +220,8 @@ public final class ProxyDownloadSlice implements Slice {
                     EcsLogger.info("com.auto1.pantera.composer")
                         .message("Cache HIT for dist artifact")
                         .eventCategory("web")
-                        .eventAction("proxy_download")
-                        .eventOutcome("cache_hit")
+                        .eventAction("cache_hit")
+                        .eventOutcome("success")
                         .field("package.name", packageName)
                         .field("package.version", version)
                         .log();
@@ -240,7 +240,8 @@ public final class ProxyDownloadSlice implements Slice {
                             .message("Cooldown blocked download")
                             .eventCategory("web")
                             .eventAction("proxy_download")
-                            .eventOutcome("blocked")
+                            .eventOutcome("failure")
+                            .field("event.reason", "cooldown_active")
                             .field("package.name", packageName)
                             .field("package.version", version)
                             .log();

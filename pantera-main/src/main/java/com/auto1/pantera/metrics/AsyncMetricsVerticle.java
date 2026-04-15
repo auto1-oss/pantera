@@ -341,7 +341,8 @@ public final class AsyncMetricsVerticle extends AbstractVerticle {
                 .message(String.format("Slow metrics scrape detected: %d bytes", result.getBytes(StandardCharsets.UTF_8).length))
                 .eventCategory("process")
                 .eventAction("scrape")
-                .eventOutcome("slow")
+                .eventOutcome("success")
+                .field("event.reason", "slow_response")
                 .field("event.duration", scrapeDuration)
                 .log();
         }

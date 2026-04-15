@@ -175,8 +175,8 @@ public final class DownloadAssetSlice implements Slice {
                 EcsLogger.info("com.auto1.pantera.npm")
                     .message("Cache hit for asset, serving cached (offline-safe)")
                     .eventCategory("web")
-                    .eventAction("get_asset")
-                    .eventOutcome("cache_hit")
+                    .eventAction("cache_hit")
+                    .eventOutcome("success")
                     .field("package.name", tgz)
                     .log();
                 // Queue the proxy event

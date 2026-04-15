@@ -243,7 +243,8 @@ public final class ImportService {
                 .message("Import skipped (already completed, session: " + session.key() + ")")
                 .eventCategory("web")
                 .eventAction("import_artifact")
-                .eventOutcome("skipped")
+                .eventOutcome("unknown")
+                .field("event.reason", "skipped")
                 .log();
             return CompletableFuture.completedFuture(
                 new ImportResult(

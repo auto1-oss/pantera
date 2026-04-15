@@ -102,7 +102,8 @@ public final class ComposerImportPostProcessor {
                         .message("Composer import merge completed with errors (" + result.mergedPackages + " packages, " + result.mergedVersions + " versions merged, " + result.failedPackages + " failed)")
                         .eventCategory("web")
                         .eventAction("import_post_process")
-                        .eventOutcome("partial_failure")
+                        .eventOutcome("failure")
+                        .field("event.reason", "partial_failure")
                         .field("repository.name", this.repoName)
                         .log();
                 } else {

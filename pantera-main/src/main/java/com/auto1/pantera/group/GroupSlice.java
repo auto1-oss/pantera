@@ -723,7 +723,8 @@ public final class GroupSlice implements Slice {
                         .message("Member circuit OPEN, skipping: " + member.name())
                         .eventCategory("network")
                         .eventAction("group_query")
-                        .eventOutcome("skipped")
+                        .eventOutcome("unknown")
+                        .field("event.reason", "skipped")
                         .field("destination.address", member.name())
                         .log();
                     completeIfAllExhausted(

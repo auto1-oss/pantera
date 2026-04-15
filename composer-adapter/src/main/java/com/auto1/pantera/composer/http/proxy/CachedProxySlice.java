@@ -241,8 +241,8 @@ final class CachedProxySlice implements Slice {
                 EcsLogger.info("com.auto1.pantera.composer")
                     .message("Cache hit, serving cached metadata (offline-safe)")
                     .eventCategory("web")
-                    .eventAction("proxy_request")
-                    .eventOutcome("cache_hit")
+                    .eventAction("cache_hit")
+                    .eventOutcome("success")
                     .field("package.name", name)
                     .log();
                 return cached.get().asBytesFuture().thenCompose(bytes -> {
@@ -283,7 +283,8 @@ final class CachedProxySlice implements Slice {
                         .message("Cooldown blocked cached metadata request")
                         .eventCategory("web")
                         .eventAction("cooldown_check")
-                        .eventOutcome("blocked")
+                        .eventOutcome("failure")
+                        .field("event.reason", "cooldown_active")
                         .field("package.name", name)
                         .log();
                     return CooldownResponses.forbidden(result.block().orElseThrow());
@@ -349,9 +350,9 @@ final class CachedProxySlice implements Slice {
                 .message("Cooldown blocked request")
                 .eventCategory("web")
                 .eventAction("cooldown_check")
-                .eventOutcome("blocked")
+                .eventOutcome("failure")
+                .field("event.reason", "cooldown_active")
                 .field("package.name", name)
-                .field("event.reason", result.block().orElseThrow().reason())
                 .log();
             return CompletableFuture.completedFuture(
                 CooldownResponses.forbidden(result.block().orElseThrow())
@@ -360,8 +361,8 @@ final class CachedProxySlice implements Slice {
         EcsLogger.debug("com.auto1.pantera.composer")
             .message("Cooldown allowed request")
             .eventCategory("web")
-            .eventAction("cooldown_check")
-            .eventOutcome("allowed")
+            .eventAction("allowed")
+            .eventOutcome("success")
             .field("package.name", name)
             .log();
         return this.fetchThroughCache(line, name, headers);
@@ -474,7 +475,8 @@ final class CachedProxySlice implements Slice {
                                 .message("Cooldown blocked metadata request")
                                 .eventCategory("web")
                                 .eventAction("cooldown_check")
-                                .eventOutcome("blocked")
+                                .eventOutcome("failure")
+                                .field("event.reason", "cooldown_active")
                                 .field("package.name", name)
                                 .log();
                             return CompletableFuture.completedFuture(

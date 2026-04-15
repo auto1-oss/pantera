@@ -85,7 +85,8 @@ public final class HttpNpmRemote implements NpmRemote {
                         .message("Package not found upstream (404)")
                         .eventCategory("web")
                         .eventAction("get_package")
-                        .eventOutcome("not_found")
+                        .eventOutcome("failure")
+                        .field("event.reason", "artifact_not_found")
                         .field("package.name", name)
                         .log();
                     return Maybe.empty();
@@ -125,7 +126,8 @@ public final class HttpNpmRemote implements NpmRemote {
                         .message("Asset not found upstream (404)")
                         .eventCategory("web")
                         .eventAction("get_asset")
-                        .eventOutcome("not_found")
+                        .eventOutcome("failure")
+                        .field("event.reason", "artifact_not_found")
                         .field("package.path", path)
                         .log();
                     return Maybe.empty();

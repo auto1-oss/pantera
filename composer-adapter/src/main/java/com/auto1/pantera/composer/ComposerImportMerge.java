@@ -164,7 +164,8 @@ public final class ComposerImportMerge {
                     .message("Merge completed with " + result.failedPackages + " failures (" + result.mergedPackages + " packages merged), keeping staging area for retry")
                     .eventCategory("web")
                     .eventAction("import_merge")
-                    .eventOutcome("partial_failure")
+                    .eventOutcome("failure")
+                    .field("event.reason", "partial_failure")
                     .log();
                 return CompletableFuture.completedFuture(result);
             });

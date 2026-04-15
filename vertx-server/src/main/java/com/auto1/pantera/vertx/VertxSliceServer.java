@@ -385,7 +385,8 @@ public final class VertxSliceServer implements Closeable {
                     .message(String.format("Drain timeout expired with %d in-flight requests, forcing shutdown", remaining))
                     .eventCategory("web")
                     .eventAction("server_drain")
-                    .eventOutcome("timeout")
+                    .eventOutcome("failure")
+                    .field("event.reason", "request_timeout")
                     .log();
             } else {
                 EcsLogger.info("com.auto1.pantera.vertx")
@@ -402,7 +403,8 @@ public final class VertxSliceServer implements Closeable {
                 .message("stop() called but server was not started")
                 .eventCategory("web")
                 .eventAction("server_stop")
-                .eventOutcome("skipped")
+                .eventOutcome("unknown")
+                .field("event.reason", "skipped")
                 .log();
         }
     }
@@ -1009,7 +1011,8 @@ public final class VertxSliceServer implements Closeable {
                         .message("Upstream processing timeout exceeded (" + timeout.timeout.toMillis() + "ms)")
                         .eventCategory("web")
                         .eventAction("request_timeout")
-                        .eventOutcome("timeout")
+                        .eventOutcome("failure")
+                        .field("event.reason", "request_timeout")
                         .field("http.request.method", req.method().name())
                         .field("url.path", LogSanitizer.sanitizeUrl(req.uri())),
                     timeoutCtx

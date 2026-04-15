@@ -297,8 +297,8 @@ final class ProxySlice implements Slice {
                     EcsLogger.debug("com.auto1.pantera.pypi")
                         .message("Cache hit, serving cached artifact (offline-safe)")
                         .eventCategory("web")
-                        .eventAction("proxy_request")
-                        .eventOutcome("cache_hit")
+                        .eventAction("cache_hit")
+                        .eventOutcome("success")
                         .field("package.name", info.artifact())
                         .field("package.version", info.version())
                         .log();
