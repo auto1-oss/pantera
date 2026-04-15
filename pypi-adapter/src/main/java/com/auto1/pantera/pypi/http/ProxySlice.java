@@ -920,29 +920,13 @@ final class ProxySlice implements Slice {
 
         final ArtifactCoordinates info = coords.get();
         final String user = new Login(rqheaders).getValue();
-        
-        // Use content from cache (passed as parameter) instead of reading from storage again.
-        return new com.auto1.pantera.asto.streams.ContentAsStream<ContentAndCoords>(content)
-            .process(stream -> {
-                try {
-                    final byte[] data = stream.readAllBytes();
-                    EcsLogger.debug("com.auto1.pantera.pypi")
-                        .message("Responding with cached artifact")
-                        .eventCategory("web")
-                        .eventAction("proxy_request")
-                        .field("package.name", key.string())
-                        .field("package.size", data.length)
-                        .log();
-                    final Content payload = new Content.From(data);
-                    return new ContentAndCoords(payload, info, data.length, data);
-                } catch (final java.io.IOException ex) {
-                    throw new com.auto1.pantera.asto.PanteraIOException(ex);
-                }
-            })
-            .toCompletableFuture()
-            .thenCompose(cac -> this.resolveRelease(info, remote, remoteSuccess)
-            .thenCompose(ctx -> {
-                // Cache hit path: enqueue event here (remote fetch path enqueues earlier).
+
+        // Stream Content directly instead of materialising to byte[] — avoids
+        // multi-MB heap allocation per request on the cache-hit artifact path.
+        // All current callers pass remoteSuccess=false (cache hits); remote-fetch
+        // flows save to storage inside this.cache.load(...), not here.
+        return this.resolveRelease(info, remote, remoteSuccess)
+            .thenApply(ctx -> {
                 if (!remoteSuccess && this.events.isPresent()) {
                     this.events.get().add(
                         new ProxyArtifactEvent(
@@ -953,20 +937,23 @@ final class ProxySlice implements Slice {
                         )
                     );
                 }
-
-                // Save to backing storage only when content was fetched from remote.
-                if (remoteSuccess) {
-                    CompletableFuture.runAsync(() -> this.storage.save(key, cac.bytes));
-                }
-
-                return CompletableFuture.completedFuture(
-                    ResponseBuilder.ok()
-                        .headers(Headers.from(ProxySlice.contentType(remote, line)))
-                        .body(cac.payload)
-                        .header(new com.auto1.pantera.http.headers.ContentLength((long) cac.length), true)
-                        .build()
+                EcsLogger.debug("com.auto1.pantera.pypi")
+                    .message("Responding with cached artifact")
+                    .eventCategory("web")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .field("package.size", content.size().orElse(-1L))
+                    .log();
+                final ResponseBuilder builder = ResponseBuilder.ok()
+                    .headers(Headers.from(ProxySlice.contentType(remote, line)))
+                    .body(content);
+                content.size().ifPresent(size ->
+                    builder.header(
+                        new com.auto1.pantera.http.headers.ContentLength(size), true
+                    )
                 );
-            }));
+                return builder.build();
+            }).toCompletableFuture();
     }
 
     /**
@@ -1526,21 +1513,4 @@ final class ProxySlice implements Slice {
         return res;
     }
 
-    /**
-     * Helper class to hold cached artifact content along with its coordinates and size.
-     * Used to ensure the same content bytes flow through the entire response pipeline.
-     */
-    private static final class ContentAndCoords {
-        private final Content payload;
-        private final ArtifactCoordinates coords;
-        private final int length;
-        private final byte[] bytes;
-
-        ContentAndCoords(final Content payload, final ArtifactCoordinates coords, final int length, final byte[] bytes) {
-            this.payload = payload;
-            this.coords = coords;
-            this.length = length;
-            this.bytes = bytes;
-        }
-    }
 }
