@@ -19,6 +19,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.headers.Header;
@@ -26,12 +27,12 @@ import com.auto1.pantera.http.slice.EcsLoggingSlice;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.index.ArtifactIndex;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -186,10 +187,10 @@ public final class GroupSlice implements Slice {
      * In-flight proxy-only fanouts keyed by {@code group:artifactName}.
      *
      * <p>Serves as a request coalescer: when N concurrent requests arrive for
-     * the same missing artifact, the first registers a "gate" future here and
-     * runs the fanout.  Late arrivals find the gate already present and wait
-     * on it instead of starting their own fanout, then retry
-     * {@link #proxyOnlyFanout} once the first has completed.
+     * the same missing artifact, the first registers a "gate" future inside
+     * the {@link SingleFlight} and runs the fanout. Late arrivals find the
+     * gate already present and park on it, then retry
+     * {@link #proxyOnlyFanout} once the leader has completed.
      *
      * <p>On the retry, the negative cache now holds the result so followers
      * return 404 immediately without touching the network.  The combination of
@@ -202,9 +203,18 @@ public final class GroupSlice implements Slice {
      * {@code proxyOnlyFanout} and either hit the freshly-populated negative
      * cache (404) or retry the fanout (which is cheap when the upstream proxy
      * has cached the bytes).
+     *
+     * <p>{@link SingleFlight} handles the completion-ordering, zombie-eviction,
+     * and stack-safety concerns that used to require a 30-line hand-rolled
+     * {@code ConcurrentHashMap} dance (commit {@code ccc155f6}). See §6.4 of
+     * {@code docs/analysis/v2.2-target-architecture.md} and anti-patterns A6,
+     * A7, A8, A9 in {@code v2.1.3-architecture-review.md}.
      */
-    private final ConcurrentMap<String, CompletableFuture<Void>> inFlightFanouts =
-        new ConcurrentHashMap<>();
+    private final SingleFlight<String, Void> inFlightFanouts = new SingleFlight<>(
+        Duration.ofMinutes(5),
+        10_000,
+        ForkJoinPool.commonPool()
+    );
 
     /**
      * Request context carried through the async call chain for log messages.
@@ -698,75 +708,73 @@ public final class GroupSlice implements Slice {
         }
 
         // ---- Request coalescing: collapse concurrent misses into ONE fanout ----
-        // The dedup key combines group + artifact name. If a fanout is already in
-        // flight for this key, followers park on the existing "gate" future and
-        // retry proxyOnlyFanout when it completes — by which point the negative
-        // cache will be populated (404 case) or the upstream proxy will have
-        // cached the bytes (200 case), making the retry very cheap.
+        // The dedup key combines group + artifact name. SingleFlight guarantees
+        // load-once semantics per key: exactly one arrival runs the loader;
+        // concurrent followers share its future. We preserve the legacy leader-
+        // vs-follower behaviour (A6 in v2.1.3-architecture-review.md):
+        //
+        //   Leader   → does the fanout and returns its Response directly.
+        //   Follower → parks on the gate, then re-enters proxyOnlyFanout. By
+        //              that point the negative cache is warm (404 case) or
+        //              the upstream proxy has cached the bytes (200 case),
+        //              so the retry is cheap.
+        //
+        // The leader flag is captured inside the loader bifunction, which
+        // Caffeine invokes synchronously on the caller's thread for the
+        // first absent key — so `isLeader[0]` is deterministic by the time
+        // SingleFlight.load returns.
+        //
+        // Stack safety: SingleFlight completes waiters via
+        // whenCompleteAsync(executor), so the `gate.thenCompose(...)` retry
+        // chain below never runs on the leader's stack. This closes the
+        // StackOverflowError class from commit ccc155f6 without the bespoke
+        // "complete-before-remove" ordering dance.
         final String dedupKey = this.group + ":" + artifactName;
-        final CompletableFuture<Void> freshGate = new CompletableFuture<>();
-        final CompletableFuture<Void> existingGate =
-            this.inFlightFanouts.putIfAbsent(dedupKey, freshGate);
-        if (existingGate != null) {
-            // Follower: another request is already fanning out for this artifact.
-            // Wait for it to finish, then re-enter proxyOnlyFanout — the negative
-            // cache check at the top will short-circuit to 404 in the miss case.
-            //
-            // CRITICAL: use thenComposeAsync, NOT thenCompose.  The leader
-            // completes the gate BEFORE removing it from inFlightFanouts
-            // (see whenComplete below — intentional ordering to avoid a
-            // separate putIfAbsent race).  If the gate is already completed
-            // when the follower calls .thenCompose, the callback runs
-            // synchronously on the same stack; the retry then hits the SAME
-            // (still-present) gate and recurses, blowing the stack with a
-            // StackOverflowError before the leader's remove() can run.
-            // thenComposeAsync dispatches the retry to the common pool so
-            // the leader's whenComplete queue can drain remove() first.
+        final boolean[] isLeader = {false};
+        final CompletableFuture<Void> leaderGate = new CompletableFuture<>();
+        final CompletableFuture<Void> gate = this.inFlightFanouts.load(
+            dedupKey,
+            () -> {
+                isLeader[0] = true;
+                return leaderGate;
+            }
+        );
+        if (isLeader[0]) {
             EcsLogger.debug("com.auto1.pantera.group")
-                .message("Coalescing with in-flight fanout for " + artifactName)
-                .eventCategory("web")
-                .eventAction("group_fanout_coalesce")
+                .message("Index miss: fanning out to "
+                    + proxyOnly.size() + " proxy member(s) only"
+                    + " (name: " + artifactName + ")")
+                .eventCategory("network")
+                .eventAction("group_index_miss")
                 .field("url.path", line.uri().getPath())
                 .log();
-            return existingGate.thenComposeAsync(MdcPropagation.withMdc(
-                ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
-            ));
+            return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
+                .thenApply(MdcPropagation.withMdcFunction(resp -> {
+                    if (resp.status() == RsStatus.NOT_FOUND) {
+                        this.negativeCache.cacheNotFound(cacheKey);
+                        EcsLogger.debug("com.auto1.pantera.group")
+                            .message("Cached negative result for artifact")
+                            .eventCategory("database")
+                            .eventAction("group_negative_cache_populate")
+                            .log();
+                    }
+                    return resp;
+                }))
+                .whenComplete((resp, err) -> leaderGate.complete(null));
         }
-
         EcsLogger.debug("com.auto1.pantera.group")
-            .message("Index miss: fanning out to "
-                + proxyOnly.size() + " proxy member(s) only"
-                + " (name: " + artifactName + ")")
-            .eventCategory("network")
-            .eventAction("group_index_miss")
+            .message("Coalescing with in-flight fanout for " + artifactName)
+            .eventCategory("web")
+            .eventAction("group_fanout_coalesce")
             .field("url.path", line.uri().getPath())
             .log();
-        return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
-            .thenApply(MdcPropagation.withMdcFunction(resp -> {
-                if (resp.status() == RsStatus.NOT_FOUND) {
-                    this.negativeCache.cacheNotFound(cacheKey);
-                    EcsLogger.debug("com.auto1.pantera.group")
-                        .message("Cached negative result for artifact")
-                        .eventCategory("database")
-                        .eventAction("group_negative_cache_populate")
-                        .log();
-                }
-                return resp;
-            }))
-            .whenComplete((resp, err) -> {
-                // Complete the gate BEFORE removing from the map.
-                // This closes the race window where a late request could arrive
-                // between remove() and complete(): if we removed first, the late
-                // request's putIfAbsent would succeed (empty map) and start a
-                // second fanout — defeating coalescing. By completing first, any
-                // concurrent follower that read the gate before removal sees it
-                // already done; any late request that arrives after completion
-                // will do putIfAbsent against the still-present (but completed)
-                // gate, observe it's done, and short-circuit through the negative
-                // cache check on retry.
-                freshGate.complete(null);
-                this.inFlightFanouts.remove(dedupKey, freshGate);
-            });
+        // Followers re-enter proxyOnlyFanout once the gate resolves. Swallow
+        // any exception the gate might carry (zombie TTL, leader's upstream
+        // failure): the negative cache or upstream proxy state is the source
+        // of truth on retry, not the gate's terminal value.
+        return gate.exceptionally(err -> null).thenCompose(MdcPropagation.withMdc(
+            ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
+        ));
     }
 
     /**
