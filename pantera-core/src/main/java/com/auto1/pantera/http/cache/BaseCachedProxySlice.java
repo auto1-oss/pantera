@@ -29,6 +29,8 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
+import com.auto1.pantera.http.misc.ConfigDefaults;
+import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
 import com.auto1.pantera.http.trace.MdcPropagation;
@@ -56,6 +58,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -148,9 +151,13 @@ public abstract class BaseCachedProxySlice implements Slice {
     private final CooldownInspector cooldownInspector;
 
     /**
-     * Request deduplicator.
+     * Per-key request coalescer. Concurrent callers for the same cache key share
+     * one cache-write loader invocation, each receiving the same
+     * {@link FetchSignal} terminal state. Wired in via WI-post-05;
+     * SIGNAL-strategy semantics are provided by
+     * {@link SingleFlight#load(Object, Supplier)}.
      */
-    private final RequestDeduplicator deduplicator;
+    private final SingleFlight<Key, FetchSignal> singleFlight;
 
     /**
      * Raw storage for direct saves (bypasses FromStorageCache lazy tee-content).
@@ -199,7 +206,17 @@ public abstract class BaseCachedProxySlice implements Slice {
             ? new NegativeCache(repoType, repoName) : null;
         this.cooldownService = cooldownService;
         this.cooldownInspector = cooldownInspector;
-        this.deduplicator = new RequestDeduplicator(config.dedupStrategy());
+        // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max
+        // in-flight entries bounds memory. Completion hops via
+        // ForkJoinPool.commonPool() — the same executor pattern used by the
+        // other WI-05 sites (CachedNpmProxySlice, GroupSlice migration).
+        this.singleFlight = new SingleFlight<>(
+            Duration.ofMillis(
+                ConfigDefaults.getLong("PANTERA_DEDUP_MAX_AGE_MS", 300_000L)
+            ),
+            10_000,
+            ForkJoinPool.commonPool()
+        );
     }
 
     /**
@@ -493,9 +510,9 @@ public abstract class BaseCachedProxySlice implements Slice {
                             this.signalToResponse(signal, line, key, headers, store));
                 }
                 this.recordProxyMetric("success", duration);
-                return this.deduplicator.deduplicate(key, () -> {
+                return this.singleFlight.load(key, () -> {
                     return this.cacheResponse(resp, key, owner, store)
-                        .thenApply(r -> RequestDeduplicator.FetchSignal.SUCCESS);
+                        .thenApply(r -> FetchSignal.SUCCESS);
                 }).thenCompose(signal ->
                     this.signalToResponse(signal, line, key, headers, store));
             }))
@@ -531,7 +548,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * Convert a dedup signal into an HTTP response.
      */
     private CompletableFuture<Response> signalToResponse(
-        final RequestDeduplicator.FetchSignal signal,
+        final FetchSignal signal,
         final RequestLine line,
         final Key key,
         final Headers headers,
@@ -577,7 +594,7 @@ public abstract class BaseCachedProxySlice implements Slice {
      * then saves from temp file to cache. Never buffers the full artifact on heap.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
-    private CompletableFuture<RequestDeduplicator.FetchSignal> cacheResponse(
+    private CompletableFuture<FetchSignal> cacheResponse(
         final Response resp,
         final Key key,
         final String owner,
@@ -604,7 +621,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .error(ex)
                 .log();
             return CompletableFuture.completedFuture(
-                RequestDeduplicator.FetchSignal.ERROR
+                FetchSignal.ERROR
             );
         }
         final Map<String, MessageDigest> digests =
@@ -679,7 +696,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }).thenApply(ignored -> {
                     this.enqueueEvent(key, resp.headers(), size, owner);
                     deleteTempQuietly(tempFile);
-                    return RequestDeduplicator.FetchSignal.SUCCESS;
+                    return FetchSignal.SUCCESS;
                 });
         })).exceptionally(MdcPropagation.withMdcFunction(err -> {
             deleteTempQuietly(tempFile);
@@ -692,7 +709,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .field("file.path", key.string())
                 .error(err)
                 .log();
-            return RequestDeduplicator.FetchSignal.ERROR;
+            return FetchSignal.ERROR;
         }));
     }
 
@@ -843,7 +860,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             }));
     }
 
-    private CompletableFuture<RequestDeduplicator.FetchSignal> handle404(
+    private CompletableFuture<FetchSignal> handle404(
         final Response resp, final Key key, final long duration
     ) {
         this.recordProxyMetric("not_found", duration);
@@ -851,11 +868,11 @@ public abstract class BaseCachedProxySlice implements Slice {
             if (this.negativeCache != null && !this.isChecksumSidecar(key.string())) {
                 this.negativeCache.cacheNotFound(key);
             }
-            return RequestDeduplicator.FetchSignal.NOT_FOUND;
+            return FetchSignal.NOT_FOUND;
         });
     }
 
-    private CompletableFuture<RequestDeduplicator.FetchSignal> handleNonSuccess(
+    private CompletableFuture<FetchSignal> handleNonSuccess(
         final Response resp, final Key key, final long duration
     ) {
         if (resp.status().code() >= 500) {
@@ -868,8 +885,8 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         return resp.body().asBytesFuture()
             .thenApply(bytes -> resp.status().code() < 500
-                ? RequestDeduplicator.FetchSignal.NOT_FOUND
-                : RequestDeduplicator.FetchSignal.ERROR);
+                ? FetchSignal.NOT_FOUND
+                : FetchSignal.ERROR);
     }
 
     /**

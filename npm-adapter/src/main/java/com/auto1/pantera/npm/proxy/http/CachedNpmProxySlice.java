@@ -18,8 +18,8 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
+import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
-import com.auto1.pantera.http.cache.RequestDeduplicator.FetchSignal;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -84,8 +84,7 @@ public final class CachedNpmProxySlice implements Slice {
     /**
      * Per-key request coalescer. Concurrent requests for the same cache key
      * share one upstream fetch, each receiving the same {@link FetchSignal}
-     * terminal state. Replaces the legacy {@code RequestDeduplicator} usage
-     * per WI-05.
+     * terminal state. Wired in WI-05.
      */
     private final SingleFlight<Key, FetchSignal> deduplicator;
 
@@ -124,8 +123,8 @@ public final class CachedNpmProxySlice implements Slice {
         this.repoType = repoType;
         this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
-        // 5-minute zombie TTL matches the legacy RequestDeduplicator default
-        // (PANTERA_DEDUP_MAX_AGE_MS = 300 000). 10K max entries bounds memory.
+        // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
+        // 10K max entries bounds memory.
         this.deduplicator = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,

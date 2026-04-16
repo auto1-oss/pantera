@@ -27,7 +27,7 @@ import java.util.function.Supplier;
  *
  * <p>Consolidates the three hand-rolled coalescers that lived in {@code
  * GroupSlice.inFlightFanouts}, {@code MavenGroupSlice.inFlightMetadataFetches},
- * and {@code RequestDeduplicator.inFlight} into one Caffeine-backed
+ * and the legacy cache-write in-flight map into one Caffeine-backed
  * implementation. See §6.4 of {@code docs/analysis/v2.2-target-architecture.md}
  * and anti-patterns A6, A7, A8, A9 in {@code v2.1.3-architecture-review.md}.
  *
@@ -245,7 +245,7 @@ public final class SingleFlight<K, V> {
      * race with this read. Caffeine recommends
      * {@code cache.synchronous().estimatedSize()} for monotonic bounds; we
      * expose it as {@code inFlightCount} for parity with the legacy
-     * {@code RequestDeduplicator#inFlightCount} API.
+     * coalescer APIs.
      *
      * @return Approximate count of distinct keys currently in-flight.
      */
