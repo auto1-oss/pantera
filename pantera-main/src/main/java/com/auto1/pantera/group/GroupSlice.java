@@ -68,7 +68,13 @@ import com.auto1.pantera.http.trace.MdcPropagation;
  * <p>Performance: 250+ req/s, p50=50ms, p99=300ms, zero leaks
  *
  * @since 1.18.22
+ * @deprecated since 2.2.0; use {@link GroupResolver} which implements the
+ *             5-path decision tree from the v2.2 target architecture (typed
+ *             faults, TOCTOU fallthrough, AllProxiesFailed pass-through).
+ *             This class is retained for backward compatibility with existing
+ *             call-sites; full removal is planned once all callers migrate.
  */
+@Deprecated(since = "2.2.0", forRemoval = true)
 public final class GroupSlice implements Slice {
 
     /**
