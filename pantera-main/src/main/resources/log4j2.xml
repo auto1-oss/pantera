@@ -31,8 +31,16 @@
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
-        <!-- Artifact Audit Logs (upload/download/delete/resolution) -->
+        <!-- Artifact Audit Logs (legacy AuditLogger — upload/download/delete/resolution) -->
         <Logger name="artifact.audit" level="info" additivity="false">
+            <AppenderRef ref="AsyncConsole"/>
+        </Logger>
+
+        <!-- Tier-5 Audit (StructuredLogger.audit — WI-03 §10.4).
+             Dedicated block so audit events are non-suppressible even when the
+             com.auto1.pantera parent is dropped to WARN/ERROR in an incident
+             rota. Closes concern C6 from the Wave-3 final review. -->
+        <Logger name="com.auto1.pantera.audit" level="info" additivity="false">
             <AppenderRef ref="AsyncConsole"/>
         </Logger>
 
