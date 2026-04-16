@@ -1,14 +1,17 @@
 # Changelog — v2.2.0
 
-Target-architecture alignment release. Ships the first four work items of the v2.2 plan (`docs/analysis/v2.2-target-architecture.md` §12): WI-00 (queue/log hotfix), WI-01 (Fault + Result sum types), WI-05 (SingleFlight coalescer), and WI-07 (ProxyCacheWriter + Maven checksum integrity). WI-02, WI-03, WI-04, WI-06, WI-06b, WI-08, WI-09, WI-10 are deferred to the follow-on v2.2.x trains — see `docs/analysis/v2.2-next-session.md` for the exact task list.
+Target-architecture alignment release. Ships the **first eight work items** of the v2.2 plan (`docs/analysis/v2.2-target-architecture.md` §12): WI-00 (queue/log hotfix), WI-01 (Fault + Result sum types), WI-05 (SingleFlight coalescer), WI-07 (ProxyCacheWriter + Maven checksum integrity), plus the Wave-3 additions WI-post-05 (retire RequestDeduplicator), WI-post-07 (wire ProxyCacheWriter into pypi/go/composer), WI-02 (full RequestContext + Deadline + ContextualExecutor), and WI-03 (StructuredLogger 5-tier + LevelPolicy + AuditAction). WI-04, WI-06, WI-06b, WI-08, WI-09, WI-10 are deferred to follow-on v2.2.x trains — see `docs/analysis/v2.2-next-session.md` for the exact task list.
 
 ## Highlights
 
 - **Maven `ChecksumFailureException` storms stopped at the source.** The `oss-parent-58.pom.sha1` class of cache-drift bug (primary bytes and the sidecar they're verified against diverging across stale-while-revalidate refetches) can no longer produce a committed cache entry. The new `ProxyCacheWriter` is a single write path that fetches primary + every sidecar in one coupled batch, recomputes all four digests (MD5, SHA-1, SHA-256, SHA-512) over the streamed primary bytes, and rejects the whole write if any sidecar disagrees. A companion `scripts/pantera-cache-integrity-audit.sh` heals pre-existing drift with `--dry-run` / `--fix`.
 - **The v2.1.3 503 burst and 2.4M/12h WARN flood are closed.** Every bounded-queue write on a request-serving path migrated from `queue.add()` (throws on overflow) to `queue.offer()` (returns false, increments `pantera.events.queue.dropped` counter). Access-log level policy redowngraded 404/401/403 from WARN to INFO — the three status codes driving ~95% of the pre-cutover WARN noise per the forensic analysis. The production regression of `IllegalStateException("Queue full")` escaping into 503 cascades is now architecturally impossible in the migrated sites.
-- **Three hand-rolled request coalescers collapsed into one.** The `inFlightFanouts` (GroupSlice), `inFlightMetadataFetches` (MavenGroupSlice), and `RequestDeduplicator` (CachedNpmProxySlice) implementations were each independently solving the same problem with slightly different race guards. `SingleFlight<K,V>` is the one utility for the whole codebase, Caffeine-backed, with stack-flat follower completion (the v2.1.3 `StackOverflowError` at ~400 concurrent followers cannot recur), explicit zombie eviction via `CompletableFuture.orTimeout`, and per-caller cancellation isolation.
+- **Three hand-rolled request coalescers collapsed into one.** The `inFlightFanouts` (GroupSlice), `inFlightMetadataFetches` (MavenGroupSlice), and `RequestDeduplicator` (CachedNpmProxySlice, BaseCachedProxySlice) implementations were each independently solving the same problem with slightly different race guards. `SingleFlight<K,V>` is the one utility for the whole codebase, Caffeine-backed, with stack-flat follower completion (the v2.1.3 `StackOverflowError` at ~400 concurrent followers cannot recur), explicit zombie eviction via `CompletableFuture.orTimeout`, and per-caller cancellation isolation.
 - **Fault taxonomy and Result sum types introduced as vocabulary, no behaviour change yet.** `pantera-core/http/fault/` now contains a sealed `Fault` hierarchy, a `Result<T>` with `map`/`flatMap`, a `FaultClassifier` for `Throwable → Fault` fallback, and a `FaultTranslator` that is the single decision point for "what HTTP status does this fault produce". No existing slice has been rewired yet — WI-04 does that. This release establishes the types + the 40-test contract, so every later WI can land without retyping the worked-examples table.
-- **Architectural-preparation scope only for adapters other than Maven.** Composer, Go, PyPI and npm cached-proxy slices carry `TODO(WI-post-07)` markers pointing at the future `ProxyCacheWriter` wiring. The Maven adapter is wired end-to-end; the others keep their pre-v2.2.0 behaviour verbatim this release.
+- **`RequestDeduplicator` deleted; `FetchSignal` promoted.** `BaseCachedProxySlice` now coalesces via `SingleFlight<Key, FetchSignal>` identical to `CachedNpmProxySlice`. `RequestDeduplicator.java`, `RequestDeduplicatorTest.java`, and the `DedupStrategy` enum are gone; the nested `FetchSignal` enum is now a top-level type at `pantera-core/http/cache/FetchSignal.java` (WI-post-05).
+- **`ProxyCacheWriter` wired into pypi / go / composer adapters** (WI-post-07). Each adapter's cached-proxy slice now routes primary-artifact cache misses through the same coupled primary+sidecar write path Maven received in WI-07. Each carries an atomic cache-integrity regression test. Only the npm adapter retains a `TODO(WI-post-07)` marker — its migration requires the RxJava2 retirement scheduled for WI-08.
+- **`RequestContext` expanded to the full ECS/APM envelope** (WI-02). Thirteen fields covering every ECS key Pantera emits (`trace.id`, `transaction.id`, `span.id`, `http.request.id`, `user.name`, `client.ip`, `user_agent.original`, `repository.name`, `repository.type`, `package.name`, `package.version`, `url.original`, `url.path`) plus an end-to-end `Deadline`. A four-arg backward-compat ctor retains the v2.2.0 scaffold signature so existing production call-sites compile unchanged. `ContextualExecutor.contextualize(Executor)` propagates the ThreadContext snapshot + APM span across `CompletableFuture` boundaries — wired at `DbArtifactIndex`, `GroupSlice.DRAIN_EXECUTOR`, `BaseCachedProxySlice` SingleFlight, `CachedNpmProxySlice` SingleFlight, and `MavenGroupSlice` SingleFlight.
+- **`StructuredLogger` 5-tier facade introduced** (WI-03). Five tier builders — `AccessLogger` (client→pantera), `InternalLogger` (pantera→pantera 500), `UpstreamLogger` (pantera→remote), `LocalLogger` (local ops), `AuditLogger` (compliance, INFO, non-suppressible) — sitting above a central `LevelPolicy` enum that encodes the §4.2 log-level matrix in one place. A closed `AuditAction` enum enumerates the only four compliance events (`ARTIFACT_PUBLISH`, `ARTIFACT_DOWNLOAD`, `ARTIFACT_DELETE`, `RESOLUTION`) per §10.4. `EcsLoggingSlice` now emits the access log exactly once per request via `StructuredLogger.access().forRequest(ctx)` on the success path (the legacy dual-emission was removed). `MdcPropagation` is retained as `@Deprecated(forRemoval=true)` while WI-06/WI-08 migrate its remaining ~110 production callers.
 
 ## Fixed
 
@@ -32,48 +35,60 @@ Target-architecture alignment release. Ships the first four work items of the v2
 - **`pantera-core/http/cache/ProxyCacheWriter`.** Single write-path for `primary + sidecars` that verifies upstream sidecar claims against bytes before the pair lands in the cache. Streams the primary into a NIO temp file (bounded chunk size, no heap scaling with artifact size) while updating four `MessageDigest` accumulators in one pass; pulls sidecars concurrently; compares trimmed-lowercased hex bodies against the computed digest; saves primary-first-then-sidecars only on agreement. Mismatch → `Result.err(Fault.UpstreamIntegrity(...))` and the temp file is deleted; no partial state leaks into the cache. Tier-4 LocalLogger events under `com.auto1.pantera.cache` with `event.action=cache_write` and `event.outcome ∈ {success, integrity_failure, partial_failure}`, plus Micrometer counters `pantera.proxy.cache.integrity_failure{repo, algo}` and `pantera.proxy.cache.write_partial_failure{repo}`.
 - **`pantera-core/http/cache/ProxyCacheWriter.IntegrityAuditor` + `scripts/pantera-cache-integrity-audit.sh`.** Static scanner that walks a `Storage`, recomputes digests for every primary artifact (`.pom`, `.jar`, `.war`, `.aar`, `.ear`, `.tgz`, `.tar.gz`, `.whl`, `.zip`), compares against any present sidecar, and in `--fix` mode deletes mismatched pairs so the next client GET repopulates through `ProxyCacheWriter`. CLI lives at `pantera-main/tools/CacheIntegrityAudit`; wrapper shell script is the supported entry point. Exit codes `0` (clean or fixed), `1` (mismatch in dry-run), `2` (CLI usage error).
 - **`pantera-core/metrics/EventsQueueMetrics`.** Shared callback invoked when `queue.offer(...)` returns false. Emits one structured WARN on `com.auto1.pantera.scheduling.events` with `event.action=queue_overflow` and bumps `pantera.events.queue.dropped{queue=<repoName>}` on the Micrometer registry when initialised. Exposes `dropCount()` for tests that run without a registry.
-- **`pantera-core/http/context/RequestContext` (scaffold).** Minimal record with `traceId`, `httpRequestId`, `repoName`, `urlOriginal`. Explicitly marked scaffold in its Javadoc — WI-02 will expand to the full ECS-native field set per target-architecture §3.3 (transactionId, spanId, userName, clientIp, userAgent, artifact, deadline, etc.). The class name and package are fixed so WI-02 can add fields without breaking imports.
+- **`pantera-core/http/cache/FetchSignal` (top-level enum).** `{SUCCESS, NOT_FOUND, ERROR}` — promoted from its former nested location inside the now-deleted `RequestDeduplicator`. Used by `BaseCachedProxySlice` and `CachedNpmProxySlice` as the return type of coalesced fetch loaders.
+- **`pantera-core/src/test/.../BaseCachedProxySliceDedupTest.java`.** 4 regression tests for the `BaseCachedProxySlice` → `SingleFlight<Key, FetchSignal>` migration: concurrent coalescing invokes the loader once, `NOT_FOUND` propagates to all followers, `ERROR` propagates to all followers, cancellation isolation.
+- **`pypi-adapter`, `go-adapter`, `composer-adapter` — `ProxyCacheWriter` wiring + integrity tests.** Each adapter's `CachedProxySlice` constructs a `ProxyCacheWriter` when a file-backed `Storage` is present, routing primary-artifact cache misses through the same coupled primary+sidecar write path Maven received in WI-07. One atomicity test + one digest-mismatch test per adapter.
+- **`pantera-core/http/context/RequestContext` (full envelope).** 13-field record: `traceId`, `transactionId`, `spanId`, `httpRequestId`, `userName`, `clientIp`, `userAgent`, `repoName`, `repoType`, `ArtifactRef artifact`, `urlOriginal`, `urlPath`, `Deadline deadline`. Includes `bindToMdc()` → `AutoCloseable` for try-with-resources MDC binding, `fromMdc()` for thread-hop recovery, `minimal(traceId, httpRequestId, repoName, urlOriginal)` factory, `withRepo(name, type, ref)` for post-resolution enrichment, and a nested `ArtifactRef` record with an `EMPTY` sentinel.
+- **`pantera-core/http/context/Deadline`.** Monotonic wall-clock deadline record (`expiresAtNanos`) with `in(Duration)` factory, `remaining()` (clamped non-negative), `expired()`, `remainingClamped(max)`, and `expiresAt()` → `Instant`.
+- **`pantera-core/http/context/ContextualExecutor`.** Utility that wraps any `Executor` so tasks inherit the caller's Log4j2 `ThreadContext` snapshot + active APM `Span`. Wired at `DbArtifactIndex.DbIndexExecutorService`, `GroupSlice.DRAIN_EXECUTOR`, `BaseCachedProxySlice` SingleFlight, `CachedNpmProxySlice` SingleFlight, `MavenGroupSlice` SingleFlight — every hot-path thread hop contextualised.
+- **`pantera-core/http/observability/StructuredLogger`.** 5-tier facade: `access()` (Tier-1, client→pantera), `internal()` (Tier-2, pantera→pantera 500), `upstream()` (Tier-3, pantera→remote), `local()` (Tier-4, local ops), `audit()` (Tier-5, compliance). Each tier exposes a builder that `Objects.requireNonNull`s its required fields at entry. Every builder binds `RequestContext` to `ThreadContext` in try-with-resources so EcsLayout picks up ECS keys automatically.
+- **`pantera-core/http/observability/LevelPolicy`.** Table-driven enum encoding the §4.2 log-level matrix: `CLIENT_FACING_SUCCESS` (DEBUG), `CLIENT_FACING_NOT_FOUND`/`CLIENT_FACING_UNAUTH` (INFO), `CLIENT_FACING_4XX_OTHER`/`CLIENT_FACING_SLOW` (WARN), `CLIENT_FACING_5XX`/`INTERNAL_CALL_500`/`UPSTREAM_5XX`/`LOCAL_FAILURE` (ERROR), `AUDIT_EVENT` (INFO), plus DEBUG/INFO/WARN hooks for every tier's success/degraded states.
+- **`pantera-core/audit/AuditAction`.** Closed enum of compliance audit events: `ARTIFACT_PUBLISH`, `ARTIFACT_DOWNLOAD`, `ARTIFACT_DELETE`, `RESOLUTION`. Deliberately small to protect the 90-day audit dataset from action-type explosion.
+- **`pantera-core` tests: 54 new tests across `http/context/` (ContextualExecutorTest, DeadlineTest, RequestContextTest), `http/observability/` (AccessLoggerTest, AuditLoggerTest, ContextualExecutorIntegrationTest, InternalLoggerTest, LevelPolicyTest, LocalLoggerTest, UpstreamLoggerTest), and `http/cache/BaseCachedProxySliceDedupTest`.** Every tier's required-field contract, level-policy mapping, and APM/MDC propagation is test-locked.
+- **Adapter tests: 6 new integrity tests across pypi / go / composer.** `CachedPyProxySliceIntegrityTest`, `CachedProxySliceIntegrityTest` (go), `CachedProxySliceIntegrityTest` (composer) — two tests per adapter covering atomic primary+sidecar commit and digest-mismatch rejection.
 
 ## Changed
 
-- **Coalescer fields in GroupSlice / MavenGroupSlice / CachedNpmProxySlice are now `SingleFlight` instances.** Field names `inFlightFanouts` / `inFlightMetadataFetches` / `deduplicator` retained for minimal diff; only the type changed. Call-site semantics preserved: the leader/follower flag pattern (`isLeader[]` array captured inside the loader bifunction) is the same; followers still re-enter their respective fanout / metadata-fetch / origin-response paths once the shared gate resolves.
+- **Coalescer fields in GroupSlice / MavenGroupSlice / CachedNpmProxySlice / BaseCachedProxySlice are now `SingleFlight` instances.** Field names `inFlightFanouts` / `inFlightMetadataFetches` / `deduplicator` / `singleFlight` retained for minimal diff; only the type changed. Call-site semantics preserved: the leader/follower flag pattern is the same; followers still re-enter their respective fanout / metadata-fetch / origin-response paths once the shared gate resolves.
+- **`RequestContext` expanded from 4 fields (v2.2.0 scaffold) to 13 fields (WI-02 full envelope).** A backward-compat 4-arg constructor is retained verbatim so every production call-site written against the scaffold compiles unchanged; internally it delegates to `minimal(...)` which fills `userName="anonymous"`, `ArtifactRef.EMPTY`, `Deadline.in(30 s)`, and `null` for every other field. The canonical 13-arg constructor is the one new code should prefer.
+- **`EcsLoggingSlice` emits the access log exactly once per request via `StructuredLogger.access()`.** The former dual emission (`StructuredLogger.access()` + `new EcsLogEvent(...)` on every success path) was removed to halve access-log volume in Kibana. Only the `.exceptionally(...)` error path still uses `EcsLogEvent` (one call-site, scheduled for migration with the rest). Rich `user_agent.name` / `.version` / `.os.name` parsing is not re-emitted by `StructuredLogger.access` today — operators depending on those sub-fields need to query `user_agent.original` directly or wait for the follow-up WI that re-lifts parsing.
+- **Three hot-path executors wrapped via `ContextualExecutor.contextualize(...)`.** `DbArtifactIndex` (via the internal `DbIndexExecutorService` adapter that forwards lifecycle methods to the underlying pool), `GroupSlice.DRAIN_EXECUTOR`, and all three SingleFlight-backed call sites (`BaseCachedProxySlice`, `CachedNpmProxySlice`, `MavenGroupSlice`) now propagate `ThreadContext` + APM span across their `CompletableFuture` boundaries.
 - **Idle-connection events logged at DEBUG, not ERROR** (`JettyClientSlice`). See Fixed.
 - **Bounded-queue enqueue semantics: `offer()`, not `add()`.** Every request-serving path that writes to a `LinkedBlockingQueue<ProxyArtifactEvent>` / `LinkedBlockingQueue<ArtifactEvent>` now uses `offer()` and routes overflow through `EventsQueueMetrics.recordDropped(repoName)`. Sites unbounded by design (ConcurrentLinkedDeque used for append-only drains) keep `add()` with an explicit `// ok: unbounded ConcurrentLinkedDeque` comment so the intent is auditable.
 - **Access-log level policy for 404/401/403** downgraded to INFO. See Fixed.
 - **Maven-adapter cached-proxy slice.** On primary-artifact cache miss (`.pom`, `.jar`, `.war`, `.aar`, `.ear`, `.zip`, `.module`) the request is routed through `ProxyCacheWriter.writeWithSidecars(...)` instead of the legacy split primary/sidecar writes. Cache-hits, maven-metadata.xml flow (stale-while-revalidate via `MetadataCache`), and non-primary sidecar paths are unchanged. Integrity failure returns 503 to the client with `X-Pantera-Fault: upstream-integrity` rather than committing the bad pair.
+- **pypi / go / composer cached-proxy slices wired to `ProxyCacheWriter`** (WI-post-07). Primary-artifact cache misses (`.whl` / `.tar.gz` / sdist for pypi; `.zip` module archives for go; `.zip` dist archives for composer) now route through `ProxyCacheWriter`. Each adapter uses its native sidecar algorithm set (pypi: SHA-256 + MD5; go: SHA-256; composer: SHA-256).
+- **`pom.xml` versions bumped 2.1.3 → 2.2.0** on the root reactor and all 30 modules. Docker image tags from `mvn install` now produce `pantera:2.2.0`. Command used: `mvn -T8 versions:set -DnewVersion=2.2.0 -DgenerateBackupPoms=false -DprocessAllModules=true`.
 
 ## Deprecated
 
-Nothing removed in this release; the following are on the v2.3.0 removal path. A future work item (tracked as **WI-post-05** in `docs/analysis/v2.2-next-session.md`) carries out the deletions.
-
-- **`pantera-core/http/cache/RequestDeduplicator`** — last in-tree caller is `BaseCachedProxySlice`; once it migrates to `SingleFlight`, `RequestDeduplicator.java` + `RequestDeduplicatorTest.java` + `DedupStrategy` enum are deleted and `FetchSignal` is promoted to a top-level `pantera-core/http/cache/FetchSignal.java` (currently a nested enum inside `RequestDeduplicator`).
-- **The `TODO(WI-post-07)` markers in `composer-adapter`, `go-adapter`, `pypi-adapter`, `npm-adapter`'s cached-proxy slices** — followup work item wires them through `ProxyCacheWriter` so they receive the same integrity guarantee Maven now has.
+- **`pantera-core/http/trace/MdcPropagation`** marked `@Deprecated(since="2.2.0", forRemoval=true)`. The replacement is `ContextualExecutor.contextualize(executor)` at pool boundaries + `RequestContext.bindToMdc()` in try-with-resources at the request edge. Approximately 110 production call-sites remain across `pantera-main/api/v1/*` handlers, `pantera-core/cooldown`, `pantera-main/group/*`, `npm-adapter/DownloadAssetSlice`, and `npm-adapter/NpmProxy` — deleting the class is a follow-up WI (WI-06 / WI-08 / Vert.x-handler contextualisation). Do not add new call-sites.
 
 ## Security / compliance
 
-None. No CVE fixes, no permissions model changes, no credential-handling changes, no PII-scope changes. Integrity verification on proxy caches (WI-07) is a correctness hardening, not a security fix — the trust boundary (upstream declares a digest, we verify it) has not moved.
+None. No CVE fixes, no permissions model changes, no credential-handling changes, no PII-scope changes. Integrity verification on proxy caches (WI-07 + WI-post-07) is a correctness hardening, not a security fix — the trust boundary (upstream declares a digest, we verify it) has not moved. The new audit logger (`StructuredLogger.audit()`) emits to a dedicated `com.auto1.pantera.audit` logger; see "Migration notes" below for the log4j2 configuration nuance before rolling out to production.
 
 ## Migration notes
 
-**No operator action required.** All changes are drop-in for v2.1.3 deployments:
+**No operator action required for functional rollout.** All changes are drop-in for v2.1.3 deployments:
 
 - The `queue.add → queue.offer` migration is internal; no YAML change, no CLI flag, no API change. Overflow events were previously stack-trace flooding; they now increment a counter and WARN once per drop.
-- The access-log level policy change is internal to `EcsLogEvent`; operators who filtered dashboards on `log.level: WARN AND http.response.status_code: 404` will see those panels empty after cutover. That is the intended outcome — noise elimination — not a regression. Kibana panels that need 404 volume should switch to `log.level: INFO AND http.response.status_code: 404` (or simply filter by status code).
-- The `ProxyCacheWriter` path in maven-adapter activates only when a file-backed `Storage` is present; deployments that inject a lambda-`Cache` in tests keep the pre-v2.2.0 code path verbatim.
+- The access-log level policy change is internal to `EcsLogEvent` / `StructuredLogger.access`; operators who filtered dashboards on `log.level: WARN AND http.response.status_code: 404` will see those panels empty after cutover. That is the intended outcome — noise elimination — not a regression. Kibana panels that need 404 volume should switch to `log.level: INFO AND http.response.status_code: 404` (or simply filter by status code).
+- The `ProxyCacheWriter` path in maven / pypi / go / composer adapters activates only when a file-backed `Storage` is present; deployments that inject a lambda-`Cache` in tests keep the pre-v2.2.0 code path verbatim.
 - The `SingleFlight` coalescers use their own dedicated Caffeine `AsyncCache` instances with a 5-minute in-flight TTL and 10K max keys; heap growth is bounded and does not require tuning.
 - `scripts/pantera-cache-integrity-audit.sh` is additive — a zero-impact no-op unless explicitly invoked. Running with `--dry-run` against a production cache is safe.
-
-**Version-string reminder.** The root `pom.xml` still reports `2.1.3` on this branch. Operators building from source should bump to `2.2.0` (or tag `v2.2.0` at release time) before producing an RC image; the Maven reactor output reads `pantera-main-2.1.3.jar` today.
+- **Kibana user_agent sub-fields:** operators who queried `user_agent.name` / `user_agent.version` / `user_agent.os.name` on access-log documents need to either (a) query `user_agent.original` directly (that's what `RequestContext` emits today) or (b) wait for the follow-up WI that re-lifts the parser into `StructuredLogger.access`. No data loss — only the parsed sub-fields are unavailable this release.
+- **Audit-log level:** `StructuredLogger.audit()` writes to the logger named `com.auto1.pantera.audit`. The bundled `log4j2.xml` does not yet declare a dedicated appender for that logger — it inherits from `com.auto1.pantera` at INFO. That means "non-suppressible" is by convention; if an operator drops `com.auto1.pantera` to WARN they will suppress audit events. Add a dedicated `<Logger name="com.auto1.pantera.audit" level="info" additivity="false">` block in production overrides to make the non-suppressibility operationally enforced.
 
 ## Under the hood
 
-This release lands the foundation for the remaining seven WIs in the v2.2 target-architecture plan:
+This release lands the foundation for the remaining WIs in the v2.2 target-architecture plan:
 
 - **WI-01's `Fault` taxonomy and `FaultTranslator` are ready for WI-04** (the `GroupResolver` rewrite) to consume. WI-04 is what turns these types from vocabulary into behaviour — every slice returns `Result<Response>`, and the `FaultTranslator` becomes the single site where "what HTTP status" is decided. The worked-examples table in target-architecture §2 is already test-locked via `FaultAllProxiesFailedPassThroughTest` so WI-04 cannot regress the status-policy contract.
-- **WI-05's `SingleFlight` is ready for WI-post-05** to migrate `BaseCachedProxySlice` from `RequestDeduplicator` and retire the three-file legacy coalescer. That migration is ~20 LoC and mechanically identical to the `CachedNpmProxySlice` change in this release.
-- **WI-07's `ProxyCacheWriter` is ready for WI-post-07** to wire npm / pypi / go / docker / composer cached-proxy slices. Each adapter inherits the same primary+sidecar integrity guarantee with a thin `fetchPrimary` / `fetchSidecar` pair per adapter.
-- **`RequestContext` as a named-but-not-yet-full scaffold is ready for WI-02** to expand (transactionId, spanId, userName, clientIp, userAgent, artifact ref, deadline, url.path). No import changes required at expansion time.
-- **The `EcsLogEvent` level-policy matrix is ready for WI-03** (five-tier StructuredLogger) to consume as the default policy for Tier-1 access logs; WI-03 replaces the call sites, not the policy.
+- **WI-05's `SingleFlight` is now the only coalescer in the codebase.** WI-post-05 finished the migration by retiring `RequestDeduplicator` / `DedupStrategy` / `RequestDeduplicatorTest.java` and promoting `FetchSignal` to a top-level enum.
+- **WI-07's `ProxyCacheWriter` is wired across maven / pypi / go / composer.** Only the npm adapter retains a `TODO(WI-post-07)` marker; its wiring is blocked on RxJava2 retirement (WI-08).
+- **`RequestContext` / `Deadline` / `ContextualExecutor` are ready for WI-04 / WI-06 / WI-08.** The 13-field envelope is final; WI-04's `GroupResolver` will thread it through the five-path decision tree, and WI-08's RxJava retirement will let the npm adapter finally delete its `MdcPropagation.withMdc*` call-sites.
+- **`StructuredLogger` 5-tier + `LevelPolicy` + `AuditAction` are ready for WI-04 / WI-06 / WI-09.** Every new log emission should prefer the tier-specific builder; `EcsLogger` direct call-sites are acceptable only on the `.exceptionally(...)` error path until the dual-emission removal follow-up lands.
 
 See `docs/analysis/v2.2-next-session.md` for the explicit agent-executable task list for each remaining WI, with file paths, test requirements, DoD commands, and dep-graph ordering.
 
@@ -81,34 +96,49 @@ See `docs/analysis/v2.2-next-session.md` for the explicit agent-executable task 
 
 | module          | tests | failures | errors | skipped |
 |-----------------|-------|----------|--------|---------|
-| pantera-core    |   820 |        0 |      0 |       7 |
-| npm-adapter     |   191 |        0 |      0 |       0 |
-| maven-adapter   |    86 |        0 |      0 |       1 |
+| pantera-core    |   891 |        0 |      0 |       7 |
 | pantera-main    |   929 |        0 |      0 |       4 |
-| pypi-adapter    |   252 |        0 |      0 |       1 |
-| go-adapter      |    19 |        0 |      0 |       0 |
+| npm-adapter     |   191 |        0 |      0 |       0 |
+| hexpm-adapter   |    19 |        0 |      0 |       0 |
+| maven-adapter   |    56 |        0 |      0 |       3 |
+| rpm-adapter     |   252 |        0 |      0 |       1 |
+| composer-files  |    27 |        0 |      0 |       0 |
+| goproxy         |    86 |        0 |      0 |       1 |
+| nuget-adapter   |   126 |        0 |      0 |       0 |
+| pypi-adapter    |   334 |        0 |      0 |       0 |
+| helm-adapter    |    77 |        0 |      0 |       0 |
 | docker-adapter  |   444 |        0 |      0 |       1 |
-| helm-adapter    |   124 |        0 |      0 |       0 |
-| rpm-adapter     |    77 |        0 |      0 |       0 |
-| hexpm-adapter   |    54 |        0 |      0 |       3 |
-| nuget-adapter   |   334 |        0 |      0 |       0 |
-| composer-files  |    25 |        0 |      0 |       0 |
+| **TOTAL**       | **3 432** | **0** | **0** | **17** |
 
 Commands used for acceptance (each returns `BUILD SUCCESS`):
 
 ```
 mvn -T8 install -DskipTests
-mvn -T8 -pl pantera-core test
-mvn -T8 -pl npm-adapter test
-mvn -T8 -pl maven-adapter test
-mvn -T8 -pl pantera-main -am test
-mvn -T8 -pl pypi-adapter,go-adapter,docker-adapter,helm-adapter,rpm-adapter,hexpm-adapter,nuget-adapter,composer-adapter test
+mvn -pl pantera-core test
+mvn -pl pantera-main test -DfailIfNoTests=false
+mvn -T4 -pl npm-adapter,maven-adapter,pypi-adapter,go-adapter,composer-adapter,docker-adapter,helm-adapter,rpm-adapter,hexpm-adapter,nuget-adapter test -DfailIfNoTests=false
 ```
 
-Acceptance greps (each returns 0 matches):
+Acceptance greps (each returns the expected count):
 
 ```
-rg 'queue\.add\(' --glob '*.java' | rg -v test | rg -v '// ok:'
-rg 'inFlightFanouts|inFlightMetadataFetches' --glob '*.java' | rg -v test | rg -v '// deprecated' | rg -v 'SingleFlight'
-rg 'Co-Authored-By' .git
+# WI-post-05
+rg 'RequestDeduplicator|class DedupStrategy|RequestDeduplicator\.FetchSignal' --glob '*.java' | rg -v test | wc -l    # 0
+rg 'new FetchSignal|FetchSignal\.(SUCCESS|NOT_FOUND|ERROR)' --glob '*.java' | rg -v test | wc -l                       # 11
+
+# WI-post-07
+rg 'TODO\(WI-post-07\)' --glob '*.java' | wc -l                                                                        # 1 (npm-adapter)
+rg 'new ProxyCacheWriter' --glob '*.java' | rg -v test | wc -l                                                         # 4 (maven/pypi/go/composer)
+
+# WI-02
+ls pantera-core/src/main/java/com/auto1/pantera/http/context/                                                          # ContextualExecutor.java Deadline.java RequestContext.java
+wc -l pantera-core/src/main/java/com/auto1/pantera/http/context/RequestContext.java                                    # 340
+
+# WI-03
+rg 'StructuredLogger\.access\(\)' --glob '*.java' | wc -l                                                              # 14
+rg 'enum AuditAction' --glob '*.java' | wc -l                                                                          # 1
+rg 'new EcsLogEvent\(\)' pantera-core/src/main/java/com/auto1/pantera/http/slice/EcsLoggingSlice.java | wc -l          # 1 (exception path only)
+
+# Commit-message hygiene
+git log c71fbbfe..HEAD --format='%B' | git interpret-trailers --only-trailers | grep -ic 'co-authored-by'             # 0
 ```
