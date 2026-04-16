@@ -181,27 +181,40 @@ public final class DownloadAssetSlice implements Slice {
                     .eventOutcome("success")
                     .field("package.name", tgz)
                     .log();
-                // Queue the proxy event
+                // Queue the proxy event — any failure (bounded queue overflow, lambda
+                // exception, etc.) MUST NOT escape the serve path. Wrap in try/catch.
                 this.packages.ifPresent(queue -> {
-                    Long millis = null;
                     try {
-                        final String lm = asset.meta().lastModified();
-                        if (!Strings.isNullOrEmpty(lm)) {
-                            millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                        Long millis = null;
+                        try {
+                            final String lm = asset.meta().lastModified();
+                            if (!Strings.isNullOrEmpty(lm)) {
+                                millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                            }
+                        } catch (final Exception ex) {
+                            EcsLogger.debug("com.auto1.pantera.npm")
+                                .message("Failed to parse asset lastModified for proxy event")
+                                .error(ex)
+                                .log();
                         }
-                    } catch (final Exception ex) {
-                        EcsLogger.debug("com.auto1.pantera.npm")
-                            .message("Failed to parse asset lastModified for proxy event")
-                            .error(ex)
-                            .log();
-                    }
-                    queue.add(
-                        new ProxyArtifactEvent(
+                        final ProxyArtifactEvent event = new ProxyArtifactEvent(
                             new Key.From(tgz), this.repoName,
                             new Login(headers).getValue(),
                             java.util.Optional.ofNullable(millis)
-                        )
-                    );
+                        );
+                        if (!queue.offer(event)) {
+                            com.auto1.pantera.metrics.EventsQueueMetrics
+                                .recordDropped(this.repoName);
+                        }
+                    } catch (final Throwable t) {
+                        EcsLogger.warn("com.auto1.pantera.npm")
+                            .message("Failed to enqueue proxy event; serve path unaffected")
+                            .eventCategory("process")
+                            .eventAction("queue_enqueue")
+                            .eventOutcome("failure")
+                            .field("repository.name", this.repoName)
+                            .log();
+                    }
                 });
                 String mime = asset.meta().contentType();
                 if (Strings.isNullOrEmpty(mime)){
@@ -272,26 +285,40 @@ public final class DownloadAssetSlice implements Slice {
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {
         return this.npm.getAsset(tgz).map(
                 asset -> {
+                    // Enqueue failures (bounded queue full, lambda exception, ...)
+                    // MUST NOT escape the serve path — wrap the whole body.
                     this.packages.ifPresent(queue -> {
-                        Long millis = null;
                         try {
-                            final String lm = asset.meta().lastModified();
-                            if (!Strings.isNullOrEmpty(lm)) {
-                                millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                            Long millis = null;
+                            try {
+                                final String lm = asset.meta().lastModified();
+                                if (!Strings.isNullOrEmpty(lm)) {
+                                    millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
+                                }
+                            } catch (final Exception ex) {
+                                EcsLogger.debug("com.auto1.pantera.npm")
+                                    .message("Failed to parse asset lastModified for proxy event")
+                                    .error(ex)
+                                    .log();
                             }
-                        } catch (final Exception ex) {
-                            EcsLogger.debug("com.auto1.pantera.npm")
-                                .message("Failed to parse asset lastModified for proxy event")
-                                .error(ex)
-                                .log();
-                        }
-                        queue.add(
-                            new ProxyArtifactEvent(
+                            final ProxyArtifactEvent event = new ProxyArtifactEvent(
                                 new Key.From(tgz), this.repoName,
                                 new Login(headers).getValue(),
                                 java.util.Optional.ofNullable(millis)
-                            )
-                        );
+                            );
+                            if (!queue.offer(event)) {
+                                com.auto1.pantera.metrics.EventsQueueMetrics
+                                    .recordDropped(this.repoName);
+                            }
+                        } catch (final Throwable t) {
+                            EcsLogger.warn("com.auto1.pantera.npm")
+                                .message("Failed to enqueue proxy event; serve path unaffected")
+                                .eventCategory("process")
+                                .eventAction("queue_enqueue")
+                                .eventOutcome("failure")
+                                .field("repository.name", this.repoName)
+                                .log();
+                        }
                     });
                     return asset;
                 })

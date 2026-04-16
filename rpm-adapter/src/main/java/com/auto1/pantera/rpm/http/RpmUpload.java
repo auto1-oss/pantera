@@ -110,7 +110,7 @@ public final class RpmUpload implements Slice {
                                     result = this.events.map(
                                         queue -> repo.performWithResult().thenAccept(
                                             list -> list.forEach(
-                                                info -> queue.add(
+                                                info -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                                     new ArtifactEvent(
                                                         RpmUpload.REPO_TYPE, this.config.name(),
                                                         new Login(headers).getValue(),

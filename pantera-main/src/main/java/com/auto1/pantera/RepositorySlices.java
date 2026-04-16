@@ -299,8 +299,11 @@ public class RepositorySlices {
                 .log();
             return resolved.get().slice();
         }
-        // Not found is NOT cached to allow dynamic repo addition without restart
-        EcsLogger.warn("com.auto1.pantera.settings")
+        // Not found is NOT cached to allow dynamic repo addition without restart.
+        // Logged at INFO (v2.1.4 WI-00): this is a client-config error, not a
+        // Pantera failure — clients misconfigured with stale repo names produce
+        // a steady stream that was previously drowning WARN output (§1.7 F2.2).
+        EcsLogger.info("com.auto1.pantera.settings")
             .message("Repository not found in configuration")
             .eventCategory("web")
             .eventAction("slice_resolve")

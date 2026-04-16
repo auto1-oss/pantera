@@ -94,7 +94,7 @@ final class UnpublishPutSlice implements Slice {
                         .thenCompose(update -> this.updateMeta(update, key))
                         .thenAccept(
                             ver -> this.events.ifPresent(
-                                queue -> queue.add(
+                                queue -> queue.add( // ok: unbounded ConcurrentLinkedDeque (ArtifactEvent queue)
                                     new ArtifactEvent(
                                         UploadSlice.REPO_TYPE, this.rname, pkg, ver
                                     )

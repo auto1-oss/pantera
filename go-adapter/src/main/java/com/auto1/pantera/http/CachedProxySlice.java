@@ -550,16 +550,21 @@ final class CachedProxySlice implements Slice {
                 owner,
                 release
             );
-            queue.add(event);
-            EcsLogger.debug("com.auto1.pantera.go")
-                .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
-                .eventCategory("web")
-                .eventAction("proxy_request")
-                .field("package.name", key.string())
-                .field("repository.name", this.rname)
-                .field("user.name", owner)
-                .field("package.release_date", release.map(Object::toString).orElse(null))
-                .log();
+            // Bounded ProxyArtifactEvent queue — offer() + drop counter so
+            // a full queue cannot cascade to 503 on the serve path.
+            if (!queue.offer(event)) {
+                com.auto1.pantera.metrics.EventsQueueMetrics.recordDropped(this.rname);
+            } else {
+                EcsLogger.debug("com.auto1.pantera.go")
+                    .message("Successfully enqueued Go proxy event (queue size: " + queue.size() + ")")
+                    .eventCategory("web")
+                    .eventAction("proxy_request")
+                    .field("package.name", key.string())
+                    .field("repository.name", this.rname)
+                    .field("user.name", owner)
+                    .field("package.release_date", release.map(Object::toString).orElse(null))
+                    .log();
+            }
         });
     }
 

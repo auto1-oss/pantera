@@ -271,11 +271,17 @@ public final class EcsLogEvent {
      * field in the Elasticsearch document. When ThreadContext does not have that
      * key, the field value is kept so it still reaches the JSON output.
      *
-     * <p>Strategy to reduce log volume:
+     * <p>Strategy to reduce log volume (v2.1.4 WI-00):
      * <ul>
-     *   <li>ERROR (>= 500): Always log at ERROR level</li>
-     *   <li>WARN (>= 400 or slow >5s): Log at WARN level</li>
-     *   <li>SUCCESS (< 400): Log at DEBUG level (production: disabled)</li>
+     *   <li>ERROR ({@code >= 500}): ERROR level</li>
+     *   <li>404 / 401 / 403 (client-driven): INFO — these are normal client probes
+     *       (Maven HEAD probes, unauthenticated health-checks, per-client auth
+     *       retries) and were responsible for ~95% of the access-log WARN noise
+     *       in production (forensic §1.7 F2.1–F2.2).</li>
+     *   <li>Other 4xx ({@code 400-499} except 401/403/404): WARN</li>
+     *   <li>Slow request ({@code durationMs > 5000}): WARN</li>
+     *   <li>{@code failureOutcome == true}: WARN</li>
+     *   <li>default: DEBUG (production: disabled)</li>
      * </ul>
      */
     public void log() {
@@ -318,6 +324,12 @@ public final class EcsLogEvent {
 
         if (statusCode != null && statusCode >= 500) {
             LOGGER.error(mapMessage);
+        } else if (statusCode != null
+            && (statusCode == 404 || statusCode == 401 || statusCode == 403)) {
+            // Client-driven 4xx are normal probes (Maven HEAD, unauthenticated
+            // health checks, auth retries). Emit at INFO to collapse the 95%
+            // log-WARN flood observed in production (§1.7 F2.1–F2.2).
+            LOGGER.info(mapMessage);
         } else if (statusCode != null && statusCode >= 400) {
             LOGGER.warn(mapMessage);
         } else if (durationMs > SLOW_REQUEST_THRESHOLD_MS) {
