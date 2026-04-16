@@ -107,6 +107,18 @@
       <artifactId>jackson-databind</artifactId>
       <version>${fasterxml.jackson.version}</version>
     </dependency>
+    <!--
+      Elastic APM agent API — needed by ContextualExecutor to snapshot + activate
+      the caller's APM span across thread hops (see §4.4 of v2.2-target-architecture).
+      The agent itself is optional at runtime; ElasticApm.currentSpan() returns a
+      no-op span when the agent is not attached, so this is safe for tests and for
+      deployments that don't run the APM agent.
+    -->
+    <dependency>
+      <groupId>co.elastic.apm</groupId>
+      <artifactId>apm-agent-api</artifactId>
+      <version>1.55.1</version>
+    </dependency>
     <dependency>
       <groupId>jakarta.servlet</groupId>
       <artifactId>jakarta.servlet-api</artifactId>
