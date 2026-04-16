@@ -22,7 +22,7 @@ import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 import com.auto1.pantera.cooldown.DbBlockRecord;
 import com.auto1.pantera.db.dao.SettingsDao;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
@@ -39,6 +39,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonStructure;
 import javax.json.JsonValue;
@@ -273,67 +274,66 @@ public final class CooldownHandler {
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        ctx.vertx().<List<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final Collection<String> all = this.crs.listAll();
-                final List<JsonObject> result = new ArrayList<>(all.size());
-                for (final String name : all) {
-                    if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
+        CompletableFuture.supplyAsync((java.util.function.Supplier<List<JsonObject>>) () -> {
+            final Collection<String> all = this.crs.listAll();
+            final List<JsonObject> result = new ArrayList<>(all.size());
+            for (final String name : all) {
+                if (!perms.implies(new AdapterBasicPermission(name, "read"))) {
+                    continue;
+                }
+                final RepositoryName rname = new RepositoryName.Simple(name);
+                try {
+                    final JsonStructure config = this.crs.value(rname);
+                    if (config == null
+                        || !(config instanceof javax.json.JsonObject)) {
                         continue;
                     }
-                    final RepositoryName rname = new RepositoryName.Simple(name);
-                    try {
-                        final JsonStructure config = this.crs.value(rname);
-                        if (config == null
-                            || !(config instanceof javax.json.JsonObject)) {
+                    final javax.json.JsonObject jobj =
+                        (javax.json.JsonObject) config;
+                    final javax.json.JsonObject repoSection;
+                    if (jobj.containsKey(CooldownHandler.REPO)) {
+                        final javax.json.JsonValue rv =
+                            jobj.get(CooldownHandler.REPO);
+                        if (rv.getValueType() != JsonValue.ValueType.OBJECT) {
                             continue;
                         }
-                        final javax.json.JsonObject jobj =
-                            (javax.json.JsonObject) config;
-                        final javax.json.JsonObject repoSection;
-                        if (jobj.containsKey(CooldownHandler.REPO)) {
-                            final javax.json.JsonValue rv =
-                                jobj.get(CooldownHandler.REPO);
-                            if (rv.getValueType() != JsonValue.ValueType.OBJECT) {
-                                continue;
-                            }
-                            repoSection = (javax.json.JsonObject) rv;
-                        } else {
-                            repoSection = jobj;
-                        }
-                        final String repoType = repoSection.getString(
-                            CooldownHandler.TYPE, ""
-                        );
-                        // Check if cooldown is actually enabled for this repo type
-                        if (!this.csettings.enabledFor(repoType)) {
-                            continue;
-                        }
-                        // Only proxy repos can have cooldown
-                        if (!repoType.endsWith("-proxy")) {
-                            continue;
-                        }
-                        final Duration minAge =
-                            this.csettings.minimumAllowedAgeFor(repoType);
-                        final JsonObject entry = new JsonObject()
-                            .put("name", name)
-                            .put(CooldownHandler.TYPE, repoType)
-                            .put("cooldown", formatDuration(minAge));
-                        // Add active block count if DB is available
-                        if (this.repository != null) {
-                            final long count =
-                                this.repository.countActiveBlocks(repoType, name);
-                            entry.put("active_blocks", count);
-                        }
-                        result.add(entry);
-                    } catch (final Exception ex) {
-                        // skip repos that cannot be read
+                        repoSection = (javax.json.JsonObject) rv;
+                    } else {
+                        repoSection = jobj;
                     }
+                    final String repoType = repoSection.getString(
+                        CooldownHandler.TYPE, ""
+                    );
+                    // Check if cooldown is actually enabled for this repo type
+                    if (!this.csettings.enabledFor(repoType)) {
+                        continue;
+                    }
+                    // Only proxy repos can have cooldown
+                    if (!repoType.endsWith("-proxy")) {
+                        continue;
+                    }
+                    final Duration minAge =
+                        this.csettings.minimumAllowedAgeFor(repoType);
+                    final JsonObject entry = new JsonObject()
+                        .put("name", name)
+                        .put(CooldownHandler.TYPE, repoType)
+                        .put("cooldown", formatDuration(minAge));
+                    // Add active block count if DB is available
+                    if (this.repository != null) {
+                        final long count =
+                            this.repository.countActiveBlocks(repoType, name);
+                        entry.put("active_blocks", count);
+                    }
+                    result.add(entry);
+                } catch (final Exception ex) {
+                    // skip repos that cannot be read
                 }
-                return result;
-            }),
-            false
-        ).onSuccess(
-            repos -> {
+            }
+            return result;
+        }, HandlerExecutor.get()).whenComplete((repos, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 final JsonArray arr = new JsonArray();
                 for (final JsonObject repo : repos) {
                     arr.add(repo);
@@ -343,9 +343,7 @@ public final class CooldownHandler {
                     .putHeader("Content-Type", "application/json")
                     .end(new JsonObject().put("repos", arr).encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -399,60 +397,59 @@ public final class CooldownHandler {
                 ctx.user().principal().getString(AuthTokenRest.CONTEXT)
             )
         );
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final List<DbBlockRecord> allBlocks =
-                    this.repository.findAllActivePaginated(
-                        0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
-                    );
-                final Instant now = Instant.now();
-                final JsonArray items = new JsonArray();
-                int skipped = 0;
-                int added = 0;
-                for (final DbBlockRecord rec : allBlocks) {
-                    if (!perms.implies(
-                        new AdapterBasicPermission(rec.repoName(), "read"))) {
-                        continue;
-                    }
-                    if (skipped < page * size) {
-                        skipped++;
-                        continue;
-                    }
-                    if (added >= size) {
-                        continue;
-                    }
-                    final long remainingSecs =
-                        Duration.between(now, rec.blockedUntil()).getSeconds();
-                    final JsonObject item = new JsonObject()
-                        .put("package_name", rec.artifact())
-                        .put("version", rec.version())
-                        .put("repo", rec.repoName())
-                        .put("repo_type", rec.repoType())
-                        .put("reason", rec.reason().name())
-                        .put("blocked_date", rec.blockedAt().toString())
-                        .put("blocked_until", rec.blockedUntil().toString())
-                        .put("remaining_hours",
-                            Math.max(0, remainingSecs / 3600));
-                    items.add(item);
-                    added++;
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonObject>) () -> {
+            final List<DbBlockRecord> allBlocks =
+                this.repository.findAllActivePaginated(
+                    0, Integer.MAX_VALUE, searchQuery, sortDbCol, sortAsc
+                );
+            final Instant now = Instant.now();
+            final JsonArray items = new JsonArray();
+            int skipped = 0;
+            int added = 0;
+            for (final DbBlockRecord rec : allBlocks) {
+                if (!perms.implies(
+                    new AdapterBasicPermission(rec.repoName(), "read"))) {
+                    continue;
                 }
-                final int filteredTotal = skipped + added
-                    + (int) allBlocks.stream()
-                        .skip((long) skipped + added)
-                        .filter(r -> perms.implies(
-                            new AdapterBasicPermission(r.repoName(), "read")))
-                        .count();
-                return ApiResponse.paginated(items, page, size, filteredTotal);
-            }),
-            false
-        ).onSuccess(
-            result -> ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(result.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+                if (skipped < page * size) {
+                    skipped++;
+                    continue;
+                }
+                if (added >= size) {
+                    continue;
+                }
+                final long remainingSecs =
+                    Duration.between(now, rec.blockedUntil()).getSeconds();
+                final JsonObject item = new JsonObject()
+                    .put("package_name", rec.artifact())
+                    .put("version", rec.version())
+                    .put("repo", rec.repoName())
+                    .put("repo_type", rec.repoType())
+                    .put("reason", rec.reason().name())
+                    .put("blocked_date", rec.blockedAt().toString())
+                    .put("blocked_until", rec.blockedUntil().toString())
+                    .put("remaining_hours",
+                        Math.max(0, remainingSecs / 3600));
+                items.add(item);
+                added++;
+            }
+            final int filteredTotal = skipped + added
+                + (int) allBlocks.stream()
+                    .skip((long) skipped + added)
+                    .filter(r -> perms.implies(
+                        new AdapterBasicPermission(r.repoName(), "read")))
+                    .count();
+            return ApiResponse.paginated(items, page, size, filteredTotal);
+        }, HandlerExecutor.get()).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(result.encode());
+            }
+        });
     }
 
     /**

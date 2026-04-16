@@ -17,7 +17,7 @@ import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.blocking.BlockingStorage;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.db.dao.StorageAliasDao;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonArray;
 import io.vertx.ext.web.Router;
@@ -25,6 +25,7 @@ import io.vertx.ext.web.RoutingContext;
 import java.io.StringReader;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -113,22 +114,21 @@ public final class StorageAliasHandler {
      * @param ctx Routing context
      */
     private void listGlobalAliases(final RoutingContext ctx) {
-        ctx.vertx().<JsonArray>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    return aliasesToArray(this.aliasDao.listGlobal());
-                }
-                return yamlAliasesToArray(new ManageStorageAliases(this.asto).list());
-            }),
-            false
-        ).onSuccess(
-            arr -> ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(arr.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonArray>) () -> {
+            if (this.aliasDao != null) {
+                return aliasesToArray(this.aliasDao.listGlobal());
+            }
+            return yamlAliasesToArray(new ManageStorageAliases(this.asto).list());
+        }, HandlerExecutor.get()).whenComplete((arr, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(arr.encode());
+            }
+        });
     }
 
     /**
@@ -142,25 +142,23 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    this.aliasDao.put(name, null, body);
-                }
-                try {
-                    new ManageStorageAliases(this.asto).add(name, body);
-                } catch (final Exception ignored) {
-                    // YAML write is best-effort when DB is primary
-                }
-                this.storagesCache.invalidateAll();
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200).end()
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.runAsync(() -> {
+            if (this.aliasDao != null) {
+                this.aliasDao.put(name, null, body);
+            }
+            try {
+                new ManageStorageAliases(this.asto).add(name, body);
+            } catch (final Exception ignored) {
+                // YAML write is best-effort when DB is primary
+            }
+            this.storagesCache.invalidateAll();
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response().setStatusCode(200).end();
+            }
+        });
     }
 
     /**
@@ -170,42 +168,39 @@ public final class StorageAliasHandler {
      */
     private void deleteGlobalAlias(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    final List<String> repos = this.aliasDao.findReposUsing(name);
-                    if (repos != null && !repos.isEmpty()) {
-                        throw new DependencyException(
-                            String.format(
-                                "Cannot delete alias '%s': used by repositories: %s",
-                                name, String.join(", ", repos)
-                            )
-                        );
-                    }
-                    this.aliasDao.delete(name, null);
+        CompletableFuture.runAsync(() -> {
+            if (this.aliasDao != null) {
+                final List<String> repos = this.aliasDao.findReposUsing(name);
+                if (repos != null && !repos.isEmpty()) {
+                    throw new DependencyException(
+                        String.format(
+                            "Cannot delete alias '%s': used by repositories: %s",
+                            name, String.join(", ", repos)
+                        )
+                    );
                 }
-                try {
-                    new ManageStorageAliases(this.asto).remove(name);
-                } catch (final Exception ignored) {
-                    // YAML delete is best-effort when DB is primary
-                }
-                this.storagesCache.invalidateAll();
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200).end()
-        ).onFailure(
-            err -> {
-                if (err instanceof DependencyException) {
-                    ApiResponse.sendError(ctx, 409, "CONFLICT", err.getMessage());
-                } else if (err instanceof IllegalStateException) {
-                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", err.getMessage());
+                this.aliasDao.delete(name, null);
+            }
+            try {
+                new ManageStorageAliases(this.asto).remove(name);
+            } catch (final Exception ignored) {
+                // YAML delete is best-effort when DB is primary
+            }
+            this.storagesCache.invalidateAll();
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
+                ctx.response().setStatusCode(200).end();
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof DependencyException) {
+                    ApiResponse.sendError(ctx, 409, "CONFLICT", cause.getMessage());
+                } else if (cause instanceof IllegalStateException) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", cause.getMessage());
                 } else {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -215,24 +210,23 @@ public final class StorageAliasHandler {
      */
     private void listRepoAliases(final RoutingContext ctx) {
         final String repoName = ctx.pathParam("name");
-        ctx.vertx().<JsonArray>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    return aliasesToArray(this.aliasDao.listForRepo(repoName));
-                }
-                return yamlAliasesToArray(
-                    new ManageStorageAliases(new Key.From(repoName), this.asto).list()
-                );
-            }),
-            false
-        ).onSuccess(
-            arr -> ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(arr.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync((java.util.function.Supplier<JsonArray>) () -> {
+            if (this.aliasDao != null) {
+                return aliasesToArray(this.aliasDao.listForRepo(repoName));
+            }
+            return yamlAliasesToArray(
+                new ManageStorageAliases(new Key.From(repoName), this.asto).list()
+            );
+        }, HandlerExecutor.get()).whenComplete((arr, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(arr.encode());
+            }
+        });
     }
 
     /**
@@ -247,26 +241,24 @@ public final class StorageAliasHandler {
         if (body == null) {
             return;
         }
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    this.aliasDao.put(aliasName, repoName, body);
-                }
-                try {
-                    new ManageStorageAliases(new Key.From(repoName), this.asto)
-                        .add(aliasName, body);
-                } catch (final Exception ignored) {
-                    // YAML write is best-effort when DB is primary
-                }
-                this.storagesCache.invalidateAll();
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200).end()
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.runAsync(() -> {
+            if (this.aliasDao != null) {
+                this.aliasDao.put(aliasName, repoName, body);
+            }
+            try {
+                new ManageStorageAliases(new Key.From(repoName), this.asto)
+                    .add(aliasName, body);
+            } catch (final Exception ignored) {
+                // YAML write is best-effort when DB is primary
+            }
+            this.storagesCache.invalidateAll();
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response().setStatusCode(200).end();
+            }
+        });
     }
 
     /**
@@ -276,32 +268,29 @@ public final class StorageAliasHandler {
     private void deleteRepoAlias(final RoutingContext ctx) {
         final String repoName = ctx.pathParam("name");
         final String aliasName = ctx.pathParam("alias");
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                if (this.aliasDao != null) {
-                    this.aliasDao.delete(aliasName, repoName);
-                }
-                try {
-                    new ManageStorageAliases(new Key.From(repoName), this.asto)
-                        .remove(aliasName);
-                } catch (final Exception ignored) {
-                    // YAML delete is best-effort when DB is primary
-                }
-                this.storagesCache.invalidateAll();
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> ctx.response().setStatusCode(200).end()
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
-                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", err.getMessage());
+        CompletableFuture.runAsync(() -> {
+            if (this.aliasDao != null) {
+                this.aliasDao.delete(aliasName, repoName);
+            }
+            try {
+                new ManageStorageAliases(new Key.From(repoName), this.asto)
+                    .remove(aliasName);
+            } catch (final Exception ignored) {
+                // YAML delete is best-effort when DB is primary
+            }
+            this.storagesCache.invalidateAll();
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
+                ctx.response().setStatusCode(200).end();
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
+                    ApiResponse.sendError(ctx, 404, "NOT_FOUND", cause.getMessage());
                 } else {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**

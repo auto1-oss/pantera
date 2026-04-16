@@ -14,8 +14,8 @@ import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.asto.Key;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.SubStorage;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.pypi.meta.PypiSidecar;
 import com.auto1.pantera.settings.RepoData;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
@@ -91,27 +91,11 @@ public final class PypiHandler {
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
         final String reason = extractReason(ctx);
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.applyYank(repo, pkg, version, reason);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
-                EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("PyPI yank applied")
-                    .eventCategory("web")
-                    .eventAction("yank")
-                    .eventOutcome("success")
-                    .field("repository.name", repo)
-                    .field("package.name", pkg)
-                    .field("package.version", version)
-                    .log();
-                ctx.response().setStatusCode(204).end();
-            }
-        ).onFailure(
-            err -> {
+        CompletableFuture.supplyAsync(() -> {
+            this.applyYank(repo, pkg, version, reason);
+            return (Void) null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
                 EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("PyPI yank failed")
                     .eventCategory("web")
@@ -123,8 +107,19 @@ public final class PypiHandler {
                     .error(err)
                     .log();
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("PyPI yank applied")
+                    .eventCategory("web")
+                    .eventAction("yank")
+                    .eventOutcome("success")
+                    .field("repository.name", repo)
+                    .field("package.name", pkg)
+                    .field("package.version", version)
+                    .log();
+                ctx.response().setStatusCode(204).end();
             }
-        );
+        });
     }
 
     /**
@@ -135,27 +130,11 @@ public final class PypiHandler {
         final String repo = ctx.pathParam("repo");
         final String pkg = ctx.pathParam("package");
         final String version = ctx.pathParam("version");
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.applyUnyank(repo, pkg, version);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
-                EcsLogger.info("com.auto1.pantera.api.v1")
-                    .message("PyPI unyank applied")
-                    .eventCategory("web")
-                    .eventAction("unyank")
-                    .eventOutcome("success")
-                    .field("repository.name", repo)
-                    .field("package.name", pkg)
-                    .field("package.version", version)
-                    .log();
-                ctx.response().setStatusCode(204).end();
-            }
-        ).onFailure(
-            err -> {
+        CompletableFuture.supplyAsync(() -> {
+            this.applyUnyank(repo, pkg, version);
+            return (Void) null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
                 EcsLogger.error("com.auto1.pantera.api.v1")
                     .message("PyPI unyank failed")
                     .eventCategory("web")
@@ -167,8 +146,19 @@ public final class PypiHandler {
                     .error(err)
                     .log();
                 ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("PyPI unyank applied")
+                    .eventCategory("web")
+                    .eventAction("unyank")
+                    .eventOutcome("success")
+                    .field("repository.name", repo)
+                    .field("package.name", pkg)
+                    .field("package.version", version)
+                    .log();
+                ctx.response().setStatusCode(204).end();
             }
-        );
+        });
     }
 
     /**

@@ -15,13 +15,14 @@ import com.auto1.pantera.api.perms.ApiAdminPermission;
 import com.auto1.pantera.auth.RevocationBlocklist;
 import com.auto1.pantera.db.dao.AuthSettingsDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Admin-only handler for auth settings management and user token revocation.
@@ -98,24 +99,23 @@ public final class AdminAuthHandler {
      * @param ctx Routing context
      */
     private void getSettings(final RoutingContext ctx) {
-        ctx.vertx().<JsonObject>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                final Map<String, String> all = this.settingsDao.getAll();
-                final JsonObject result = new JsonObject();
-                for (final Map.Entry<String, String> entry : all.entrySet()) {
-                    result.put(entry.getKey(), entry.getValue());
-                }
-                return result;
-            }),
-            false
-        ).onSuccess(
-            settings -> ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(settings.encode())
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync(() -> {
+            final Map<String, String> all = this.settingsDao.getAll();
+            final JsonObject result = new JsonObject();
+            for (final Map.Entry<String, String> entry : all.entrySet()) {
+                result.put(entry.getKey(), entry.getValue());
+            }
+            return result;
+        }, HandlerExecutor.get()).whenComplete((settings, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(settings.encode());
+            }
+        });
     }
 
     /**
@@ -146,26 +146,25 @@ public final class AdminAuthHandler {
                 return;
             }
         }
-        ctx.vertx().<Void>executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                for (final String key : body.fieldNames()) {
-                    this.settingsDao.put(key, body.getValue(key).toString());
-                }
-                return null;
-            }),
-            false
-        ).onSuccess(ignored -> {
-            EcsLogger.info("com.auto1.pantera.api.v1")
-                .message("Admin updated auth settings")
-                .eventCategory("iam")
-                .eventAction("auth_settings_update")
-                .eventOutcome("success")
-                .field("settings.keys", String.join(",", body.fieldNames()))
-                .log();
-            ctx.response().setStatusCode(204).end();
-        }).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        CompletableFuture.supplyAsync(() -> {
+            for (final String key : body.fieldNames()) {
+                this.settingsDao.put(key, body.getValue(key).toString());
+            }
+            return null;
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin updated auth settings")
+                    .eventCategory("iam")
+                    .eventAction("auth_settings_update")
+                    .eventOutcome("success")
+                    .field("settings.keys", String.join(",", body.fieldNames()))
+                    .log();
+                ctx.response().setStatusCode(204).end();
+            }
+        });
     }
 
     /**
@@ -179,30 +178,32 @@ public final class AdminAuthHandler {
             ApiResponse.sendError(ctx, 400, "BAD_REQUEST", "Username is required");
             return;
         }
-        ctx.vertx().<Integer>executeBlocking(
-            MdcPropagation.withMdc(() -> this.tokenDao.revokeAllForUser(username)),
-            false
-        ).onSuccess(count -> {
-            if (this.blocklist != null) {
-                this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
+        CompletableFuture.supplyAsync(
+            () -> this.tokenDao.revokeAllForUser(username),
+            HandlerExecutor.get()
+        ).whenComplete((count, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
+                if (this.blocklist != null) {
+                    this.blocklist.revokeUser(username, REVOKE_USER_TTL_SECONDS);
+                }
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("Admin revoked all tokens for user")
+                    .eventCategory("iam")
+                    .eventAction("user_revoke")
+                    .eventOutcome("success")
+                    .field("user.name", username)
+                    .field("revoked_count", count)
+                    .log();
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(new JsonObject()
+                        .put("username", username)
+                        .put("revoked_count", count)
+                        .encode());
             }
-            EcsLogger.info("com.auto1.pantera.api.v1")
-                .message("Admin revoked all tokens for user")
-                .eventCategory("iam")
-                .eventAction("user_revoke")
-                .eventOutcome("success")
-                .field("user.name", username)
-                .field("revoked_count", count)
-                .log();
-            ctx.response()
-                .setStatusCode(200)
-                .putHeader("Content-Type", "application/json")
-                .end(new JsonObject()
-                    .put("username", username)
-                    .put("revoked_count", count)
-                    .encode());
-        }).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 }

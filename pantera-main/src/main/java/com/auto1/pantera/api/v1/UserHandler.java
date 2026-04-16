@@ -21,8 +21,8 @@ import com.auto1.pantera.db.dao.UserDao;
 import com.auto1.pantera.db.dao.UserTokenDao;
 import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.auth.Authentication;
+import com.auto1.pantera.http.context.HandlerExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.PanteraSecurity;
 import com.auto1.pantera.settings.cache.PanteraCaches;
@@ -34,6 +34,7 @@ import java.io.StringReader;
 import java.security.PermissionCollection;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import javax.json.Json;
 import javax.json.JsonObject;
 
@@ -195,13 +196,14 @@ public final class UserHandler {
             return;
         }
         final UserDao dao = (UserDao) this.users;
-        ctx.vertx().<PagedResult<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(
-                () -> dao.listPaged(query, sortField, ascending, size, page * size)
-            ),
-            false
-        ).onSuccess(
-            result -> {
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<PagedResult<JsonObject>>)
+                () -> dao.listPaged(query, sortField, ascending, size, page * size),
+            HandlerExecutor.get()
+        ).whenComplete((result, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else {
                 final JsonArray items = new JsonArray();
                 for (final JsonObject obj : result.items()) {
                     items.add(new io.vertx.core.json.JsonObject(obj.toString()));
@@ -211,9 +213,7 @@ public final class UserHandler {
                     .putHeader("Content-Type", "application/json")
                     .end(ApiResponse.paginated(items, page, size, result.total()).encode());
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -222,26 +222,24 @@ public final class UserHandler {
      */
     private void getUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
-        ctx.vertx().<Optional<JsonObject>>executeBlocking(
-            MdcPropagation.withMdc(() -> this.users.get(uname)),
-            false
-        ).onSuccess(
-            opt -> {
-                if (opt.isPresent()) {
-                    ctx.response()
-                        .setStatusCode(200)
-                        .putHeader("Content-Type", "application/json")
-                        .end(opt.get().toString());
-                } else {
-                    ApiResponse.sendError(
-                        ctx, 404, "NOT_FOUND",
-                        String.format("User '%s' not found", uname)
-                    );
-                }
+        CompletableFuture.supplyAsync(
+            (java.util.function.Supplier<Optional<JsonObject>>) () -> this.users.get(uname),
+            HandlerExecutor.get()
+        ).whenComplete((opt, err) -> {
+            if (err != null) {
+                ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+            } else if (opt.isPresent()) {
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end(opt.get().toString());
+            } else {
+                ApiResponse.sendError(
+                    ctx, 404, "NOT_FOUND",
+                    String.format("User '%s' not found", uname)
+                );
             }
-        ).onFailure(
-            err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-        );
+        });
     }
 
     /**
@@ -284,21 +282,18 @@ public final class UserHandler {
         );
         if (existing.isPresent() && perms.implies(UserHandler.UPDATE)
             || existing.isEmpty() && perms.implies(UserHandler.CREATE)) {
-            ctx.vertx().executeBlocking(
-                MdcPropagation.withMdc(() -> {
-                    this.users.addOrUpdate(body, uname);
-                    return null;
-                }),
-                false
-            ).onSuccess(
-                ignored -> {
+            CompletableFuture.runAsync(
+                () -> this.users.addOrUpdate(body, uname),
+                HandlerExecutor.get()
+            ).whenComplete((ignored, err) -> {
+                if (err != null) {
+                    ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
+                } else {
                     this.ucache.invalidate(uname);
                     this.pcache.invalidate(uname);
                     ctx.response().setStatusCode(201).end();
                 }
-            ).onFailure(
-                err -> ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage())
-            );
+            });
         } else {
             ApiResponse.sendError(ctx, 403, "FORBIDDEN", "Insufficient permissions");
         }
@@ -310,21 +305,17 @@ public final class UserHandler {
      */
     private void deleteUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.users.remove(uname);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.users.remove(uname),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("User '%s' not found", uname)
@@ -333,7 +324,7 @@ public final class UserHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -384,14 +375,11 @@ public final class UserHandler {
                 return;
             }
         }
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.users.alterPassword(uname, body);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.users.alterPassword(uname, body),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 // ucache is a PublishingCleanable wrapping CachedUsers, so
                 // an instanceof check on CachedUsers is always false here.
                 // Cleanable.invalidate(key) delegates to CachedUsers.invalidate
@@ -404,14 +392,13 @@ public final class UserHandler {
                 // user; invalidate that too so subsequent requests see fresh data.
                 this.pcache.invalidate(uname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                // Vert.x wraps the underlying exception in CompletionException;
-                // unwrap to get the original from UserDao.alterPassword.
+            } else {
+                // CompletableFuture wraps the underlying exception in
+                // CompletionException; unwrap to get the original from
+                // UserDao.alterPassword.
                 final Throwable cause = err.getCause() != null ? err.getCause() : err;
                 if (cause instanceof IllegalArgumentException) {
-                    // PasswordPolicy validation failure → 400 with the message
+                    // PasswordPolicy validation failure -> 400 with the message
                     ApiResponse.sendError(
                         ctx, 400, "WEAK_PASSWORD", cause.getMessage()
                     );
@@ -424,7 +411,7 @@ public final class UserHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -433,21 +420,17 @@ public final class UserHandler {
      */
     private void enableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.users.enable(uname);
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(
+            () -> this.users.enable(uname),
+            HandlerExecutor.get()
+        ).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("User '%s' not found", uname)
@@ -456,7 +439,7 @@ public final class UserHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 
     /**
@@ -465,44 +448,39 @@ public final class UserHandler {
      */
     private void disableUser(final RoutingContext ctx) {
         final String uname = ctx.pathParam(UserHandler.NAME);
-        ctx.vertx().executeBlocking(
-            MdcPropagation.withMdc(() -> {
-                this.users.disable(uname);
-                // Immediate token revocation — without this, the
-                // user's existing access tokens, refresh tokens, and
-                // API tokens would keep working until expiry. The
-                // per-request isEnabled check in UnifiedJwtAuthHandler
-                // is the safety net (fires on the next request), but
-                // explicit revocation is cheaper, synchronous, and
-                // cluster-wide via the blocklist pub/sub.
-                if (this.blocklist != null) {
-                    // 7 days covers the default refresh-token TTL; any
-                    // access token older than that is already expired
-                    // by the JWT's own exp claim.
-                    this.blocklist.revokeUser(uname, 7 * 24 * 3600);
-                }
-                if (this.tokenDao != null) {
-                    final int revoked = this.tokenDao.revokeAllForUser(uname);
-                    EcsLogger.info("com.auto1.pantera.api.v1")
-                        .message("User disabled: revoked " + revoked + " tokens")
-                        .eventCategory("iam")
-                        .eventAction("user_disable")
-                        .eventOutcome("success")
-                        .field("user.name", uname)
-                        .log();
-                }
-                return null;
-            }),
-            false
-        ).onSuccess(
-            ignored -> {
+        CompletableFuture.runAsync(() -> {
+            this.users.disable(uname);
+            // Immediate token revocation — without this, the
+            // user's existing access tokens, refresh tokens, and
+            // API tokens would keep working until expiry. The
+            // per-request isEnabled check in UnifiedJwtAuthHandler
+            // is the safety net (fires on the next request), but
+            // explicit revocation is cheaper, synchronous, and
+            // cluster-wide via the blocklist pub/sub.
+            if (this.blocklist != null) {
+                // 7 days covers the default refresh-token TTL; any
+                // access token older than that is already expired
+                // by the JWT's own exp claim.
+                this.blocklist.revokeUser(uname, 7 * 24 * 3600);
+            }
+            if (this.tokenDao != null) {
+                final int revoked = this.tokenDao.revokeAllForUser(uname);
+                EcsLogger.info("com.auto1.pantera.api.v1")
+                    .message("User disabled: revoked " + revoked + " tokens")
+                    .eventCategory("iam")
+                    .eventAction("user_disable")
+                    .eventOutcome("success")
+                    .field("user.name", uname)
+                    .log();
+            }
+        }, HandlerExecutor.get()).whenComplete((ignored, err) -> {
+            if (err == null) {
                 this.ucache.invalidate(uname);
                 this.pcache.invalidate(uname);
                 ctx.response().setStatusCode(200).end();
-            }
-        ).onFailure(
-            err -> {
-                if (err instanceof IllegalStateException) {
+            } else {
+                final Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (cause instanceof IllegalStateException) {
                     ApiResponse.sendError(
                         ctx, 404, "NOT_FOUND",
                         String.format("User '%s' not found", uname)
@@ -511,6 +489,6 @@ public final class UserHandler {
                     ApiResponse.sendError(ctx, 500, "INTERNAL_ERROR", err.getMessage());
                 }
             }
-        );
+        });
     }
 }
