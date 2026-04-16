@@ -26,6 +26,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -215,7 +216,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 ConfigDefaults.getLong("PANTERA_DEDUP_MAX_AGE_MS", 300_000L)
             ),
             10_000,
-            ForkJoinPool.commonPool()
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
     }
 

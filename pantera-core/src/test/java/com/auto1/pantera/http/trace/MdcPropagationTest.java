@@ -24,9 +24,13 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 /**
- * Tests for {@link MdcPropagation}.
+ * Tests for {@link MdcPropagation}. Deprecation warnings are suppressed here
+ * because WI-03 marked {@code MdcPropagation} {@code @Deprecated(forRemoval=true)}
+ * — this test stays green for as long as the class ships, ensuring behaviour
+ * does not regress before WI-08 removes it.
  * @since 2.1.0
  */
+@SuppressWarnings({"deprecation", "removal"})
 final class MdcPropagationTest {
 
     private ExecutorService pool;

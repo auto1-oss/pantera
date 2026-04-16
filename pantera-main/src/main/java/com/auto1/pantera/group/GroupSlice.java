@@ -31,7 +31,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -49,6 +48,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 import com.auto1.pantera.http.trace.MdcPropagation;
 
@@ -79,7 +79,7 @@ public final class GroupSlice implements Slice {
      * <p>16 threads, bounded queue of 2000. When full, new drain tasks are logged and dropped.
      * Each thread is daemon so it does not prevent JVM shutdown.
      */
-    private static final ExecutorService DRAIN_EXECUTOR;
+    private static final java.util.concurrent.Executor DRAIN_EXECUTOR;
 
     /**
      * Count of drain tasks rejected because the drain queue was full.
@@ -121,7 +121,9 @@ public final class GroupSlice implements Slice {
                 }
             }
         );
-        DRAIN_EXECUTOR = pool;
+        // Wrap the pool with ContextualExecutor so drain tasks inherit the
+        // submitting request's ThreadContext + APM span (WI-03 §4.4).
+        DRAIN_EXECUTOR = ContextualExecutor.contextualize(pool);
         EcsLogger.info("com.auto1.pantera.group")
             .message("GroupSlice drain executor initialised (16 threads, queue=2000)")
             .eventCategory("configuration")
@@ -213,7 +215,7 @@ public final class GroupSlice implements Slice {
     private final SingleFlight<String, Void> inFlightFanouts = new SingleFlight<>(
         Duration.ofMinutes(5),
         10_000,
-        ForkJoinPool.commonPool()
+        ContextualExecutor.contextualize(ForkJoinPool.commonPool())
     );
 
     /**

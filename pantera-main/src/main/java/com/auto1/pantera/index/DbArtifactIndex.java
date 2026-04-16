@@ -12,7 +12,7 @@ package com.auto1.pantera.index;
 
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.misc.ConfigDefaults;
-import com.auto1.pantera.http.trace.TraceContextExecutor;
+import com.auto1.pantera.http.context.ContextualExecutor;
 
 import javax.sql.DataSource;
 import java.sql.Array;
@@ -285,7 +285,94 @@ public final class DbArtifactIndex implements ArtifactIndex {
             .eventCategory("configuration")
             .eventAction("pool_init")
             .log();
-        return TraceContextExecutor.wrap(pool);
+        // WI-03 §4.4: ContextualExecutor stamps the submitting thread's
+        // Log4j2 ThreadContext (ECS fields) AND the active APM Span onto every
+        // task; TraceContextExecutor is kept around for legacy MDC shim but
+        // the contextualising wrapper is the source of truth for new code.
+        final java.util.concurrent.Executor ctxExec =
+            ContextualExecutor.contextualize(pool);
+        return new DbIndexExecutorService(pool, ctxExec);
+    }
+
+    /**
+     * {@link ExecutorService} adapter that delegates task execution through
+     * {@link ContextualExecutor} (so ECS ThreadContext + APM span propagate)
+     * while delegating lifecycle methods to the underlying pool.
+     *
+     * <p>Declared static-nested to keep {@link DbArtifactIndex} free of an
+     * implicit outer reference — the adapter is state-less w.r.t. the index.
+     */
+    private static final class DbIndexExecutorService implements ExecutorService {
+
+        private final ExecutorService pool;
+        private final java.util.concurrent.Executor submit;
+
+        DbIndexExecutorService(
+            final ExecutorService underlying,
+            final java.util.concurrent.Executor contextualSubmit
+        ) {
+            this.pool = underlying;
+            this.submit = contextualSubmit;
+        }
+
+        @Override public void execute(final Runnable command) {
+            this.submit.execute(command);
+        }
+        @Override public void shutdown() {
+            this.pool.shutdown();
+        }
+        @Override public java.util.List<Runnable> shutdownNow() {
+            return this.pool.shutdownNow();
+        }
+        @Override public boolean isShutdown() {
+            return this.pool.isShutdown();
+        }
+        @Override public boolean isTerminated() {
+            return this.pool.isTerminated();
+        }
+        @Override public boolean awaitTermination(final long timeout, final TimeUnit unit)
+            throws InterruptedException {
+            return this.pool.awaitTermination(timeout, unit);
+        }
+        @Override public <T> java.util.concurrent.Future<T> submit(
+            final java.util.concurrent.Callable<T> task) {
+            // Delegate to underlying pool via submit — Callable can't easily be
+            // wrapped through a bare Executor; TraceContextExecutor used to do
+            // this via MDC. For the CompletableFuture.runAsync path — which is
+            // the hot path in DbArtifactIndex — execute(Runnable) is what's
+            // called and it goes via the contextualising submit above.
+            return this.pool.submit(task);
+        }
+        @Override public <T> java.util.concurrent.Future<T> submit(
+            final Runnable task, final T result) {
+            return this.pool.submit(task, result);
+        }
+        @Override public java.util.concurrent.Future<?> submit(final Runnable task) {
+            return this.pool.submit(task);
+        }
+        @Override public <T> java.util.List<java.util.concurrent.Future<T>> invokeAll(
+            final java.util.Collection<? extends java.util.concurrent.Callable<T>> tasks
+        ) throws InterruptedException {
+            return this.pool.invokeAll(tasks);
+        }
+        @Override public <T> java.util.List<java.util.concurrent.Future<T>> invokeAll(
+            final java.util.Collection<? extends java.util.concurrent.Callable<T>> tasks,
+            final long timeout, final TimeUnit unit
+        ) throws InterruptedException {
+            return this.pool.invokeAll(tasks, timeout, unit);
+        }
+        @Override public <T> T invokeAny(
+            final java.util.Collection<? extends java.util.concurrent.Callable<T>> tasks
+        ) throws InterruptedException, java.util.concurrent.ExecutionException {
+            return this.pool.invokeAny(tasks);
+        }
+        @Override public <T> T invokeAny(
+            final java.util.Collection<? extends java.util.concurrent.Callable<T>> tasks,
+            final long timeout, final TimeUnit unit
+        ) throws InterruptedException, java.util.concurrent.ExecutionException,
+            java.util.concurrent.TimeoutException {
+            return this.pool.invokeAny(tasks, timeout, unit);
+        }
     }
 
     /**

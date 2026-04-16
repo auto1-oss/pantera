@@ -14,9 +14,11 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.log.EcsMdc;
 import com.auto1.pantera.http.log.EcsLogEvent;
+import com.auto1.pantera.http.observability.StructuredLogger;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.trace.SpanContext;
 import org.slf4j.MDC;
@@ -159,27 +161,22 @@ public final class EcsLoggingSlice implements Slice {
                 // Internal routing is captured as DEBUG application logs in GroupSlice
                 // (event.action=group_index_hit, group_proxy_fanout, etc.).
                 if (!internalRouting) {
-                    // Build ECS log event
-                    // NOTE: client.ip, user.name, trace.id are already in MDC (set above).
-                    // EcsLayout includes all MDC entries in JSON output automatically.
-                    // Do NOT add them to MapMessage — that causes duplicate fields in Elastic.
-                    final EcsLogEvent logEvent = new EcsLogEvent()
-                        .httpMethod(line.method().value())
-                        .httpVersion(line.version())
-                        .httpStatus(response.status())
-                        .urlPath(line.uri().getPath())
-                        .urlOriginal(line.uri().toString())
-                        .userAgent(headers)
-                        .duration(duration);
-
-                    // Add query string if present
-                    final String query = line.uri().getQuery();
-                    if (query != null && !query.isEmpty()) {
-                        logEvent.urlQuery(query);
-                    }
-
-                    // Log the event (automatically selects log level based on status)
-                    logEvent.log();
+                    // WI-03 §4.1: emit the access log via the Tier-1 builder.
+                    // The legacy EcsLogEvent emission that used to run alongside
+                    // here was removed to avoid doubling the access-log volume
+                    // in Kibana.  Rich user_agent.* sub-field parsing (name,
+                    // version, os.name, os.version) and url.query emission
+                    // migrate to StructuredLogger.access in a follow-up WI;
+                    // the core contract (trace.id, client.ip, user.name,
+                    // url.original, url.path, http.request.method,
+                    // http.response.status_code, event.duration,
+                    // user_agent.original) is covered by RequestContext today.
+                    final RequestContext rctx = buildRequestContext(
+                        span, clientIp, userName, line);
+                    StructuredLogger.access().forRequest(rctx)
+                        .status(response.status().code())
+                        .duration(duration)
+                        .log();
                 }
 
                 // Add traceparent response header for downstream correlation
@@ -216,6 +213,35 @@ public final class EcsLoggingSlice implements Slice {
                 MDC.remove(EcsMdc.REPO_NAME);
                 MDC.remove(EcsMdc.REPO_TYPE);
             });
+    }
+
+    /**
+     * Build a {@link RequestContext} for the WI-03 {@link StructuredLogger}
+     * access tier. The slice still maintains MDC directly (for legacy call
+     * sites that read {@link MDC}); this method just assembles the same fields
+     * into the immutable envelope the Tier-1 builder expects.
+     */
+    private RequestContext buildRequestContext(
+        final SpanContext span,
+        final String clientIp,
+        final String userName,
+        final RequestLine line
+    ) {
+        return new RequestContext(
+            span.traceId(),
+            /* transactionId */ null,
+            span.spanId(),
+            /* httpRequestId */ null,
+            userName == null ? "anonymous" : userName,
+            clientIp,
+            /* userAgent */ null,
+            this.repoName,
+            this.repoType,
+            RequestContext.ArtifactRef.EMPTY,
+            line.uri().toString(),
+            line.uri().getPath(),
+            com.auto1.pantera.http.context.Deadline.in(java.time.Duration.ofSeconds(30))
+        );
     }
 }
 

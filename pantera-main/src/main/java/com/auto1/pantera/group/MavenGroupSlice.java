@@ -17,6 +17,7 @@ import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
@@ -115,7 +116,7 @@ public final class MavenGroupSlice implements Slice {
         new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
-            ForkJoinPool.commonPool()
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
 
     /**

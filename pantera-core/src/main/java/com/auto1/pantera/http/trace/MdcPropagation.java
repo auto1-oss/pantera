@@ -42,8 +42,53 @@ import org.slf4j.MDC;
  * thread). On the worker thread the captured map is installed before
  * the callable runs and fully cleared after.</p>
  *
+ * <p><strong>WI-03 status (v2.2.0):</strong> this class is <em>deprecated
+ * for new code</em>. The observability architecture (§4.4 of
+ * {@code docs/analysis/v2.2-target-architecture.md}) replaces per-call
+ * wrapping with
+ * {@link com.auto1.pantera.http.context.ContextualExecutor#contextualize(
+ * java.util.concurrent.Executor)} — wrap the downstream executor once and
+ * every task it accepts inherits {@link org.apache.logging.log4j.ThreadContext}
+ * <em>and</em> the active APM span automatically, without the caller wrapping
+ * every lambda.
+ *
+ * <p>Remaining callers (see architecture-review §A14/C4):
+ * <ul>
+ *   <li>{@code pantera-main/api/v1/**} Vert.x handlers use
+ *       {@code vertx.executeBlocking(withMdc(...), ...)} — the Vert.x worker
+ *       pool is not yet wrapped with {@code ContextualExecutor}; migration
+ *       blocked on WI-08 (Vert.x worker-pool contextualisation).</li>
+ *   <li>{@code CooldownCache}, {@code FilteredMetadataCache},
+ *       {@code CooldownMetadataServiceImpl}, {@code JdbcCooldownService} use
+ *       MDC propagation across Caffeine / Valkey async boundaries; WI-06
+ *       (NegativeCache unification) will rework those paths.</li>
+ *   <li>{@code NpmProxy} and {@code DownloadAssetSlice} use
+ *       {@link #withMdcRxFunction(io.reactivex.functions.Function)} and
+ *       {@link #capture()} / {@link #runWith(java.util.Map, Runnable)} inside
+ *       RxJava2 operators; migration blocked on WI-08 (RxJava2 retirement).</li>
+ *   <li>{@code GroupSlice}, {@code MavenGroupSlice},
+ *       {@code BaseCachedProxySlice}, {@code CachedNpmProxySlice} —
+ *       in-scope files for WI-03; they retain MdcPropagation on
+ *       {@code CompletableFuture.thenCompose/thenApply/whenComplete}
+ *       callbacks that run on whatever thread completes the upstream stage
+ *       (typically a Jetty client thread) and therefore cannot rely on
+ *       ContextualExecutor wrapping alone. The SingleFlight / drain /
+ *       DbArtifactIndex executor pools have been wrapped with
+ *       {@code ContextualExecutor} so that tasks they dispatch inherit the
+ *       submitting request's context automatically.</li>
+ * </ul>
+ *
+ * <p>Do not introduce new call-sites to this class — use
+ * {@link com.auto1.pantera.http.context.ContextualExecutor} plus
+ * {@link com.auto1.pantera.http.context.RequestContext#bindToMdc()} instead.
+ *
  * @since 2.1.0
+ * @deprecated since 2.2.0 — migrate to
+ *             {@link com.auto1.pantera.http.context.ContextualExecutor} and
+ *             {@link com.auto1.pantera.http.context.RequestContext#bindToMdc()}.
+ *             Final removal tracked under WI-08.
  */
+@Deprecated(since = "2.2.0", forRemoval = true)
 public final class MdcPropagation {
 
     private MdcPropagation() {

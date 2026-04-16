@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
@@ -128,7 +129,7 @@ public final class CachedNpmProxySlice implements Slice {
         this.deduplicator = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
-            ForkJoinPool.commonPool()
+            ContextualExecutor.contextualize(ForkJoinPool.commonPool())
         );
     }
 
