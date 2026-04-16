@@ -12,6 +12,7 @@ package com.auto1.pantera.composer.http.proxy;
 
 import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Key;
+import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.log.LogSanitizer;
 import com.auto1.pantera.asto.cache.Cache;
@@ -30,33 +31,60 @@ import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.Slice;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.headers.Header;
 import com.auto1.pantera.http.headers.Login;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
+import io.micrometer.core.instrument.MeterRegistry;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeParseException;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Composer proxy slice with cache support, cooldown service, and event emission.
  *
- * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
- * here so the Composer adapter inherits the same primary+sidecar integrity
- * guarantee the Maven adapter received in WI-07 (§9.5).
+ * <p>Primary artifact writes (the {@code *.zip} / {@code *.tar} / {@code *.phar}
+ * dist archives) flow through {@link ProxyCacheWriter} so the packagist.org
+ * {@code dist.shasum} SHA-256 sidecar is verified against the downloaded
+ * bytes before anything lands in the cache — giving the Composer adapter
+ * the same primary+sidecar integrity guarantee the Maven adapter received
+ * in WI-07 (§9.5). The existing metadata-JSON flow (the dominant traffic
+ * shape through this slice) is unchanged.
  */
 @SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 final class CachedProxySlice implements Slice {
+
+    /**
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path via {@link ProxyCacheWriter}.
+     */
+    private static final List<String> PRIMARY_EXTENSIONS = List.of(
+        ".zip", ".tar", ".phar"
+    );
 
     /**
      * Pattern to extract package name and version from path.
@@ -69,32 +97,32 @@ final class CachedProxySlice implements Slice {
     private final Slice remote;
     private final Cache cache;
     private final Repository repo;
-    
+
     /**
      * Proxy artifact events queue.
      */
     private final Optional<Queue<ProxyArtifactEvent>> events;
-    
+
     /**
      * Repository name.
      */
     private final String rname;
-    
+
     /**
      * Repository type.
      */
     private final String rtype;
-    
+
     /**
      * Cooldown service.
      */
     private final CooldownService cooldown;
-    
+
     /**
      * Cooldown inspector.
      */
     private final CooldownInspector inspector;
-    
+
     /**
      * Base URL for metadata rewriting.
      */
@@ -114,6 +142,15 @@ final class CachedProxySlice implements Slice {
      * Store for upstream Last-Modified headers (conditional requests).
      */
     private final ConcurrentHashMap<String, String> lastModifiedStore;
+
+    /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary dist archive + the
+     * Composer {@code .sha256} sidecar in one coupled batch, verifies the
+     * declared claim against the bytes we just downloaded, and atomically
+     * commits the pair. Non-null whenever {@code repo.storage()} is set.
+     */
+    private final ProxyCacheWriter cacheWriter;
 
     /**
      * @param remote Remote slice
@@ -194,6 +231,10 @@ final class CachedProxySlice implements Slice {
         this.upstreamUrl = upstreamUrl;
         this.refreshing = ConcurrentHashMap.newKeySet();
         this.lastModifiedStore = new ConcurrentHashMap<>();
+        final Storage storage = repo.storage();
+        this.cacheWriter = storage == null
+            ? null
+            : new ProxyCacheWriter(storage, rname, meterRegistry());
     }
 
     @Override
@@ -208,6 +249,14 @@ final class CachedProxySlice implements Slice {
                 .eventAction("proxy_request")
                 .field("url.path", path)
                 .log();
+
+            // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
+            // cache-miss. Runs only when the request path resolves to a
+            // primary dist archive (.zip / .tar / .phar). Metadata JSON
+            // paths fall through to the existing flow unchanged.
+            if (this.cacheWriter != null && isPrimaryArtifact(path)) {
+                return this.verifyAndServePrimary(line, path);
+            }
 
             // Keep ~dev suffix in cache key to avoid collision between stable and dev metadata
             final String name = path
@@ -333,7 +382,7 @@ final class CachedProxySlice implements Slice {
 
         return this.fetchThroughCache(line, name, headers);
     }
-    
+
     /**
      * Handle response after cooldown evaluation.
      *
@@ -521,13 +570,13 @@ final class CachedProxySlice implements Slice {
     ) {
         try {
             final javax.json.JsonObject json = javax.json.Json.createReader(new java.io.StringReader(new String(bytes))).readObject();
-            
+
             // Handle both Satis format (packages is array) and traditional format (packages is object)
             final javax.json.JsonValue packagesValue = json.get("packages");
             if (packagesValue == null) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             // If packages is an array (Satis format), skip cooldown check
             // Satis format has empty packages array and uses provider-includes instead
             if (packagesValue.getValueType() == javax.json.JsonValue.ValueType.ARRAY) {
@@ -538,12 +587,12 @@ final class CachedProxySlice implements Slice {
                     .log();
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             // Traditional format: packages is an object
             if (packagesValue.getValueType() != javax.json.JsonValue.ValueType.OBJECT) {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
-            
+
             final javax.json.JsonObject packages = packagesValue.asJsonObject();
             final javax.json.JsonValue pkgVal = packages.get(name);
             if (pkgVal == null) {
@@ -630,7 +679,7 @@ final class CachedProxySlice implements Slice {
             return java.util.Optional.ofNullable(bestVer);
         }
     }
-    
+
     /**
      * Rewrite metadata content to proxy downloads through Pantera.
      * Returns byte[] directly to avoid unnecessary Content wrapping/unwrapping.
@@ -669,7 +718,7 @@ final class CachedProxySlice implements Slice {
         // by caching version lists or parsing the request differently
         return Optional.empty();
     }
-    
+
     /**
      * Emit event for downloaded package.
      *
@@ -717,7 +766,7 @@ final class CachedProxySlice implements Slice {
             .field("user.name", owner)
             .log();
     }
-    
+
     /**
      * Extract release date from response headers.
      *
@@ -851,5 +900,192 @@ final class CachedProxySlice implements Slice {
                 .error(ex)
                 .log();
         }
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Check if path represents a Composer primary artifact (zip / tar /
+     * phar dist archive) that should be routed through
+     * {@link ProxyCacheWriter}.
+     *
+     * @param path Request path.
+     * @return {@code true} if the path ends with a primary-artifact extension.
+     */
+    private static boolean isPrimaryArtifact(final String path) {
+        if (path.endsWith("/")) {
+            return false;
+        }
+        final String lower = path.toLowerCase(Locale.ROOT);
+        for (final String ext : PRIMARY_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Primary-artifact flow: if the cache already has the primary, serve
+     * from the cache; otherwise fetch the primary + the
+     * {@code dist.shasum} SHA-256 sidecar upstream in one coupled batch,
+     * verify via {@link ProxyCacheWriter}, atomically commit, and serve
+     * the freshly-cached bytes.
+     *
+     * <p>On {@link Fault.UpstreamIntegrity} collapses to 502 with the
+     * {@code X-Pantera-Fault: upstream-integrity:sha256} header; on
+     * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
+     * cache empty for this key.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line, final String path
+    ) {
+        final Storage storage = this.repo.storage();
+        final Key key = new Key.From(path.startsWith("/") ? path.substring(1) : path);
+        return storage.exists(key).thenCompose(present -> {
+            if (present) {
+                return this.serveFromCache(storage, key);
+            }
+            return this.fetchVerifyAndCache(line, key, path);
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.composer")
+                .message("Composer primary-artifact verify-and-serve failed; returning 502")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.rname)
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return ResponseBuilder.badGateway().build();
+        }).toCompletableFuture();
+    }
+
+    /**
+     * Fetch the primary + the declared sidecar upstream, verify via
+     * {@link ProxyCacheWriter}, then stream the primary from the cache.
+     */
+    private CompletionStage<Response> fetchVerifyAndCache(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final Storage storage = this.repo.storage();
+        final String upstream = this.upstreamUrl + path;
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.rname,
+            path
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
+
+        return this.cacheWriter.writeWithSidecars(
+            key,
+            upstream,
+            () -> this.fetchPrimary(line),
+            sidecars,
+            ctx
+        ).thenCompose(result -> {
+            if (result instanceof Result.Err<Void> err) {
+                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                    return CompletableFuture.<Response>completedFuture(
+                        ResponseBuilder.badGateway()
+                            .header(
+                                "X-Pantera-Fault",
+                                "upstream-integrity:"
+                                    + ui.algo().name().toLowerCase(Locale.ROOT)
+                            )
+                            .textBody("Upstream integrity verification failed")
+                            .build()
+                    );
+                }
+                return CompletableFuture.<Response>completedFuture(
+                    ResponseBuilder.badGateway()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+            }
+            return this.serveFromCache(storage, key);
+        });
+    }
+
+    /**
+     * Read the primary from upstream as an {@link InputStream}. On any
+     * non-success status, throws so the writer's outer exception handler
+     * treats it as a transient failure (no cache mutation).
+     */
+    private CompletionStage<InputStream> fetchPrimary(final RequestLine line) {
+        return this.remote.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    throw new IllegalStateException(
+                        "Upstream returned HTTP " + resp.status().code()
+                    );
+                }
+                try {
+                    return resp.body().asInputStream();
+                } catch (final IOException ex) {
+                    throw new IllegalStateException("Upstream body not readable", ex);
+                }
+            });
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx and I/O errors so the writer
+     * treats the sidecar as absent; a transient sidecar failure never
+     * blocks the primary write.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
+        return this.remote.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletionStage<Response> serveFromCache(final Storage storage, final Key key) {
+        return storage.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
+    }
+
+    /**
+     * Resolve the shared micrometer registry when metrics are enabled.
+     *
+     * @return Registry or {@code null} when metrics have not been
+     *         initialised (e.g. test suites that skip bootstrap).
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static MeterRegistry meterRegistry() {
+        try {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                return com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.composer")
+                .message("MicrometerMetrics registry unavailable; writer will run without metrics")
+                .error(ex)
+                .log();
+        }
+        return null;
     }
 }

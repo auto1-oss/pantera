@@ -20,25 +20,51 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.ProxyCacheWriter;
+import com.auto1.pantera.http.context.RequestContext;
+import com.auto1.pantera.http.fault.Fault;
+import com.auto1.pantera.http.fault.Fault.ChecksumAlgo;
+import com.auto1.pantera.http.fault.Result;
 import com.auto1.pantera.http.rq.RequestLine;
+import com.auto1.pantera.http.rq.RqMethod;
 import com.auto1.pantera.http.slice.KeyFromPath;
+import io.micrometer.core.instrument.MeterRegistry;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 /**
- * PyPI proxy slice with negative and metadata caching.
- * Wraps PyProxySlice to add caching layer that prevents repeated
- * 404 requests and caches package metadata.
+ * PyPI proxy slice with negative, metadata and integrity-verified caching.
+ * Wraps PyProxySlice to add a caching layer that prevents repeated 404
+ * requests and caches package metadata.
  *
- * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
- * here so the PyPI adapter inherits the same primary+sidecar integrity
+ * <p>Primary artifact writes (wheels / sdists / zip archives) flow through
+ * {@link ProxyCacheWriter} so the PyPI-declared sidecars (MD5 / SHA-256 /
+ * SHA-512) are verified against the downloaded bytes before anything
+ * lands in the cache — giving PyPI the same primary+sidecar integrity
  * guarantee the Maven adapter received in WI-07 (§9.5).
  *
  * @since 1.0
  */
 public final class CachedPyProxySlice implements Slice {
+
+    /**
+     * Primary artifact extensions that participate in the coupled
+     * primary+sidecar write path via {@link ProxyCacheWriter}.
+     */
+    private static final List<String> PRIMARY_EXTENSIONS = List.of(
+        ".whl", ".tar.gz", ".zip"
+    );
 
     /**
      * Origin slice (PyProxySlice).
@@ -69,6 +95,22 @@ public final class CachedPyProxySlice implements Slice {
      * Repository type.
      */
     private final String repoType;
+
+    /**
+     * Optional raw storage used by {@link ProxyCacheWriter} to land the
+     * primary + sidecars atomically. Empty when the slice runs without a
+     * file-backed cache; in that case the legacy flow is used unchanged.
+     */
+    private final Optional<Storage> rawStorage;
+
+    /**
+     * Single-source-of-truth cache writer introduced by WI-07 (§9.5 of the
+     * v2.2 target architecture). Fetches the primary + every PyPI sidecar
+     * (MD5 / SHA-256 / SHA-512) in one coupled batch, verifies each
+     * declared claim against the bytes we just downloaded, and atomically
+     * commits the pair. Null when {@link #rawStorage} is empty.
+     */
+    private final ProxyCacheWriter cacheWriter;
 
     /**
      * Ctor with default caching (24h TTL, enabled).
@@ -156,6 +198,10 @@ public final class CachedPyProxySlice implements Slice {
         // TTL, maxSize, and Valkey settings come from global config (caches.negative in pantera.yml)
         this.negativeCache = new NegativeCache(repoType, repoName);
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
+        this.rawStorage = storage;
+        this.cacheWriter = storage
+            .map(raw -> new ProxyCacheWriter(raw, repoName, meterRegistry()))
+            .orElse(null);
     }
 
     @Override
@@ -166,7 +212,7 @@ public final class CachedPyProxySlice implements Slice {
     ) {
         final String path = line.uri().getPath();
         final Key key = new KeyFromPath(path);
-        
+
         // Check negative cache first (404s)
         if (this.negativeCache.isNotFound(key)) {
             EcsLogger.debug("com.auto1.pantera.pypi")
@@ -178,6 +224,14 @@ public final class CachedPyProxySlice implements Slice {
             return CompletableFuture.completedFuture(
                 ResponseBuilder.notFound().build()
             );
+        }
+
+        // WI-07 §9.5 — integrity-verified atomic primary+sidecar write on
+        // cache-miss. Runs only when we have a file-backed storage and the
+        // requested path is a primary artifact. All other paths fall
+        // through to the existing metadata / origin flow unchanged.
+        if (this.cacheWriter != null && isPrimaryArtifact(path)) {
+            return this.verifyAndServePrimary(line, key, path);
         }
 
         // Check metadata cache for wheels and index pages
@@ -197,6 +251,26 @@ public final class CachedPyProxySlice implements Slice {
             || path.endsWith(".tar.gz")
             || path.endsWith(".zip")
             || path.contains("/simple/");
+    }
+
+    /**
+     * Check if path represents a PyPI primary artifact (wheel / sdist /
+     * zip archive) that should be routed through {@link ProxyCacheWriter}.
+     *
+     * @param path Request path.
+     * @return {@code true} if the path ends with a primary-artifact extension.
+     */
+    private static boolean isPrimaryArtifact(final String path) {
+        if (path.endsWith("/")) {
+            return false;
+        }
+        final String lower = path.toLowerCase(Locale.ROOT);
+        for (final String ext : PRIMARY_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -337,5 +411,177 @@ public final class CachedPyProxySlice implements Slice {
                 .error(ex)
                 .log();
         }
+    }
+
+    // ===== WI-07 §9.5: ProxyCacheWriter integration =====
+
+    /**
+     * Primary-artifact flow: if the cache already has the primary, serve
+     * from the cache; otherwise fetch the primary + every declared sidecar
+     * upstream in one coupled batch, verify digests, atomically commit,
+     * and serve the freshly-cached bytes.
+     *
+     * <p>On {@link Fault.UpstreamIntegrity} collapses to 502 with the
+     * {@code X-Pantera-Fault: upstream-integrity:&lt;algo&gt;} header; on
+     * {@link Fault.StorageUnavailable} collapses to 502 and leaves the
+     * cache empty for this key.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletableFuture<Response> verifyAndServePrimary(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        return storage.exists(key).thenCompose(present -> {
+            if (present) {
+                return this.serveFromCache(storage, key);
+            }
+            return this.fetchVerifyAndCache(line, key, path);
+        }).exceptionally(err -> {
+            EcsLogger.warn("com.auto1.pantera.pypi")
+                .message("PyPI primary-artifact verify-and-serve failed; returning 502")
+                .eventCategory("web")
+                .eventAction("cache_write")
+                .eventOutcome("failure")
+                .field("repository.name", this.repoName)
+                .field("url.path", path)
+                .error(err)
+                .log();
+            return ResponseBuilder.badGateway().build();
+        });
+    }
+
+    /**
+     * Fetch the primary + every sidecar upstream, verify via
+     * {@link ProxyCacheWriter}, then stream the primary from the cache.
+     * Integrity failures collapse to a 502 with the
+     * {@code X-Pantera-Fault: upstream-integrity:&lt;algo&gt;} header and
+     * leave the cache empty for this key.
+     */
+    private CompletableFuture<Response> fetchVerifyAndCache(
+        final RequestLine line, final Key key, final String path
+    ) {
+        final Storage storage = this.rawStorage.orElseThrow();
+        final String upstream = this.upstreamUrl + path;
+        final RequestContext ctx = new RequestContext(
+            org.apache.logging.log4j.ThreadContext.get("trace.id"),
+            null,
+            this.repoName,
+            path
+        );
+        final Map<ChecksumAlgo, Supplier<CompletionStage<Optional<InputStream>>>> sidecars =
+            new EnumMap<>(ChecksumAlgo.class);
+        sidecars.put(ChecksumAlgo.SHA256, () -> this.fetchSidecar(line, ".sha256"));
+        sidecars.put(ChecksumAlgo.MD5, () -> this.fetchSidecar(line, ".md5"));
+        sidecars.put(ChecksumAlgo.SHA512, () -> this.fetchSidecar(line, ".sha512"));
+
+        return this.cacheWriter.writeWithSidecars(
+            key,
+            upstream,
+            () -> this.fetchPrimary(line),
+            sidecars,
+            ctx
+        ).toCompletableFuture().thenCompose(result -> {
+            if (result instanceof Result.Err<Void> err) {
+                if (err.fault() instanceof Fault.UpstreamIntegrity ui) {
+                    return CompletableFuture.completedFuture(
+                        ResponseBuilder.badGateway()
+                            .header(
+                                "X-Pantera-Fault",
+                                "upstream-integrity:"
+                                    + ui.algo().name().toLowerCase(Locale.ROOT)
+                            )
+                            .textBody("Upstream integrity verification failed")
+                            .build()
+                    );
+                }
+                // StorageUnavailable / anything else → 502; cache empty.
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.badGateway()
+                        .textBody("Upstream temporarily unavailable")
+                        .build()
+                );
+            }
+            return this.serveFromCache(storage, key);
+        });
+    }
+
+    /**
+     * Read the primary from upstream as an {@link InputStream}. On any
+     * non-success status, throws so the writer's outer exception handler
+     * treats it as a transient failure (no cache mutation).
+     */
+    private CompletionStage<InputStream> fetchPrimary(final RequestLine line) {
+        return this.origin.response(line, Headers.EMPTY, Content.EMPTY)
+            .thenApply(resp -> {
+                if (!resp.status().success()) {
+                    resp.body().asBytesFuture();
+                    throw new IllegalStateException(
+                        "Upstream returned HTTP " + resp.status().code()
+                    );
+                }
+                try {
+                    return resp.body().asInputStream();
+                } catch (final IOException ex) {
+                    throw new IllegalStateException("Upstream body not readable", ex);
+                }
+            });
+    }
+
+    /**
+     * Fetch a sidecar for the primary at {@code line}. Returns
+     * {@link Optional#empty()} for 4xx/5xx so the writer treats the
+     * sidecar as absent; I/O errors collapse to empty so a transient
+     * sidecar failure never blocks the primary write.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private CompletionStage<Optional<InputStream>> fetchSidecar(
+        final RequestLine primary, final String extension
+    ) {
+        final String sidecarPath = primary.uri().getPath() + extension;
+        final RequestLine sidecarLine = new RequestLine(RqMethod.GET, sidecarPath);
+        return this.origin.response(sidecarLine, Headers.EMPTY, Content.EMPTY)
+            .thenCompose(resp -> {
+                if (!resp.status().success()) {
+                    return resp.body().asBytesFuture()
+                        .thenApply(ignored -> Optional.<InputStream>empty());
+                }
+                return resp.body().asBytesFuture()
+                    .thenApply(bytes -> Optional.<InputStream>of(
+                        new ByteArrayInputStream(bytes)
+                    ));
+            })
+            .exceptionally(ignored -> Optional.<InputStream>empty());
+    }
+
+    /**
+     * Serve the primary from storage after a successful atomic write.
+     */
+    private CompletableFuture<Response> serveFromCache(
+        final Storage storage, final Key key
+    ) {
+        return storage.value(key).thenApply(content ->
+            ResponseBuilder.ok().body(content).build()
+        );
+    }
+
+    /**
+     * Resolve the shared micrometer registry when metrics are enabled.
+     *
+     * @return Registry or {@code null} when metrics have not been
+     *         initialised (e.g. test suites that skip bootstrap).
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static MeterRegistry meterRegistry() {
+        try {
+            if (com.auto1.pantera.metrics.MicrometerMetrics.isInitialized()) {
+                return com.auto1.pantera.metrics.MicrometerMetrics.getInstance().getRegistry();
+            }
+        } catch (final Exception ex) {
+            EcsLogger.debug("com.auto1.pantera.pypi")
+                .message("MicrometerMetrics registry unavailable; writer will run without metrics")
+                .error(ex)
+                .log();
+        }
+        return null;
     }
 }
