@@ -204,6 +204,40 @@ final class AccessLoggerTest {
         MatcherAssert.assertThat(ThreadContext.get("trace.id"), Matchers.nullValue());
     }
 
+    @Test
+    @DisplayName("log() parses user_agent.original and emits user_agent.* sub-fields (WI-post-03b)")
+    void logEmitsParsedUserAgentSubFields() {
+        final RequestContext ctx = new RequestContext(
+            "trace-ua", null, null, null,
+            "anonymous", "10.0.0.3",
+            "Maven/3.9.6 (Java/21.0.3 Linux 6.12.68)",
+            "maven_group", "maven", RequestContext.ArtifactRef.EMPTY,
+            "/com/example/foo-1.0.jar", "/com/example/foo-1.0.jar",
+            Deadline.in(Duration.ofSeconds(10))
+        );
+        StructuredLogger.access().forRequest(ctx)
+            .status(200).duration(42L).log();
+        final LogEvent evt = this.capture.last();
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.name"), Matchers.is("Maven"));
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.version"), Matchers.is("3.9.6"));
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.os.name"), Matchers.is("Linux"));
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.os.version"), Matchers.is("21.0.3"));
+    }
+
+    @Test
+    @DisplayName("log() omits user_agent.* sub-fields when RequestContext.userAgent is null")
+    void logSkipsSubFieldsWhenOriginalAbsent() {
+        // minimalCtx() has userAgent=null.
+        StructuredLogger.access().forRequest(minimalCtx())
+            .status(200).duration(3L).log();
+        final LogEvent evt = this.capture.last();
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.name"), Matchers.nullValue());
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.version"), Matchers.nullValue());
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.os.name"), Matchers.nullValue());
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.os.version"), Matchers.nullValue());
+        MatcherAssert.assertThat(payloadField(evt, "user_agent.device.name"), Matchers.nullValue());
+    }
+
     // ---- helpers ----
 
     private static RequestContext minimalCtx() {

@@ -243,6 +243,7 @@ public final class StructuredLogger {
             } else {
                 payload.put("message", defaultMessage(this.status));
             }
+            attachUserAgentSubFields(payload, this.ctx.userAgent());
             attachFault(payload, this.fault);
             return payload;
         }
@@ -734,6 +735,42 @@ public final class StructuredLogger {
             }
         } else {
             logger.log(level, msg);
+        }
+    }
+
+    /**
+     * Parse {@code user_agent.original} with {@link UserAgentParser} and add
+     * the {@code user_agent.name / .version / .os.name / .os.version / .device.name}
+     * sub-fields to the payload when the parser identified them. Null-safe:
+     * missing or empty UA contributes nothing.
+     *
+     * <p>WI-post-03b — restores the rich UA parsing that operators' Kibana
+     * dashboards filter on. The parsing happens on the access-log emission
+     * path only (Tier-1); other tiers do not re-emit user_agent.* since the
+     * fields are still available via {@code ThreadContext.get("user_agent.original")}
+     * for any downstream consumer that wants to re-parse.
+     */
+    private static void attachUserAgentSubFields(
+        final Map<String, Object> payload, final String userAgent
+    ) {
+        if (userAgent == null || userAgent.isEmpty()) {
+            return;
+        }
+        final UserAgentParser.UserAgentInfo info = UserAgentParser.parse(userAgent);
+        if (info.name() != null) {
+            payload.put("user_agent.name", info.name());
+        }
+        if (info.version() != null) {
+            payload.put("user_agent.version", info.version());
+        }
+        if (info.osName() != null) {
+            payload.put("user_agent.os.name", info.osName());
+        }
+        if (info.osVersion() != null) {
+            payload.put("user_agent.os.version", info.osVersion());
+        }
+        if (info.deviceName() != null) {
+            payload.put("user_agent.device.name", info.deviceName());
         }
     }
 

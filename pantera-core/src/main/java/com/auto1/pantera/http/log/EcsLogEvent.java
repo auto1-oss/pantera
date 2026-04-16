@@ -13,6 +13,7 @@ package com.auto1.pantera.http.log;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.RsStatus;
 import com.auto1.pantera.http.headers.Header;
+import com.auto1.pantera.http.observability.UserAgentParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.message.MapMessage;
@@ -138,22 +139,24 @@ public final class EcsLogEvent {
             if (original != null && !original.isEmpty()) {
                 fields.put("user_agent.original", original);
 
-                // Parse user agent (basic parsing - can be enhanced with ua-parser library)
-                final UserAgentInfo info = parseUserAgent(original);
-                if (info.name != null) {
-                    fields.put("user_agent.name", info.name);
+                // Delegates to UserAgentParser (WI-post-03b re-lifted the parser
+                // into pantera-core.observability so StructuredLogger.access
+                // can reuse the same shape without coupling back to this class).
+                final UserAgentParser.UserAgentInfo info = UserAgentParser.parse(original);
+                if (info.name() != null) {
+                    fields.put("user_agent.name", info.name());
                 }
-                if (info.version != null) {
-                    fields.put("user_agent.version", info.version);
+                if (info.version() != null) {
+                    fields.put("user_agent.version", info.version());
                 }
-                if (info.osName != null) {
-                    fields.put("user_agent.os.name", info.osName);
-                    if (info.osVersion != null) {
-                        fields.put("user_agent.os.version", info.osVersion);
+                if (info.osName() != null) {
+                    fields.put("user_agent.os.name", info.osName());
+                    if (info.osVersion() != null) {
+                        fields.put("user_agent.os.version", info.osVersion());
                     }
                 }
-                if (info.deviceName != null) {
-                    fields.put("user_agent.device.name", info.deviceName);
+                if (info.deviceName() != null) {
+                    fields.put("user_agent.device.name", info.deviceName());
                 }
             }
             break;
@@ -438,99 +441,4 @@ public final class EcsLogEvent {
         return Optional.empty();
     }
 
-    /**
-     * Parse user agent string into ECS components.
-     */
-    private static UserAgentInfo parseUserAgent(final String ua) {
-        final UserAgentInfo info = new UserAgentInfo();
-
-        if (ua == null || ua.isEmpty()) {
-            return info;
-        }
-
-        if (ua.startsWith("Maven/")) {
-            info.name = "Maven";
-            extractVersion(ua, "Maven/", info);
-        } else if (ua.startsWith("npm/")) {
-            info.name = "npm";
-            extractVersion(ua, "npm/", info);
-        } else if (ua.startsWith("pip/")) {
-            info.name = "pip";
-            extractVersion(ua, "pip/", info);
-        } else if (ua.contains("Docker-Client/")) {
-            info.name = "Docker";
-            extractVersion(ua, "Docker-Client/", info);
-        } else if (ua.startsWith("Go-http-client/")) {
-            info.name = "Go";
-            extractVersion(ua, "Go-http-client/", info);
-        } else if (ua.startsWith("Gradle/")) {
-            info.name = "Gradle";
-            extractVersion(ua, "Gradle/", info);
-        } else if (ua.contains("Composer/")) {
-            info.name = "Composer";
-            extractVersion(ua, "Composer/", info);
-        } else if (ua.startsWith("NuGet")) {
-            info.name = "NuGet";
-            if (ua.contains("/")) {
-                extractVersion(ua, "NuGet Command Line/", info);
-            }
-        } else if (ua.contains("curl/")) {
-            info.name = "curl";
-            extractVersion(ua, "curl/", info);
-        } else if (ua.contains("wget/")) {
-            info.name = "wget";
-            extractVersion(ua, "wget/", info);
-        }
-
-        if (ua.contains("Linux")) {
-            info.osName = "Linux";
-        } else if (ua.contains("Windows")) {
-            info.osName = "Windows";
-        } else if (ua.contains("Mac OS X") || ua.contains("Darwin")) {
-            info.osName = "macOS";
-        } else if (ua.contains("FreeBSD")) {
-            info.osName = "FreeBSD";
-        }
-
-        if (ua.contains("Java/")) {
-            final int start = ua.indexOf("Java/") + 5;
-            final int end = findVersionEnd(ua, start);
-            if (end > start) {
-                info.osVersion = ua.substring(start, end);
-            }
-        }
-
-        return info;
-    }
-
-    private static void extractVersion(final String ua, final String prefix, final UserAgentInfo info) {
-        final int start = ua.indexOf(prefix);
-        if (start >= 0) {
-            final int versionStart = start + prefix.length();
-            final int versionEnd = findVersionEnd(ua, versionStart);
-            if (versionEnd > versionStart) {
-                info.version = ua.substring(versionStart, versionEnd);
-            }
-        }
-    }
-
-    private static int findVersionEnd(final String ua, final int start) {
-        int end = start;
-        while (end < ua.length()) {
-            final char c = ua.charAt(end);
-            if (c == ' ' || c == ';' || c == '(' || c == ')') {
-                break;
-            }
-            end++;
-        }
-        return end;
-    }
-
-    private static final class UserAgentInfo {
-        String name;
-        String version;
-        String osName;
-        String osVersion;
-        String deviceName;
-    }
 }
