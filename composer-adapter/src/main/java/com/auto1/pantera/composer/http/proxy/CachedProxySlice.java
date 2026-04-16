@@ -50,6 +50,10 @@ import java.util.regex.Pattern;
 
 /**
  * Composer proxy slice with cache support, cooldown service, and event emission.
+ *
+ * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
+ * here so the Composer adapter inherits the same primary+sidecar integrity
+ * guarantee the Maven adapter received in WI-07 (§9.5).
  */
 @SuppressWarnings({"PMD.UnusedPrivateField", "PMD.SingularField"})
 final class CachedProxySlice implements Slice {

@@ -32,6 +32,10 @@ import java.util.concurrent.CompletableFuture;
  * Wraps PyProxySlice to add caching layer that prevents repeated
  * 404 requests and caches package metadata.
  *
+ * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
+ * here so the PyPI adapter inherits the same primary+sidecar integrity
+ * guarantee the Maven adapter received in WI-07 (§9.5).
+ *
  * @since 1.0
  */
 public final class CachedPyProxySlice implements Slice {

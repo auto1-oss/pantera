@@ -49,6 +49,10 @@ import java.util.stream.StreamSupport;
 /**
  * Go proxy slice with cache support.
  *
+ * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
+ * here so the Go adapter inherits the same primary+sidecar integrity guarantee
+ * the Maven adapter received in WI-07 (§9.5).
+ *
  * @since 1.0
  */
 final class CachedProxySlice implements Slice {
