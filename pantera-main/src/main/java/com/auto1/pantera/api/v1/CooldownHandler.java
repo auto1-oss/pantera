@@ -14,15 +14,18 @@ import com.auto1.pantera.api.AuthTokenRest;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.RepositoryName;
 import com.auto1.pantera.api.perms.ApiCooldownPermission;
-import com.auto1.pantera.http.auth.AuthUser;
-import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.cooldown.CooldownRepository;
+import com.auto1.pantera.cooldown.DbBlockRecord;
 import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
 import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
-import com.auto1.pantera.cooldown.DbBlockRecord;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.db.dao.SettingsDao;
+import com.auto1.pantera.http.auth.AuthUser;
 import com.auto1.pantera.http.context.HandlerExecutor;
+import com.auto1.pantera.http.observability.StructuredLogger;
+import com.auto1.pantera.security.perms.AdapterBasicPermission;
 import com.auto1.pantera.security.policy.Policy;
 import com.auto1.pantera.settings.repo.CrudRepoSettings;
 import io.vertx.core.json.JsonArray;
@@ -50,7 +53,13 @@ import javax.sql.DataSource;
  * @since 1.21.0
  * @checkstyle ClassDataAbstractionCouplingCheck (300 lines)
  */
+@SuppressWarnings("PMD.TooManyMethods")
 public final class CooldownHandler {
+
+    /**
+     * Logger component name for StructuredLogger.local() (Tier-4).
+     */
+    private static final String LOG_COMPONENT = "com.auto1.pantera.cooldown.admin";
 
     /**
      * JSON key for repo section.
@@ -71,6 +80,12 @@ public final class CooldownHandler {
      * Cooldown metadata service (for filtered metadata cache invalidation on unblock).
      */
     private final CooldownMetadataService metadataService;
+
+    /**
+     * Cooldown decision cache (for L1+L2 invalidation on unblock).
+     * May be null when cooldown is backed by NoopCooldownService.
+     */
+    private final CooldownCache cooldownCache;
 
     /**
      * Repository settings CRUD.
@@ -101,6 +116,33 @@ public final class CooldownHandler {
      * Ctor.
      * @param cooldown Cooldown service
      * @param metadataService Cooldown metadata service for cache invalidation
+     * @param cooldownCache Cooldown decision cache (nullable)
+     * @param crs Repository settings CRUD
+     * @param csettings Cooldown settings
+     * @param dataSource Database data source (nullable)
+     * @param policy Security policy
+     * @checkstyle ParameterNumberCheck (5 lines)
+     */
+    public CooldownHandler(final CooldownService cooldown,
+        final CooldownMetadataService metadataService,
+        final CooldownCache cooldownCache,
+        final CrudRepoSettings crs,
+        final CooldownSettings csettings, final DataSource dataSource,
+        final Policy<?> policy) {
+        this.cooldown = cooldown;
+        this.metadataService = metadataService;
+        this.cooldownCache = cooldownCache;
+        this.crs = crs;
+        this.csettings = csettings;
+        this.repository = dataSource != null ? new CooldownRepository(dataSource) : null;
+        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
+        this.policy = policy;
+    }
+
+    /**
+     * Backward-compatible ctor (no CooldownCache).
+     * @param cooldown Cooldown service
+     * @param metadataService Cooldown metadata service for cache invalidation
      * @param crs Repository settings CRUD
      * @param csettings Cooldown settings
      * @param dataSource Database data source (nullable)
@@ -111,13 +153,7 @@ public final class CooldownHandler {
         final CooldownMetadataService metadataService, final CrudRepoSettings crs,
         final CooldownSettings csettings, final DataSource dataSource,
         final Policy<?> policy) {
-        this.cooldown = cooldown;
-        this.metadataService = metadataService;
-        this.crs = crs;
-        this.csettings = csettings;
-        this.repository = dataSource != null ? new CooldownRepository(dataSource) : null;
-        this.settingsDao = dataSource != null ? new SettingsDao(dataSource) : null;
-        this.policy = policy;
+        this(cooldown, metadataService, null, crs, csettings, dataSource, policy);
     }
 
     /**
@@ -235,7 +271,7 @@ public final class CooldownHandler {
         }
         // Persist to DB if available
         if (this.settingsDao != null) {
-            final String actor = ctx.user() != null
+            final String actor2 = ctx.user() != null
                 ? ctx.user().principal().getString(AuthTokenRest.SUB, "system")
                 : "system";
             final javax.json.JsonObjectBuilder jb = Json.createObjectBuilder()
@@ -254,8 +290,22 @@ public final class CooldownHandler {
                 }
                 jb.add("repo_types", rtb);
             }
-            this.settingsDao.put("cooldown", jb.build(), actor);
+            this.settingsDao.put("cooldown", jb.build(), actor2);
         }
+        // Invalidate ALL caches: a policy change (e.g. 30d→7d) can shift
+        // which versions are in/out of the cooldown window, so every cached
+        // decision and every cached filtered-metadata response may be stale.
+        this.metadataService.clearAll();
+        if (this.cooldownCache != null) {
+            this.cooldownCache.clear();
+        }
+        CooldownHandler.recordAdminMetric("policy_change");
+        StructuredLogger.local().forComponent(LOG_COMPONENT)
+            .message("Cooldown policy updated — all caches invalidated")
+            .field("cooldown.enabled", newEnabled)
+            .field("cooldown.minimum_allowed_age",
+                CooldownHandler.formatDuration(newAge))
+            .info();
         ctx.response()
             .setStatusCode(200)
             .putHeader("Content-Type", "application/json")
@@ -454,9 +504,12 @@ public final class CooldownHandler {
 
     /**
      * POST /api/v1/repositories/:name/cooldown/unblock — unblock a single artifact version.
+     * Flow: DB write → CooldownCache invalidation → FilteredMetadataCache invalidation → 204.
+     * All invalidations complete synchronously before the response is sent.
      * @param ctx Routing context
      * @checkstyle ExecutableStatementCountCheck (60 lines)
      */
+    @SuppressWarnings("PMD.CognitiveComplexity")
     private void unblock(final RoutingContext ctx) {
         final String name = ctx.pathParam("name");
         final RepositoryName rname = new RepositoryName.Simple(name);
@@ -490,23 +543,40 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblock(repoType, name, artifact, version, actor)
-            .whenComplete(
-                (ignored, error) -> {
-                    if (error == null) {
-                        this.metadataService.invalidate(repoType, name, artifact);
-                        ctx.response().setStatusCode(204).end();
-                    } else {
-                        ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR", error.getMessage()
-                        );
-                    }
+            .thenRun(() -> {
+                // CooldownCache L1+L2 invalidation (handler-level guarantee)
+                if (this.cooldownCache != null) {
+                    this.cooldownCache.unblock(name, artifact, version);
                 }
-            );
+                // FilteredMetadataCache invalidation
+                this.metadataService.invalidate(repoType, name, artifact);
+                CooldownHandler.recordAdminMetric("unblock");
+                StructuredLogger.local().forComponent(LOG_COMPONENT)
+                    .message("Admin unblock: version unblocked")
+                    .field("repository.name", name)
+                    .field("repository.type", repoType)
+                    .field("package.name", artifact)
+                    .field("package.version", version)
+                    .field("user.name", actor)
+                    .info();
+            })
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    ctx.response().setStatusCode(204).end();
+                } else {
+                    ApiResponse.sendError(
+                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                    );
+                }
+            });
     }
 
     /**
      * POST /api/v1/repositories/:name/cooldown/unblock-all — unblock all artifacts in repo.
+     * Flow: DB write → CooldownCache invalidation → FilteredMetadataCache invalidation → 204.
+     * All invalidations complete synchronously before the response is sent.
      * @param ctx Routing context
      */
     private void unblockAll(final RoutingContext ctx) {
@@ -524,19 +594,32 @@ public final class CooldownHandler {
             return;
         }
         final String actor = ctx.user().principal().getString(AuthTokenRest.SUB);
+        // DB write completes first, then synchronous cache invalidation, then response
         this.cooldown.unblockAll(repoType, name, actor)
-            .whenComplete(
-                (ignored, error) -> {
-                    if (error == null) {
-                        this.metadataService.invalidateAll(repoType, name);
-                        ctx.response().setStatusCode(204).end();
-                    } else {
-                        ApiResponse.sendError(
-                            ctx, 500, "INTERNAL_ERROR", error.getMessage()
-                        );
-                    }
+            .thenRun(() -> {
+                // CooldownCache L1+L2 invalidation (handler-level guarantee)
+                if (this.cooldownCache != null) {
+                    this.cooldownCache.unblockAll(name);
                 }
-            );
+                // FilteredMetadataCache invalidation
+                this.metadataService.invalidateAll(repoType, name);
+                CooldownHandler.recordAdminMetric("unblock_all");
+                StructuredLogger.local().forComponent(LOG_COMPONENT)
+                    .message("Admin unblock-all: all versions unblocked for repo")
+                    .field("repository.name", name)
+                    .field("repository.type", repoType)
+                    .field("user.name", actor)
+                    .info();
+            })
+            .whenComplete((ignored, error) -> {
+                if (error == null) {
+                    ctx.response().setStatusCode(204).end();
+                } else {
+                    ApiResponse.sendError(
+                        ctx, 500, "INTERNAL_ERROR", error.getMessage()
+                    );
+                }
+            });
     }
 
     /**
@@ -611,5 +694,16 @@ public final class CooldownHandler {
             return Duration.ofMinutes(amount);
         }
         return Duration.ofHours(amount);
+    }
+
+    /**
+     * Record admin action counter: {@code pantera.cooldown.admin{action=...}}.
+     * Safe to call even when Micrometer is not initialised (guard-checked).
+     * @param action Action tag value (unblock, unblock_all, policy_change)
+     */
+    private static void recordAdminMetric(final String action) {
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().recordAdminAction(action);
+        }
     }
 }

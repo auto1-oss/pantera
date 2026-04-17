@@ -64,6 +64,11 @@ public final class NoopCooldownMetadataService implements CooldownMetadataServic
     }
 
     @Override
+    public void clearAll() {
+        // No-op
+    }
+
+    @Override
     public String stats() {
         return "NoopCooldownMetadataService[disabled]";
     }

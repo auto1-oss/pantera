@@ -648,6 +648,19 @@ public final class MetadataFilterService implements CooldownMetadataService {
     }
 
     @Override
+    public void clearAll() {
+        this.metadataCache.clear();
+        if (CooldownMetrics.isAvailable()) {
+            CooldownMetrics.getInstance().recordInvalidation("*", "policy_change");
+        }
+        EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+            .message("Cleared all metadata caches (policy change)")
+            .eventCategory("database")
+            .eventAction("cache_clear_all")
+            .log();
+    }
+
+    @Override
     public String stats() {
         return this.metadataCache.stats();
     }
