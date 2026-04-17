@@ -199,6 +199,14 @@ public class RepositorySlices {
         new ConcurrentHashMap<>();
 
     /**
+     * Per-repo bulkheads keyed by repository name.
+     * Each group repository gets exactly one {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * at first access. Saturation in one repo cannot starve another (WI-09).
+     */
+    private final ConcurrentMap<String, com.auto1.pantera.http.resilience.RepoBulkhead> repoBulkheads =
+        new ConcurrentHashMap<>();
+
+    /**
      * @param settings Pantera settings
      * @param repos Repositories
      * @param tokens Tokens: authentication and generation
@@ -679,7 +687,8 @@ public class RepositorySlices {
                     proxyMembers(npmFlatMembers),
                     "npm-group",
                     this.sharedNegativeCache,
-                    this::getOrCreateMemberRegistry
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 // Create audit slice that aggregates results from ALL members
                 // This is critical for vulnerability scanning - local repos return {},
@@ -745,7 +754,8 @@ public class RepositorySlices {
                     proxyMembers(composerFlatMembers),
                     cfg.type(),
                     this.sharedNegativeCache,
-                    this::getOrCreateMemberRegistry
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -775,7 +785,8 @@ public class RepositorySlices {
                     proxyMembers(mavenFlatMembers),
                     "maven-group",
                     this.sharedNegativeCache,
-                    this::getOrCreateMemberRegistry
+                    this::getOrCreateMemberRegistry,
+                    getOrCreateBulkhead(cfg.name()).drainExecutor()
                 );
                 slice = trimPathSlice(
                     new CombinedAuthzSliceWrap(
@@ -812,7 +823,8 @@ public class RepositorySlices {
                             proxyMembers(genericFlatMembers),
                             cfg.type(),
                             this.sharedNegativeCache,
-                            this::getOrCreateMemberRegistry
+                            this::getOrCreateMemberRegistry,
+                            getOrCreateBulkhead(cfg.name()).drainExecutor()
                         ),
                         authentication(),
                         tokens.auth(),
@@ -1128,6 +1140,33 @@ public class RepositorySlices {
                     .eventAction("circuit_breaker_init")
                     .log();
                 return new AutoBlockRegistry(AutoBlockSettings.defaults());
+            }
+        );
+    }
+
+    /**
+     * Get or create a per-repo {@link com.auto1.pantera.http.resilience.RepoBulkhead}
+     * for the given group repository name (WI-09).
+     *
+     * @param repoName Group repository name
+     * @return Per-repo bulkhead (created on first access with default limits)
+     */
+    private com.auto1.pantera.http.resilience.RepoBulkhead getOrCreateBulkhead(final String repoName) {
+        return this.repoBulkheads.computeIfAbsent(
+            repoName,
+            n -> {
+                final com.auto1.pantera.http.resilience.BulkheadLimits limits =
+                    com.auto1.pantera.http.resilience.BulkheadLimits.defaults();
+                EcsLogger.info("com.auto1.pantera")
+                    .message("Per-repo bulkhead created for: " + n
+                        + " (maxConcurrent=" + limits.maxConcurrent()
+                        + ", maxQueueDepth=" + limits.maxQueueDepth() + ")")
+                    .eventCategory("configuration")
+                    .eventAction("bulkhead_init")
+                    .log();
+                return new com.auto1.pantera.http.resilience.RepoBulkhead(
+                    n, limits, java.util.concurrent.ForkJoinPool.commonPool()
+                );
             }
         );
     }

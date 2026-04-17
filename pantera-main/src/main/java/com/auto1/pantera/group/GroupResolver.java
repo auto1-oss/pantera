@@ -43,12 +43,8 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -103,43 +99,6 @@ import com.auto1.pantera.http.timeout.AutoBlockRegistry;
 @SuppressWarnings({"PMD.TooManyMethods", "PMD.GodClass"})
 public final class GroupResolver implements Slice {
 
-    /**
-     * Background executor for draining non-winning member response bodies.
-     * Same pool as the one previously in GroupSlice.
-     */
-    private static final java.util.concurrent.Executor DRAIN_EXECUTOR;
-    private static final AtomicLong DRAIN_DROP_COUNT = new AtomicLong();
-
-    static {
-        final ThreadPoolExecutor pool = new ThreadPoolExecutor(
-            16, 16,
-            60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(2000),
-            r -> {
-                final Thread t = new Thread(r, "group-resolver-drain-" + System.identityHashCode(r));
-                t.setDaemon(true);
-                return t;
-            },
-            (r, executor) -> {
-                final long dropped = DRAIN_DROP_COUNT.incrementAndGet();
-                EcsLogger.warn("com.auto1.pantera.group")
-                    .message("Drain queue full, discarding drain task (total drops: " + dropped + ")")
-                    .eventCategory("network")
-                    .eventAction("body_drain")
-                    .eventOutcome("failure")
-                    .field("event.reason", "Drain executor queue saturated")
-                    .field("pantera.drain.drop_count", dropped)
-                    .log();
-                final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
-                    com.auto1.pantera.metrics.GroupSliceMetrics.instance();
-                if (metrics != null) {
-                    metrics.recordDrainDropped();
-                }
-            }
-        );
-        DRAIN_EXECUTOR = ContextualExecutor.contextualize(pool);
-    }
-
     private final String group;
     private final List<MemberSlice> members;
     private final List<RoutingRule> routingRules;
@@ -148,6 +107,7 @@ public final class GroupResolver implements Slice {
     private final Set<String> proxyMembers;
     private final NegativeCache negativeCache;
     private final SingleFlight<String, Void> inFlightFanouts;
+    private final java.util.concurrent.Executor drainExecutor;
 
     /**
      * Full constructor.
@@ -159,6 +119,7 @@ public final class GroupResolver implements Slice {
      * @param repoType Repository type for name parsing
      * @param proxyMembers Names of proxy repository members
      * @param negativeCache Negative cache for 404 results
+     * @param drainExecutor Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}
      */
     @SuppressWarnings("PMD.ExcessiveParameterList")
     public GroupResolver(
@@ -168,7 +129,8 @@ public final class GroupResolver implements Slice {
         final Optional<ArtifactIndex> artifactIndex,
         final String repoType,
         final Set<String> proxyMembers,
-        final NegativeCache negativeCache
+        final NegativeCache negativeCache,
+        final java.util.concurrent.Executor drainExecutor
     ) {
         this.group = Objects.requireNonNull(group, "group");
         this.members = Objects.requireNonNull(members, "members");
@@ -177,6 +139,7 @@ public final class GroupResolver implements Slice {
         this.repoType = repoType != null ? repoType : "";
         this.proxyMembers = proxyMembers != null ? proxyMembers : Collections.emptySet();
         this.negativeCache = Objects.requireNonNull(negativeCache, "negativeCache");
+        this.drainExecutor = Objects.requireNonNull(drainExecutor, "drainExecutor");
         this.inFlightFanouts = new SingleFlight<>(
             Duration.ofMinutes(5),
             10_000,
@@ -915,10 +878,10 @@ public final class GroupResolver implements Slice {
     }
 
     /**
-     * Drain response body on background executor.
+     * Drain response body on per-repo background executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
      */
     private void drainBody(final String memberName, final Content body) {
-        DRAIN_EXECUTOR.execute(() ->
+        this.drainExecutor.execute(() ->
             body.subscribe(new org.reactivestreams.Subscriber<>() {
                 @Override
                 public void onSubscribe(final org.reactivestreams.Subscription sub) {

@@ -463,7 +463,8 @@ final class GroupResolverTest {
             Optional.empty(),
             REPO_TYPE,
             Collections.emptySet(),
-            buildNegativeCache()
+            buildNegativeCache(),
+            java.util.concurrent.ForkJoinPool.commonPool()
         );
         final Response resp = resolver.response(
             new RequestLine("GET", JAR_PATH), Headers.EMPTY, Content.EMPTY
@@ -508,7 +509,8 @@ final class GroupResolverTest {
             idx != null ? Optional.of(idx) : Optional.empty(),
             repoType,
             proxyMemberNames,
-            negCache
+            negCache,
+            java.util.concurrent.ForkJoinPool.commonPool()
         );
     }
 

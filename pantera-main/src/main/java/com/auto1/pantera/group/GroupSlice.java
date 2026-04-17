@@ -44,7 +44,6 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -78,24 +77,11 @@ import com.auto1.pantera.http.trace.MdcPropagation;
 public final class GroupSlice implements Slice {
 
     /**
-     * Background executor for draining non-winning member response bodies.
-     * Decoupled from the result path: drain failures and backpressure never affect
-     * the winning response delivered to the client.
-     *
-     * <p>16 threads, bounded queue of 2000. When full, new drain tasks are logged and dropped.
-     * Each thread is daemon so it does not prevent JVM shutdown.
+     * Fallback drain executor used by backward-compatible constructors that do not
+     * receive a per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     * Provides the same thread pool shape as the former static drain pool.
      */
-    private static final java.util.concurrent.Executor DRAIN_EXECUTOR;
-
-    /**
-     * Count of drain tasks rejected because the drain queue was full.
-     * Each drop represents a response body that will not be drained until the
-     * upstream/Jetty idle-timeout closes the connection — a potential slow
-     * connection leak. Monitor this counter: sustained growth indicates the
-     * drain pool needs tuning (more threads / larger queue) or that upstream
-     * latency is producing more losers than we can drain in parallel.
-     */
-    private static final AtomicLong DRAIN_DROP_COUNT = new AtomicLong();
+    private static final java.util.concurrent.Executor LEGACY_DRAIN_POOL;
 
     static {
         final ThreadPoolExecutor pool = new ThreadPoolExecutor(
@@ -103,48 +89,15 @@ public final class GroupSlice implements Slice {
             60L, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(2000),
             r -> {
-                final Thread t = new Thread(r, "group-drain-" + System.identityHashCode(r));
+                final Thread t = new Thread(r, "group-drain-fallback-" + System.identityHashCode(r));
                 t.setDaemon(true);
                 return t;
             },
             (r, executor) -> {
-                final long dropped = DRAIN_DROP_COUNT.incrementAndGet();
-                EcsLogger.warn("com.auto1.pantera.group")
-                    .message(
-                        "Drain queue full, discarding drain task — "
-                            + "possible response body leak (total drops: " + dropped + ")"
-                    )
-                    .eventCategory("network")
-                    .eventAction("body_drain")
-                    .eventOutcome("failure")
-                    .field("event.reason", "Drain executor queue saturated")
-                    .field("pantera.drain.drop_count", dropped)
-                    .log();
-                final com.auto1.pantera.metrics.GroupSliceMetrics metrics =
-                    com.auto1.pantera.metrics.GroupSliceMetrics.instance();
-                if (metrics != null) {
-                    metrics.recordDrainDropped();
-                }
+                // Drop silently — callers using the fallback are legacy paths.
             }
         );
-        // Wrap the pool with ContextualExecutor so drain tasks inherit the
-        // submitting request's ThreadContext + APM span (WI-03 §4.4).
-        DRAIN_EXECUTOR = ContextualExecutor.contextualize(pool);
-        EcsLogger.info("com.auto1.pantera.group")
-            .message("GroupSlice drain executor initialised (16 threads, queue=2000)")
-            .eventCategory("configuration")
-            .eventAction("group_init")
-            .log();
-    }
-
-    /**
-     * Total count of drain tasks dropped because the drain queue was saturated.
-     * Exposed for metrics integration and tests.
-     *
-     * @return monotonic total of rejected drain tasks since JVM start
-     */
-    public static long drainDropCount() {
-        return DRAIN_DROP_COUNT.get();
+        LEGACY_DRAIN_POOL = ContextualExecutor.contextualize(pool);
     }
 
     /**
@@ -190,6 +143,12 @@ public final class GroupSlice implements Slice {
      * in-memory 5 min TTL, 10K-entry single-tier cache when YAML wiring is absent.
      */
     private final NegativeCache negativeCache;
+
+    /**
+     * Per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     * Replaces the former process-wide static drain pool.
+     */
+    private final java.util.concurrent.Executor drainExecutor;
 
     /**
      * In-flight proxy-only fanouts keyed by {@code group:artifactName}.
@@ -413,6 +372,7 @@ public final class GroupSlice implements Slice {
         this.negativeCache = negativeCache != null
             ? negativeCache
             : defaultNegativeCache(this.group);
+        this.drainExecutor = LEGACY_DRAIN_POOL;
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -471,6 +431,45 @@ public final class GroupSlice implements Slice {
         final NegativeCache negativeCache,
         final Function<String, AutoBlockRegistry> registrySupplier
     ) {
+        this(resolver, group, members, port, depth, timeoutSeconds,
+            routingRules, artifactIndex, proxyMembers, repoType,
+            negativeCache, registrySupplier, null);
+    }
+
+    /**
+     * Full constructor with shared per-member circuit-breaker registries and
+     * per-repo drain executor from {@link com.auto1.pantera.http.resilience.RepoBulkhead}.
+     *
+     * @param resolver Slice resolver/cache
+     * @param group Group repository name
+     * @param members Member repository names
+     * @param port Server port
+     * @param depth Nesting depth (ignored)
+     * @param timeoutSeconds Timeout for member requests
+     * @param routingRules Routing rules for path-based member selection
+     * @param artifactIndex Optional artifact index for O(1) lookups
+     * @param proxyMembers Names of members that are proxy repositories
+     * @param repoType Repository type for name parsing (e.g., "maven-group")
+     * @param negativeCache Pre-constructed negative cache (e.g. YAML-driven two-tier)
+     * @param registrySupplier Function mapping member name to its shared AutoBlockRegistry
+     * @param repoDrainExecutor Per-repo drain executor, or {@code null} to use the fallback
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public GroupSlice(
+        final SliceResolver resolver,
+        final String group,
+        final List<String> members,
+        final int port,
+        final int depth,
+        final long timeoutSeconds,
+        final List<RoutingRule> routingRules,
+        final Optional<ArtifactIndex> artifactIndex,
+        final Set<String> proxyMembers,
+        final String repoType,
+        final NegativeCache negativeCache,
+        final Function<String, AutoBlockRegistry> registrySupplier,
+        final java.util.concurrent.Executor repoDrainExecutor
+    ) {
         this.group = Objects.requireNonNull(group, "group");
         this.repoType = repoType != null ? repoType : "";
         this.routingRules = routingRules != null ? routingRules : Collections.emptyList();
@@ -479,6 +478,9 @@ public final class GroupSlice implements Slice {
         this.negativeCache = negativeCache != null
             ? negativeCache
             : defaultNegativeCache(this.group);
+        this.drainExecutor = repoDrainExecutor != null
+            ? repoDrainExecutor
+            : LEGACY_DRAIN_POOL;
 
         // Deduplicate members while preserving order
         final List<String> flatMembers = new ArrayList<>(new LinkedHashSet<>(members));
@@ -1207,14 +1209,14 @@ public final class GroupSlice implements Slice {
     /**
      * Drain response body on the background drain executor to prevent connection leak.
      *
-     * <p>Fully decoupled from the result path: submitted to {@link #DRAIN_EXECUTOR} and
+     * <p>Fully decoupled from the result path: submitted to the per-repo drain executor and
      * returns immediately. Drain failures and backpressure never block or affect the
      * winning response delivered to the client. Uses streaming discard to avoid OOM on
      * large responses (e.g., npm typescript ~30MB).
      */
     private void drainBody(final String memberName, final Content body) {
         final String group = this.group;
-        DRAIN_EXECUTOR.execute(() ->
+        this.drainExecutor.execute(() ->
             body.subscribe(new org.reactivestreams.Subscriber<>() {
                 @Override
                 public void onSubscribe(final org.reactivestreams.Subscription sub) {

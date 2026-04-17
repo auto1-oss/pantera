@@ -80,8 +80,8 @@ public final class GroupSliceMetrics {
     /**
      * Increment the {@code pantera.group.drain.dropped} Micrometer counter.
      *
-     * <p>Called from the {@code DRAIN_EXECUTOR} rejection handler in
-     * {@link com.auto1.pantera.group.GroupSlice} whenever a drain task is dropped
+     * <p>Called from the per-repo drain executor rejection handler in
+     * {@link com.auto1.pantera.http.resilience.RepoBulkhead} whenever a drain task is dropped
      * because the bounded queue is full.  Each increment represents one undrained
      * loser response body — a potential Jetty socket leak until idle-timeout.
      * Ops should alert on any sustained non-zero rate of this counter.
