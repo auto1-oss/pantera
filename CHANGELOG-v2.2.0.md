@@ -80,6 +80,63 @@ None. No CVE fixes, no permissions model changes, no credential-handling changes
 - **Kibana user_agent sub-fields:** operators who queried `user_agent.name` / `user_agent.version` / `user_agent.os.name` on access-log documents need to either (a) query `user_agent.original` directly (that's what `RequestContext` emits today) or (b) wait for the follow-up WI that re-lifts the parser into `StructuredLogger.access`. No data loss — only the parsed sub-fields are unavailable this release.
 - **Audit-log level:** `StructuredLogger.audit()` writes to the logger named `com.auto1.pantera.audit`. The bundled `log4j2.xml` does not yet declare a dedicated appender for that logger — it inherits from `com.auto1.pantera` at INFO. That means "non-suppressible" is by convention; if an operator drops `com.auto1.pantera` to WARN they will suppress audit events. Add a dedicated `<Logger name="com.auto1.pantera.audit" level="info" additivity="false">` block in production overrides to make the non-suppressibility operationally enforced.
 
+## Cooldown Metadata Filtering
+
+Comprehensive two-layer cooldown enforcement across all 7 adapters (Maven, npm, PyPI, Docker, Go, Composer, Gradle). Full design documentation in `docs/cooldown-metadata-filtering.md`.
+
+### Package Restructure (Phase 1)
+
+- Cooldown package reorganised to SOLID sub-package layout: `api/`, `cache/`, `metadata/`, `response/`, `config/`, `metrics/`, `impl/`.
+- `CooldownMetadataServiceImpl` renamed to `MetadataFilterService`.
+- No behaviour change; all existing tests pass unchanged.
+
+### Performance Hardenings (Phase 2)
+
+- **H1 -- Pre-warm release-date cache.** `MetadataParser.extractReleaseDates()` SPI extracts timestamps from metadata (e.g., npm `time` field) and bulk-populates `CooldownCache` L1 with `false` (allowed) for versions older than the cooldown period. Avoids DB/Valkey round-trip on the hot path for the majority of versions.
+- **H2 -- Parallel bounded version evaluation.** Dedicated 4-thread executor pool dispatches version evaluations via `CompletableFuture.allOf()`, bounded to 50 versions per request.
+- **H3 -- Stale-while-revalidate (SWR) on FilteredMetadataCache.** Stale bytes returned immediately on TTL expiry; background task re-evaluates. 5-minute SWR grace period.
+- **H4 -- L1 cache capacity increased to 50K entries.** Configurable via `PANTERA_COOLDOWN_METADATA_L1_SIZE` env var (default 50,000).
+- **H5 -- CooldownCache inflight-map memory leak fixed.** Guaranteed removal on success, error, and cancellation via `whenComplete`. 30-second `orTimeout` zombie safety net.
+
+### Per-Adapter Metadata Implementations (Phase 3)
+
+Metadata parser, filter, rewriter, and request detector implemented for 7 adapters:
+- **Maven:** DOM-parses `maven-metadata.xml`; removes blocked `<version>` nodes; updates `<latest>` + `<lastUpdated>`.
+- **npm:** Existing implementation verified against renamed interfaces.
+- **PyPI:** HTML simple-index parser; removes blocked `<a>` tags.
+- **Docker:** JSON `tags/list` parser; removes blocked tag strings.
+- **Go:** Plain-text version-per-line parser; removes blocked version lines.
+- **Composer:** JSON `packages.json` parser; removes blocked version keys.
+- **Gradle:** Reuses Maven components (same metadata format).
+
+235+ adapter unit tests across parser, filter, rewriter, detector, and response-factory test classes.
+
+### Per-Adapter 403 Response Factories (Phase 4)
+
+`CooldownResponseFactory` interface with per-adapter implementations producing format-appropriate 403 responses:
+- Maven/Go: `text/plain` with human-readable message + `Retry-After` header
+- npm/Docker/Composer: JSON error envelopes matching each ecosystem's error spec
+- PyPI: `text/plain`
+- `CooldownResponseRegistry` for type-based lookup at runtime; Gradle aliased to Maven.
+
+### Admin/Invalidation Hardening (Phase 5)
+
+- Unblock flow hardened: DB write completes before cache invalidation; `FilteredMetadataCache` L1+L2 and `CooldownCache` L1+L2 both invalidated; all invalidation futures complete synchronously before the 200 response.
+- `clearAll()` on policy change flushes all cached filtered metadata.
+- Micrometer counters: `pantera.cooldown.admin{action=unblock|reblock|policy_change}`.
+
+### Adapter Bundle Registration + Wiring (Phase 6)
+
+- `CooldownAdapterBundle<T>` record bundles parser/filter/rewriter/detector/responseFactory per adapter.
+- `CooldownAdapterRegistry` singleton populated at startup; queried on every proxy request.
+- All 7 adapters registered with aliases (Gradle -> Maven).
+
+### Integration + Chaos Tests (Phase 7)
+
+- `MetadataFilterServiceIntegrationTest`: end-to-end with Go adapter format; verifies filtered output, cache hit, SWR behaviour, invalidation.
+- `CooldownAdapterRegistryTest`: bundle registration, alias lookup, null rejection, overwrite, clear.
+- `CooldownConcurrentFilterStampedeTest` (`@Tag("Chaos")`): 100 concurrent requests for same uncached metadata; parser runs at most 5 times (stampede dedup); all callers get consistent filtered bytes.
+
 ## Under the hood
 
 This release lands the foundation for the remaining WIs in the v2.2 target-architecture plan:
