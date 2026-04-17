@@ -44,11 +44,6 @@ import java.util.concurrent.ForkJoinPool;
  * the same signal contract as the legacy path — only the coalescer
  * implementation changed.</p>
  *
- * <p>TODO(WI-post-07): wire {@link com.auto1.pantera.http.cache.ProxyCacheWriter}
- * here so the npm adapter inherits the same primary+sidecar integrity
- * guarantee the Maven adapter received in WI-07 (§9.5) — npm uses SHA-512
- * integrity on tarballs and will benefit from the same pattern.
- *
  * @since 1.0
  */
 public final class CachedNpmProxySlice implements Slice {

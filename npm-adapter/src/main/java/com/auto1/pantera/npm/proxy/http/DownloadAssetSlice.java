@@ -23,7 +23,6 @@ import com.auto1.pantera.npm.misc.DateTimeNowStr;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.google.common.base.Strings;
-import hu.akarnokd.rxjava2.interop.SingleInterop;
 
 import com.auto1.pantera.cooldown.CooldownInspector;
 import com.auto1.pantera.cooldown.CooldownRequest;
@@ -167,13 +166,15 @@ public final class DownloadAssetSlice implements Slice {
     private CompletableFuture<Response> checkCacheFirst(final String tgz, final Headers headers) {
         // NpmProxy.getAsset checks storage first internally, but we need to check BEFORE
         // calling cooldown.evaluate() which may make network calls.
-        // Use a non-blocking check that returns asset from storage if present.
-        // Wrap RxJava/CompletableFuture continuations with MDC propagation so
-        // cache-hit logs carry trace.id/user.name on worker threads.
-        return this.npm.getAsset(tgz)
-            .map(com.auto1.pantera.http.trace.MdcPropagation.withMdcRxFunction(asset -> {
-                // Asset found in storage cache - check if it's served from cache (not remote)
-                // Since getAsset tries storage first, if we have it, serve immediately
+        // Convert RxJava Maybe at the NpmProxy boundary to CompletionStage.
+        return this.npm.getAssetAsync(tgz)
+            .thenCompose(optAsset -> {
+                if (optAsset.isEmpty()) {
+                    // Cache miss — evaluate cooldown then fetch from upstream
+                    return this.evaluateCooldownAndFetch(tgz, headers);
+                }
+                final var asset = optAsset.get();
+                // Asset found in storage cache — serve immediately (offline-safe)
                 EcsLogger.info("com.auto1.pantera.npm")
                     .message("Cache hit for asset, serving cached (offline-safe)")
                     .eventCategory("web")
@@ -181,67 +182,24 @@ public final class DownloadAssetSlice implements Slice {
                     .eventOutcome("success")
                     .field("package.name", tgz)
                     .log();
-                // Queue the proxy event — any failure (bounded queue overflow, lambda
-                // exception, etc.) MUST NOT escape the serve path. Wrap in try/catch.
-                this.packages.ifPresent(queue -> {
-                    try {
-                        Long millis = null;
-                        try {
-                            final String lm = asset.meta().lastModified();
-                            if (!Strings.isNullOrEmpty(lm)) {
-                                millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
-                            }
-                        } catch (final Exception ex) {
-                            EcsLogger.debug("com.auto1.pantera.npm")
-                                .message("Failed to parse asset lastModified for proxy event")
-                                .error(ex)
-                                .log();
-                        }
-                        final ProxyArtifactEvent event = new ProxyArtifactEvent(
-                            new Key.From(tgz), this.repoName,
-                            new Login(headers).getValue(),
-                            java.util.Optional.ofNullable(millis)
-                        );
-                        if (!queue.offer(event)) {
-                            com.auto1.pantera.metrics.EventsQueueMetrics
-                                .recordDropped(this.repoName);
-                        }
-                    } catch (final Throwable t) {
-                        EcsLogger.warn("com.auto1.pantera.npm")
-                            .message("Failed to enqueue proxy event; serve path unaffected")
-                            .eventCategory("process")
-                            .eventAction("queue_enqueue")
-                            .eventOutcome("failure")
-                            .field("repository.name", this.repoName)
-                            .log();
-                    }
-                });
+                // Queue the proxy event — failures MUST NOT escape the serve path.
+                this.enqueueProxyEvent(tgz, headers, asset);
                 String mime = asset.meta().contentType();
-                if (Strings.isNullOrEmpty(mime)){
+                if (Strings.isNullOrEmpty(mime)) {
                     throw new IllegalStateException("Failed to get 'Content-Type'");
                 }
                 String lastModified = asset.meta().lastModified();
-                if(Strings.isNullOrEmpty(lastModified)){
+                if (Strings.isNullOrEmpty(lastModified)) {
                     lastModified = new DateTimeNowStr().value();
                 }
-                return ResponseBuilder.ok()
-                    .header(ContentType.mime(mime))
-                    .header("Last-Modified", lastModified)
-                    .body(asset.dataPublisher())
-                    .build();
-            }))
-            .toSingle(ResponseBuilder.notFound().build())
-            .to(SingleInterop.get())
-            .toCompletableFuture()
-            .thenCompose(com.auto1.pantera.http.trace.MdcPropagation.withMdc(response -> {
-                // If we got a 404 (not in storage), now we need to go to remote
-                // At this point, we should evaluate cooldown first
-                if (response.status().code() == 404) {
-                    return this.evaluateCooldownAndFetch(tgz, headers);
-                }
-                // Asset was served from cache - return it
-                return CompletableFuture.completedFuture(response);
-            }));
+                return CompletableFuture.completedFuture(
+                    ResponseBuilder.ok()
+                        .header(ContentType.mime(mime))
+                        .header("Last-Modified", lastModified)
+                        .body(asset.dataPublisher())
+                        .build()
+                );
+            });
     }
 
     /**
@@ -283,67 +241,83 @@ public final class DownloadAssetSlice implements Slice {
     }
 
     private CompletableFuture<Response> serveAsset(final String tgz, final Headers headers) {
-        return this.npm.getAsset(tgz).map(
-                asset -> {
-                    // Enqueue failures (bounded queue full, lambda exception, ...)
-                    // MUST NOT escape the serve path — wrap the whole body.
-                    this.packages.ifPresent(queue -> {
-                        try {
-                            Long millis = null;
-                            try {
-                                final String lm = asset.meta().lastModified();
-                                if (!Strings.isNullOrEmpty(lm)) {
-                                    millis = java.time.Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)).toEpochMilli();
-                                }
-                            } catch (final Exception ex) {
-                                EcsLogger.debug("com.auto1.pantera.npm")
-                                    .message("Failed to parse asset lastModified for proxy event")
-                                    .error(ex)
-                                    .log();
-                            }
-                            final ProxyArtifactEvent event = new ProxyArtifactEvent(
-                                new Key.From(tgz), this.repoName,
-                                new Login(headers).getValue(),
-                                java.util.Optional.ofNullable(millis)
-                            );
-                            if (!queue.offer(event)) {
-                                com.auto1.pantera.metrics.EventsQueueMetrics
-                                    .recordDropped(this.repoName);
-                            }
-                        } catch (final Throwable t) {
-                            EcsLogger.warn("com.auto1.pantera.npm")
-                                .message("Failed to enqueue proxy event; serve path unaffected")
-                                .eventCategory("process")
-                                .eventAction("queue_enqueue")
-                                .eventOutcome("failure")
-                                .field("repository.name", this.repoName)
-                                .log();
-                        }
-                    });
-                    return asset;
-                })
-            .map(
-                asset -> {
-                    String mime = asset.meta().contentType();
-                    if (Strings.isNullOrEmpty(mime)){
-                        throw new IllegalStateException("Failed to get 'Content-Type'");
-                    }
-                    String lastModified = asset.meta().lastModified();
-                    if(Strings.isNullOrEmpty(lastModified)){
-                        lastModified = new DateTimeNowStr().value();
-                    }
-                    // Stream content directly - no buffering needed.
-                    // MicrometerSlice fix ensures response bodies aren't double-subscribed.
-                    return ResponseBuilder.ok()
-                        .header(ContentType.mime(mime))
-                        .header("Last-Modified", lastModified)
-                        .body(asset.dataPublisher())
-                        .build();
+        // Convert RxJava Maybe at the NpmProxy boundary to CompletionStage.
+        return this.npm.getAssetAsync(tgz)
+            .thenApply(optAsset -> {
+                if (optAsset.isEmpty()) {
+                    return ResponseBuilder.notFound().build();
                 }
-            )
-            .toSingle(ResponseBuilder.notFound().build())
-            .to(SingleInterop.get())
-            .toCompletableFuture();
+                final var asset = optAsset.get();
+                // Enqueue failures (bounded queue full, lambda exception, ...)
+                // MUST NOT escape the serve path — wrap the whole body.
+                this.enqueueProxyEvent(tgz, headers, asset);
+                String mime = asset.meta().contentType();
+                if (Strings.isNullOrEmpty(mime)) {
+                    throw new IllegalStateException("Failed to get 'Content-Type'");
+                }
+                String lastModified = asset.meta().lastModified();
+                if (Strings.isNullOrEmpty(lastModified)) {
+                    lastModified = new DateTimeNowStr().value();
+                }
+                // Stream content directly - no buffering needed.
+                return ResponseBuilder.ok()
+                    .header(ContentType.mime(mime))
+                    .header("Last-Modified", lastModified)
+                    .body(asset.dataPublisher())
+                    .build();
+            });
+    }
+
+    /**
+     * Enqueue a proxy artifact event for the given asset.
+     * Failures (bounded queue full, parse errors) are swallowed
+     * so the serve path is never affected.
+     *
+     * @param tgz Asset path
+     * @param headers Request headers
+     * @param asset The resolved asset
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void enqueueProxyEvent(
+        final String tgz,
+        final Headers headers,
+        final com.auto1.pantera.npm.proxy.model.NpmAsset asset
+    ) {
+        this.packages.ifPresent(queue -> {
+            try {
+                Long millis = null;
+                try {
+                    final String lm = asset.meta().lastModified();
+                    if (!Strings.isNullOrEmpty(lm)) {
+                        millis = java.time.Instant.from(
+                            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(lm)
+                        ).toEpochMilli();
+                    }
+                } catch (final Exception ex) {
+                    EcsLogger.debug("com.auto1.pantera.npm")
+                        .message("Failed to parse asset lastModified for proxy event")
+                        .error(ex)
+                        .log();
+                }
+                final ProxyArtifactEvent event = new ProxyArtifactEvent(
+                    new Key.From(tgz), this.repoName,
+                    new Login(headers).getValue(),
+                    java.util.Optional.ofNullable(millis)
+                );
+                if (!queue.offer(event)) {
+                    com.auto1.pantera.metrics.EventsQueueMetrics
+                        .recordDropped(this.repoName);
+                }
+            } catch (final Throwable t) {
+                EcsLogger.warn("com.auto1.pantera.npm")
+                    .message("Failed to enqueue proxy event; serve path unaffected")
+                    .eventCategory("process")
+                    .eventAction("queue_enqueue")
+                    .eventOutcome("failure")
+                    .field("repository.name", this.repoName)
+                    .log();
+            }
+        });
     }
 
     private Optional<CooldownRequest> cooldownRequest(final String original, final Headers headers) {

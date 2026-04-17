@@ -34,10 +34,7 @@ import com.auto1.pantera.http.misc.ConfigDefaults;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.slice.KeyFromPath;
-import com.auto1.pantera.http.trace.MdcPropagation;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-
-import io.reactivex.Flowable;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.nio.ByteBuffer;
@@ -443,7 +440,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         }
         final CachedArtifactMetadataStore store = this.metadataStore.orElseThrow();
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(MdcPropagation.withMdc(cached -> {
+            .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     this.logDebug("Cache hit", path);
                     // Fast path: serve from cache with async metadata
@@ -456,7 +453,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 }
                 // Cache miss: evaluate cooldown then fetch
                 return this.evaluateCooldownAndFetch(line, headers, key, path, store);
-            })).toCompletableFuture();
+            }).toCompletableFuture();
     }
 
     /**
@@ -476,14 +473,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                 this.buildCooldownRequest(path, headers);
             if (request.isPresent()) {
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
-                    .thenCompose(MdcPropagation.withMdc(result -> {
+                    .thenCompose(result -> {
                         if (result.blocked()) {
                             return CompletableFuture.completedFuture(
                                 CooldownResponses.forbidden(result.block().orElseThrow())
                             );
                         }
                         return this.fetchAndCache(line, key, headers, store);
-                    }));
+                    });
             }
         }
         return this.fetchAndCache(line, key, headers, store);
@@ -502,7 +499,7 @@ public abstract class BaseCachedProxySlice implements Slice {
         final String owner = new Login(headers).getValue();
         final long startTime = System.currentTimeMillis();
         return this.client.response(line, Headers.EMPTY, Content.EMPTY)
-            .thenCompose(MdcPropagation.withMdc(resp -> {
+            .thenCompose(resp -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 if (resp.status().code() == 404) {
                     return this.handle404(resp, key, duration)
@@ -520,8 +517,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                         .thenApply(r -> FetchSignal.SUCCESS);
                 }).thenCompose(signal ->
                     this.signalToResponse(signal, line, key, headers, store));
-            }))
-            .handle(MdcPropagation.withMdcBiFunction((resp, error) -> {
+            })
+            .handle((resp, error) -> {
                 if (error != null) {
                     final long duration = System.currentTimeMillis() - startTime;
                     this.trackUpstreamFailure(error);
@@ -545,7 +542,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return CompletableFuture.completedFuture(resp);
-            }))
+            })
             .thenCompose(future -> future);
     }
 
@@ -633,30 +630,51 @@ public abstract class BaseCachedProxySlice implements Slice {
             DigestComputer.createDigests(this.digestAlgorithms());
         final AtomicLong totalSize = new AtomicLong(0);
         final CompletableFuture<Void> streamDone = new CompletableFuture<>();
-        Flowable.fromPublisher(resp.body())
-            .doOnNext(buf -> {
-                final int nbytes = buf.remaining();
-                DigestComputer.updateDigests(digests, buf);
-                final ByteBuffer copy = buf.asReadOnlyBuffer();
-                while (copy.hasRemaining()) {
-                    channel.write(copy);
+        resp.body().subscribe(new org.reactivestreams.Subscriber<>() {
+            private org.reactivestreams.Subscription sub;
+
+            @Override
+            public void onSubscribe(final org.reactivestreams.Subscription subscription) {
+                this.sub = subscription;
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(final ByteBuffer buf) {
+                try {
+                    final int nbytes = buf.remaining();
+                    DigestComputer.updateDigests(digests, buf);
+                    final ByteBuffer copy = buf.asReadOnlyBuffer();
+                    while (copy.hasRemaining()) {
+                        channel.write(copy);
+                    }
+                    totalSize.addAndGet(nbytes);
+                } catch (final IOException ex) {
+                    this.sub.cancel();
+                    streamDone.completeExceptionally(ex);
                 }
-                totalSize.addAndGet(nbytes);
-            })
-            .doOnComplete(() -> {
-                channel.force(true);
-                channel.close();
-            })
-            .doOnError(err -> {
+            }
+
+            @Override
+            public void onError(final Throwable throwable) {
                 closeChannelQuietly(channel);
                 deleteTempQuietly(tempFile);
-            })
-            .subscribe(
-                item -> { },
-                streamDone::completeExceptionally,
-                () -> streamDone.complete(null)
-            );
-        return streamDone.thenCompose(MdcPropagation.withMdc(v -> {
+                streamDone.completeExceptionally(throwable);
+            }
+
+            @Override
+            public void onComplete() {
+                try {
+                    channel.force(true);
+                    channel.close();
+                    streamDone.complete(null);
+                } catch (final IOException ex) {
+                    closeChannelQuietly(channel);
+                    streamDone.completeExceptionally(ex);
+                }
+            }
+        });
+        return streamDone.thenCompose(v -> {
             final Map<String, String> digestResults =
                 DigestComputer.finalizeDigests(digests);
             final long size = totalSize.get();
@@ -703,7 +721,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     deleteTempQuietly(tempFile);
                     return FetchSignal.SUCCESS;
                 });
-        })).exceptionally(MdcPropagation.withMdcFunction(err -> {
+        }).exceptionally(err -> {
             deleteTempQuietly(tempFile);
             EcsLogger.warn("com.auto1.pantera." + this.repoType)
                 .message("Failed to cache upstream response")
@@ -715,7 +733,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 .error(err)
                 .log();
             return FetchSignal.ERROR;
-        }));
+        });
     }
 
     /**
@@ -732,44 +750,77 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Key key, final Path tempFile, final long size
     ) {
         if (this.storage.isPresent()) {
-            final Flowable<ByteBuffer> flow = Flowable.using(
-                () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-                chan -> Flowable.<ByteBuffer>generate(emitter -> {
-                    final ByteBuffer buf = ByteBuffer.allocate(65536);
-                    final int read = chan.read(buf);
-                    if (read < 0) {
-                        emitter.onComplete();
-                    } else {
-                        buf.flip();
-                        emitter.onNext(buf);
-                    }
-                }),
-                FileChannel::close
+            final Content content = new Content.From(
+                Optional.of(size), filePublisher(tempFile)
             );
-            final Content content = new Content.From(Optional.of(size), flow);
             return this.storage.get().save(key, content);
         }
         // Fallback: use cache.load (non-storage-backed mode)
-        final Flowable<ByteBuffer> flow = Flowable.using(
-            () -> FileChannel.open(tempFile, StandardOpenOption.READ),
-            chan -> Flowable.<ByteBuffer>generate(emitter -> {
-                final ByteBuffer buf = ByteBuffer.allocate(65536);
-                final int read = chan.read(buf);
-                if (read < 0) {
-                    emitter.onComplete();
-                } else {
-                    buf.flip();
-                    emitter.onNext(buf);
-                }
-            }),
-            FileChannel::close
+        final Content content = new Content.From(
+            Optional.of(size), filePublisher(tempFile)
         );
-        final Content content = new Content.From(Optional.of(size), flow);
         return this.cache.load(
             key,
             () -> CompletableFuture.completedFuture(Optional.of(content)),
             CacheControl.Standard.ALWAYS
         ).toCompletableFuture();
+    }
+
+    /**
+     * Create a reactive-streams {@link org.reactivestreams.Publisher} that reads
+     * a temp file in 64 KB chunks. Replaces the previous {@code Flowable.using}
+     * pattern so this class no longer imports {@code io.reactivex.Flowable}.
+     *
+     * @param tempFile Temp file to read
+     * @return Publisher of ByteBuffer chunks
+     */
+    private static org.reactivestreams.Publisher<ByteBuffer> filePublisher(final Path tempFile) {
+        return subscriber -> {
+            final FileChannel[] holder = new FileChannel[1];
+            try {
+                holder[0] = FileChannel.open(tempFile, StandardOpenOption.READ);
+            } catch (final IOException ex) {
+                subscriber.onSubscribe(new org.reactivestreams.Subscription() {
+                    @Override public void request(final long n) { }
+                    @Override public void cancel() { }
+                });
+                subscriber.onError(ex);
+                return;
+            }
+            final FileChannel chan = holder[0];
+            subscriber.onSubscribe(new org.reactivestreams.Subscription() {
+                private volatile boolean cancelled;
+
+                @Override
+                @SuppressWarnings("PMD.AvoidCatchingGenericException")
+                public void request(final long n) {
+                    try {
+                        long remaining = n;
+                        while (remaining > 0 && !this.cancelled) {
+                            final ByteBuffer buf = ByteBuffer.allocate(65_536);
+                            final int read = chan.read(buf);
+                            if (read < 0) {
+                                chan.close();
+                                subscriber.onComplete();
+                                return;
+                            }
+                            buf.flip();
+                            subscriber.onNext(buf);
+                            remaining--;
+                        }
+                    } catch (final Exception ex) {
+                        closeChannelQuietly(chan);
+                        subscriber.onError(ex);
+                    }
+                }
+
+                @Override
+                public void cancel() {
+                    this.cancelled = true;
+                    closeChannelQuietly(chan);
+                }
+            });
+        };
     }
 
     /**
@@ -846,7 +897,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     )
                 );
             })
-            .exceptionally(MdcPropagation.withMdcFunction(error -> {
+            .exceptionally(error -> {
                 final long duration = System.currentTimeMillis() - startTime;
                 this.trackUpstreamFailure(error);
                 this.recordProxyMetric("exception", duration);
@@ -862,7 +913,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return ResponseBuilder.unavailable()
                     .textBody("Upstream error")
                     .build();
-            }));
+            });
     }
 
     private CompletableFuture<FetchSignal> handle404(
@@ -918,7 +969,7 @@ public abstract class BaseCachedProxySlice implements Slice {
             return fallback.get();
         }
         if (this.metadataStore.isPresent()) {
-            return this.metadataStore.get().load(key).thenCompose(MdcPropagation.withMdc(metaOpt -> {
+            return this.metadataStore.get().load(key).thenCompose(metaOpt -> {
                 if (metaOpt.isEmpty()) {
                     return this.serveStaleFromStorage(key, fallback);
                 }
@@ -938,7 +989,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     return fallback.get();
                 }
                 return this.serveStaleFromStorageWithAge(key, fallback, age);
-            }));
+            });
         }
         return this.serveStaleFromStorage(key, fallback);
     }
@@ -948,12 +999,12 @@ public abstract class BaseCachedProxySlice implements Slice {
         final Supplier<CompletableFuture<Response>> fallback
     ) {
         final Storage store = this.storage.get();
-        return store.exists(key).thenCompose(MdcPropagation.withMdc(exists -> {
+        return store.exists(key).thenCompose(exists -> {
             if (!exists) {
                 return fallback.get();
             }
             return serveStaleFromStorageWithAge(key, fallback, null);
-        }));
+        });
     }
 
     private CompletableFuture<Response> serveStaleFromStorageWithAge(
@@ -963,7 +1014,7 @@ public abstract class BaseCachedProxySlice implements Slice {
     ) {
         final Storage store = this.storage.get();
         return store.value(key)
-            .thenApply(MdcPropagation.withMdcFunction(content -> {
+            .thenApply(content -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Upstream failed, serving stale cached artifact")
                     .eventCategory("network")
@@ -978,8 +1029,8 @@ public abstract class BaseCachedProxySlice implements Slice {
                     builder.header("Age", String.valueOf(age.getSeconds()));
                 }
                 return (Response) builder.body(content).build();
-            }))
-            .exceptionallyCompose(MdcPropagation.withMdc(err -> {
+            })
+            .exceptionallyCompose(err -> {
                 EcsLogger.warn("com.auto1.pantera." + this.repoType)
                     .message("Failed to read stale artifact from storage")
                     .eventCategory("web")
@@ -990,14 +1041,14 @@ public abstract class BaseCachedProxySlice implements Slice {
                     .error(err)
                     .log();
                 return fallback.get();
-            }));
+            });
     }
 
     private CompletableFuture<Response> serveChecksumFromStorage(
         final RequestLine line, final Key key, final String owner
     ) {
         return this.cache.load(key, Remote.EMPTY, CacheControl.Standard.ALWAYS)
-            .thenCompose(MdcPropagation.withMdc(cached -> {
+            .thenCompose(cached -> {
                 if (cached.isPresent()) {
                     return CompletableFuture.completedFuture(
                         ResponseBuilder.ok()
@@ -1007,7 +1058,7 @@ public abstract class BaseCachedProxySlice implements Slice {
                     );
                 }
                 return this.fetchDirect(line, key, owner);
-            })).toCompletableFuture();
+            }).toCompletableFuture();
     }
 
     private CompletableFuture<Response> handleRootPath(final RequestLine line) {

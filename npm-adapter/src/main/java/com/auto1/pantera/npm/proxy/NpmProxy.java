@@ -15,18 +15,20 @@ import com.auto1.pantera.asto.rx.RxStorageWrapper;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.client.ClientSlices;
 import com.auto1.pantera.http.client.UriClientSlice;
-import com.auto1.pantera.http.trace.MdcPropagation;
+import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.npm.proxy.model.NpmAsset;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
 import com.auto1.pantera.http.log.EcsLogger;
 import io.reactivex.Maybe;
+import io.reactivex.Scheduler;
 import io.reactivex.schedulers.Schedulers;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * NPM Proxy.
@@ -61,6 +63,13 @@ public class NpmProxy {
      * Prevents duplicate refresh operations for the same package.
      */
     private final ConcurrentHashMap.KeySetView<String, Boolean> refreshing;
+
+    /**
+     * Contextualised RxJava scheduler for background refresh.
+     * Propagates ThreadContext (ECS fields) and APM span automatically,
+     * replacing the per-call MDC capture/restore pattern.
+     */
+    private final Scheduler backgroundScheduler;
 
     /**
      * Ctor.
@@ -123,6 +132,11 @@ public class NpmProxy {
         this.remote = remote;
         this.metadataTtl = metadataTtl;
         this.refreshing = ConcurrentHashMap.newKeySet();
+        // Wrap ForkJoinPool.commonPool with ContextualExecutor so background
+        // refresh callbacks inherit the caller's ThreadContext (trace.id etc.)
+        // and APM span. This replaces the per-call MDC capture/restore.
+        final Executor ctxExec = ContextualExecutor.contextualize(ForkJoinPool.commonPool());
+        this.backgroundScheduler = Schedulers.from(ctxExec);
     }
 
     /**
@@ -231,35 +245,30 @@ public class NpmProxy {
      * Serves stale content immediately while refreshing in background.
      * Uses a ConcurrentHashMap.KeySetView to deduplicate in-flight refreshes.
      *
-     * <p>Captures the caller's MDC snapshot at wrap time and restores it
-     * inside the RxJava subscribe callbacks; without this the
-     * {@code Schedulers.io()} pool thread would emit logs without
-     * {@code trace.id} / {@code client.ip}, which is ~3.3k entries/day per
-     * production observation.</p>
+     * <p>Uses a {@link ContextualExecutor}-wrapped scheduler so that
+     * background callbacks inherit the caller's ThreadContext (trace.id,
+     * client.ip) and APM span automatically — no per-call MDC capture needed.
      *
      * @param name Package name
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void backgroundRefresh(final String name) {
         if (this.refreshing.add(name)) {
-            // Capture caller MDC so subscribe callbacks on Schedulers.io()
-            // still carry trace.id / client.ip when they log.
-            final Map<String, String> mdc = MdcPropagation.capture();
-            // Try conditional request first if we have a stored upstream ETag
+            // Try conditional request first if we have a stored upstream ETag.
+            // The backgroundScheduler propagates ThreadContext automatically.
             this.conditionalRefresh(name)
-                .subscribeOn(Schedulers.io())
+                .subscribeOn(this.backgroundScheduler)
                 .doFinally(() -> this.refreshing.remove(name))
                 .subscribe(
-                    saved -> MdcPropagation.runWith(mdc, () ->
+                    saved ->
                         EcsLogger.debug("com.auto1.pantera.npm.proxy")
                             .message("Background refresh completed")
                             .eventCategory("database")
                             .eventAction("stale_while_revalidate")
                             .eventOutcome("success")
                             .field("package.name", name)
-                            .log()
-                    ),
-                    err -> MdcPropagation.runWith(mdc, () ->
+                            .log(),
+                    err ->
                         EcsLogger.warn("com.auto1.pantera.npm.proxy")
                             .message("Background refresh failed")
                             .eventCategory("database")
@@ -267,8 +276,7 @@ public class NpmProxy {
                             .eventOutcome("failure")
                             .field("package.name", name)
                             .error(err)
-                            .log()
-                    ),
+                            .log(),
                     () -> this.refreshing.remove(name)
                 );
         }
@@ -324,6 +332,26 @@ public class NpmProxy {
                 )
             )
         );
+    }
+
+    /**
+     * CompletionStage-based boundary adapter for {@link #getAsset(String)}.
+     * Converts the internal RxJava {@code Maybe<NpmAsset>} to
+     * {@code CompletableFuture<Optional<NpmAsset>>} so callers on hot paths
+     * (e.g. {@code DownloadAssetSlice}) can stay in the CompletionStage world
+     * without importing RxJava types.
+     *
+     * @param path Asset path
+     * @return Future containing the asset, or empty if not found
+     */
+    public java.util.concurrent.CompletableFuture<java.util.Optional<NpmAsset>> getAssetAsync(
+        final String path
+    ) {
+        return this.getAsset(path)
+            .map(java.util.Optional::of)
+            .toSingle(java.util.Optional.empty())
+            .to(hu.akarnokd.rxjava2.interop.SingleInterop.get())
+            .toCompletableFuture();
     }
 
     /**
