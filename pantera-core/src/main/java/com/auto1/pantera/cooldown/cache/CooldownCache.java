@@ -260,25 +260,26 @@ public final class CooldownCache {
             // Deduplication metrics can be added if needed
             return existing;
         }
-        
-        // Query database
-        final CompletableFuture<Boolean> future = dbQuery.get()
-            .whenComplete((blocked, error) -> {
-                this.inflight.remove(key);
-                if (error == null && blocked != null) {
-                    // Cache in L1
-                    this.decisions.put(key, blocked);
-                    // Cache in L2 only for ALLOWED entries (false)
-                    // BLOCKED entries (true) are cached by service layer with dynamic TTL
-                    if (this.twoTier && !blocked) {
-                        this.putL2Boolean(key, false, this.l2AllowedTtlSeconds);
-                    }
-                }
-            });
 
-        // Register inflight to deduplicate concurrent requests
+        // Query database — register in inflight BEFORE attaching whenComplete
+        // to avoid a race where the future completes (and removes from inflight)
+        // before the put() call, leaving a zombie entry in the map.
+        final CompletableFuture<Boolean> future = dbQuery.get()
+            .orTimeout(30, TimeUnit.SECONDS);
         this.inflight.put(key, future);
-        
+        future.whenComplete((blocked, error) -> {
+            this.inflight.remove(key);
+            if (error == null && blocked != null) {
+                // Cache in L1
+                this.decisions.put(key, blocked);
+                // Cache in L2 only for ALLOWED entries (false)
+                // BLOCKED entries (true) are cached by service layer with dynamic TTL
+                if (this.twoTier && !blocked) {
+                    this.putL2Boolean(key, false, this.l2AllowedTtlSeconds);
+                }
+            }
+        });
+
         return future;
     }
 
