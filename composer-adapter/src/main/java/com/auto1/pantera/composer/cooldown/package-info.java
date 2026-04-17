@@ -21,6 +21,8 @@
  *       - Serializes filtered metadata to JSON</li>
  *   <li>{@link com.auto1.pantera.composer.cooldown.ComposerMetadataRequestDetector}
  *       - Detects {@code /packages/} and {@code /p2/} metadata endpoints</li>
+ *   <li>{@link com.auto1.pantera.composer.cooldown.ComposerCooldownResponseFactory}
+ *       - Builds 403 responses for blocked Composer packages</li>
  * </ul>
  *
  * <p>Composer metadata structure ({@code /packages/{vendor}/{pkg}.json}
