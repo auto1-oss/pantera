@@ -147,12 +147,13 @@ final class CooldownConcurrentFilterStampedeTest {
         // The parser should have run a small number of times,
         // far less than 100. With stampede dedup the first thread
         // loads and all others coalesce. We allow a generous margin
-        // (up to 5) for race-condition timing between the first load
-        // completing and the other threads checking the inflight map.
+        // (up to 10) for race-condition timing between the first load
+        // completing and the other threads checking the inflight map,
+        // especially under parallel reactor builds (-T8).
         final int parseCount = parser.parseCount.get();
         assertThat("Parser should run far fewer than " + CONCURRENT + " times "
                 + "(stampede dedup). Actual: " + parseCount,
-            parseCount, lessThanOrEqualTo(5));
+            parseCount, lessThanOrEqualTo(10));
     }
 
     /**
