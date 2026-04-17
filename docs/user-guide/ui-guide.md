@@ -186,6 +186,22 @@ Admin panels appear in the sidebar under **Administration** only if you have the
 
 If you do not see the Administration section, you have read-only access. Contact your administrator for elevated permissions.
 
+### Creating Repositories
+
+The **Create Repository** page (`/admin/repositories/create`) allows administrators to create new repositories. The **Type** dropdown lists all supported repository formats:
+
+- **Maven**, **Gradle**, **Docker**, **npm**, **PyPI**, **Go**, **Helm**, **NuGet**, **Debian**, **RPM**, **Conda**, **RubyGems**, **Conan**, **Hex**, **PHP**, **File**, **Binary**
+
+Each format supports Local, Proxy, and/or Group variants where applicable. For example, Go supports Local, Proxy, and Group; Gradle supports all three variants.
+
+### Configuring Group Members
+
+When creating or editing a **Group** repository (e.g., `maven-group`), the **Group Members** section provides:
+
+- **AutoComplete dropdown**: Type to search existing repositories that are compatible with the group type. For a `maven-group`, only `maven` (local) and `maven-proxy` repositories are shown. Each suggestion displays the repository name and type badge.
+- **Reordering**: Use the up/down arrow buttons to set resolution priority. The first matching member wins.
+- **Create new member**: Click **Create new** to open an inline dialog that creates a new compatible repository and immediately adds it to the member list.
+
 ---
 
 ## Keyboard and Navigation Tips
