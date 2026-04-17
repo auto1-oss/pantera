@@ -475,6 +475,9 @@ public final class AsyncApiVerticle extends AbstractVerticle {
                 this.security.policy()
             ).register(router);
         }
+        new com.auto1.pantera.api.v1.admin.NegativeCacheAdminResource(
+            this.security.policy()
+        ).register(router);
         // Start server
         final HttpServer server;
         final String schema;
