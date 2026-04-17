@@ -46,9 +46,10 @@ public final class FilteredMetadataCacheConfig {
     public static final Duration DEFAULT_TTL = Duration.ofHours(24);
 
     /**
-     * Default maximum L1 cache size (5,000 packages).
+     * Default maximum L1 cache size (50,000 packages — H4).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE} env var.
      */
-    public static final int DEFAULT_MAX_SIZE = 5_000;
+    public static final int DEFAULT_MAX_SIZE = 50_000;
 
     /**
      * Default L1 TTL when L2 is enabled (5 minutes).
