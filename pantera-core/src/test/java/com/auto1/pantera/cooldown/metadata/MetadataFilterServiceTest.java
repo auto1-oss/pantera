@@ -369,9 +369,9 @@ final class MetadataFilterServiceTest {
     void cacheExpiresWhenBlockExpiresAndReturnsUnblockedVersion() throws Exception {
         // Block version with very short expiry (100ms)
         final Instant shortBlockedUntil = Instant.now().plus(Duration.ofMillis(100));
-        
+
         // Use a custom cooldown service that returns short blockedUntil
-        final ShortExpiryTestCooldownService shortExpiryService = 
+        final ShortExpiryTestCooldownService shortExpiryService =
             new ShortExpiryTestCooldownService(shortBlockedUntil);
         shortExpiryService.blockVersion("test-pkg", "3.0.0");
 
@@ -399,7 +399,7 @@ final class MetadataFilterServiceTest {
             parser, filter, rewriter, Optional.of(inspector)
         ).get();
 
-        assertThat("3.0.0 should be blocked initially", 
+        assertThat("3.0.0 should be blocked initially",
             filter.lastBlockedVersions.contains("3.0.0"), equalTo(true));
 
         final int firstParseCount = parser.parseCount;
@@ -410,18 +410,30 @@ final class MetadataFilterServiceTest {
         // Simulate block expiry in cooldown service
         shortExpiryService.expireBlock("test-pkg", "3.0.0");
 
-        // Second request after expiry - cache should have expired, 3.0.0 should be allowed
+        // Second request after expiry — SWR returns stale bytes immediately
+        // and triggers background re-evaluation. The stale response still has
+        // 3.0.0 filtered, but the background revalidation runs asynchronously.
         shortExpiryMetadataService.filterMetadata(
             "npm", "test-repo", "test-pkg",
             "raw".getBytes(StandardCharsets.UTF_8),
             parser, filter, rewriter, Optional.of(inspector)
         ).get();
 
-        // Should have re-parsed (cache expired based on blockedUntil)
-        assertThat("Should re-parse after cache expiry", 
+        // Wait for background revalidation to complete
+        Thread.sleep(200);
+
+        // Third request — should return fresh data with 3.0.0 allowed
+        shortExpiryMetadataService.filterMetadata(
+            "npm", "test-repo", "test-pkg",
+            "raw".getBytes(StandardCharsets.UTF_8),
+            parser, filter, rewriter, Optional.of(inspector)
+        ).get();
+
+        // Background revalidation should have re-parsed
+        assertThat("Should re-parse via SWR background revalidation",
             parser.parseCount, equalTo(firstParseCount + 1));
-        // 3.0.0 should no longer be blocked
-        assertThat("3.0.0 should not be blocked after expiry", 
+        // 3.0.0 should no longer be blocked after revalidation
+        assertThat("3.0.0 should not be blocked after expiry + revalidation",
             filter.lastBlockedVersions.contains("3.0.0"), equalTo(false));
     }
 
