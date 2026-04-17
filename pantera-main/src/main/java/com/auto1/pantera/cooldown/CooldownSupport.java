@@ -10,10 +10,12 @@
  */
 package com.auto1.pantera.cooldown;
 
-import com.auto1.pantera.cooldown.NoopCooldownService;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.metadata.MetadataFilterService;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService;
@@ -153,7 +155,7 @@ public final class CooldownSupport {
             .eventAction("metadata_service_init")
             .log();
         
-        final CooldownMetadataServiceImpl metadataService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService metadataService = new MetadataFilterService(
             cooldownService,
             settings.cooldown(),
             jdbc.cache(),

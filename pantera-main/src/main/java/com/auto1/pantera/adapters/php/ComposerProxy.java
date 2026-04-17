@@ -42,7 +42,7 @@ public final class ComposerProxy implements Slice {
      * @param cfg Repository configuration
      */
     public ComposerProxy(ClientSlices client, RepoConfig cfg) {
-        this(client, cfg, Optional.empty(), com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE);
+        this(client, cfg, Optional.empty(), com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE);
     }
 
     /**
@@ -56,7 +56,7 @@ public final class ComposerProxy implements Slice {
         ClientSlices client,
         RepoConfig cfg,
         Optional<Queue<com.auto1.pantera.scheduling.ProxyArtifactEvent>> events,
-        com.auto1.pantera.cooldown.CooldownService cooldown
+        com.auto1.pantera.cooldown.api.CooldownService cooldown
     ) {
         final Optional<Storage> asto = cfg.storageOpt();
         final String baseUrl = cfg.url().toString();

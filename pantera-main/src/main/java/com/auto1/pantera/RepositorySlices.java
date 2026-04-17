@@ -35,7 +35,7 @@ import com.auto1.pantera.docker.asto.AstoDocker;
 import com.auto1.pantera.docker.asto.RegistryRoot;
 import com.auto1.pantera.docker.http.DockerSlice;
 import com.auto1.pantera.docker.http.TrimmedDocker;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSupport;
 import com.auto1.pantera.files.FilesSlice;
 import com.auto1.pantera.gem.http.GemSlice;

@@ -90,7 +90,7 @@ class DockerProxyTest {
             (username, password) -> Optional.empty(),
             token -> java.util.concurrent.CompletableFuture.completedFuture(Optional.empty()),
             Optional.empty(),
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE
         );
     }
 

@@ -17,9 +17,9 @@ import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.StreamThroughCache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.cache.Remote;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -101,7 +101,7 @@ public final class FileProxySlice implements Slice {
      */
     public FileProxySlice(final ClientSlices clients, final URI remote) {
         this(new UriClientSlice(clients, remote), Cache.NOP, Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**
@@ -116,7 +116,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), auth),
             new StreamThroughCache(asto), Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -133,7 +133,7 @@ public final class FileProxySlice implements Slice {
         this(
             new AuthClientSlice(new UriClientSlice(clients, remote), Authenticator.ANONYMOUS),
             new StreamThroughCache(asto), Optional.of(events), rname,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, remote.toString(), Optional.of(asto)
         );
     }
 
@@ -143,7 +143,7 @@ public final class FileProxySlice implements Slice {
      */
     FileProxySlice(final Slice remote, final Cache cache) {
         this(remote, cache, Optional.empty(), FilesSlice.ANY_REPO,
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE, "unknown", Optional.empty());
     }
 
     /**

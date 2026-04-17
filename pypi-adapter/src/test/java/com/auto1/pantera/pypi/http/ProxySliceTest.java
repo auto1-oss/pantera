@@ -19,7 +19,7 @@ import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
 import com.auto1.pantera.asto.ext.KeyLastPart;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;

@@ -8,9 +8,11 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
-package com.auto1.pantera.cooldown;
+package com.auto1.pantera.cooldown.impl;
 
 import com.auto1.pantera.cache.CacheConfig;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;

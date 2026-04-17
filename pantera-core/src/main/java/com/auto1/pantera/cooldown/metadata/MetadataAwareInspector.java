@@ -14,7 +14,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Extension interface for {@link com.auto1.pantera.cooldown.CooldownInspector} implementations
+ * Extension interface for {@link com.auto1.pantera.cooldown.api.CooldownInspector} implementations
  * that can accept preloaded release dates from metadata.
  *
  * <p>When metadata contains release timestamps (e.g., NPM's {@code time} object),

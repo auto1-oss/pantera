@@ -15,7 +15,7 @@ import com.amihaiemil.eoyaml.YamlSequence;
 import com.auto1.pantera.api.ssl.KeyStore;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.http.client.HttpClientSettings;
 import com.auto1.pantera.index.ArtifactIndex;
 import com.auto1.pantera.scheduling.MetadataEventQueues;

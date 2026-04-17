@@ -10,11 +10,11 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownCache;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
 
@@ -49,7 +49,7 @@ import java.util.stream.Collectors;
  *
  * @since 1.0
  */
-public final class CooldownMetadataServiceImpl implements CooldownMetadataService {
+public final class MetadataFilterService implements CooldownMetadataService {
 
     /**
      * Default maximum versions to evaluate for cooldown.
@@ -110,7 +110,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
      * @param settings Cooldown settings
      * @param cooldownCache Per-version cooldown cache
      */
-    public CooldownMetadataServiceImpl(
+    public MetadataFilterService(
         final CooldownService cooldown,
         final CooldownSettings settings,
         final CooldownCache cooldownCache
@@ -135,7 +135,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
      * @param executor Executor for async operations
      * @param maxVersionsToEvaluate Maximum versions to evaluate
      */
-    public CooldownMetadataServiceImpl(
+    public MetadataFilterService(
         final CooldownService cooldown,
         final CooldownSettings settings,
         final CooldownCache cooldownCache,

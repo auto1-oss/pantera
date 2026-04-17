@@ -10,8 +10,8 @@
  */
 package com.auto1.pantera.pypi.http;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -28,7 +28,7 @@ import java.util.concurrent.CompletableFuture;
  * Uses bounded Caffeine cache to prevent unbounded memory growth in Old Gen.
  */
 final class PyProxyCooldownInspector implements CooldownInspector,
-    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.config.InspectorRegistry.InvalidatableInspector {
     /**
      * Bounded cache of artifact versions and their release times.
      * Key format: "artifact:version"

@@ -9,6 +9,19 @@
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
 package com.auto1.pantera.cooldown;
+
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.config.CooldownCircuitBreaker;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.config.InspectorRegistry;
+import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
+import com.auto1.pantera.http.log.EcsLogger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,8 +34,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
-import com.auto1.pantera.http.log.EcsLogger;
 
 
 final class JdbcCooldownService implements CooldownService {
@@ -96,7 +107,7 @@ final class JdbcCooldownService implements CooldownService {
 
     /**
      * Get the cooldown cache instance.
-     * Used by CooldownMetadataServiceImpl for cache sharing.
+     * Used by MetadataFilterService for cache sharing.
      * @return CooldownCache instance
      */
     public CooldownCache cache() {
@@ -733,7 +744,7 @@ final class JdbcCooldownService implements CooldownService {
                 .log();
         }
         // Invalidate inspector cache (same as unblockSingle does)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .invalidate(record.repoType(), record.repoName(),
                 record.artifact(), record.version());
     }
@@ -749,7 +760,7 @@ final class JdbcCooldownService implements CooldownService {
         record.ifPresent(value -> this.release(value, actor, Instant.now()));
         
         // Invalidate inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .invalidate(repoType, repoName, artifact, version);
     }
 
@@ -780,7 +791,7 @@ final class JdbcCooldownService implements CooldownService {
         // Single bulk DELETE instead of N individual updates
         final int count = this.repository.deleteActiveBlocksForRepo(repoType, repoName);
         // Clear inspector cache (works for all adapters: Docker, NPM, PyPI, etc.)
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        InspectorRegistry.instance()
             .clearAll(repoType, repoName);
         return count;
     }

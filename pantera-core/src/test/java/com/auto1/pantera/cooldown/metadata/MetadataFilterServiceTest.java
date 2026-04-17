@@ -10,13 +10,13 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownCache;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownSettings;
-import com.auto1.pantera.cooldown.NoopCooldownService;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.impl.NoopCooldownService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -39,13 +39,13 @@ import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Tests for {@link CooldownMetadataServiceImpl}.
+ * Tests for {@link MetadataFilterService}.
  *
  * @since 1.0
  */
-final class CooldownMetadataServiceImplTest {
+final class MetadataFilterServiceTest {
 
-    private CooldownMetadataServiceImpl service;
+    private MetadataFilterService service;
     private TestCooldownService cooldownService;
     private CooldownSettings settings;
     private CooldownCache cooldownCache;
@@ -57,7 +57,7 @@ final class CooldownMetadataServiceImplTest {
         this.settings = new CooldownSettings(true, Duration.ofDays(7));
         this.cooldownCache = new CooldownCache();
         this.metadataCache = new FilteredMetadataCache();
-        this.service = new CooldownMetadataServiceImpl(
+        this.service = new MetadataFilterService(
             this.cooldownService,
             this.settings,
             this.cooldownCache,
@@ -164,7 +164,7 @@ final class CooldownMetadataServiceImplTest {
     void returnsRawMetadataWhenCooldownDisabled() throws Exception {
         // Disable cooldown
         final CooldownSettings disabledSettings = new CooldownSettings(false, Duration.ofDays(7));
-        final CooldownMetadataServiceImpl disabledService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService disabledService = new MetadataFilterService(
             this.cooldownService,
             disabledSettings,
             this.cooldownCache,
@@ -375,7 +375,7 @@ final class CooldownMetadataServiceImplTest {
             new ShortExpiryTestCooldownService(shortBlockedUntil);
         shortExpiryService.blockVersion("test-pkg", "3.0.0");
 
-        final CooldownMetadataServiceImpl shortExpiryMetadataService = new CooldownMetadataServiceImpl(
+        final MetadataFilterService shortExpiryMetadataService = new MetadataFilterService(
             shortExpiryService,
             this.settings,
             new CooldownCache(),
@@ -454,12 +454,12 @@ final class CooldownMetadataServiceImplTest {
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
-                    CooldownResult.blocked(new com.auto1.pantera.cooldown.CooldownBlock(
+                    CooldownResult.blocked(new com.auto1.pantera.cooldown.api.CooldownBlock(
                         request.repoType(),
                         request.repoName(),
                         request.artifact(),
                         request.version(),
-                        com.auto1.pantera.cooldown.CooldownReason.FRESH_RELEASE,
+                        com.auto1.pantera.cooldown.api.CooldownReason.FRESH_RELEASE,
                         Instant.now(),
                         this.blockedUntil, // Use configurable blockedUntil
                         java.util.Collections.emptyList()
@@ -484,7 +484,7 @@ final class CooldownMetadataServiceImplTest {
         }
 
         @Override
-        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.CooldownBlock>> activeBlocks(
+        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.api.CooldownBlock>> activeBlocks(
             String repoType, String repoName
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());
@@ -506,12 +506,12 @@ final class CooldownMetadataServiceImplTest {
             final String key = request.artifact() + "@" + request.version();
             if (this.blockedVersions.contains(key)) {
                 return CompletableFuture.completedFuture(
-                    CooldownResult.blocked(new com.auto1.pantera.cooldown.CooldownBlock(
+                    CooldownResult.blocked(new com.auto1.pantera.cooldown.api.CooldownBlock(
                         request.repoType(),
                         request.repoName(),
                         request.artifact(),
                         request.version(),
-                        com.auto1.pantera.cooldown.CooldownReason.FRESH_RELEASE,
+                        com.auto1.pantera.cooldown.api.CooldownReason.FRESH_RELEASE,
                         Instant.now(),
                         Instant.now().plus(Duration.ofDays(7)),
                         java.util.Collections.emptyList()
@@ -536,7 +536,7 @@ final class CooldownMetadataServiceImplTest {
         }
 
         @Override
-        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.CooldownBlock>> activeBlocks(
+        public CompletableFuture<java.util.List<com.auto1.pantera.cooldown.api.CooldownBlock>> activeBlocks(
             String repoType, String repoName
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());
@@ -633,7 +633,7 @@ final class CooldownMetadataServiceImplTest {
         }
 
         @Override
-        public CompletableFuture<List<com.auto1.pantera.cooldown.CooldownDependency>> dependencies(
+        public CompletableFuture<List<com.auto1.pantera.cooldown.api.CooldownDependency>> dependencies(
             final String artifact, final String version
         ) {
             return CompletableFuture.completedFuture(java.util.Collections.emptyList());

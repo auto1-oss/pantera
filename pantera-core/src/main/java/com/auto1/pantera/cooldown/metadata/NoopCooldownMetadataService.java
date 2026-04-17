@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.cooldown.metadata;
 
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
