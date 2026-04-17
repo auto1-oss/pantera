@@ -33,6 +33,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 
@@ -84,9 +86,15 @@ public final class MetadataFilterService implements CooldownMetadataService {
     private final FilteredMetadataCache metadataCache;
 
     /**
-     * Executor for async operations.
+     * Executor for async operations (metadata parse, filter, rewrite).
      */
     private final Executor executor;
+
+    /**
+     * Dedicated bounded executor for parallel version evaluation (H2).
+     * 4 threads, context-propagating, used only for evaluateVersion() dispatch.
+     */
+    private final ExecutorService evaluationExecutor;
 
     /**
      * Maximum versions to evaluate.
@@ -121,7 +129,8 @@ public final class MetadataFilterService implements CooldownMetadataService {
             cooldownCache,
             new FilteredMetadataCache(),
             ForkJoinPool.commonPool(),
-            DEFAULT_MAX_VERSIONS
+            DEFAULT_MAX_VERSIONS,
+            null
         );
     }
 
@@ -143,12 +152,44 @@ public final class MetadataFilterService implements CooldownMetadataService {
         final Executor executor,
         final int maxVersionsToEvaluate
     ) {
+        this(cooldown, settings, cooldownCache, metadataCache, executor, maxVersionsToEvaluate, null);
+    }
+
+    /**
+     * Full constructor with optional dedicated evaluation executor.
+     *
+     * @param cooldown Cooldown service
+     * @param settings Cooldown settings
+     * @param cooldownCache Per-version cooldown cache
+     * @param metadataCache Filtered metadata cache
+     * @param executor Executor for async operations
+     * @param maxVersionsToEvaluate Maximum versions to evaluate
+     * @param evalExecutor Dedicated executor for parallel version evaluation (null = create default)
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public MetadataFilterService(
+        final CooldownService cooldown,
+        final CooldownSettings settings,
+        final CooldownCache cooldownCache,
+        final FilteredMetadataCache metadataCache,
+        final Executor executor,
+        final int maxVersionsToEvaluate,
+        final ExecutorService evalExecutor
+    ) {
         this.cooldown = Objects.requireNonNull(cooldown);
         this.settings = Objects.requireNonNull(settings);
         this.cooldownCache = Objects.requireNonNull(cooldownCache);
         this.metadataCache = Objects.requireNonNull(metadataCache);
         this.executor = com.auto1.pantera.http.context.ContextualExecutor
             .contextualize(Objects.requireNonNull(executor));
+        this.evaluationExecutor = evalExecutor != null
+            ? evalExecutor
+            : com.auto1.pantera.http.context.ContextualExecutorService.wrap(
+                Executors.newFixedThreadPool(4, r -> {
+                    final Thread t = new Thread(r, "cooldown-eval");
+                    t.setDaemon(true);
+                    return t;
+                }));
         this.maxVersionsToEvaluate = maxVersionsToEvaluate;
         this.versionComparators = Map.of(
             "npm", VersionComparators.semver(),
@@ -340,13 +381,18 @@ public final class MetadataFilterService implements CooldownMetadataService {
     /**
      * Evaluate cooldown for versions and filter metadata.
      * Returns CacheEntry with TTL based on earliest blockedUntil.
+     * Versions are evaluated in parallel on a dedicated bounded executor (H2).
      */
     private <T> CompletableFuture<FilteredMetadataCache.CacheEntry> evaluateAndFilter(final FilterContext<T> ctx) {
-        // Step 4: Evaluate cooldown for each version in parallel
+        // Step 4: Evaluate cooldown for each version in parallel on dedicated pool
         final List<CompletableFuture<VersionBlockResult>> futures = ctx.versionsToEvaluate.stream()
-            .map(version -> this.evaluateVersion(
-                ctx.repoType, ctx.repoName, ctx.packageName, version, ctx.inspectorOpt
-            ))
+            .limit(this.maxVersionsToEvaluate)
+            .map(version -> CompletableFuture.supplyAsync(
+                () -> this.evaluateVersion(
+                    ctx.repoType, ctx.repoName, ctx.packageName, version, ctx.inspectorOpt
+                ),
+                this.evaluationExecutor
+            ).thenCompose(f -> f))
             .collect(Collectors.toList());
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
