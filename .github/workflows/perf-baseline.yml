@@ -1,0 +1,67 @@
+name: Perf Baseline
+
+on:
+  pull_request:
+    branches: [master, 2.2.0]
+
+jobs:
+  perf-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Build (skip tests)
+        run: mvn -T8 install -DskipTests -q
+
+      - name: Install wrk
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wrk
+
+      - name: Start Pantera
+        run: |
+          java -jar pantera-main/target/pantera-main-*.jar &
+          echo $! > /tmp/pantera.pid
+          # Wait for health endpoint
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/api/health > /dev/null 2>&1; then
+              echo "Pantera started"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run perf benchmark
+        run: |
+          chmod +x scripts/perf-benchmark.sh
+          scripts/perf-benchmark.sh http://localhost:8080 /tmp/measured.json
+
+      - name: Compare against baseline
+        run: |
+          chmod +x scripts/perf-compare.sh
+          scripts/perf-compare.sh tests/perf-baselines/npm-proxy.json /tmp/measured.json
+
+      - name: Stop Pantera
+        if: always()
+        run: |
+          if [ -f /tmp/pantera.pid ]; then
+            kill "$(cat /tmp/pantera.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: /tmp/measured.json
+          retention-days: 30
