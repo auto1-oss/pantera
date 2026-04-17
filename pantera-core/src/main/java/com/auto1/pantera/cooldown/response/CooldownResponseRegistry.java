@@ -24,7 +24,24 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class CooldownResponseRegistry {
 
+    /**
+     * Singleton instance.
+     */
+    private static final CooldownResponseRegistry INSTANCE = new CooldownResponseRegistry();
+
     private final Map<String, CooldownResponseFactory> factories = new ConcurrentHashMap<>();
+
+    private CooldownResponseRegistry() {
+    }
+
+    /**
+     * Get singleton instance.
+     *
+     * @return Registry instance
+     */
+    public static CooldownResponseRegistry instance() {
+        return INSTANCE;
+    }
 
     /**
      * Register a factory for a repository type.
@@ -67,5 +84,12 @@ public final class CooldownResponseRegistry {
      */
     public Set<String> registeredTypes() {
         return Set.copyOf(this.factories.keySet());
+    }
+
+    /**
+     * Clear all registrations. For testing only.
+     */
+    public void clear() {
+        this.factories.clear();
     }
 }

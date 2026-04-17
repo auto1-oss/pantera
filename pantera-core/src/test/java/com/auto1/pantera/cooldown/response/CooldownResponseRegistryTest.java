@@ -41,7 +41,8 @@ final class CooldownResponseRegistryTest {
 
     @BeforeEach
     void setUp() {
-        this.registry = new CooldownResponseRegistry();
+        this.registry = CooldownResponseRegistry.instance();
+        this.registry.clear();
     }
 
     @Test
