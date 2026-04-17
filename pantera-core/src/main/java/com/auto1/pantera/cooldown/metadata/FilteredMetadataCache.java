@@ -65,8 +65,9 @@ public final class FilteredMetadataCache {
 
     /**
      * Default L1 cache size (number of packages).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE} env var.
      */
-    private static final int DEFAULT_L1_SIZE = 5_000;
+    private static final int DEFAULT_L1_SIZE = resolveDefaultL1Size();
 
     /**
      * Default max TTL when no versions are blocked (24 hours).
@@ -654,5 +655,26 @@ public final class FilteredMetadataCache {
         ) {
             return new CacheEntry(data, Optional.of(earliestBlockedUntil), maxTtl);
         }
+    }
+
+    /**
+     * Resolve default L1 size from env var or fall back to 50,000 (H4).
+     * Configurable via {@code PANTERA_COOLDOWN_METADATA_L1_SIZE}.
+     *
+     * @return L1 size
+     */
+    private static int resolveDefaultL1Size() {
+        final String env = System.getenv("PANTERA_COOLDOWN_METADATA_L1_SIZE");
+        if (env != null && !env.isEmpty()) {
+            try {
+                final int parsed = Integer.parseInt(env.trim());
+                if (parsed > 0) {
+                    return parsed;
+                }
+            } catch (final NumberFormatException ignored) {
+                // fall through to default
+            }
+        }
+        return 50_000;
     }
 }
