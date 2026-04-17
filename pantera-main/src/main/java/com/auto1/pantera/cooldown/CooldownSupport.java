@@ -186,6 +186,20 @@ public final class CooldownSupport {
     }
 
     /**
+     * Extract the CooldownCache from a CooldownService, if it is backed
+     * by JdbcCooldownService. Returns null for NoopCooldownService.
+     *
+     * @param cooldownService The cooldown service
+     * @return CooldownCache or null
+     */
+    public static CooldownCache extractCache(final CooldownService cooldownService) {
+        if (cooldownService instanceof JdbcCooldownService) {
+            return ((JdbcCooldownService) cooldownService).cache();
+        }
+        return null;
+    }
+
+    /**
      * Load cooldown settings from DB and apply to in-memory CooldownSettings.
      * DB settings (saved via the UI) take precedence over YAML defaults.
      * @param csettings In-memory cooldown settings to update

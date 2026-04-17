@@ -79,6 +79,13 @@ public interface CooldownMetadataService {
     void invalidateAll(String repoType, String repoName);
 
     /**
+     * Clear all cached metadata across all repositories.
+     * Called on global policy changes (e.g. cooldown duration change)
+     * that may affect all cached entries.
+     */
+    void clearAll();
+
+    /**
      * Get cache statistics.
      *
      * @return Statistics string
