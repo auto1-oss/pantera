@@ -24,7 +24,13 @@ import javax.json.JsonObjectBuilder;
 
 /**
  * Helper to build cooldown HTTP responses.
+ *
+ * @deprecated Use per-adapter {@link CooldownResponseFactory} via
+ *     {@link CooldownResponseRegistry#get(String)} instead. This class will be
+ *     removed in a future release. See Phase 4 / Phase 6 of the cooldown
+ *     metadata filtering plan.
  */
+@Deprecated(forRemoval = true)
 public final class CooldownResponses {
 
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
@@ -32,6 +38,14 @@ public final class CooldownResponses {
     private CooldownResponses() {
     }
 
+    /**
+     * Build a generic 403 Forbidden response for a blocked artifact.
+     *
+     * @param block Block details
+     * @return HTTP response
+     * @deprecated Use per-adapter {@link CooldownResponseFactory#forbidden(CooldownBlock)} instead
+     */
+    @Deprecated(forRemoval = true)
     public static Response forbidden(final CooldownBlock block) {
         // Calculate human-readable message
         // Note: blockedAt is when the block was created, blockedUntil is when it expires

@@ -16,8 +16,11 @@ import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.CacheControl;
 import com.auto1.pantera.asto.cache.Remote;
+import com.auto1.pantera.cooldown.api.CooldownBlock;
 import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.config.CooldownAdapterRegistry;
+import com.auto1.pantera.cooldown.response.CooldownResponseFactory;
 import com.auto1.pantera.cooldown.response.CooldownResponses;
 import com.auto1.pantera.cooldown.api.CooldownResult;
 import com.auto1.pantera.cooldown.api.CooldownService;
@@ -475,8 +478,9 @@ public abstract class BaseCachedProxySlice implements Slice {
                 return this.cooldownService.evaluate(request.get(), this.cooldownInspector)
                     .thenCompose(result -> {
                         if (result.blocked()) {
+                            final CooldownBlock block = result.block().orElseThrow();
                             return CompletableFuture.completedFuture(
-                                CooldownResponses.forbidden(result.block().orElseThrow())
+                                buildForbiddenResponse(block, this.repoType)
                             );
                         }
                         return this.fetchAndCache(line, key, headers, store);
@@ -484,6 +488,26 @@ public abstract class BaseCachedProxySlice implements Slice {
             }
         }
         return this.fetchAndCache(line, key, headers, store);
+    }
+
+    /**
+     * Build a 403 Forbidden response for a cooldown block.
+     * Uses the per-adapter {@link CooldownResponseFactory} from the
+     * {@link CooldownAdapterRegistry} if one is registered for the repo type;
+     * otherwise falls back to the generic {@link CooldownResponses#forbidden(CooldownBlock)}.
+     *
+     * @param block Block details
+     * @param repoType Repository type for factory lookup
+     * @return HTTP 403 response
+     */
+    @SuppressWarnings("deprecation")
+    private static Response buildForbiddenResponse(
+        final CooldownBlock block,
+        final String repoType
+    ) {
+        return CooldownAdapterRegistry.instance().get(repoType)
+            .map(bundle -> bundle.responseFactory().forbidden(block))
+            .orElseGet(() -> CooldownResponses.forbidden(block));
     }
 
     /**

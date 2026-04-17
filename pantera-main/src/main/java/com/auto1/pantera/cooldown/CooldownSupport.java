@@ -89,6 +89,10 @@ public final class CooldownSupport {
     }
 
     public static CooldownService create(final Settings settings, final Executor executor) {
+        // Register all adapter bundles (parser/filter/rewriter/detector/responseFactory)
+        // into the global CooldownAdapterRegistry. This is idempotent and safe to call
+        // early -- the registry is a ConcurrentHashMap, and adapters are stateless.
+        CooldownWiring.registerAllAdapters();
         return settings.artifactsDatabase()
             .map(ds -> {
                 // Load DB-persisted cooldown config and apply over YAML defaults.
