@@ -31,8 +31,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p><strong>Use as the executor argument to {@code CompletableFuture.*Async}
  * in every {@code api/v1/} handler</strong> — do <em>not</em> use
  * {@link java.util.concurrent.ForkJoinPool#commonPool()} (no context
- * propagation) and do <em>not</em> wrap lambdas in
- * {@code MdcPropagation.withMdc*} at the call site (retired in WI-03).
+ * propagation) — context propagation is handled by
+ * {@link ContextualExecutor} at the pool boundary.
  *
  * <p>§4.4 of {@code docs/analysis/v2.2-target-architecture.md} makes the
  * <em>pool boundary</em> — not the per-call wrapper — responsible for
@@ -69,7 +69,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <h2>Singleton rationale</h2>
  * <p>A static holder (rather than DI) keeps the migration mechanical —
  * each handler call-site flips from
- * {@code ctx.vertx().executeBlocking(MdcPropagation.withMdc(c), false)} to
+ * {@code ctx.vertx().executeBlocking(callable, false)} to
  * {@code CompletableFuture.supplyAsync(supplier, HandlerExecutor.get())}
  * without touching constructors or the {@code AsyncApiVerticle} wiring.
  * The pool is JVM-scoped; we have one process per node and one handler

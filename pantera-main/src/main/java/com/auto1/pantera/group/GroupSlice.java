@@ -49,7 +49,6 @@ import java.util.stream.Collectors;
 
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.timeout.AutoBlockRegistry;
-import com.auto1.pantera.http.trace.MdcPropagation;
 
 /**
  * High-performance group/virtual repository slice.
@@ -579,9 +578,9 @@ public final class GroupSlice implements Slice {
         // ---- Path 1: No index configured OR unparseable URL → full two-phase fanout ----
         if (this.artifactIndex.isEmpty()) {
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                .whenComplete(
                     (resp, err) -> recordMetrics(resp, err, requestStartTime)
-                ));
+                );
         }
         final ArtifactIndex idx = this.artifactIndex.get();
         final Optional<String> parsedName =
@@ -595,14 +594,14 @@ public final class GroupSlice implements Slice {
                 .field("url.path", path)
                 .log();
             return fullTwoPhaseFanout(line, headers, body, ctx)
-                .whenComplete(MdcPropagation.withMdcBiConsumer(
+                .whenComplete(
                     (resp, err) -> recordMetrics(resp, err, requestStartTime)
-                ));
+                );
         }
 
         // ---- Path 2: Query index ----
         return idx.locateByName(parsedName.get())
-            .thenCompose(MdcPropagation.withMdc(optRepos -> {
+            .thenCompose(optRepos -> {
                 if (optRepos.isEmpty()) {
                     // DB error → full two-phase fanout safety net
                     EcsLogger.warn("com.auto1.pantera.group")
@@ -621,10 +620,10 @@ public final class GroupSlice implements Slice {
                 }
                 // ---- Path 3: Index hit → targeted local read ----
                 return targetedLocalRead(repos, line, headers, body, ctx);
-            }))
-            .whenComplete(MdcPropagation.withMdcBiConsumer(
+            })
+            .whenComplete(
                 (resp, err) -> recordMetrics(resp, err, requestStartTime)
-            ));
+            );
     }
 
     private void recordMetrics(
@@ -759,7 +758,7 @@ public final class GroupSlice implements Slice {
                 .field("url.path", line.uri().getPath())
                 .log();
             return queryTargetedMembers(proxyOnly, line, headers, body, ctx, false)
-                .thenApply(MdcPropagation.withMdcFunction(resp -> {
+                .thenApply(resp -> {
                     if (resp.status() == RsStatus.NOT_FOUND) {
                         this.negativeCache.cacheNotFound(cacheKey);
                         EcsLogger.debug("com.auto1.pantera.group")
@@ -769,7 +768,7 @@ public final class GroupSlice implements Slice {
                             .log();
                     }
                     return resp;
-                }))
+                })
                 .whenComplete((resp, err) -> leaderGate.complete(null));
         }
         EcsLogger.debug("com.auto1.pantera.group")
@@ -782,9 +781,9 @@ public final class GroupSlice implements Slice {
         // any exception the gate might carry (zombie TTL, leader's upstream
         // failure): the negative cache or upstream proxy state is the source
         // of truth on retry, not the gate's terminal value.
-        return gate.exceptionally(err -> null).thenCompose(MdcPropagation.withMdc(
+        return gate.exceptionally(err -> null).thenCompose(
             ignored -> this.proxyOnlyFanout(line, headers, body, ctx, artifactName)
-        ));
+        );
     }
 
     /**
@@ -918,7 +917,7 @@ public final class GroupSlice implements Slice {
         }
         // Try hosted first; fall to proxy only if hosted yields no 200
         return queryTargetedMembers(hosted, line, headers, body, ctx, false)
-            .thenCompose(MdcPropagation.withMdc(resp -> {
+            .thenCompose(resp -> {
                 if (resp.status().success()) {
                     return CompletableFuture.completedFuture(resp);
                 }
@@ -930,7 +929,7 @@ public final class GroupSlice implements Slice {
                     .eventAction("group_cascade_to_proxy")
                     .log();
                 return queryTargetedMembers(proxy, line, headers, body, ctx, false);
-            }));
+            });
     }
 
     /**

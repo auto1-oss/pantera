@@ -21,7 +21,6 @@ import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.resilience.SingleFlight;
 import com.auto1.pantera.http.rq.RequestLine;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -218,10 +217,10 @@ public final class MavenGroupSlice implements Slice {
         );
 
         return mergeMetadata(metadataLine, headers, body, metadataPath)
-            .thenApply(MdcPropagation.withMdcFunction(metadataResponse -> {
+            .thenApply(metadataResponse -> {
                 // Extract body from metadata response
                 return metadataResponse.body().asBytesFuture()
-                    .thenApply(MdcPropagation.withMdcFunction(metadataBytes -> {
+                    .thenApply(metadataBytes -> {
                         try {
                             // Compute checksum
                             final java.security.MessageDigest digest = java.security.MessageDigest.getInstance(
@@ -252,8 +251,8 @@ public final class MavenGroupSlice implements Slice {
                                 .textBody("Failed to compute checksum")
                                 .build();
                         }
-                    }));
-            }))
+                    });
+            })
             .thenCompose(future -> future);
     }
 
@@ -276,7 +275,7 @@ public final class MavenGroupSlice implements Slice {
         final String cacheKey = path;
 
         // Check two-tier cache (L1 then L2 if miss)
-        return this.metadataCache.get(cacheKey).thenCompose(MdcPropagation.withMdc(cached -> {
+        return this.metadataCache.get(cacheKey).thenCompose(cached -> {
             if (cached.isPresent()) {
                 // Cache HIT (L1 or L2)
                 EcsLogger.debug("com.auto1.pantera.maven")
@@ -316,9 +315,9 @@ public final class MavenGroupSlice implements Slice {
             );
             if (isLeader[0]) {
                 return fetchAndMergeFromMembers(line, headers, path, cacheKey)
-                    .whenComplete(MdcPropagation.withMdcBiConsumer(
+                    .whenComplete(
                         (resp, err) -> leaderGate.complete(null)
-                    ));
+                    );
             }
             EcsLogger.debug("com.auto1.pantera.maven")
                 .message("Coalescing with in-flight metadata fetch")
@@ -330,10 +329,10 @@ public final class MavenGroupSlice implements Slice {
             // Follower: re-enter response() once the gate resolves. Swallow
             // any exception the gate might carry — the L1/L2 cache is the
             // source of truth on retry.
-            return gate.exceptionally(err -> null).thenCompose(MdcPropagation.withMdc(
+            return gate.exceptionally(err -> null).thenCompose(
                 ignored -> this.response(line, headers, body)
-            ));
-        }));
+            );
+        });
     }
 
     /**
@@ -350,7 +349,7 @@ public final class MavenGroupSlice implements Slice {
         // Cache MISS - fetch and merge from members
         // CRITICAL: Consume original body to prevent OneTimePublisher errors
         // GET requests for maven-metadata.xml have empty bodies, but Content is still reference-counted
-        return CompletableFuture.completedFuture((byte[]) null).thenCompose(MdcPropagation.withMdc(requestBytes -> {
+        return CompletableFuture.completedFuture((byte[]) null).thenCompose(requestBytes -> {
             // Track fetch duration separately from merge duration
             final long fetchStartTime = System.currentTimeMillis();
 
@@ -371,7 +370,7 @@ public final class MavenGroupSlice implements Slice {
 
                 final CompletableFuture<byte[]> memberFuture = memberSlice
                     .response(memberLine, dropFullPathHeader(headers), Content.EMPTY)
-                    .thenCompose(MdcPropagation.withMdc(resp -> {
+                    .thenCompose(resp -> {
                         if (resp.status() == RsStatus.OK) {
                             return readResponseBody(resp.body());
                         } else {
@@ -379,8 +378,8 @@ public final class MavenGroupSlice implements Slice {
                             return resp.body().asBytesFuture()
                                 .thenApply(ignored -> (byte[]) null);
                         }
-                    }))
-                    .exceptionally(MdcPropagation.withMdcFunction(err -> {
+                    })
+                    .exceptionally(err -> {
                         EcsLogger.warn("com.auto1.pantera.maven")
                             .message("Member failed to fetch metadata: " + member)
                             .eventCategory("web")
@@ -390,14 +389,14 @@ public final class MavenGroupSlice implements Slice {
                             .error(err)
                             .log();
                         return null;
-                    }));
+                    });
 
                 futures.add(memberFuture);
             }
 
             // Wait for all members and merge results
             return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                .thenCompose(MdcPropagation.withMdc(v -> {
+                .thenCompose(v -> {
                     final List<byte[]> metadataList = new ArrayList<>();
                     for (CompletableFuture<byte[]> future : futures) {
                         final byte[] metadata = future.getNow(null);
@@ -412,7 +411,7 @@ public final class MavenGroupSlice implements Slice {
                     if (metadataList.isEmpty()) {
                         // All members failed — try last-known-good stale fallback
                         return MavenGroupSlice.this.metadataCache.getStale(cacheKey)
-                            .thenApply(MdcPropagation.withMdcFunction(stale -> {
+                            .thenApply(stale -> {
                                 if (stale.isPresent()) {
                                     EcsLogger.warn("com.auto1.pantera.maven")
                                         .message("Returning stale metadata (all members failed)")
@@ -439,7 +438,7 @@ public final class MavenGroupSlice implements Slice {
                                     .field("event.duration", fetchDuration)
                                     .log();
                                 return ResponseBuilder.notFound().build();
-                            }));
+                            });
                     }
 
                     // Track merge duration separately (actual XML processing time)
@@ -448,7 +447,7 @@ public final class MavenGroupSlice implements Slice {
                     // Use reflection to call MetadataMerger from maven-adapter module
                     // This avoids circular dependency issues
                     return mergeUsingReflection(metadataList)
-                        .thenApply(MdcPropagation.withMdcFunction(mergedBytes -> {
+                        .thenApply(mergedBytes -> {
                             final long mergeDuration = System.currentTimeMillis() - mergeStartTime;
                             final long totalDuration = fetchDuration + mergeDuration;
 
@@ -488,9 +487,9 @@ public final class MavenGroupSlice implements Slice {
                                 .header("Content-Type", "application/xml")
                                 .body(mergedBytes)
                                 .build();
-                        }));
-                }))
-                .exceptionally(MdcPropagation.withMdcFunction(err -> {
+                        });
+                })
+                .exceptionally(err -> {
                     // Unwrap CompletionException to get the real cause
                     final Throwable cause = err.getCause() != null ? err.getCause() : err;
                     EcsLogger.error("com.auto1.pantera.maven")
@@ -505,8 +504,8 @@ public final class MavenGroupSlice implements Slice {
                     return ResponseBuilder.internalError()
                         .textBody("Failed to merge metadata: " + cause.getMessage())
                         .build();
-                }));
-        }));
+                });
+        });
     }
 
     /**

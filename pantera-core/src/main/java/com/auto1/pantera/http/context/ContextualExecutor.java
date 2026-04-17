@@ -24,8 +24,8 @@ import org.apache.logging.log4j.ThreadContext;
  * {@link RequestContext}) and the caller's Elastic APM active {@link Span}.
  *
  * <p>Implements §4.4 of {@code docs/analysis/v2.2-target-architecture.md}: the
- * single replacement for the old per-call {@code MdcPropagation.withMdc*}
- * helpers. Wire this once at each thread-pool boundary (Vert.x worker pool,
+ * single mechanism for context propagation across async boundaries.
+ * Wire this once at each thread-pool boundary (Vert.x worker pool,
  * the drain executor, the DB index executor, the Quartz worker thread factory,
  * any {@code ForkJoinPool} on the hot path) — from then on, every
  * {@code CompletableFuture.supplyAsync(..., ctxExecutor)} or
