@@ -80,6 +80,12 @@ public final class FilteredMetadataCache {
     private static final Duration MIN_TTL = Duration.ofMinutes(1);
 
     /**
+     * Grace period after logical TTL expiry during which the stale entry
+     * remains in Caffeine to serve stale-while-revalidate responses (H3).
+     */
+    private static final Duration SWR_GRACE = Duration.ofMinutes(5);
+
+    /**
      * L1 cache (in-memory) with per-entry dynamic TTL.
      * May be null in L2-only mode.
      */
@@ -232,17 +238,22 @@ public final class FilteredMetadataCache {
         if (!this.l2OnlyMode && this.l1Cache != null) {
             final CacheEntry l1Cached = this.l1Cache.getIfPresent(key);
             if (l1Cached != null) {
-                // Check if entry has expired (blockedUntil has passed)
                 if (l1Cached.isExpired()) {
-                    // Entry expired - invalidate and reload
-                    this.l1Cache.invalidate(key);
-                } else {
+                    // Stale-while-revalidate (H3): return stale bytes immediately
+                    // and trigger background re-evaluation so the next caller gets
+                    // fresh data without waiting.
+                    this.triggerBackgroundRevalidation(key, loader);
                     this.l1Hits++;
                     if (CooldownMetrics.isAvailable()) {
-                        CooldownMetrics.getInstance().recordCacheHit("l1");
+                        CooldownMetrics.getInstance().recordCacheHit("l1_swr");
                     }
                     return CompletableFuture.completedFuture(l1Cached.data());
                 }
+                this.l1Hits++;
+                if (CooldownMetrics.isAvailable()) {
+                    CooldownMetrics.getInstance().recordCacheHit("l1");
+                }
+                return CompletableFuture.completedFuture(l1Cached.data());
             }
         }
 
@@ -284,8 +295,27 @@ public final class FilteredMetadataCache {
     }
 
     /**
+     * Trigger background re-evaluation for a stale cache entry (SWR — H3).
+     * Only fires if no revalidation is already in progress for this key.
+     * The caller has already returned stale bytes to the client.
+     */
+    private void triggerBackgroundRevalidation(
+        final String key,
+        final java.util.function.Supplier<CompletableFuture<CacheEntry>> loader
+    ) {
+        if (this.inflight.containsKey(key)) {
+            // Already revalidating — skip duplicate
+            return;
+        }
+        // Fire-and-forget: loadAndCache will update L1 + L2 on completion
+        this.loadAndCache(key, loader);
+    }
+
+    /**
      * Load metadata and cache in both tiers with dynamic TTL.
      * Uses single-flight pattern to prevent stampede.
+     * Registers in inflight BEFORE attaching whenComplete to avoid the
+     * same race condition fixed in CooldownCache (H5).
      */
     private CompletableFuture<byte[]> loadAndCache(
         final String key,
@@ -297,32 +327,32 @@ public final class FilteredMetadataCache {
             return existing.thenApply(CacheEntry::data);
         }
 
-        // Start loading
-        final CompletableFuture<CacheEntry> future = loader.get()
-            .whenComplete((entry, error) -> {
-                this.inflight.remove(key);
-                if (error == null && entry != null) {
-                    // Cache in L1 with L1 TTL (skip in L2-only mode)
-                    if (!this.l2OnlyMode && this.l1Cache != null) {
-                        // Wrap entry with L1 TTL for proper expiration
-                        final CacheEntry l1Entry = new CacheEntry(
-                            entry.data(),
-                            entry.earliestBlockedUntil(),
-                            this.l1Ttl
-                        );
-                        this.l1Cache.put(key, l1Entry);
-                    }
-                    // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
-                    if (this.l2Connection != null) {
-                        final long ttlSeconds = this.calculateL2Ttl(entry);
-                        if (ttlSeconds > 0) {
-                            this.l2Connection.async().setex(key, ttlSeconds, entry.data());
-                        }
+        // Start loading -- register in inflight BEFORE whenComplete
+        final CompletableFuture<CacheEntry> future = loader.get();
+        this.inflight.put(key, future);
+        future.whenComplete((entry, error) -> {
+            this.inflight.remove(key);
+            if (error == null && entry != null) {
+                // Cache in L1 with L1 TTL (skip in L2-only mode)
+                if (!this.l2OnlyMode && this.l1Cache != null) {
+                    // Wrap entry with L1 TTL for proper expiration
+                    final CacheEntry l1Entry = new CacheEntry(
+                        entry.data(),
+                        entry.earliestBlockedUntil(),
+                        this.l1Ttl
+                    );
+                    this.l1Cache.put(key, l1Entry);
+                }
+                // Cache in L2 with L2 TTL (use configured l2Ttl, capped by blockedUntil if present)
+                if (this.l2Connection != null) {
+                    final long ttlSeconds = this.calculateL2Ttl(entry);
+                    if (ttlSeconds > 0) {
+                        this.l2Connection.async().setex(key, ttlSeconds, entry.data());
                     }
                 }
-            });
+            }
+        });
 
-        this.inflight.put(key, future);
         return future.thenApply(CacheEntry::data);
     }
 
@@ -551,31 +581,49 @@ public final class FilteredMetadataCache {
 
         /**
          * Calculate TTL in nanoseconds for Caffeine expiry.
-         * If versions are blocked: TTL = earliestBlockedUntil - now
-         * If no versions blocked: TTL = maxTtl (release dates don't change)
+         * Includes a SWR grace period so the entry stays in Caffeine
+         * beyond its logical expiry, allowing stale-while-revalidate.
+         * Use {@link #isExpired()} for logical expiry checks.
          *
-         * @return TTL in nanoseconds
+         * @return TTL in nanoseconds (logical TTL + SWR grace)
          */
         public long ttlNanos() {
             if (this.earliestBlockedUntil.isPresent()) {
                 final Duration remaining = Duration.between(Instant.now(), this.earliestBlockedUntil.get());
                 if (remaining.isNegative() || remaining.isZero()) {
-                    // Already expired - use minimum TTL
-                    return MIN_TTL.toNanos();
+                    // Already logically expired - keep alive for SWR grace
+                    return SWR_GRACE.toNanos();
                 }
-                return remaining.toNanos();
+                return remaining.plus(SWR_GRACE).toNanos();
             }
-            // No blocked versions - cache for max TTL
-            return this.maxTtl.toNanos();
+            // No blocked versions - cache for max TTL + grace
+            return this.maxTtl.plus(SWR_GRACE).toNanos();
         }
 
         /**
-         * Calculate TTL in seconds for L2 cache.
+         * Calculate logical TTL in seconds for L2 cache (excludes SWR grace).
          *
          * @return TTL in seconds
          */
         public long ttlSeconds() {
-            return Math.max(MIN_TTL.getSeconds(), this.ttlNanos() / 1_000_000_000L);
+            return Math.max(MIN_TTL.getSeconds(), this.logicalTtlNanos() / 1_000_000_000L);
+        }
+
+        /**
+         * Logical TTL in nanoseconds (without SWR grace period).
+         * Used for L2 TTL calculation and tests.
+         *
+         * @return Logical TTL in nanoseconds
+         */
+        private long logicalTtlNanos() {
+            if (this.earliestBlockedUntil.isPresent()) {
+                final Duration remaining = Duration.between(Instant.now(), this.earliestBlockedUntil.get());
+                if (remaining.isNegative() || remaining.isZero()) {
+                    return MIN_TTL.toNanos();
+                }
+                return remaining.toNanos();
+            }
+            return this.maxTtl.toNanos();
         }
 
         /**
