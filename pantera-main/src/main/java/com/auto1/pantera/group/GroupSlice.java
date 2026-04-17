@@ -517,28 +517,28 @@ public final class GroupSlice implements Slice {
     }
 
     /**
-     * Build the default in-memory-only negative cache used when no YAML wiring
-     * is supplied.  Matches the pre-YAML behaviour exactly: 5 min TTL, 10K entries,
-     * no Valkey.  Kept as a static helper so tests and callers without settings
-     * access still get a working cache.
+     * Obtain the default negative cache.  Since v2.2.0 (WI-06), prefers the
+     * single shared bean held by {@link NegativeCacheRegistry} when available.
+     * Falls back to a fresh per-group instance for tests and callers where
+     * the shared cache has not yet been initialized.
      *
-     * @param group Group name used as the {@code repoName} for cache-key isolation
-     * @return L1-only negative cache (5 min TTL, 10K entries)
+     * @param group Group name for fallback cache-key isolation
+     * @return Shared or fresh NegativeCache instance
      */
     private static NegativeCache defaultNegativeCache(final String group) {
-        final NegativeCacheConfig config = new NegativeCacheConfig(
-            java.time.Duration.ofMinutes(5),
-            10_000,
-            false,
-            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
-            NegativeCacheConfig.DEFAULT_L1_TTL,
-            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
-            NegativeCacheConfig.DEFAULT_L2_TTL
-        );
+        if (com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().isSharedCacheSet()) {
+            return com.auto1.pantera.http.cache.NegativeCacheRegistry.instance().sharedCache();
+        }
         return new NegativeCache(
             "group-negative",
             group != null ? group : "default",
-            config
+            new NegativeCacheConfig(
+                java.time.Duration.ofMinutes(5), 10_000, false,
+                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L1_TTL,
+                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+                NegativeCacheConfig.DEFAULT_L2_TTL
+            )
         );
     }
 

@@ -20,6 +20,7 @@ import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.FetchSignal;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.context.ContextualExecutor;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.http.resilience.SingleFlight;
@@ -122,7 +123,7 @@ public final class CachedNpmProxySlice implements Slice {
         this.repoName = repoName;
         this.upstreamUrl = upstreamUrl;
         this.repoType = repoType;
-        this.negativeCache = new NegativeCache(repoType, repoName);
+        this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         // 5-minute zombie TTL (PANTERA_DEDUP_MAX_AGE_MS = 300 000 ms).
         // 10K max entries bounds memory.

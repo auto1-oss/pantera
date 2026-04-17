@@ -203,8 +203,12 @@ public abstract class BaseCachedProxySlice implements Slice {
         this.metadataStore = storage.map(CachedArtifactMetadataStore::new);
         this.storageBacked = this.metadataStore.isPresent()
             && !Objects.equals(this.cache, Cache.NOP);
+        final NegativeCache registryCache = NegativeCacheRegistry.instance().isSharedCacheSet()
+            ? NegativeCacheRegistry.instance().sharedCache() : null;
         this.negativeCache = config.negativeCacheEnabled()
-            ? new NegativeCache(repoType, repoName) : null;
+            ? (registryCache != null ? registryCache
+                : new NegativeCache(repoType, repoName))
+            : null;
         this.cooldownService = cooldownService;
         this.cooldownInspector = cooldownInspector;
         // Zombie TTL honours PANTERA_DEDUP_MAX_AGE_MS (default 5 min). 10K max

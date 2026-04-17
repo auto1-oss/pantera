@@ -174,13 +174,19 @@ public class RepositorySlices {
     private final SharedJettyClients sharedClients;
 
     /**
-     * Negative cache configuration for group fanout 404s.
-     * <p>Loaded once from {@code meta.caches.group-negative} in pantera.yml; falls
-     * back to a 5 min TTL / 10K entry in-memory default when absent.  Each
-     * {@code *-group} repo receives a dedicated {@link NegativeCache} built from
-     * this config so key-prefixing isolates entries per group.
+     * Negative cache configuration loaded from YAML.
+     * <p>Read from {@code meta.caches.repo-negative} first; falls back to the
+     * legacy {@code meta.caches.group-negative} key with a deprecation WARN.
+     * When neither key is present, uses historical defaults (5 min / 10K).
      */
-    private final NegativeCacheConfig groupNegativeCacheConfig;
+    private final NegativeCacheConfig negativeCacheConfig;
+
+    /**
+     * Single shared NegativeCache instance for the entire JVM.
+     * All group, proxy, and hosted scopes share this bean. Keyed by
+     * {@link com.auto1.pantera.http.cache.NegativeCacheKey}.
+     */
+    private final NegativeCache sharedNegativeCache;
 
     /**
      * Shared circuit-breaker registries keyed by physical repo name.
@@ -216,12 +222,12 @@ public class RepositorySlices {
             }
         }
         this.sharedClients = new SharedJettyClients();
-        // Load group-negative cache config once at construction time.  When the
-        // sub-key is absent from pantera.yml, fromYaml returns the default
-        // single-tier config (24h TTL / 50K entries) which we override below to
-        // preserve the pre-YAML group-slice defaults (5m / 10K) unless the
-        // operator explicitly opts in.
-        this.groupNegativeCacheConfig = loadGroupNegativeCacheConfig(settings);
+        // Load negative cache config once at construction time.
+        // Reads repo-negative first; falls back to group-negative with deprecation WARN.
+        this.negativeCacheConfig = loadNegativeCacheConfig(settings);
+        this.sharedNegativeCache = new NegativeCache(this.negativeCacheConfig);
+        com.auto1.pantera.http.cache.NegativeCacheRegistry.instance()
+            .setSharedCache(this.sharedNegativeCache);
         this.slices = CacheBuilder.newBuilder()
             .maximumSize(500)
             .expireAfterAccess(30, java.util.concurrent.TimeUnit.MINUTES)
@@ -672,7 +678,7 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(npmFlatMembers),
                     "npm-group",
-                    newGroupNegativeCache(cfg.name()),
+                    this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry
                 );
                 // Create audit slice that aggregates results from ALL members
@@ -738,7 +744,7 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(composerFlatMembers),
                     cfg.type(),
-                    newGroupNegativeCache(cfg.name()),
+                    this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
@@ -768,7 +774,7 @@ public class RepositorySlices {
                     Optional.of(this.settings.artifactIndex()),
                     proxyMembers(mavenFlatMembers),
                     "maven-group",
-                    newGroupNegativeCache(cfg.name()),
+                    this.sharedNegativeCache,
                     this::getOrCreateMemberRegistry
                 );
                 slice = trimPathSlice(
@@ -805,7 +811,7 @@ public class RepositorySlices {
                             Optional.of(this.settings.artifactIndex()),
                             proxyMembers(genericFlatMembers),
                             cfg.type(),
-                            newGroupNegativeCache(cfg.name()),
+                            this.sharedNegativeCache,
                             this::getOrCreateMemberRegistry
                         ),
                         authentication(),
@@ -1039,50 +1045,45 @@ public class RepositorySlices {
 
 
     /**
-     * Load negative cache config for group fanout 404s.
+     * Load negative cache config from YAML.
      *
-     * <p>Reads {@code meta.caches.group-negative} via {@link NegativeCacheConfig#fromYaml}.
-     * When the sub-key is absent the helper returns the package defaults (24h /
-     * 50K); we substitute the historical GroupSlice values (5 min / 10K /
-     * L1-only) so upgrades without YAML changes preserve prior behaviour.
+     * <p>Reads {@code meta.caches.repo-negative} first (the v2.2 canonical key).
+     * If absent, falls back to the legacy {@code meta.caches.group-negative} key
+     * and emits a deprecation WARN.  When neither key is present, returns the
+     * historical defaults (5 min / 10K / in-memory only) to preserve backwards
+     * compatibility.
      *
      * @param settings Pantera settings
-     * @return Group-specific negative cache config
+     * @return Unified negative cache config
      */
-    private static NegativeCacheConfig loadGroupNegativeCacheConfig(final Settings settings) {
+    private static NegativeCacheConfig loadNegativeCacheConfig(final Settings settings) {
         final com.amihaiemil.eoyaml.YamlMapping caches = settings != null && settings.meta() != null
             ? settings.meta().yamlMapping("caches")
             : null;
-        final boolean hasGroupNegative = caches != null
-            && caches.yamlMapping("group-negative") != null;
-        if (!hasGroupNegative) {
-            // Preserve pre-YAML defaults: 5 min TTL, 10K entries, in-memory only
-            return new NegativeCacheConfig(
-                java.time.Duration.ofMinutes(5),
-                10_000,
-                false,
-                NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L1_TTL,
-                NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
-                NegativeCacheConfig.DEFAULT_L2_TTL
-            );
+        // Try the new canonical key first
+        if (caches != null && caches.yamlMapping("repo-negative") != null) {
+            return NegativeCacheConfig.fromYaml(caches, "repo-negative");
         }
-        return NegativeCacheConfig.fromYaml(caches, "group-negative");
-    }
-
-    /**
-     * Construct a per-group {@link NegativeCache} backed by the shared config.
-     * The group name is used as the cache-key prefix so entries for different
-     * groups cannot collide in either L1 or L2.
-     *
-     * @param groupName Group repository name
-     * @return Negative cache scoped to this group
-     */
-    private NegativeCache newGroupNegativeCache(final String groupName) {
-        return new NegativeCache(
-            "group-negative",
-            groupName,
-            this.groupNegativeCacheConfig
+        // Fall back to legacy key with deprecation WARN
+        if (caches != null && caches.yamlMapping("group-negative") != null) {
+            EcsLogger.warn("com.auto1.pantera.settings")
+                .message("YAML key 'meta.caches.group-negative' is deprecated; "
+                    + "rename to 'meta.caches.repo-negative' — legacy key will be "
+                    + "removed in a future release")
+                .eventCategory("configuration")
+                .eventAction("yaml_deprecation")
+                .log();
+            return NegativeCacheConfig.fromYaml(caches, "group-negative");
+        }
+        // Neither key present — preserve pre-YAML defaults
+        return new NegativeCacheConfig(
+            java.time.Duration.ofMinutes(5),
+            10_000,
+            false,
+            NegativeCacheConfig.DEFAULT_L1_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L1_TTL,
+            NegativeCacheConfig.DEFAULT_L2_MAX_SIZE,
+            NegativeCacheConfig.DEFAULT_L2_TTL
         );
     }
 

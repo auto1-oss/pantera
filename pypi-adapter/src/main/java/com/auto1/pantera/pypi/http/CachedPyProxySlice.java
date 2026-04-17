@@ -20,6 +20,7 @@ import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Slice;
 import com.auto1.pantera.http.cache.CachedArtifactMetadataStore;
 import com.auto1.pantera.http.cache.NegativeCache;
+import com.auto1.pantera.http.cache.NegativeCacheRegistry;
 import com.auto1.pantera.http.cache.ProxyCacheWriter;
 import com.auto1.pantera.http.context.RequestContext;
 import com.auto1.pantera.http.fault.Fault;
@@ -196,7 +197,7 @@ public final class CachedPyProxySlice implements Slice {
         this.repoType = repoType;
         // Use unified NegativeCacheConfig for consistent settings across all adapters
         // TTL, maxSize, and Valkey settings come from global config (caches.negative in pantera.yml)
-        this.negativeCache = new NegativeCache(repoType, repoName);
+        this.negativeCache = NegativeCacheRegistry.instance().sharedCache();
         this.metadata = storage.map(CachedArtifactMetadataStore::new);
         this.rawStorage = storage;
         this.cacheWriter = storage

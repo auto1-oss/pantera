@@ -17,7 +17,7 @@ import com.auto1.pantera.cooldown.CooldownService;
 import com.auto1.pantera.cooldown.CooldownSettings;
 import com.auto1.pantera.cooldown.metrics.CooldownMetrics;
 import com.auto1.pantera.http.log.EcsLogger;
-import com.auto1.pantera.http.trace.MdcPropagation;
+
 import org.slf4j.MDC;
 
 import java.time.Duration;
@@ -147,7 +147,8 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         this.settings = Objects.requireNonNull(settings);
         this.cooldownCache = Objects.requireNonNull(cooldownCache);
         this.metadataCache = Objects.requireNonNull(metadataCache);
-        this.executor = Objects.requireNonNull(executor);
+        this.executor = com.auto1.pantera.http.context.ContextualExecutor
+            .contextualize(Objects.requireNonNull(executor));
         this.maxVersionsToEvaluate = maxVersionsToEvaluate;
         this.versionComparators = Map.of(
             "npm", VersionComparators.semver(),
@@ -212,7 +213,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
         final Optional<CooldownInspector> inspectorOpt,
         final long startTime
     ) {
-        return CompletableFuture.supplyAsync(MdcPropagation.withMdcSupplier(() -> {
+        return CompletableFuture.supplyAsync(() -> {
             // Step 1: Parse metadata
             final T parsed = parser.parse(rawMetadata);
             final List<String> allVersions = parser.extractVersions(parsed);
@@ -315,14 +316,14 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                 allVersions, sortedVersions, versionsToEvaluate,
                 parser, filter, rewriter, inspectorOpt, startTime
             );
-        }), this.executor).thenCompose(MdcPropagation.withMdc(ctx -> {
+        }, this.executor).thenCompose(ctx -> {
             if (ctx instanceof FilteredMetadataCache.CacheEntry) {
                 return CompletableFuture.completedFuture((FilteredMetadataCache.CacheEntry) ctx);
             }
             @SuppressWarnings("unchecked")
             final FilterContext<T> context = (FilterContext<T>) ctx;
             return this.evaluateAndFilter(context);
-        }));
+        });
     }
 
     /**
@@ -338,7 +339,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
             .collect(Collectors.toList());
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .thenApply(MdcPropagation.withMdcFunction(ignored -> {
+            .thenApply(ignored -> {
                 // Step 5: Collect blocked versions and find earliest blockedUntil
                 final Set<String> blockedVersions = new HashSet<>();
                 Instant earliestBlockedUntil = null;
@@ -432,7 +433,7 @@ public final class CooldownMetadataServiceImpl implements CooldownMetadataServic
                     );
                 }
                 return FilteredMetadataCache.CacheEntry.noBlockedVersions(resultBytes, this.maxTtl);
-            })).whenComplete((result, error) -> {
+            }).whenComplete((result, error) -> {
                 // Clear preloaded dates
                 ctx.inspectorOpt.ifPresent(inspector -> {
                     if (inspector instanceof MetadataAwareInspector) {
