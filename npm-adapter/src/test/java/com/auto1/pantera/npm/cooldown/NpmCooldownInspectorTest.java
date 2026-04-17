@@ -10,7 +10,7 @@
  */
 package com.auto1.pantera.npm.cooldown;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

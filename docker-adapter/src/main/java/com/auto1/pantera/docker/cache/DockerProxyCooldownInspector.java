@@ -4,8 +4,8 @@
  */
 package com.auto1.pantera.docker.cache;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.misc.ConfigDefaults;
 
 import java.time.Duration;
@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
  * Uses Caffeine cache with automatic eviction to limit Old Gen growth.
  */
 public final class DockerProxyCooldownInspector implements CooldownInspector,
-    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.config.InspectorRegistry.InvalidatableInspector {
 
     /**
      * Bounded cache of image release dates.

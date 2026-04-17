@@ -8,7 +8,7 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
-package com.auto1.pantera.cooldown;
+package com.auto1.pantera.cooldown.api;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;

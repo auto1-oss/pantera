@@ -14,7 +14,7 @@ import com.auto1.pantera.asto.Content;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.cache.Cache;
 import com.auto1.pantera.asto.cache.FromStorageCache;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.GoProxySlice;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;

@@ -24,7 +24,7 @@ import com.auto1.pantera.http.slice.LoggingSlice;
 import com.auto1.pantera.http.slice.SliceSimple;
 import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.cooldown.metadata.CooldownMetadataService;
 
 import java.net.URL;
@@ -82,7 +82,7 @@ public final class NpmProxySlice implements Slice {
         final AssetPath apath = new AssetPath(path);
         final NpmCooldownInspector inspector = new NpmCooldownInspector(npm.remoteClient());
         // Register inspector globally so unblock can invalidate its cache
-        com.auto1.pantera.cooldown.InspectorRegistry.instance()
+        com.auto1.pantera.cooldown.config.InspectorRegistry.instance()
             .register(repoType, repoName, inspector);
         this.route = new SliceRoute(
             new RtRulePath(

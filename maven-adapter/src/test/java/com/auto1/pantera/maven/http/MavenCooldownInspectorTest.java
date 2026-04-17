@@ -11,7 +11,7 @@
 package com.auto1.pantera.maven.http;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;

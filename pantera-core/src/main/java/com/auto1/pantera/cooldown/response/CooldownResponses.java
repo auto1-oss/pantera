@@ -8,8 +8,10 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
-package com.auto1.pantera.cooldown;
+package com.auto1.pantera.cooldown.response;
 
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownReason;
 import com.auto1.pantera.http.Response;
 import com.auto1.pantera.http.ResponseBuilder;
 import java.time.Instant;

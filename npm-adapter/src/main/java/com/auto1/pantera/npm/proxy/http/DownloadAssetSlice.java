@@ -24,11 +24,11 @@ import com.auto1.pantera.npm.proxy.NpmProxy;
 import com.auto1.pantera.scheduling.ProxyArtifactEvent;
 import com.google.common.base.Strings;
 
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.log.EcsLogger;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;

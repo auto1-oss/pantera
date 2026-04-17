@@ -18,7 +18,7 @@ import com.auto1.pantera.api.ssl.KeyStoreFactory;
 import com.auto1.pantera.asto.Storage;
 import com.auto1.pantera.asto.memory.InMemoryStorage;
 import com.auto1.pantera.auth.AuthFromEnv;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.http.auth.Authentication;
 import com.auto1.pantera.scheduling.MetadataEventQueues;
 import com.auto1.pantera.security.policy.Policy;

@@ -8,8 +8,13 @@
  *
  * Originally based on Artipie (https://github.com/artipie/artipie), MIT License.
  */
-package com.auto1.pantera.cooldown;
+package com.auto1.pantera.cooldown.impl;
 
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;

@@ -13,7 +13,7 @@ package com.auto1.pantera.api.v1;
 import com.auto1.pantera.api.AuthzHandler;
 import com.auto1.pantera.api.ManageRepoSettings;
 import com.auto1.pantera.api.perms.ApiRolePermission;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.db.dao.AuthProviderDao;
 import com.auto1.pantera.db.dao.SettingsDao;
 import com.auto1.pantera.http.client.HttpClientSettings;

@@ -30,7 +30,7 @@ import com.auto1.pantera.cache.NegativeCacheConfig;
 import com.auto1.pantera.cache.PublishingCleanable;
 import com.auto1.pantera.cache.StoragesCache;
 import com.auto1.pantera.cache.ValkeyConnection;
-import com.auto1.pantera.cooldown.CooldownSettings;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
 import com.auto1.pantera.cooldown.YamlCooldownSettings;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCacheConfig;
 import com.auto1.pantera.db.ArtifactDbFactory;

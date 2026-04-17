@@ -10,15 +10,15 @@
  */
 package com.auto1.pantera.npm.cooldown;
 
-import com.auto1.pantera.cooldown.CooldownBlock;
-import com.auto1.pantera.cooldown.CooldownCache;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownReason;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
-import com.auto1.pantera.cooldown.CooldownSettings;
-import com.auto1.pantera.cooldown.metadata.CooldownMetadataServiceImpl;
+import com.auto1.pantera.cooldown.api.CooldownBlock;
+import com.auto1.pantera.cooldown.cache.CooldownCache;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownReason;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
+import com.auto1.pantera.cooldown.config.CooldownSettings;
+import com.auto1.pantera.cooldown.metadata.MetadataFilterService;
 import com.auto1.pantera.cooldown.metadata.FilteredMetadataCache;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,7 +43,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 
 /**
- * Integration tests for NPM cooldown metadata filtering with CooldownMetadataServiceImpl.
+ * Integration tests for NPM cooldown metadata filtering with MetadataFilterService.
  *
  * @since 1.0
  */
@@ -51,7 +51,7 @@ final class NpmCooldownIntegrationTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private CooldownMetadataServiceImpl service;
+    private MetadataFilterService service;
     private TestCooldownService cooldownService;
     private NpmMetadataParser parser;
     private NpmMetadataFilter filter;
@@ -65,7 +65,7 @@ final class NpmCooldownIntegrationTest {
         final CooldownCache cooldownCache = new CooldownCache();
         final FilteredMetadataCache metadataCache = new FilteredMetadataCache();
         
-        this.service = new CooldownMetadataServiceImpl(
+        this.service = new MetadataFilterService(
             this.cooldownService,
             settings,
             cooldownCache,

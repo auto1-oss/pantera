@@ -5,9 +5,9 @@
 package com.auto1.pantera.adapters.docker;
 
 import com.auto1.pantera.asto.Content;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.docker.Digest;
 import com.auto1.pantera.docker.Docker;
 import com.auto1.pantera.docker.cache.DockerProxyCooldownInspector;

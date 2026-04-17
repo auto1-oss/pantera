@@ -10,8 +10,8 @@
  */
 package com.auto1.pantera.npm.proxy.http;
 
-import com.auto1.pantera.cooldown.CooldownDependency;
-import com.auto1.pantera.cooldown.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownDependency;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
 import com.auto1.pantera.http.log.EcsLogger;
 import com.auto1.pantera.npm.proxy.NpmRemote;
 import com.auto1.pantera.npm.proxy.model.NpmPackage;
@@ -45,7 +45,7 @@ import javax.json.JsonObject;
  * </ul>
  */
 final class NpmCooldownInspector implements CooldownInspector,
-    com.auto1.pantera.cooldown.InspectorRegistry.InvalidatableInspector {
+    com.auto1.pantera.cooldown.config.InspectorRegistry.InvalidatableInspector {
 
     private final NpmRemote remote;
 

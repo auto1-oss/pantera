@@ -242,7 +242,7 @@ public final class NpmProxyITCase {
         final NpmProxySlice slice = new NpmProxySlice(
             "npm-proxy", npm, Optional.of(packages),
             "npm-proxy", "npm-proxy",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
             com.auto1.pantera.cooldown.metadata.NoopCooldownMetadataService.INSTANCE,
             new com.auto1.pantera.http.client.UriClientSlice(this.client, uri)
         );

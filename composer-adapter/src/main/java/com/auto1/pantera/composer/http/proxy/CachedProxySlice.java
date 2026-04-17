@@ -22,11 +22,11 @@ import com.auto1.pantera.asto.cache.Remote;
 import com.auto1.pantera.composer.JsonPackages;
 import com.auto1.pantera.composer.Packages;
 import com.auto1.pantera.composer.Repository;
-import com.auto1.pantera.cooldown.CooldownInspector;
-import com.auto1.pantera.cooldown.CooldownRequest;
-import com.auto1.pantera.cooldown.CooldownResponses;
-import com.auto1.pantera.cooldown.CooldownResult;
-import com.auto1.pantera.cooldown.CooldownService;
+import com.auto1.pantera.cooldown.api.CooldownInspector;
+import com.auto1.pantera.cooldown.api.CooldownRequest;
+import com.auto1.pantera.cooldown.response.CooldownResponses;
+import com.auto1.pantera.cooldown.api.CooldownResult;
+import com.auto1.pantera.cooldown.api.CooldownService;
 import com.auto1.pantera.http.Headers;
 import com.auto1.pantera.http.ResponseBuilder;
 import com.auto1.pantera.http.Response;
@@ -159,7 +159,7 @@ final class CachedProxySlice implements Slice {
      */
     CachedProxySlice(Slice remote, Repository repo, Cache cache) {
         this(remote, repo, cache, Optional.empty(), "composer", "php",
-            com.auto1.pantera.cooldown.NoopCooldownService.INSTANCE,
+            com.auto1.pantera.cooldown.impl.NoopCooldownService.INSTANCE,
             new NoopComposerCooldownInspector(),
             "http://localhost:8080",
             "unknown"
@@ -603,7 +603,7 @@ final class CachedProxySlice implements Slice {
                 return CompletableFuture.completedFuture(CooldownResult.allowed());
             }
             final String owner = new Login(headers).getValue();
-            final com.auto1.pantera.cooldown.CooldownRequest req = new com.auto1.pantera.cooldown.CooldownRequest(
+            final com.auto1.pantera.cooldown.api.CooldownRequest req = new com.auto1.pantera.cooldown.api.CooldownRequest(
                 this.rtype,
                 this.rname,
                 name,
