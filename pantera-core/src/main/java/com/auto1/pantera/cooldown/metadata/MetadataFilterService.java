@@ -231,8 +231,13 @@ public final class MetadataFilterService implements CooldownMetadataService {
             }
 
             // Step 2: Get release dates from metadata (if available)
+            // Prefer the new MetadataParser.extractReleaseDates() SPI; fall back
+            // to the older ReleaseDateProvider interface for backward compat.
+            final Map<String, Instant> extracted = parser.extractReleaseDates(parsed);
             final Map<String, Instant> releaseDates;
-            if (parser instanceof ReleaseDateProvider) {
+            if (!extracted.isEmpty()) {
+                releaseDates = extracted;
+            } else if (parser instanceof ReleaseDateProvider) {
                 @SuppressWarnings("unchecked")
                 final ReleaseDateProvider<T> provider = (ReleaseDateProvider<T>) parser;
                 releaseDates = provider.releaseDates(parsed);
@@ -242,6 +247,12 @@ public final class MetadataFilterService implements CooldownMetadataService {
 
             // Step 2b: Preload release dates into inspector for later use
             this.preloadReleaseDates(parser, parsed, inspectorOpt);
+
+            // Step 2c: Pre-warm CooldownCache L1 with release dates from metadata.
+            // Versions older than the cooldown period are guaranteed allowed (false).
+            if (!releaseDates.isEmpty()) {
+                this.preWarmCooldownCache(repoName, packageName, releaseDates);
+            }
 
             // Step 3: Select versions to evaluate based on RELEASE DATE, not semver
             // Only versions released within the cooldown period could possibly be blocked
@@ -483,6 +494,44 @@ public final class MetadataFilterService implements CooldownMetadataService {
                 }
                 return new VersionBlockResult(version, false, null);
             });
+    }
+
+    /**
+     * Pre-warm CooldownCache L1 with release dates extracted from metadata.
+     * Versions whose release date is older than the cooldown period are
+     * guaranteed to be allowed (not blocked due to freshness), so we can
+     * populate the L1 cache with {@code false} (allowed) immediately.
+     * This avoids a DB/Valkey round-trip on the hot path for the majority
+     * of versions that are well past the cooldown window.
+     *
+     * @param repoName Repository name
+     * @param packageName Package name
+     * @param releaseDates Map of version to release timestamp
+     */
+    private void preWarmCooldownCache(
+        final String repoName,
+        final String packageName,
+        final Map<String, Instant> releaseDates
+    ) {
+        final Instant cutoff = Instant.now().minus(this.settings.minimumAllowedAge());
+        int warmed = 0;
+        for (final Map.Entry<String, Instant> entry : releaseDates.entrySet()) {
+            if (entry.getValue().isBefore(cutoff)) {
+                // Version is older than cooldown period -- guaranteed allowed
+                this.cooldownCache.put(repoName, packageName, entry.getKey(), false);
+                warmed++;
+            }
+        }
+        if (warmed > 0) {
+            EcsLogger.debug("com.auto1.pantera.cooldown.metadata")
+                .message(String.format(
+                    "Pre-warmed CooldownCache L1 with %d allowed versions from metadata", warmed))
+                .eventCategory("database")
+                .eventAction("cache_prewarm")
+                .field("repository.name", repoName)
+                .field("package.name", packageName)
+                .log();
+        }
     }
 
     /**
