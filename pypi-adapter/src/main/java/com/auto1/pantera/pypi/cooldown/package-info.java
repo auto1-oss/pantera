@@ -23,6 +23,8 @@
  *       Detects {@code /simple/{package}/} metadata endpoints</li>
  *   <li>{@link com.auto1.pantera.pypi.cooldown.PypiSimpleIndex} -
  *       Parsed representation (record) of the Simple Index page</li>
+ *   <li>{@link com.auto1.pantera.pypi.cooldown.PypiCooldownResponseFactory} -
+ *       Builds 403 responses for blocked PyPI packages</li>
  * </ul>
  *
  * <p>PyPI Simple Index HTML structure (PEP 503):</p>

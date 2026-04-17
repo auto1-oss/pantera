@@ -21,6 +21,8 @@
  *       - Serializes filtered metadata back to XML</li>
  *   <li>{@link com.auto1.pantera.maven.cooldown.MavenMetadataRequestDetector}
  *       - Detects {@code maven-metadata.xml} requests</li>
+ *   <li>{@link com.auto1.pantera.maven.cooldown.MavenCooldownResponseFactory}
+ *       - Builds 403 responses for blocked Maven artifacts</li>
  * </ul>
  *
  * @since 2.2.0

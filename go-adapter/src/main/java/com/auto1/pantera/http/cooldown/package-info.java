@@ -21,6 +21,8 @@
  *       Serializes filtered version list back to newline-separated text</li>
  *   <li>{@link com.auto1.pantera.http.cooldown.GoMetadataRequestDetector} -
  *       Detects {@code /@v/list} metadata requests</li>
+ *   <li>{@link com.auto1.pantera.http.cooldown.GoCooldownResponseFactory} -
+ *       Builds 403 responses for blocked Go modules</li>
  * </ul>
  *
  * <p>Go version list format (plain text, one version per line):</p>
