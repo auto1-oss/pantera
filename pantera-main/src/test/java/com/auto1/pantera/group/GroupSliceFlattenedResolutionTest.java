@@ -529,9 +529,13 @@ final class GroupSliceFlattenedResolutionTest {
      * even when the index future completes on a different thread.
      *
      * <p>This guards against regression of the MDC propagation fix: without
-     * {@code MdcPropagation.withMdc()}, the DB executor thread would execute
-     * the callback with an empty MDC, causing trace.id/user.name/client.ip to
-     * be missing from any logs emitted inside that callback.
+     * propagating context across the thread boundary (today done by wrapping
+     * the DB executor with {@link com.auto1.pantera.http.context.ContextualExecutor}
+     * or by wrapping individual tasks with
+     * {@link com.auto1.pantera.http.trace.TraceContextExecutor}), the DB
+     * executor thread would execute the callback with an empty MDC, causing
+     * trace.id/user.name/client.ip to be missing from any logs emitted inside
+     * that callback.
      */
     @Test
     void mdcIsVisibleInsideThenComposeCallbackAcrossThreadBoundary() throws Exception {

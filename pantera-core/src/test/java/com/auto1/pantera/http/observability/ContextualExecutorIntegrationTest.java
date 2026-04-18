@@ -31,9 +31,10 @@ import org.junit.jupiter.api.Test;
  * {@link ContextualExecutor#contextualize(java.util.concurrent.Executor)}
  * into a {@link SingleFlight} (the WI-03 executor-wrapping points in
  * {@code GroupSlice}, {@code MavenGroupSlice}, {@code BaseCachedProxySlice},
- * {@code CachedNpmProxySlice}) means callers no longer need
- * {@code MdcPropagation.withMdc*} on continuations that hop through the
- * wrapped executor.
+ * {@code CachedNpmProxySlice}) means callers no longer need to wrap each
+ * continuation by hand: the executor itself snapshots the caller's
+ * {@link ThreadContext} and APM span and installs them on the runner thread
+ * for the duration of the task.
  */
 final class ContextualExecutorIntegrationTest {
 
@@ -113,7 +114,7 @@ final class ContextualExecutorIntegrationTest {
     }
 
     @Test
-    @DisplayName("Chained thenApplyAsync/thenComposeAsync see caller context without MdcPropagation")
+    @DisplayName("Chained thenApplyAsync/thenComposeAsync see caller context via ContextualExecutor")
     void chainedStagesSeeContextWithoutManualMdc() throws Exception {
         ThreadContext.put("trace.id", "chain-1");
         ThreadContext.put("user.name", "alice");

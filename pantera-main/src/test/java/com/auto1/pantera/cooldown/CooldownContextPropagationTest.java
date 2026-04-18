@@ -25,7 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Verifies that ThreadContext survives async hops in the cooldown package
- * after replacing {@code MdcPropagation} with {@code ContextualExecutor}.
+ * when the backing executor is wrapped with
+ * {@link ContextualExecutor#contextualize(java.util.concurrent.Executor)}.
+ *
+ * <p>This is the canonical v2.2 primitive for MDC / APM propagation across
+ * thread-pool boundaries (see §4.4 of
+ * {@code docs/analysis/v2.2-target-architecture.md}); the older
+ * per-continuation wrapper approach has been retired.
  *
  * @since 2.2.0
  */
