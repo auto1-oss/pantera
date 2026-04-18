@@ -1206,4 +1206,18 @@ jattach 1 jcmd "JFR.dump name=pantera filename=/var/pantera/logs/pantera.jfr"
 
 ---
 
+## 17. Performance benchmarking
+
+Pantera ships a local Docker-based scaling benchmark under [`performance/`](../performance/README.md) that measures saturation-rps and SLO-rps at configurable CPU/RAM sizes. See the linked README for prerequisites, the run commands (`make smoke`, `make matrix`), and interpretation caveats.
+
+Quick start:
+```bash
+cd performance
+make setup    # generate mock-upstream bodies
+make smoke    # one cell end-to-end (~15-20 min)
+make matrix   # full 6-cell matrix (~2 h)
+```
+
+---
+
 *This document covers Pantera version 2.0.0. For questions, contact the Auto1 DevOps Team.*
